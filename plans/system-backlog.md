@@ -5,7 +5,7 @@
 - [x] Implement cron and email connectors
 - [x] Add SQLite-backed idempotency and run records
 - Build Codex executor with timeout and structured output parsing
-- Implement policy engine and action gating
+- [x] Implement policy engine and action gating
 - Add audit logging for every run
 
 Progress notes:
@@ -14,6 +14,7 @@ Progress notes:
 - 2026-02-27: Added `RunRecord` model contract plus `app.state.SQLiteStateStore` for SQLite-backed idempotency keys and run-record persistence, with unit tests.
 - 2026-02-27: Added `app.connectors` with `Connector` protocol and fake cron/email connectors that normalize source events to canonical `TaskEnvelope` objects, with unit tests.
 - 2026-02-27: Added `app.router.RuleBasedRouter` baseline that produces contract-valid `RoutedTask` objects for cron and email envelopes, with unit tests.
+- 2026-02-27: Added `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, config update review buckets, and unit tests.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

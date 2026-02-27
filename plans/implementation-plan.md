@@ -63,6 +63,9 @@ Acceptance criteria:
 - Sensitive config changes move to pending-approval state
 - Allowed responses are returned to originating channel
 
+Progress notes:
+- 2026-02-27: Implemented `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, sensitive config pending-review classification, and unit tests.
+
 ## Phase 4: Reliability + Ops
 Duration: 2-4 days
 
