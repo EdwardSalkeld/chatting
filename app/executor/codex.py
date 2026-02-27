@@ -23,6 +23,9 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "requires_human_review",
     "errors",
 }
+_ALLOWED_MESSAGE_KEYS = {"channel", "target", "body"}
+_ALLOWED_ACTION_KEYS = {"type", "path", "content"}
+_ALLOWED_CONFIG_UPDATE_KEYS = {"path", "value"}
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,9 @@ def _parse_messages(value: Any) -> list[OutboundMessage]:
     for item in value:
         if not isinstance(item, dict):
             raise ValueError("messages_items_must_be_objects")
+        unknown_keys = set(item) - _ALLOWED_MESSAGE_KEYS
+        if unknown_keys:
+            raise ValueError("unknown_message_keys:" + ",".join(sorted(unknown_keys)))
         messages.append(
             OutboundMessage(
                 channel=_required_str(item, "channel", "message"),
@@ -144,6 +150,9 @@ def _parse_actions(value: Any) -> list[ActionProposal]:
     for item in value:
         if not isinstance(item, dict):
             raise ValueError("actions_items_must_be_objects")
+        unknown_keys = set(item) - _ALLOWED_ACTION_KEYS
+        if unknown_keys:
+            raise ValueError("unknown_action_keys:" + ",".join(sorted(unknown_keys)))
 
         path = item.get("path")
         if path is not None and not isinstance(path, str):
@@ -171,6 +180,11 @@ def _parse_config_updates(value: Any) -> list[ConfigUpdate]:
     for item in value:
         if not isinstance(item, dict):
             raise ValueError("config_updates_items_must_be_objects")
+        unknown_keys = set(item) - _ALLOWED_CONFIG_UPDATE_KEYS
+        if unknown_keys:
+            raise ValueError(
+                "unknown_config_update_keys:" + ",".join(sorted(unknown_keys))
+            )
         if "value" not in item:
             raise ValueError("config_update_value_required")
         updates.append(

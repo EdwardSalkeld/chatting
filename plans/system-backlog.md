@@ -19,6 +19,7 @@ Progress notes:
 - 2026-02-27: Added `app.applier.NoOpApplier` plus `ApplyResult` contract for bootstrap-safe apply summaries, with unit tests.
 - 2026-02-27: Added runnable `app.main` bootstrap orchestration with deterministic `StubExecutor` integration, duplicate skipping via SQLite idempotency checks, and persisted run statuses including `success` and `blocked_action`.
 - 2026-02-27: Added `app.executor.CodexExecutor` subprocess wrapper with per-task timeout enforcement plus strict JSON `ExecutionResult` parsing (`parse_execution_result`) that rejects unknown top-level fields and malformed schemas; covered with unit tests.
+- 2026-02-27: Hardened `ExecutionResult` parser strictness by rejecting unknown nested keys in message/action/config-update objects, tightening the P0 schema-drift mitigation.
 - 2026-02-27: Added typed `AuditEvent` contract plus `SQLiteStateStore` audit event persistence (`append_audit_event`/`list_audit_events`) and wired `app.main` to write one audit event per processed run with policy decision summary fields.
 - 2026-02-27: Added `app.state.StateStore` protocol contract and a runtime conformance test ensuring `SQLiteStateStore` satisfies the state interface boundary defined in architecture docs.
 - 2026-02-27: Hardened run-level observability output to emit the full contract fields (`run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, `result_status`) and added bootstrap flow assertions.

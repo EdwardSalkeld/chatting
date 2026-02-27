@@ -58,6 +58,67 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown_top_level_keys"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_unknown_message_keys(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [
+                    {
+                        "channel": "email",
+                        "target": "alice@example.com",
+                        "body": "Done.",
+                        "priority": "high",
+                    }
+                ],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown_message_keys"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [],
+                "actions": [
+                    {
+                        "type": "write_file",
+                        "path": "docs/notes.md",
+                        "mode": "append",
+                    }
+                ],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown_action_keys"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_unknown_config_update_keys(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [],
+                "actions": [],
+                "config_updates": [
+                    {
+                        "path": "routing.default_timeout",
+                        "value": 240,
+                        "source": "llm",
+                    }
+                ],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown_config_update_keys"):
+            parse_execution_result(payload)
+
 
 class CodexExecutorTests(unittest.TestCase):
     @patch("app.executor.codex.subprocess.run")
