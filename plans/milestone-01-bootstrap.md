@@ -25,4 +25,5 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Bootstrap package layout (`app/`, `tests/`)
 - [x] Canonical models implemented for `TaskEnvelope` and `RoutedTask` with unit tests
 - [x] Canonical models implemented for `ExecutionResult` and `PolicyDecision` with unit tests
-- [ ] Remaining in scope: fake connectors, router/policy/applier stubs, SQLite state store, runnable `app.main`
+- [x] SQLite state store baseline implemented (`seen`, `mark_seen`, `append_run`) with unit tests
+- [ ] Remaining in scope: fake connectors, router/policy/applier stubs, runnable `app.main`

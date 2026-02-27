@@ -11,6 +11,7 @@ from app.models import (
     OutboundMessage,
     PolicyDecision,
     ReplyChannel,
+    RunRecord,
     RoutedTask,
     TaskEnvelope,
 )
@@ -165,6 +166,48 @@ class PolicyDecisionTests(unittest.TestCase):
     def test_action_requires_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "type is required"):
             ActionProposal(type="")
+
+
+class RunRecordTests(unittest.TestCase):
+    def test_run_record_serializes_expected_shape(self) -> None:
+        record = RunRecord(
+            run_id="run_123",
+            envelope_id="evt_123",
+            source="email",
+            workflow="respond_and_optionally_edit",
+            policy_profile="default",
+            latency_ms=42,
+            result_status="success",
+            created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(
+            record.to_dict(),
+            {
+                "schema_version": "1.0",
+                "run_id": "run_123",
+                "envelope_id": "evt_123",
+                "source": "email",
+                "workflow": "respond_and_optionally_edit",
+                "policy_profile": "default",
+                "latency_ms": 42,
+                "result_status": "success",
+                "created_at": "2026-02-27T16:05:00Z",
+            },
+        )
+
+    def test_run_record_requires_timezone_aware_timestamp(self) -> None:
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            RunRecord(
+                run_id="run_1",
+                envelope_id="evt_1",
+                source="cron",
+                workflow="respond_and_optionally_edit",
+                policy_profile="default",
+                latency_ms=0,
+                result_status="success",
+                created_at=datetime(2026, 2, 27, 16, 5),
+            )
 
 
 if __name__ == "__main__":
