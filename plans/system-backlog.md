@@ -25,6 +25,7 @@ Progress notes:
 - 2026-02-27: Hardened run-level observability output to emit the full contract fields (`run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, `result_status`) and added bootstrap flow assertions.
 - 2026-02-27: Hardened executor output contract enforcement by requiring explicit `schema_version` in parsed `ExecutionResult` payloads; removed implicit defaulting and added parser rejection coverage for missing schema versions.
 - 2026-02-27: Hardened protocol contracts for connectors/router/executor/policy/applier with `@runtime_checkable` interfaces plus runtime conformance tests for shipped implementations.
+- 2026-02-27: Hardened idempotency storage semantics to use source-scoped dedupe (`source + dedupe_key`) at the `StateStore` boundary, with SQLite legacy-schema migration and collision regression coverage.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

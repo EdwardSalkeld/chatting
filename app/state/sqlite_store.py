@@ -26,14 +26,7 @@ class SQLiteStateStore:
     def _initialize(self) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS idempotency_keys (
-                    dedupe_key TEXT PRIMARY KEY,
-                    seen_at TEXT NOT NULL
-                )
-                """
-            )
+            self._initialize_idempotency_table(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_records (
@@ -67,23 +60,73 @@ class SQLiteStateStore:
             )
             connection.commit()
 
-    def seen(self, dedupe_key: str) -> bool:
+    def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
+        idempotency_columns = connection.execute(
+            "PRAGMA table_info(idempotency_keys)"
+        ).fetchall()
+        if not idempotency_columns:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    source TEXT NOT NULL,
+                    dedupe_key TEXT NOT NULL,
+                    seen_at TEXT NOT NULL,
+                    PRIMARY KEY (source, dedupe_key)
+                )
+                """
+            )
+            return
+
+        column_names = {row["name"] for row in idempotency_columns}
+        if column_names == {"source", "dedupe_key", "seen_at"}:
+            return
+
+        # Migrate legacy schema keyed only by dedupe_key.
+        connection.execute("ALTER TABLE idempotency_keys RENAME TO idempotency_keys_legacy")
+        connection.execute(
+            """
+            CREATE TABLE idempotency_keys (
+                source TEXT NOT NULL,
+                dedupe_key TEXT NOT NULL,
+                seen_at TEXT NOT NULL,
+                PRIMARY KEY (source, dedupe_key)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO idempotency_keys (source, dedupe_key, seen_at)
+            SELECT 'legacy', dedupe_key, seen_at
+            FROM idempotency_keys_legacy
+            """
+        )
+        connection.execute("DROP TABLE idempotency_keys_legacy")
+
+    def seen(self, source: str, dedupe_key: str) -> bool:
+        if not source:
+            raise ValueError("source is required")
+        if not dedupe_key:
+            raise ValueError("dedupe_key is required")
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT 1 FROM idempotency_keys WHERE dedupe_key = ?",
-                (dedupe_key,),
+                "SELECT 1 FROM idempotency_keys WHERE source = ? AND dedupe_key = ?",
+                (source, dedupe_key),
             ).fetchone()
         return row is not None
 
-    def mark_seen(self, dedupe_key: str) -> None:
+    def mark_seen(self, source: str, dedupe_key: str) -> None:
+        if not source:
+            raise ValueError("source is required")
+        if not dedupe_key:
+            raise ValueError("dedupe_key is required")
         seen_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO idempotency_keys (dedupe_key, seen_at)
-                VALUES (?, ?)
+                INSERT OR IGNORE INTO idempotency_keys (source, dedupe_key, seen_at)
+                VALUES (?, ?, ?)
                 """,
-                (dedupe_key, seen_at),
+                (source, dedupe_key, seen_at),
             )
             connection.commit()
 

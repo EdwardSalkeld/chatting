@@ -11,11 +11,11 @@ from app.models import AuditEvent, RunRecord
 class StateStore(Protocol):
     """Persistence boundary for idempotency, run records, and audit events."""
 
-    def seen(self, dedupe_key: str) -> bool:
-        """Return whether the dedupe key has been observed before."""
+    def seen(self, source: str, dedupe_key: str) -> bool:
+        """Return whether the source-scoped dedupe key has been observed before."""
 
-    def mark_seen(self, dedupe_key: str) -> None:
-        """Persist a dedupe key as seen."""
+    def mark_seen(self, source: str, dedupe_key: str) -> None:
+        """Persist a source-scoped dedupe key as seen."""
 
     def append_run(self, record: RunRecord) -> None:
         """Persist one run record."""

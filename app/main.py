@@ -31,11 +31,11 @@ def run_bootstrap(db_path: str) -> list[RunRecord]:
     applier = NoOpApplier()
 
     for envelope in _default_envelopes():
-        if store.seen(envelope.dedupe_key):
-            print(f"skip duplicate dedupe_key={envelope.dedupe_key}")
+        if store.seen(envelope.source, envelope.dedupe_key):
+            print(f"skip duplicate source={envelope.source} dedupe_key={envelope.dedupe_key}")
             continue
 
-        store.mark_seen(envelope.dedupe_key)
+        store.mark_seen(envelope.source, envelope.dedupe_key)
 
         started = time.perf_counter()
         task = router.route(envelope)

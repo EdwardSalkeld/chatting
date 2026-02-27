@@ -33,6 +33,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Runnable `app.main` implemented with duplicate-skipping and run-log persistence
 - [x] State storage protocol boundary (`StateStore`) codified with SQLite conformance test
 - [x] Core module interface protocols made runtime-checkable with implementation conformance tests
+- [x] Idempotency contract hardened to dedupe by `source + dedupe_key` with SQLite compatibility migration
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -47,3 +48,4 @@ Notes:
 - 2026-02-27: Post-milestone P0 hardening: aligned bootstrap run logging with the observability contract by emitting run-level fields (`run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, `result_status`) and validating them in `tests.test_main`.
 - 2026-02-27: Post-milestone P0 hardening: required explicit `schema_version` in executor JSON parsing (`parse_execution_result`) so contract versioning is enforced rather than defaulted.
 - 2026-02-27: Post-milestone P0 hardening: marked connector/router/executor/policy/applier protocols as runtime-checkable and added interface conformance tests for default implementations.
+- 2026-02-27: Post-milestone P0 hardening: updated `StateStore` idempotency methods and SQLite schema to key dedupe on `(source, dedupe_key)`; added regression coverage for cross-source collisions and legacy idempotency-table migration.
