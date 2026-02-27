@@ -318,3 +318,47 @@ class RunRecord:
             "result_status": self.result_status,
             "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+
+
+@dataclass(frozen=True)
+class AuditEvent:
+    """Audit log event persisted for every processed run."""
+
+    run_id: str
+    envelope_id: str
+    source: Literal["cron", "email", "im", "webhook"]
+    workflow: str
+    policy_profile: str
+    result_status: str
+    detail: dict[str, Any]
+    created_at: datetime
+    schema_version: str = "1.0"
+
+    def __post_init__(self) -> None:
+        if not self.run_id:
+            raise ValueError("run_id is required")
+        if not self.envelope_id:
+            raise ValueError("envelope_id is required")
+        if self.source not in SOURCE_TYPES:
+            raise ValueError(f"source must be one of {SOURCE_TYPES}")
+        if not self.workflow:
+            raise ValueError("workflow is required")
+        if not self.policy_profile:
+            raise ValueError("policy_profile is required")
+        if not self.result_status:
+            raise ValueError("result_status is required")
+        if self.created_at.tzinfo is None:
+            raise ValueError("created_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "envelope_id": self.envelope_id,
+            "source": self.source,
+            "workflow": self.workflow,
+            "policy_profile": self.policy_profile,
+            "result_status": self.result_status,
+            "detail": self.detail,
+            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app.models import (
     ActionProposal,
+    AuditEvent,
     ApplyResult,
     AttachmentRef,
     ConfigUpdate,
@@ -232,6 +233,48 @@ class ApplyResultTests(unittest.TestCase):
                 "reason_codes": ["noop_applier_skipped_actions"],
             },
         )
+
+
+class AuditEventTests(unittest.TestCase):
+    def test_audit_event_serializes_expected_shape(self) -> None:
+        event = AuditEvent(
+            run_id="run_123",
+            envelope_id="evt_123",
+            source="email",
+            workflow="respond_and_optionally_edit",
+            policy_profile="default",
+            result_status="success",
+            detail={"approved_action_count": 1, "reason_codes": []},
+            created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(
+            event.to_dict(),
+            {
+                "schema_version": "1.0",
+                "run_id": "run_123",
+                "envelope_id": "evt_123",
+                "source": "email",
+                "workflow": "respond_and_optionally_edit",
+                "policy_profile": "default",
+                "result_status": "success",
+                "detail": {"approved_action_count": 1, "reason_codes": []},
+                "created_at": "2026-02-27T16:05:00Z",
+            },
+        )
+
+    def test_audit_event_requires_timezone_aware_timestamp(self) -> None:
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            AuditEvent(
+                run_id="run_1",
+                envelope_id="evt_1",
+                source="cron",
+                workflow="respond_and_optionally_edit",
+                policy_profile="default",
+                result_status="success",
+                detail={},
+                created_at=datetime(2026, 2, 27, 16, 5),
+            )
 
 
 if __name__ == "__main__":

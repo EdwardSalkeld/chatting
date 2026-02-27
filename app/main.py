@@ -16,7 +16,7 @@ from app.connectors import (
     FakeEmailConnector,
 )
 from app.executor import StubExecutor
-from app.models import RunRecord, TaskEnvelope
+from app.models import AuditEvent, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore
@@ -55,6 +55,23 @@ def run_bootstrap(db_path: str) -> list[RunRecord]:
             created_at=datetime.now(timezone.utc),
         )
         store.append_run(record)
+        store.append_audit_event(
+            AuditEvent(
+                run_id=record.run_id,
+                envelope_id=record.envelope_id,
+                source=record.source,
+                workflow=record.workflow,
+                policy_profile=record.policy_profile,
+                result_status=record.result_status,
+                detail={
+                    "reason_codes": decision.reason_codes,
+                    "approved_action_count": len(decision.approved_actions),
+                    "blocked_action_count": len(decision.blocked_actions),
+                    "approved_message_count": len(decision.approved_messages),
+                },
+                created_at=record.created_at,
+            )
+        )
         print(
             f"processed envelope_id={envelope.id} status={record.result_status} "
             f"workflow={task.workflow}"

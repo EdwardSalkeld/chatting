@@ -86,6 +86,9 @@ Acceptance criteria:
 - Audit record links input, prompt package, output, and applied actions
 - Operators can rollback config to prior version
 
+Progress notes:
+- 2026-02-27: Added per-run audit logging baseline via `AuditEvent` model and SQLite persistence; bootstrap flow now emits one audit event for each processed run with policy decision counts and reason codes.
+
 ## Phase 5: Connector Expansion (Optional)
 Duration: 3-5 days
 

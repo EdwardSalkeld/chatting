@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import RunRecord
+from app.models import AuditEvent, RunRecord
 
 
 class SQLiteStateStore:
@@ -43,6 +44,22 @@ class SQLiteStateStore:
                     policy_profile TEXT NOT NULL,
                     latency_ms INTEGER NOT NULL,
                     result_status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    schema_version TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    envelope_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    workflow TEXT NOT NULL,
+                    policy_profile TEXT NOT NULL,
+                    result_status TEXT NOT NULL,
+                    detail_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     schema_version TEXT NOT NULL
                 )
@@ -117,6 +134,59 @@ class SQLiteStateStore:
                 policy_profile=row["policy_profile"],
                 latency_ms=row["latency_ms"],
                 result_status=row["result_status"],
+                created_at=_parse_rfc3339_utc(row["created_at"]),
+                schema_version=row["schema_version"],
+            )
+            for row in rows
+        ]
+
+    def append_audit_event(self, event: AuditEvent) -> None:
+        payload = event.to_dict()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                    run_id,
+                    envelope_id,
+                    source,
+                    workflow,
+                    policy_profile,
+                    result_status,
+                    detail_json,
+                    created_at,
+                    schema_version
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["run_id"],
+                    payload["envelope_id"],
+                    payload["source"],
+                    payload["workflow"],
+                    payload["policy_profile"],
+                    payload["result_status"],
+                    json.dumps(payload["detail"], sort_keys=True),
+                    payload["created_at"],
+                    payload["schema_version"],
+                ),
+            )
+            connection.commit()
+
+    def list_audit_events(self) -> list[AuditEvent]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM audit_events ORDER BY event_id ASC"
+            ).fetchall()
+
+        return [
+            AuditEvent(
+                run_id=row["run_id"],
+                envelope_id=row["envelope_id"],
+                source=row["source"],
+                workflow=row["workflow"],
+                policy_profile=row["policy_profile"],
+                result_status=row["result_status"],
+                detail=json.loads(row["detail_json"]),
                 created_at=_parse_rfc3339_utc(row["created_at"]),
                 schema_version=row["schema_version"],
             )

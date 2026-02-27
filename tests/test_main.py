@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.main import run_bootstrap
+from app.state import SQLiteStateStore
 
 
 class MainBootstrapFlowTests(unittest.TestCase):
@@ -20,6 +21,17 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(
                 [run.result_status for run in runs],
                 ["success", "success", "blocked_action"],
+            )
+
+            audit_events = SQLiteStateStore(db_path).list_audit_events()
+            self.assertEqual(len(audit_events), len(runs))
+            self.assertEqual(
+                [event.run_id for event in audit_events],
+                [run.run_id for run in runs],
+            )
+            self.assertEqual(
+                [event.result_status for event in audit_events],
+                [run.result_status for run in runs],
             )
 
 

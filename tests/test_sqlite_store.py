@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import RunRecord
+from app.models import AuditEvent, RunRecord
 from app.state.sqlite_store import SQLiteStateStore
 
 
@@ -35,6 +35,25 @@ class SQLiteStateStoreTests(unittest.TestCase):
             store.append_run(record)
 
             self.assertEqual(store.list_runs(), [record])
+
+    def test_append_audit_event_persists_and_lists_audit_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+            event = AuditEvent(
+                run_id="run_1",
+                envelope_id="evt_1",
+                source="cron",
+                workflow="respond_and_optionally_edit",
+                policy_profile="default",
+                result_status="success",
+                detail={"approved_action_count": 1, "reason_codes": []},
+                created_at=datetime(2026, 2, 27, 16, 10, tzinfo=timezone.utc),
+            )
+
+            store.append_audit_event(event)
+
+            self.assertEqual(store.list_audit_events(), [event])
 
 
 if __name__ == "__main__":

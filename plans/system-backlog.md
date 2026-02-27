@@ -6,7 +6,7 @@
 - [x] Add SQLite-backed idempotency and run records
 - [x] Build Codex executor with timeout and structured output parsing
 - [x] Implement policy engine and action gating
-- Add audit logging for every run
+- [x] Add audit logging for every run
 
 Progress notes:
 - 2026-02-27: Added `app.models` with typed canonical `TaskEnvelope` and `RoutedTask` contracts, including `schema_version`, required-field validation, and serialization tests.
@@ -18,6 +18,7 @@ Progress notes:
 - 2026-02-27: Added `app.applier.NoOpApplier` plus `ApplyResult` contract for bootstrap-safe apply summaries, with unit tests.
 - 2026-02-27: Added runnable `app.main` bootstrap orchestration with deterministic `StubExecutor` integration, duplicate skipping via SQLite idempotency checks, and persisted run statuses including `success` and `blocked_action`.
 - 2026-02-27: Added `app.executor.CodexExecutor` subprocess wrapper with per-task timeout enforcement plus strict JSON `ExecutionResult` parsing (`parse_execution_result`) that rejects unknown top-level fields and malformed schemas; covered with unit tests.
+- 2026-02-27: Added typed `AuditEvent` contract plus `SQLiteStateStore` audit event persistence (`append_audit_event`/`list_audit_events`) and wired `app.main` to write one audit event per processed run with policy decision summary fields.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

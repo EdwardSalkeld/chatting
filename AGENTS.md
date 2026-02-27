@@ -8,5 +8,6 @@
 - Run policy tests: `python3 -m unittest tests.test_policy`
 - Run bootstrap flow tests: `python3 -m unittest tests.test_main`
 - Run executor tests: `python3 -m unittest tests.test_executor`
+- Run audit logging checks: `python3 -m unittest tests.test_models tests.test_sqlite_store tests.test_main`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
 - If `rg` is unavailable locally, use `find . -type f` for file discovery.
