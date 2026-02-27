@@ -2,8 +2,14 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models import (
+    ActionProposal,
     AttachmentRef,
+    ConfigUpdate,
+    ConfigUpdateDecision,
+    ExecutionResult,
     ExecutionConstraints,
+    OutboundMessage,
+    PolicyDecision,
     ReplyChannel,
     RoutedTask,
     TaskEnvelope,
@@ -91,6 +97,74 @@ class RoutedTaskTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "max_tokens"):
             ExecutionConstraints(timeout_seconds=10, max_tokens=0)
+
+
+class ExecutionResultTests(unittest.TestCase):
+    def test_execution_result_serializes_expected_shape(self) -> None:
+        result = ExecutionResult(
+            messages=[OutboundMessage(channel="email", target="alice@example.com", body="Done.")],
+            actions=[ActionProposal(type="write_file", path="docs/notes.md", content="hello")],
+            config_updates=[ConfigUpdate(path="routing.default_timeout", value=240)],
+            requires_human_review=False,
+            errors=[],
+        )
+
+        self.assertEqual(
+            result.to_dict(),
+            {
+                "schema_version": "1.0",
+                "messages": [
+                    {"channel": "email", "target": "alice@example.com", "body": "Done."}
+                ],
+                "actions": [
+                    {"type": "write_file", "path": "docs/notes.md", "content": "hello"}
+                ],
+                "config_updates": [{"path": "routing.default_timeout", "value": 240}],
+                "requires_human_review": False,
+                "errors": [],
+            },
+        )
+
+    def test_execution_result_message_requires_body(self) -> None:
+        with self.assertRaisesRegex(ValueError, "body is required"):
+            OutboundMessage(channel="email", target="alice@example.com", body="")
+
+
+class PolicyDecisionTests(unittest.TestCase):
+    def test_policy_decision_serializes_expected_shape(self) -> None:
+        decision = PolicyDecision(
+            approved_actions=[],
+            blocked_actions=[ActionProposal(type="write_file", path="secrets.txt")],
+            approved_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Blocked.")],
+            config_updates=ConfigUpdateDecision(
+                approved=[],
+                pending_review=[ConfigUpdate(path="routing.default_timeout", value=240)],
+                rejected=[],
+            ),
+            reason_codes=["action_not_allowed"],
+        )
+
+        self.assertEqual(
+            decision.to_dict(),
+            {
+                "schema_version": "1.0",
+                "approved_actions": [],
+                "blocked_actions": [{"type": "write_file", "path": "secrets.txt"}],
+                "approved_messages": [
+                    {"channel": "email", "target": "alice@example.com", "body": "Blocked."}
+                ],
+                "config_updates": {
+                    "approved": [],
+                    "pending_review": [{"path": "routing.default_timeout", "value": 240}],
+                    "rejected": [],
+                },
+                "reason_codes": ["action_not_allowed"],
+            },
+        )
+
+    def test_action_requires_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "type is required"):
+            ActionProposal(type="")
 
 
 if __name__ == "__main__":

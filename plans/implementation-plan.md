@@ -8,7 +8,7 @@ Duration: 2-3 days
 
 Deliverables:
 - Repository structure and package layout
-- Typed data models for `TaskEnvelope`, `RoutedTask`, `RunRecord` (`TaskEnvelope` and `RoutedTask` completed on 2026-02-27; `RunRecord` pending)
+- Typed data models for `TaskEnvelope`, `RoutedTask`, `ExecutionResult`, `PolicyDecision`, `RunRecord` (`TaskEnvelope`, `RoutedTask`, `ExecutionResult`, and `PolicyDecision` completed on 2026-02-27; `RunRecord` pending)
 - Config system with environment-specific loading
 - Structured logging and trace IDs
 
