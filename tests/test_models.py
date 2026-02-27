@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app.models import (
     ActionProposal,
+    ApplyResult,
     AttachmentRef,
     ConfigUpdate,
     ConfigUpdateDecision,
@@ -208,6 +209,29 @@ class RunRecordTests(unittest.TestCase):
                 result_status="success",
                 created_at=datetime(2026, 2, 27, 16, 5),
             )
+
+
+class ApplyResultTests(unittest.TestCase):
+    def test_apply_result_serializes_expected_shape(self) -> None:
+        result = ApplyResult(
+            applied_actions=[],
+            skipped_actions=[ActionProposal(type="write_file", path="docs/notes.md")],
+            dispatched_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Done.")],
+            reason_codes=["noop_applier_skipped_actions"],
+        )
+
+        self.assertEqual(
+            result.to_dict(),
+            {
+                "schema_version": "1.0",
+                "applied_actions": [],
+                "skipped_actions": [{"type": "write_file", "path": "docs/notes.md"}],
+                "dispatched_messages": [
+                    {"channel": "email", "target": "alice@example.com", "body": "Done."}
+                ],
+                "reason_codes": ["noop_applier_skipped_actions"],
+            },
+        )
 
 
 if __name__ == "__main__":

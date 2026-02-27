@@ -253,6 +253,28 @@ class PolicyDecision:
 
 
 @dataclass(frozen=True)
+class ApplyResult:
+    """Result contract produced by applier implementations."""
+
+    applied_actions: list[ActionProposal]
+    skipped_actions: list[ActionProposal]
+    dispatched_messages: list[OutboundMessage]
+    reason_codes: list[str]
+    schema_version: str = "1.0"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "applied_actions": [action.to_dict() for action in self.applied_actions],
+            "skipped_actions": [action.to_dict() for action in self.skipped_actions],
+            "dispatched_messages": [
+                message.to_dict() for message in self.dispatched_messages
+            ],
+            "reason_codes": self.reason_codes,
+        }
+
+
+@dataclass(frozen=True)
 class RunRecord:
     """Persisted execution record for observability and audit history."""
 

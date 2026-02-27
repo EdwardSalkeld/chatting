@@ -97,6 +97,16 @@ class StateStore(Protocol):
 }
 ```
 
+### ApplyResult
+```json
+{
+  "applied_actions": [],
+  "skipped_actions": [],
+  "dispatched_messages": [],
+  "reason_codes": []
+}
+```
+
 ## Versioning Strategy
 - Add `schema_version` to every top-level object.
 - Backward-compatible changes: additive optional fields.

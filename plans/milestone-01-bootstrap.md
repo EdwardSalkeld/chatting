@@ -29,9 +29,11 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Connector interface and fake cron/email connectors implemented with unit tests
 - [x] Router baseline implemented (`RuleBasedRouter`) with unit tests for source/workflow/priority mapping
 - [x] Stub policy baseline implemented (`AllowlistPolicyEngine`) with unit tests for action/config gating
-- [ ] Remaining in scope: no-op applier stub, runnable `app.main`
+- [x] No-op applier stub implemented (`NoOpApplier`) with unit tests
+- [ ] Remaining in scope: runnable `app.main`
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
 - 2026-02-27: Added `app.router.RuleBasedRouter` with deterministic routing rules for cron/email plus urgent-priority escalation.
 - 2026-02-27: Added `app.policy.AllowlistPolicyEngine` implementing baseline deny-by-default policy behavior, including sensitive config updates routed to pending review.
+- 2026-02-27: Added `app.applier.NoOpApplier` baseline with `ApplyResult` contract so policy-approved operations can be summarized without side effects during bootstrap.

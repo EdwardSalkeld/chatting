@@ -6,3 +6,4 @@
 - Run connector tests: `python3 -m unittest tests.test_connectors`
 - Run router tests: `python3 -m unittest tests.test_router`
 - Run policy tests: `python3 -m unittest tests.test_policy`
+- If `rg` is unavailable locally, use `find . -type f` for file discovery.

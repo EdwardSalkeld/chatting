@@ -15,6 +15,7 @@ Progress notes:
 - 2026-02-27: Added `app.connectors` with `Connector` protocol and fake cron/email connectors that normalize source events to canonical `TaskEnvelope` objects, with unit tests.
 - 2026-02-27: Added `app.router.RuleBasedRouter` baseline that produces contract-valid `RoutedTask` objects for cron and email envelopes, with unit tests.
 - 2026-02-27: Added `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, config update review buckets, and unit tests.
+- 2026-02-27: Added `app.applier.NoOpApplier` plus `ApplyResult` contract for bootstrap-safe apply summaries, with unit tests.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

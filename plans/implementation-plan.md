@@ -65,6 +65,7 @@ Acceptance criteria:
 
 Progress notes:
 - 2026-02-27: Implemented `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, sensitive config pending-review classification, and unit tests.
+- 2026-02-27: Implemented `app.applier.NoOpApplier` and `ApplyResult` contract baseline with unit tests to complete the milestone's applier stub requirement without side effects.
 
 ## Phase 4: Reliability + Ops
 Duration: 2-4 days
