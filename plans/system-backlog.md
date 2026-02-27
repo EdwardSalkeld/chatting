@@ -13,6 +13,7 @@ Progress notes:
 - 2026-02-27: Added typed `ExecutionResult` and `PolicyDecision` model contracts with serialization and validation tests aligned to interface contract examples.
 - 2026-02-27: Added `RunRecord` model contract plus `app.state.SQLiteStateStore` for SQLite-backed idempotency keys and run-record persistence, with unit tests.
 - 2026-02-27: Added `app.connectors` with `Connector` protocol and fake cron/email connectors that normalize source events to canonical `TaskEnvelope` objects, with unit tests.
+- 2026-02-27: Added `app.router.RuleBasedRouter` baseline that produces contract-valid `RoutedTask` objects for cron and email envelopes, with unit tests.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility
