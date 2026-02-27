@@ -26,4 +26,8 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Canonical models implemented for `TaskEnvelope` and `RoutedTask` with unit tests
 - [x] Canonical models implemented for `ExecutionResult` and `PolicyDecision` with unit tests
 - [x] SQLite state store baseline implemented (`seen`, `mark_seen`, `append_run`) with unit tests
-- [ ] Remaining in scope: fake connectors, router/policy/applier stubs, runnable `app.main`
+- [x] Connector interface and fake cron/email connectors implemented with unit tests
+- [ ] Remaining in scope: router/policy/applier stubs, runnable `app.main`
+
+Notes:
+- 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.

@@ -31,6 +31,9 @@ Acceptance criteria:
 - Connectors produce valid `TaskEnvelope` schema
 - Queue backpressure behavior is observable via logs/metrics
 
+Progress notes:
+- 2026-02-27: Implemented bootstrap `app.connectors` package with connector protocol and fake cron/email connectors that emit canonical `TaskEnvelope` objects (unit-tested).
+
 ## Phase 2: Routing + Execution
 Duration: 3-5 days
 

@@ -2,7 +2,7 @@
 
 ## P0 (Must Have)
 - [x] Define canonical `TaskEnvelope`, `RoutedTask`, `ExecutionResult`, and `PolicyDecision` schemas
-- Implement cron and email connectors
+- [x] Implement cron and email connectors
 - [x] Add SQLite-backed idempotency and run records
 - Build Codex executor with timeout and structured output parsing
 - Implement policy engine and action gating
@@ -12,6 +12,7 @@ Progress notes:
 - 2026-02-27: Added `app.models` with typed canonical `TaskEnvelope` and `RoutedTask` contracts, including `schema_version`, required-field validation, and serialization tests.
 - 2026-02-27: Added typed `ExecutionResult` and `PolicyDecision` model contracts with serialization and validation tests aligned to interface contract examples.
 - 2026-02-27: Added `RunRecord` model contract plus `app.state.SQLiteStateStore` for SQLite-backed idempotency keys and run-record persistence, with unit tests.
+- 2026-02-27: Added `app.connectors` with `Connector` protocol and fake cron/email connectors that normalize source events to canonical `TaskEnvelope` objects, with unit tests.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility
