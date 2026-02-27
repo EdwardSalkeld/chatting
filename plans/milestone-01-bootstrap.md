@@ -42,3 +42,4 @@ Notes:
 - 2026-02-27: Post-milestone P0 progress: added `app.executor.CodexExecutor` and strict structured-output parsing to advance Phase 2 executor requirements while preserving Milestone 01 bootstrap defaults.
 - 2026-02-27: Post-milestone P0 progress: added `AuditEvent` persistence and per-run audit logging in `app.main` to complete the remaining P0 backlog requirement.
 - 2026-02-27: Post-milestone P0 hardening: added `StateStore` protocol interface and conformance coverage for `SQLiteStateStore` to keep persistence behind an explicit contract.
+- 2026-02-27: Post-milestone P0 hardening: aligned bootstrap run logging with the observability contract by emitting run-level fields (`run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, `result_status`) and validating them in `tests.test_main`.

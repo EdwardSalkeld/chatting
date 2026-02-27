@@ -73,8 +73,10 @@ def run_bootstrap(db_path: str) -> list[RunRecord]:
             )
         )
         print(
-            f"processed envelope_id={envelope.id} status={record.result_status} "
-            f"workflow={task.workflow}"
+            f"run_observed run_id={record.run_id} envelope_id={record.envelope_id} "
+            f"source={record.source} workflow={record.workflow} "
+            f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
+            f"result_status={record.result_status}"
         )
 
     runs = store.list_runs()

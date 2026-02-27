@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from app.main import run_bootstrap
@@ -11,7 +13,9 @@ class MainBootstrapFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
 
-            runs = run_bootstrap(db_path)
+            output_buffer = StringIO()
+            with redirect_stdout(output_buffer):
+                runs = run_bootstrap(db_path)
 
             self.assertEqual([run.source for run in runs], ["cron", "email", "email"])
             self.assertEqual(
@@ -33,6 +37,21 @@ class MainBootstrapFlowTests(unittest.TestCase):
                 [event.result_status for event in audit_events],
                 [run.result_status for run in runs],
             )
+
+            observed_lines = [
+                line
+                for line in output_buffer.getvalue().splitlines()
+                if line.startswith("run_observed ")
+            ]
+            self.assertEqual(len(observed_lines), 3)
+            for line in observed_lines:
+                self.assertIn("run_id=", line)
+                self.assertIn("envelope_id=", line)
+                self.assertIn("source=", line)
+                self.assertIn("workflow=", line)
+                self.assertIn("policy_profile=", line)
+                self.assertIn("latency_ms=", line)
+                self.assertIn("result_status=", line)
 
 
 if __name__ == "__main__":
