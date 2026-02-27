@@ -1,12 +1,15 @@
 # System Backlog
 
 ## P0 (Must Have)
-- Define canonical `TaskEnvelope` and `RoutedTask` schemas
+- [x] Define canonical `TaskEnvelope` and `RoutedTask` schemas
 - Implement cron and email connectors
 - Add SQLite-backed idempotency and run records
 - Build Codex executor with timeout and structured output parsing
 - Implement policy engine and action gating
 - Add audit logging for every run
+
+Progress notes:
+- 2026-02-27: Added `app.models` with typed canonical `TaskEnvelope` and `RoutedTask` contracts, including `schema_version`, required-field validation, and serialization tests.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

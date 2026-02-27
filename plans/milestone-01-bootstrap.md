@@ -20,3 +20,8 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - Real email provider integration
 - Real Codex command invocation
 - External queue backends
+
+## Progress Checkpoints
+- [x] Bootstrap package layout (`app/`, `tests/`)
+- [x] Canonical models implemented for `TaskEnvelope` and `RoutedTask` with unit tests
+- [ ] Remaining in scope: models for result/decision, fake connectors, router/policy/applier stubs, SQLite state store, runnable `app.main`

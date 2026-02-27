@@ -1,0 +1,1 @@
+"""Prototype application package."""
