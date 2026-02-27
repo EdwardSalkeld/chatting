@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.models import ExecutionResult, RoutedTask
 
 
+@runtime_checkable
 class Executor(Protocol):
     """Execute a routed task and return structured results."""
 

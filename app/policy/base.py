@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.models import ExecutionResult, PolicyDecision
 
 
+@runtime_checkable
 class PolicyEngine(Protocol):
     """Evaluate execution output and return an enforceable policy decision."""
 

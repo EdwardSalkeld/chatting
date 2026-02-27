@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.models import RoutedTask, TaskEnvelope
 
 
+@runtime_checkable
 class Router(Protocol):
     """Route normalized envelopes to execution-ready tasks."""
 
