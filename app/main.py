@@ -19,12 +19,12 @@ from app.executor import StubExecutor
 from app.models import AuditEvent, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
-from app.state import SQLiteStateStore
+from app.state import SQLiteStateStore, StateStore
 
 
 def run_bootstrap(db_path: str) -> list[RunRecord]:
     """Run one deterministic pass of the bootstrap control flow."""
-    store = SQLiteStateStore(db_path)
+    store: StateStore = SQLiteStateStore(db_path)
     router = RuleBasedRouter()
     executor = StubExecutor()
     policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))

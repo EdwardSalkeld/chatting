@@ -31,6 +31,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Stub policy baseline implemented (`AllowlistPolicyEngine`) with unit tests for action/config gating
 - [x] No-op applier stub implemented (`NoOpApplier`) with unit tests
 - [x] Runnable `app.main` implemented with duplicate-skipping and run-log persistence
+- [x] State storage protocol boundary (`StateStore`) codified with SQLite conformance test
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -40,3 +41,4 @@ Notes:
 - 2026-02-27: Added runnable `app.main` bootstrap flow wired through fake connectors, rule-based router, stub executor, allowlist policy, no-op applier, and SQLite run logging. The flow includes an intentional duplicate event skip and persists both `success` and `blocked_action` run outcomes.
 - 2026-02-27: Post-milestone P0 progress: added `app.executor.CodexExecutor` and strict structured-output parsing to advance Phase 2 executor requirements while preserving Milestone 01 bootstrap defaults.
 - 2026-02-27: Post-milestone P0 progress: added `AuditEvent` persistence and per-run audit logging in `app.main` to complete the remaining P0 backlog requirement.
+- 2026-02-27: Post-milestone P0 hardening: added `StateStore` protocol interface and conformance coverage for `SQLiteStateStore` to keep persistence behind an explicit contract.
