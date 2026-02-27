@@ -277,5 +277,89 @@ class AuditEventTests(unittest.TestCase):
             )
 
 
+class SchemaVersionValidationTests(unittest.TestCase):
+    def test_top_level_models_require_non_empty_schema_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            TaskEnvelope(
+                id="evt_1",
+                source="email",
+                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="content",
+                attachments=[],
+                context_refs=[],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:1",
+                schema_version="",
+            )
+
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            RoutedTask(
+                task_id="task_1",
+                envelope_id="evt_1",
+                workflow="respond_and_optionally_edit",
+                priority="normal",
+                execution_constraints=ExecutionConstraints(timeout_seconds=10, max_tokens=1000),
+                policy_profile="default",
+                schema_version="",
+            )
+
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            ExecutionResult(
+                messages=[],
+                actions=[],
+                config_updates=[],
+                requires_human_review=False,
+                errors=[],
+                schema_version="",
+            )
+
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+                schema_version="",
+            )
+
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            ApplyResult(
+                applied_actions=[],
+                skipped_actions=[],
+                dispatched_messages=[],
+                reason_codes=[],
+                schema_version="",
+            )
+
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            RunRecord(
+                run_id="run_1",
+                envelope_id="evt_1",
+                source="email",
+                workflow="respond_and_optionally_edit",
+                policy_profile="default",
+                latency_ms=1,
+                result_status="success",
+                created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+                schema_version="",
+            )
+
+        with self.assertRaisesRegex(ValueError, "schema_version is required"):
+            AuditEvent(
+                run_id="run_1",
+                envelope_id="evt_1",
+                source="email",
+                workflow="respond_and_optionally_edit",
+                policy_profile="default",
+                result_status="success",
+                detail={},
+                created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+                schema_version="",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -104,6 +104,8 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
     schema_version = payload["schema_version"]
     if not isinstance(schema_version, str):
         raise ValueError("schema_version_must_be_string")
+    if not schema_version:
+        raise ValueError("schema_version_required")
 
     return ExecutionResult(
         messages=messages,

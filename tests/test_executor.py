@@ -137,6 +137,21 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing_top_level_keys:schema_version"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_blank_schema_version(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "",
+                "messages": [],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "schema_version_required"):
+            parse_execution_result(payload)
+
 
 class CodexExecutorTests(unittest.TestCase):
     @patch("app.executor.codex.subprocess.run")

@@ -26,6 +26,7 @@ Progress notes:
 - 2026-02-27: Hardened executor output contract enforcement by requiring explicit `schema_version` in parsed `ExecutionResult` payloads; removed implicit defaulting and added parser rejection coverage for missing schema versions.
 - 2026-02-27: Hardened protocol contracts for connectors/router/executor/policy/applier with `@runtime_checkable` interfaces plus runtime conformance tests for shipped implementations.
 - 2026-02-27: Hardened idempotency storage semantics to use source-scoped dedupe (`source + dedupe_key`) at the `StateStore` boundary, with SQLite legacy-schema migration and collision regression coverage.
+- 2026-02-27: Hardened schema-version handling by rejecting blank `schema_version` values in top-level model constructors and executor output parsing.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

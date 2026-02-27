@@ -10,6 +10,13 @@ SOURCE_TYPES = ("cron", "email", "im", "webhook")
 PRIORITY_TYPES = ("low", "normal", "high")
 
 
+def _validate_schema_version(schema_version: str) -> None:
+    if not isinstance(schema_version, str):
+        raise ValueError("schema_version must be a string")
+    if not schema_version:
+        raise ValueError("schema_version is required")
+
+
 @dataclass(frozen=True)
 class AttachmentRef:
     """Reference to an external attachment."""
@@ -57,6 +64,7 @@ class TaskEnvelope:
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
         if self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
         if not self.id:
@@ -103,6 +111,7 @@ class RoutedTask:
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
         if self.priority not in PRIORITY_TYPES:
             raise ValueError(f"priority must be one of {PRIORITY_TYPES}")
         if not self.task_id:
@@ -203,6 +212,9 @@ class ExecutionResult:
     errors: list[str]
     schema_version: str = "1.0"
 
+    def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -241,6 +253,9 @@ class PolicyDecision:
     reason_codes: list[str]
     schema_version: str = "1.0"
 
+    def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -261,6 +276,9 @@ class ApplyResult:
     dispatched_messages: list[OutboundMessage]
     reason_codes: list[str]
     schema_version: str = "1.0"
+
+    def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -289,6 +307,7 @@ class RunRecord:
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
         if not self.run_id:
             raise ValueError("run_id is required")
         if not self.envelope_id:
@@ -335,6 +354,7 @@ class AuditEvent:
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
         if not self.run_id:
             raise ValueError("run_id is required")
         if not self.envelope_id:
