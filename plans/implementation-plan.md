@@ -34,6 +34,7 @@ Acceptance criteria:
 Progress notes:
 - 2026-02-27: Implemented bootstrap `app.connectors` package with connector protocol and fake cron/email connectors that emit canonical `TaskEnvelope` objects (unit-tested).
 - 2026-02-27: Implemented baseline `app.router.RuleBasedRouter` that maps canonical envelopes to `RoutedTask` with source-specific workflows/constraints and urgent email prioritization (unit-tested).
+- 2026-02-27: Implemented runnable `app.main` bootstrap flow with SQLite idempotency checks in the processing loop; verifies duplicate events are skipped and run records are persisted for cron/email scenarios.
 
 ## Phase 2: Routing + Execution
 Duration: 3-5 days
@@ -48,6 +49,9 @@ Acceptance criteria:
 - Invalid Codex outputs fail safely with error record
 - Execution timeouts do not crash worker loop
 - Routed policy profiles map correctly to execution constraints
+
+Progress notes:
+- 2026-02-27: Added `app.executor.StubExecutor` for deterministic bootstrap execution results used by `app.main`; full Codex executor wrapper with timeout + structured output parsing remains open.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days

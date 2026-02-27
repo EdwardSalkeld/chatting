@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,7 +24,7 @@ class SQLiteStateStore:
 
     def _initialize(self) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -47,9 +48,10 @@ class SQLiteStateStore:
                 )
                 """
             )
+            connection.commit()
 
     def seen(self, dedupe_key: str) -> bool:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT 1 FROM idempotency_keys WHERE dedupe_key = ?",
                 (dedupe_key,),
@@ -58,7 +60,7 @@ class SQLiteStateStore:
 
     def mark_seen(self, dedupe_key: str) -> None:
         seen_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO idempotency_keys (dedupe_key, seen_at)
@@ -66,10 +68,11 @@ class SQLiteStateStore:
                 """,
                 (dedupe_key, seen_at),
             )
+            connection.commit()
 
     def append_run(self, record: RunRecord) -> None:
         payload = record.to_dict()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 """
                 INSERT INTO run_records (
@@ -97,9 +100,10 @@ class SQLiteStateStore:
                     payload["schema_version"],
                 ),
             )
+            connection.commit()
 
     def list_runs(self) -> list[RunRecord]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 "SELECT * FROM run_records ORDER BY created_at ASC"
             ).fetchall()
