@@ -38,3 +38,4 @@ Notes:
 - 2026-02-27: Added `app.policy.AllowlistPolicyEngine` implementing baseline deny-by-default policy behavior, including sensitive config updates routed to pending review.
 - 2026-02-27: Added `app.applier.NoOpApplier` baseline with `ApplyResult` contract so policy-approved operations can be summarized without side effects during bootstrap.
 - 2026-02-27: Added runnable `app.main` bootstrap flow wired through fake connectors, rule-based router, stub executor, allowlist policy, no-op applier, and SQLite run logging. The flow includes an intentional duplicate event skip and persists both `success` and `blocked_action` run outcomes.
+- 2026-02-27: Post-milestone P0 progress: added `app.executor.CodexExecutor` and strict structured-output parsing to advance Phase 2 executor requirements while preserving Milestone 01 bootstrap defaults.

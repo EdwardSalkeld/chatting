@@ -7,5 +7,6 @@
 - Run router tests: `python3 -m unittest tests.test_router`
 - Run policy tests: `python3 -m unittest tests.test_policy`
 - Run bootstrap flow tests: `python3 -m unittest tests.test_main`
+- Run executor tests: `python3 -m unittest tests.test_executor`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
 - If `rg` is unavailable locally, use `find . -type f` for file discovery.

@@ -52,6 +52,7 @@ Acceptance criteria:
 
 Progress notes:
 - 2026-02-27: Added `app.executor.StubExecutor` for deterministic bootstrap execution results used by `app.main`; full Codex executor wrapper with timeout + structured output parsing remains open.
+- 2026-02-27: Implemented `app.executor.CodexExecutor` with subprocess timeout handling and strict JSON schema parsing via `parse_execution_result`, including unit tests for success, timeout, invalid output, and non-zero exit paths.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days
