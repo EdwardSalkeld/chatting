@@ -58,6 +58,7 @@ Progress notes:
 - 2026-02-27: Added `app.executor.StubExecutor` for deterministic bootstrap execution results used by `app.main`; full Codex executor wrapper with timeout + structured output parsing remains open.
 - 2026-02-27: Implemented `app.executor.CodexExecutor` with subprocess timeout handling and strict JSON schema parsing via `parse_execution_result`, including unit tests for success, timeout, invalid output, and non-zero exit paths.
 - 2026-02-27: Tightened `parse_execution_result` schema checks to reject unknown nested keys in `messages`, `actions`, and `config_updates`, reducing output drift risk from executor responses.
+- 2026-02-27: Hardened `parse_execution_result` to require explicit top-level `schema_version` from Codex output instead of applying an implicit default; added parser coverage for missing-schema rejection to keep contract versioning strict.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days

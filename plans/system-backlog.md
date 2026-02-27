@@ -23,6 +23,7 @@ Progress notes:
 - 2026-02-27: Added typed `AuditEvent` contract plus `SQLiteStateStore` audit event persistence (`append_audit_event`/`list_audit_events`) and wired `app.main` to write one audit event per processed run with policy decision summary fields.
 - 2026-02-27: Added `app.state.StateStore` protocol contract and a runtime conformance test ensuring `SQLiteStateStore` satisfies the state interface boundary defined in architecture docs.
 - 2026-02-27: Hardened run-level observability output to emit the full contract fields (`run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, `result_status`) and added bootstrap flow assertions.
+- 2026-02-27: Hardened executor output contract enforcement by requiring explicit `schema_version` in parsed `ExecutionResult` payloads; removed implicit defaulting and added parser rejection coverage for missing schema versions.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

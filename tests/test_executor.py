@@ -46,6 +46,7 @@ class ParseExecutionResultTests(unittest.TestCase):
     def test_parse_execution_result_rejects_unknown_top_level_keys(self) -> None:
         payload = json.dumps(
             {
+                "schema_version": "1.0",
                 "messages": [],
                 "actions": [],
                 "config_updates": [],
@@ -61,6 +62,7 @@ class ParseExecutionResultTests(unittest.TestCase):
     def test_parse_execution_result_rejects_unknown_message_keys(self) -> None:
         payload = json.dumps(
             {
+                "schema_version": "1.0",
                 "messages": [
                     {
                         "channel": "email",
@@ -82,6 +84,7 @@ class ParseExecutionResultTests(unittest.TestCase):
     def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
         payload = json.dumps(
             {
+                "schema_version": "1.0",
                 "messages": [],
                 "actions": [
                     {
@@ -102,6 +105,7 @@ class ParseExecutionResultTests(unittest.TestCase):
     def test_parse_execution_result_rejects_unknown_config_update_keys(self) -> None:
         payload = json.dumps(
             {
+                "schema_version": "1.0",
                 "messages": [],
                 "actions": [],
                 "config_updates": [
@@ -117,6 +121,20 @@ class ParseExecutionResultTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "unknown_config_update_keys"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_missing_schema_version(self) -> None:
+        payload = json.dumps(
+            {
+                "messages": [],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missing_top_level_keys:schema_version"):
             parse_execution_result(payload)
 
 
@@ -152,6 +170,7 @@ class CodexExecutorTests(unittest.TestCase):
             returncode=0,
             stdout=json.dumps(
                 {
+                    "schema_version": "1.0",
                     "messages": [
                         {
                             "channel": "log",

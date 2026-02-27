@@ -9,6 +9,7 @@
 - Run bootstrap flow tests: `python3 -m unittest tests.test_main`
 - Run executor tests: `python3 -m unittest tests.test_executor`
 - Run executor parser-only checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests`
+- For executor schema-contract changes, run parser-only checks first, then full executor tests: `python3 -m unittest tests.test_executor.ParseExecutionResultTests && python3 -m unittest tests.test_executor`
 - Run state contract tests: `python3 -m unittest tests.test_state_contract`
 - Run audit logging checks: `python3 -m unittest tests.test_models tests.test_sqlite_store tests.test_main`
 - Run bootstrap observability log checks: `python3 -m unittest tests.test_main`

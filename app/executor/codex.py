@@ -78,6 +78,7 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
         )
 
     required_keys = {
+        "schema_version",
         "messages",
         "actions",
         "config_updates",
@@ -100,7 +101,7 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
     if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
         raise ValueError("errors_must_be_list_of_strings")
 
-    schema_version = payload.get("schema_version", "1.0")
+    schema_version = payload["schema_version"]
     if not isinstance(schema_version, str):
         raise ValueError("schema_version_must_be_string")
 
