@@ -16,6 +16,7 @@
 - Run targeted config-update contract checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_config_update_missing_required_value tests.test_models.ConfigUpdateTests.test_config_update_rejects_whitespace_only_path`
 - Run targeted error-string parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_error_item_with_empty_string tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_error_item_with_only_whitespace`
 - Run model string-list contract checks: `python3 -m unittest tests.test_models.StringListContractValidationTests`
+- Run model required-string hardening checks (plus parser compatibility): `python3 -m unittest tests.test_models.RequiredStringContractValidationTests tests.test_executor.ParseExecutionResultTests tests.test_executor`
 - For executor schema-contract changes, run parser-only checks first, then full executor tests: `python3 -m unittest tests.test_executor.ParseExecutionResultTests && python3 -m unittest tests.test_executor`
 - For schema-version contract hardening across models + executor parser, run: `python3 -m unittest tests.test_models tests.test_executor.ParseExecutionResultTests`
 - Run state contract tests: `python3 -m unittest tests.test_state_contract`

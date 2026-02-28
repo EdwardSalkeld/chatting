@@ -43,6 +43,7 @@ Progress notes:
 - 2026-02-28: Added live-mode startup safety (`--imap-host` now requires SMTP config), smoke-path execution (`--use-stub-executor`), and runnable artifacts (`docs/run-live.md`, `configs/live-schedule.example.json`) to accelerate deployment validation.
 - 2026-02-28: Added live-mode JSON config ingestion (`--config`) plus template config (`configs/live-runtime.example.json`), reducing command-line verbosity while preserving CLI override behavior.
 - 2026-02-28: Hardened top-level model string-list contracts so `errors`/`reason_codes` entries must be non-empty, non-whitespace strings across `ExecutionResult`, `PolicyDecision`, and `ApplyResult`, closing a remaining schema-quality gap outside executor parsing.
+- 2026-02-28: Hardened model-level required-string contracts to reject whitespace-only values across key message/action/envelope/run/audit fields while keeping executor parser `write_file_path_required`/`write_file_content_required` error semantics stable.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

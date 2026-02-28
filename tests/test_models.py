@@ -432,5 +432,49 @@ class StringListContractValidationTests(unittest.TestCase):
             )
 
 
+class RequiredStringContractValidationTests(unittest.TestCase):
+    def test_reply_channel_rejects_whitespace_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "type is required"):
+            ReplyChannel(type="   ", target="alice@example.com")
+
+        with self.assertRaisesRegex(ValueError, "target is required"):
+            ReplyChannel(type="email", target="  ")
+
+    def test_task_envelope_rejects_whitespace_required_strings(self) -> None:
+        with self.assertRaisesRegex(ValueError, "content is required"):
+            TaskEnvelope(
+                id="evt_1",
+                source="email",
+                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="   ",
+                attachments=[],
+                context_refs=[],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:1",
+            )
+
+    def test_action_and_message_reject_whitespace_required_strings(self) -> None:
+        with self.assertRaisesRegex(ValueError, "type is required"):
+            ActionProposal(type="   ")
+
+        with self.assertRaisesRegex(ValueError, "body is required"):
+            OutboundMessage(channel="email", target="alice@example.com", body="   ")
+
+    def test_run_record_rejects_whitespace_result_status(self) -> None:
+        with self.assertRaisesRegex(ValueError, "result_status is required"):
+            RunRecord(
+                run_id="run_1",
+                envelope_id="evt_1",
+                source="email",
+                workflow="respond_and_optionally_edit",
+                policy_profile="default",
+                latency_ms=1,
+                result_status="   ",
+                created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

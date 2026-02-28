@@ -28,6 +28,11 @@ def _validate_string_list(values: list[str], *, field_name: str) -> None:
             raise ValueError(f"{field_name} items must be non-empty strings")
 
 
+def _validate_required_string(value: str, *, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} is required")
+
+
 @dataclass(frozen=True)
 class AttachmentRef:
     """Reference to an external attachment."""
@@ -42,6 +47,10 @@ class ReplyChannel:
 
     type: str
     target: str
+
+    def __post_init__(self) -> None:
+        _validate_required_string(self.type, field_name="type")
+        _validate_required_string(self.target, field_name="target")
 
 
 @dataclass(frozen=True)
@@ -78,12 +87,10 @@ class TaskEnvelope:
         _validate_schema_version(self.schema_version)
         if self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
-        if not self.id:
-            raise ValueError("id is required")
-        if not self.dedupe_key:
-            raise ValueError("dedupe_key is required")
-        if not self.policy_profile:
-            raise ValueError("policy_profile is required")
+        _validate_required_string(self.id, field_name="id")
+        _validate_required_string(self.content, field_name="content")
+        _validate_required_string(self.dedupe_key, field_name="dedupe_key")
+        _validate_required_string(self.policy_profile, field_name="policy_profile")
         if self.received_at.tzinfo is None:
             raise ValueError("received_at must be timezone-aware")
 
@@ -129,21 +136,19 @@ class RoutedTask:
         _validate_schema_version(self.schema_version)
         if self.priority not in PRIORITY_TYPES:
             raise ValueError(f"priority must be one of {PRIORITY_TYPES}")
-        if not self.task_id:
-            raise ValueError("task_id is required")
-        if not self.envelope_id:
-            raise ValueError("envelope_id is required")
-        if not self.workflow:
-            raise ValueError("workflow is required")
-        if not self.policy_profile:
-            raise ValueError("policy_profile is required")
+        _validate_required_string(self.task_id, field_name="task_id")
+        _validate_required_string(self.envelope_id, field_name="envelope_id")
+        _validate_required_string(self.workflow, field_name="workflow")
+        _validate_required_string(self.policy_profile, field_name="policy_profile")
         if self.source is not None and self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
+        if self.actor is not None:
+            _validate_required_string(self.actor, field_name="actor")
+        if self.content is not None:
+            _validate_required_string(self.content, field_name="content")
         if self.reply_channel is not None:
-            if not self.reply_channel.type:
-                raise ValueError("reply_channel.type is required")
-            if not self.reply_channel.target:
-                raise ValueError("reply_channel.target is required")
+            _validate_required_string(self.reply_channel.type, field_name="reply_channel.type")
+            _validate_required_string(self.reply_channel.target, field_name="reply_channel.target")
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -181,12 +186,9 @@ class OutboundMessage:
     body: str
 
     def __post_init__(self) -> None:
-        if not self.channel:
-            raise ValueError("channel is required")
-        if not self.target:
-            raise ValueError("target is required")
-        if not self.body:
-            raise ValueError("body is required")
+        _validate_required_string(self.channel, field_name="channel")
+        _validate_required_string(self.target, field_name="target")
+        _validate_required_string(self.body, field_name="body")
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -205,8 +207,11 @@ class ActionProposal:
     content: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.type:
-            raise ValueError("type is required")
+        _validate_required_string(self.type, field_name="type")
+        if self.path is not None:
+            _validate_required_string(self.path, field_name="path")
+        if self.content is not None:
+            _validate_required_string(self.content, field_name="content")
 
     def to_dict(self) -> dict[str, str]:
         payload: dict[str, str] = {"type": self.type}
@@ -345,20 +350,15 @@ class RunRecord:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
-        if not self.run_id:
-            raise ValueError("run_id is required")
-        if not self.envelope_id:
-            raise ValueError("envelope_id is required")
+        _validate_required_string(self.run_id, field_name="run_id")
+        _validate_required_string(self.envelope_id, field_name="envelope_id")
         if self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
-        if not self.workflow:
-            raise ValueError("workflow is required")
-        if not self.policy_profile:
-            raise ValueError("policy_profile is required")
+        _validate_required_string(self.workflow, field_name="workflow")
+        _validate_required_string(self.policy_profile, field_name="policy_profile")
         if self.latency_ms < 0:
             raise ValueError("latency_ms must be non-negative")
-        if not self.result_status:
-            raise ValueError("result_status is required")
+        _validate_required_string(self.result_status, field_name="result_status")
         if self.created_at.tzinfo is None:
             raise ValueError("created_at must be timezone-aware")
 
@@ -392,18 +392,13 @@ class AuditEvent:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
-        if not self.run_id:
-            raise ValueError("run_id is required")
-        if not self.envelope_id:
-            raise ValueError("envelope_id is required")
+        _validate_required_string(self.run_id, field_name="run_id")
+        _validate_required_string(self.envelope_id, field_name="envelope_id")
         if self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
-        if not self.workflow:
-            raise ValueError("workflow is required")
-        if not self.policy_profile:
-            raise ValueError("policy_profile is required")
-        if not self.result_status:
-            raise ValueError("result_status is required")
+        _validate_required_string(self.workflow, field_name="workflow")
+        _validate_required_string(self.policy_profile, field_name="policy_profile")
+        _validate_required_string(self.result_status, field_name="result_status")
         if self.created_at.tzinfo is None:
             raise ValueError("created_at must be timezone-aware")
 

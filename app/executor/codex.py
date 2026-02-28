@@ -170,14 +170,19 @@ def _parse_actions(value: Any) -> list[ActionProposal]:
         if content is not None and not isinstance(content, str):
             raise ValueError("action_content_must_be_string")
 
+        action_type = _required_str(item, "type", "action")
+        _validate_action_payload(
+            action_type=action_type,
+            path=path,
+            content=content,
+        )
         actions.append(
             ActionProposal(
-                type=_required_str(item, "type", "action"),
+                type=action_type,
                 path=path,
                 content=content,
             )
         )
-        _validate_action_payload(actions[-1])
     return actions
 
 
@@ -216,17 +221,22 @@ def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
     return value
 
 
-def _validate_action_payload(action: ActionProposal) -> None:
-    if action.type == "write_file":
-        if action.path is None or _is_blank(action.path):
+def _validate_action_payload(
+    *,
+    action_type: str,
+    path: str | None,
+    content: str | None,
+) -> None:
+    if action_type == "write_file":
+        if path is None or _is_blank(path):
             raise ValueError("write_file_path_required")
-        if action.content is None or _is_blank(action.content):
+        if content is None or _is_blank(content):
             raise ValueError("write_file_content_required")
         return
 
-    if action.path is not None:
+    if path is not None:
         raise ValueError("non_write_file_path_forbidden")
-    if action.content is not None:
+    if content is not None:
         raise ValueError("non_write_file_content_forbidden")
 
 
