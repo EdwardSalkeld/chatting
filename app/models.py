@@ -111,6 +111,10 @@ class RoutedTask:
     priority: Literal["low", "normal", "high"]
     execution_constraints: ExecutionConstraints
     policy_profile: str
+    source: Literal["cron", "email", "im", "webhook"] | None = None
+    actor: str | None = None
+    content: str | None = None
+    reply_channel: ReplyChannel | None = None
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -125,9 +129,16 @@ class RoutedTask:
             raise ValueError("workflow is required")
         if not self.policy_profile:
             raise ValueError("policy_profile is required")
+        if self.source is not None and self.source not in SOURCE_TYPES:
+            raise ValueError(f"source must be one of {SOURCE_TYPES}")
+        if self.reply_channel is not None:
+            if not self.reply_channel.type:
+                raise ValueError("reply_channel.type is required")
+            if not self.reply_channel.target:
+                raise ValueError("reply_channel.target is required")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "task_id": self.task_id,
             "envelope_id": self.envelope_id,
@@ -139,6 +150,18 @@ class RoutedTask:
             },
             "policy_profile": self.policy_profile,
         }
+        if self.source is not None:
+            payload["source"] = self.source
+        if self.actor is not None:
+            payload["actor"] = self.actor
+        if self.content is not None:
+            payload["content"] = self.content
+        if self.reply_channel is not None:
+            payload["reply_channel"] = {
+                "type": self.reply_channel.type,
+                "target": self.reply_channel.target,
+            }
+        return payload
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,10 @@ class RuleBasedRouterTests(unittest.TestCase):
         self.assertEqual(task.execution_constraints.timeout_seconds, 180)
         self.assertEqual(task.execution_constraints.max_tokens, 12000)
         self.assertEqual(task.policy_profile, "default")
+        self.assertEqual(task.source, "email")
+        self.assertEqual(task.actor, "alice@example.com")
+        self.assertEqual(task.content, envelope.content)
+        self.assertEqual(task.reply_channel, envelope.reply_channel)
 
     def test_routes_cron_to_scheduled_automation_with_cron_constraints(self) -> None:
         envelope = TaskEnvelope(

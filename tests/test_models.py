@@ -76,6 +76,10 @@ class RoutedTaskTests(unittest.TestCase):
             priority="normal",
             execution_constraints=ExecutionConstraints(timeout_seconds=180, max_tokens=12000),
             policy_profile="default",
+            source="email",
+            actor="alice@example.com",
+            content="Please summarize and reply",
+            reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         )
 
         self.assertEqual(
@@ -91,6 +95,10 @@ class RoutedTaskTests(unittest.TestCase):
                     "max_tokens": 12000,
                 },
                 "policy_profile": "default",
+                "source": "email",
+                "actor": "alice@example.com",
+                "content": "Please summarize and reply",
+                "reply_channel": {"type": "email", "target": "alice@example.com"},
             },
         )
 

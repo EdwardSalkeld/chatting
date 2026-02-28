@@ -12,9 +12,15 @@ class StubExecutor:
     """Return deterministic outputs without invoking external tools."""
 
     def execute(self, task: RoutedTask) -> ExecutionResult:
+        channel = "log"
+        target = task.envelope_id
+        if task.reply_channel is not None:
+            channel = task.reply_channel.type
+            target = task.reply_channel.target
+
         message = OutboundMessage(
-            channel="log",
-            target=task.envelope_id,
+            channel=channel,
+            target=target,
             body=f"Handled workflow {task.workflow}",
         )
 

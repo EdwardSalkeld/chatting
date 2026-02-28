@@ -71,6 +71,7 @@ Progress notes:
 - 2026-02-28: Hardened executor action-shape validation so non-`write_file` actions cannot include `path` or `content`, preventing cross-action payload drift in structured outputs.
 - 2026-02-28: Hardened executor required-string parsing to reject whitespace-only `messages`/`actions`/`config_updates` fields and whitespace-only `write_file.path`/`write_file.content`, with parser regression coverage.
 - 2026-02-28: Added live runtime mode in `app.main` (`--run-live`) with long-lived connector polling, retry/DLQ handling, Codex command wiring, and CLI-configurable IMAP/schedule/SMTP integration parameters.
+- 2026-02-28: Extended `RoutedTask` context to include source/actor/content/reply-channel metadata and propagated it through routing + stub execution so email-origin tasks can produce dispatchable email responses in live mode.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days

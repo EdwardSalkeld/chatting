@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from app.executor import CodexExecutor, parse_execution_result
-from app.models import ExecutionConstraints, RoutedTask
+from app.models import ExecutionConstraints, ReplyChannel, RoutedTask
 
 
 def _task() -> RoutedTask:
@@ -15,6 +15,10 @@ def _task() -> RoutedTask:
         priority="normal",
         execution_constraints=ExecutionConstraints(timeout_seconds=7, max_tokens=1000),
         policy_profile="default",
+        source="email",
+        actor="alice@example.com",
+        content="Subject: hello\\n\\nPlease summarize this thread.",
+        reply_channel=ReplyChannel(type="email", target="alice@example.com"),
     )
 
 
