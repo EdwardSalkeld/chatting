@@ -41,6 +41,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Executor parser rejects `path`/`content` fields on non-`write_file` action payloads
 - [x] Executor parser rejects whitespace-only values for required message/action/config-update fields
 - [x] Executor parser rejects empty/whitespace-only strings in `errors` payload entries
+- [x] Top-level models reject empty/whitespace-only entries in `errors`/`reason_codes` string-list fields
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -68,3 +69,4 @@ Notes:
 - 2026-02-28: Post-milestone integration progress: added live runtime mode in `app.main` (`--run-live`) plus IMAP/schedule connector wiring and SMTP dispatch wiring so the app can operate beyond fake bootstrap inputs.
 - 2026-02-28: Post-milestone integration hardening: added live smoke-run support (`--use-stub-executor`), IMAP+SMTP startup validation, and first-run operator artifacts (`docs/run-live.md`, sample schedule JSON).
 - 2026-02-28: Post-milestone integration hardening: added `--config` runtime JSON support and a full example config template so live runs no longer require long argument chains.
+- 2026-02-28: Post-milestone P0 hardening: enforced model-level non-empty string-list validation for `ExecutionResult.errors`, `PolicyDecision.reason_codes`, and `ApplyResult.reason_codes` to keep contract integrity consistent beyond executor parsing.

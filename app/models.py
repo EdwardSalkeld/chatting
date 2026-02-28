@@ -20,6 +20,14 @@ def _validate_schema_version(schema_version: str) -> None:
         raise ValueError(f"unsupported_schema_version:{schema_version}")
 
 
+def _validate_string_list(values: list[str], *, field_name: str) -> None:
+    if not isinstance(values, list):
+        raise ValueError(f"{field_name} must be a list")
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{field_name} items must be non-empty strings")
+
+
 @dataclass(frozen=True)
 class AttachmentRef:
     """Reference to an external attachment."""
@@ -240,6 +248,7 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
+        _validate_string_list(self.errors, field_name="errors")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -281,6 +290,7 @@ class PolicyDecision:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
+        _validate_string_list(self.reason_codes, field_name="reason_codes")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -305,6 +315,7 @@ class ApplyResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
+        _validate_string_list(self.reason_codes, field_name="reason_codes")
 
     def to_dict(self) -> dict[str, Any]:
         return {

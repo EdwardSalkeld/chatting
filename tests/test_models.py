@@ -395,5 +395,36 @@ class SchemaVersionValidationTests(unittest.TestCase):
             )
 
 
+class StringListContractValidationTests(unittest.TestCase):
+    def test_execution_result_rejects_blank_error_items(self) -> None:
+        with self.assertRaisesRegex(ValueError, "errors items must be non-empty strings"):
+            ExecutionResult(
+                messages=[],
+                actions=[],
+                config_updates=[],
+                requires_human_review=False,
+                errors=["   "],
+            )
+
+    def test_policy_decision_rejects_blank_reason_codes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "reason_codes items must be non-empty strings"):
+            PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[""],
+            )
+
+    def test_apply_result_rejects_blank_reason_codes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "reason_codes items must be non-empty strings"):
+            ApplyResult(
+                applied_actions=[],
+                skipped_actions=[],
+                dispatched_messages=[],
+                reason_codes=["   "],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
