@@ -48,6 +48,7 @@ Progress notes:
 - Config versioning + rollback command
 
 ## P2 (Nice to Have)
+- Telegram connector + outbound dispatch path
 - Slack connector
 - Webhook connector
 - Queue backend abstraction (Redis/SQS)
@@ -62,3 +63,6 @@ Progress notes:
 - Strict schema validation + reject unknown critical fields
 - Connector adapters isolated behind interfaces
 - Deny-by-default policy profile with explicit allowlists
+
+Planning notes:
+- 2026-02-28: Added scoped delivery plan for Telegram integration in `plans/milestone-02-telegram-integration.md` to de-risk P2 connector expansion with explicit acceptance criteria and rollout stages.

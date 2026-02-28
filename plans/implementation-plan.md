@@ -123,6 +123,9 @@ Acceptance criteria:
 - Both connectors use same canonical envelope path
 - New connector onboarding does not change router/executor interfaces
 
+Progress notes:
+- 2026-02-28: Authored `plans/milestone-02-telegram-integration.md` to define phased Telegram connector + dispatch implementation (contracts, config, tests, rollout) as the first concrete Phase 5 workstream.
+
 ## Cross-Cutting Test Plan
 - Unit tests: models, router, policy, parser
 - Integration tests: connector -> queue -> executor -> applier
