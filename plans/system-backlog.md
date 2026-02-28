@@ -34,6 +34,7 @@ Progress notes:
 - 2026-02-28: Hardened executor action schema enforcement so `write_file` actions require non-empty `path` and `content`, preventing incomplete file-write proposals from entering policy/apply flow.
 - 2026-02-28: Hardened executor action-shape schema so non-`write_file` actions reject `path`/`content` fields, tightening contract isolation between action types.
 - 2026-02-28: Hardened executor required-string schema checks to reject whitespace-only required fields in `messages`, `actions`, and `config_updates`, including whitespace-only `write_file.path`/`write_file.content`.
+- 2026-02-28: Added integration-ready connector primitives for real sources: interval-based cron scheduling (`IntervalScheduleConnector`) and IMAP polling (`ImapEmailConnector`), with unit tests validating canonical envelope normalization.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

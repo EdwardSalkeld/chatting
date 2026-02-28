@@ -36,6 +36,7 @@ Acceptance criteria:
 
 Progress notes:
 - 2026-02-27: Implemented bootstrap `app.connectors` package with connector protocol and fake cron/email connectors that emit canonical `TaskEnvelope` objects (unit-tested).
+- 2026-02-28: Added production-integration connector primitives: `IntervalScheduleConnector` (interval-based scheduled events) and `ImapEmailConnector` (IMAP inbox polling to canonical envelopes), both with unit coverage.
 - 2026-02-27: Implemented baseline `app.router.RuleBasedRouter` that maps canonical envelopes to `RoutedTask` with source-specific workflows/constraints and urgent email prioritization (unit-tested).
 - 2026-02-27: Implemented runnable `app.main` bootstrap flow with SQLite idempotency checks in the processing loop; verifies duplicate events are skipped and run records are persisted for cron/email scenarios.
 - 2026-02-27: Added explicit `StateStore` protocol contract and SQLite runtime conformance test to reinforce module boundary compatibility for future backend swaps.

@@ -1,8 +1,14 @@
 import unittest
 from datetime import datetime, timezone
+from email.message import EmailMessage as ParsedEmailMessage
 
 from app.connectors.fake_cron_connector import CronTrigger, FakeCronConnector
 from app.connectors.fake_email_connector import EmailMessage, FakeEmailConnector
+from app.connectors.imap_email_connector import ImapEmailConnector
+from app.connectors.interval_schedule_connector import (
+    IntervalScheduleConnector,
+    IntervalScheduleJob,
+)
 
 
 class FakeCronConnectorTests(unittest.TestCase):
@@ -90,6 +96,151 @@ class FakeEmailConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
+
+
+class IntervalScheduleConnectorTests(unittest.TestCase):
+    def test_poll_emits_due_job_and_respects_interval(self) -> None:
+        clock = _MutableClock(datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc))
+        connector = IntervalScheduleConnector(
+            jobs=[
+                IntervalScheduleJob(
+                    job_name="heartbeat",
+                    content="Run scheduled heartbeat",
+                    interval_seconds=60,
+                    start_at=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+                    context_refs=["repo:/home/edward/chatting"],
+                )
+            ],
+            now_provider=clock.now,
+        )
+
+        first_poll = connector.poll()
+        self.assertEqual(len(first_poll), 1)
+        self.assertEqual(
+            first_poll[0].dedupe_key,
+            "cron:heartbeat:2026-02-28T10:00:00+00:00",
+        )
+
+        self.assertEqual(connector.poll(), [])
+
+        clock.set(datetime(2026, 2, 28, 10, 1, tzinfo=timezone.utc))
+        second_poll = connector.poll()
+        self.assertEqual(len(second_poll), 1)
+        self.assertEqual(
+            second_poll[0].dedupe_key,
+            "cron:heartbeat:2026-02-28T10:01:00+00:00",
+        )
+
+    def test_job_rejects_naive_start_at(self) -> None:
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            IntervalScheduleJob(
+                job_name="daily",
+                content="Run",
+                interval_seconds=30,
+                start_at=datetime(2026, 2, 28, 10, 0),
+                context_refs=[],
+            )
+
+
+class ImapEmailConnectorTests(unittest.TestCase):
+    def test_poll_normalizes_imap_messages_to_envelopes(self) -> None:
+        raw_message = _build_raw_email(
+            sender="alice@example.com",
+            subject="Please summarize",
+            body="Summarize this inbox thread.",
+            date_value="Sat, 28 Feb 2026 10:15:00 +0000",
+        )
+        fake_client = _FakeImapClient({b"101": raw_message})
+        connector = ImapEmailConnector(
+            host="imap.example.com",
+            username="bot@example.com",
+            password="secret",
+            imap_client_factory=lambda _host, _port: fake_client,
+            context_refs=["repo:/home/edward/chatting"],
+            now_provider=lambda: datetime(2026, 2, 28, 10, 30, tzinfo=timezone.utc),
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        envelope = envelopes[0]
+        self.assertEqual(envelope.source, "email")
+        self.assertEqual(envelope.actor, "alice@example.com")
+        self.assertEqual(envelope.reply_channel.target, "alice@example.com")
+        self.assertEqual(envelope.dedupe_key, "email:101")
+        self.assertEqual(
+            envelope.content,
+            "Subject: Please summarize\n\nSummarize this inbox thread.",
+        )
+        self.assertEqual(
+            envelope.received_at,
+            datetime(2026, 2, 28, 10, 15, tzinfo=timezone.utc),
+        )
+
+    def test_poll_falls_back_to_now_for_invalid_date_header(self) -> None:
+        raw_message = _build_raw_email(
+            sender="alice@example.com",
+            subject="No Date",
+            body="Body",
+            date_value="not-a-date",
+        )
+        fake_client = _FakeImapClient({b"201": raw_message})
+        fallback_now = datetime(2026, 2, 28, 11, 0, tzinfo=timezone.utc)
+        connector = ImapEmailConnector(
+            host="imap.example.com",
+            username="bot@example.com",
+            password="secret",
+            imap_client_factory=lambda _host, _port: fake_client,
+            now_provider=lambda: fallback_now,
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(envelopes[0].received_at, fallback_now)
+
+
+class _MutableClock:
+    def __init__(self, current: datetime) -> None:
+        self._current = current
+
+    def now(self) -> datetime:
+        return self._current
+
+    def set(self, value: datetime) -> None:
+        self._current = value
+
+
+class _FakeImapClient:
+    def __init__(self, raw_messages_by_uid: dict[bytes, bytes]) -> None:
+        self._raw_messages_by_uid = raw_messages_by_uid
+
+    def login(self, _username: str, _password: str):
+        return "OK", [b"logged-in"]
+
+    def select(self, _mailbox: str):
+        return "OK", [b"1"]
+
+    def search(self, _charset, _criterion: str):
+        joined = b" ".join(sorted(self._raw_messages_by_uid.keys()))
+        return "OK", [joined]
+
+    def fetch(self, uid: bytes, _payload: str):
+        raw_message = self._raw_messages_by_uid[uid]
+        return "OK", [(b"RFC822", raw_message)]
+
+    def logout(self):
+        return "BYE", [b"logged-out"]
+
+
+def _build_raw_email(*, sender: str, subject: str, body: str, date_value: str) -> bytes:
+    parsed = ParsedEmailMessage()
+    parsed["From"] = sender
+    parsed["To"] = "bot@example.com"
+    parsed["Subject"] = subject
+    parsed["Date"] = date_value
+    parsed.set_content(body)
+    return parsed.as_bytes()
 
 
 if __name__ == "__main__":
