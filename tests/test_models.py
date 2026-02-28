@@ -433,6 +433,13 @@ class StringListContractValidationTests(unittest.TestCase):
 
 
 class RequiredStringContractValidationTests(unittest.TestCase):
+    def test_attachment_ref_rejects_blank_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "uri is required"):
+            AttachmentRef(uri="   ")
+
+        with self.assertRaisesRegex(ValueError, "name is required"):
+            AttachmentRef(uri="s3://bucket/file.txt", name="   ")
+
     def test_reply_channel_rejects_whitespace_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "type is required"):
             ReplyChannel(type="   ", target="alice@example.com")
@@ -449,6 +456,40 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 actor="alice@example.com",
                 content="   ",
                 attachments=[],
+                context_refs=[],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:1",
+            )
+
+    def test_task_envelope_rejects_invalid_context_refs_items(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "context_refs items must be non-empty strings"
+        ):
+            TaskEnvelope(
+                id="evt_1",
+                source="email",
+                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="content",
+                attachments=[],
+                context_refs=["repo:/home/edward/chatting", "   "],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:1",
+            )
+
+    def test_task_envelope_rejects_invalid_attachment_items(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "attachments items must be AttachmentRef"
+        ):
+            TaskEnvelope(
+                id="evt_1",
+                source="email",
+                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="content",
+                attachments=[object()],  # type: ignore[list-item]
                 context_refs=[],
                 policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),

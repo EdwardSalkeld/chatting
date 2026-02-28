@@ -44,6 +44,7 @@ Progress notes:
 - 2026-02-28: Added live-mode JSON config ingestion (`--config`) plus template config (`configs/live-runtime.example.json`), reducing command-line verbosity while preserving CLI override behavior.
 - 2026-02-28: Hardened top-level model string-list contracts so `errors`/`reason_codes` entries must be non-empty, non-whitespace strings across `ExecutionResult`, `PolicyDecision`, and `ApplyResult`, closing a remaining schema-quality gap outside executor parsing.
 - 2026-02-28: Hardened model-level required-string contracts to reject whitespace-only values across key message/action/envelope/run/audit fields while keeping executor parser `write_file_path_required`/`write_file_content_required` error semantics stable.
+- 2026-02-28: Hardened `TaskEnvelope` runtime contract validation so `attachments` must be `AttachmentRef` objects with non-empty `uri`/optional `name`, and `context_refs` entries must be non-empty strings.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

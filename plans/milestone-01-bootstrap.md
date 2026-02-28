@@ -44,6 +44,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Top-level models reject empty/whitespace-only entries in `errors`/`reason_codes` string-list fields
 - [x] Config-update contracts reject whitespace-only `path` values and require parser-level `value` presence
 - [x] Model-layer required-string fields reject whitespace-only values without regressing executor parser error-code contracts
+- [x] `TaskEnvelope` enforces runtime attachment/context-ref list contracts (typed attachments + non-empty refs)
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -74,3 +75,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: enforced model-level non-empty string-list validation for `ExecutionResult.errors`, `PolicyDecision.reason_codes`, and `ApplyResult.reason_codes` to keep contract integrity consistent beyond executor parsing.
 - 2026-02-28: Post-milestone P0 hardening: aligned config-update strictness across layers by rejecting whitespace-only `ConfigUpdate.path` in model constructors and adding parser regression coverage for missing `config_update.value`.
 - 2026-02-28: Post-milestone P0 hardening: expanded model-level required-string validation to reject whitespace-only values in reply-channel, envelope/routed-task identifiers/content, action/message fields, and run/audit metadata; updated executor action parsing order so `write_file_*_required` parser errors remain unchanged.
+- 2026-02-28: Post-milestone P0 hardening: enforced `TaskEnvelope` runtime list contracts so `attachments` contain only `AttachmentRef` values (with non-empty URI/name fields) and `context_refs` entries are non-empty strings.

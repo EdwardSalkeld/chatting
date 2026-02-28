@@ -19,6 +19,7 @@ Acceptance criteria:
 
 Progress notes:
 - 2026-02-27: Hardened bootstrap observability output in `app.main` so each processed run emits `run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, and `result_status`; added test coverage in `tests.test_main`.
+- 2026-02-28: Hardened `TaskEnvelope` model runtime validation to enforce canonical list contracts for `attachments` and `context_refs` (including non-empty `AttachmentRef.uri`/`name` and non-blank context refs), with regression coverage in `tests.test_models`.
 
 ## Phase 1: Ingestion + Queue
 Duration: 3-4 days

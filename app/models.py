@@ -33,12 +33,33 @@ def _validate_required_string(value: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} is required")
 
 
+def _validate_context_refs(values: list[str]) -> None:
+    if not isinstance(values, list):
+        raise ValueError("context_refs must be a list")
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("context_refs items must be non-empty strings")
+
+
+def _validate_attachments(values: list["AttachmentRef"]) -> None:
+    if not isinstance(values, list):
+        raise ValueError("attachments must be a list")
+    for item in values:
+        if not isinstance(item, AttachmentRef):
+            raise ValueError("attachments items must be AttachmentRef")
+
+
 @dataclass(frozen=True)
 class AttachmentRef:
     """Reference to an external attachment."""
 
     uri: str
     name: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_required_string(self.uri, field_name="uri")
+        if self.name is not None:
+            _validate_required_string(self.name, field_name="name")
 
 
 @dataclass(frozen=True)
@@ -91,6 +112,8 @@ class TaskEnvelope:
         _validate_required_string(self.content, field_name="content")
         _validate_required_string(self.dedupe_key, field_name="dedupe_key")
         _validate_required_string(self.policy_profile, field_name="policy_profile")
+        _validate_attachments(self.attachments)
+        _validate_context_refs(self.context_refs)
         if self.received_at.tzinfo is None:
             raise ValueError("received_at must be timezone-aware")
 
