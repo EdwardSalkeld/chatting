@@ -101,6 +101,8 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
     errors = payload["errors"]
     if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
         raise ValueError("errors_must_be_list_of_strings")
+    if any(_is_blank(item) for item in errors):
+        raise ValueError("errors_items_must_be_non_empty_strings")
 
     schema_version = payload["schema_version"]
     if not isinstance(schema_version, str):

@@ -404,6 +404,40 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_error_item_with_empty_string(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [""],
+            }
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "errors_items_must_be_non_empty_strings"
+        ):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_error_item_with_only_whitespace(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": ["   "],
+            }
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "errors_items_must_be_non_empty_strings"
+        ):
+            parse_execution_result(payload)
+
 
 class CodexExecutorTests(unittest.TestCase):
     @patch("app.executor.codex.subprocess.run")
