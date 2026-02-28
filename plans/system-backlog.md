@@ -30,6 +30,7 @@ Progress notes:
 - 2026-02-28: Added bootstrap retry enforcement in `app.main` with bounded attempts and `dead_letter` terminal status on retry exhaustion, including audit metadata for attempts and terminal error details.
 - 2026-02-28: Hardened schema-version compatibility by rejecting unsupported schema versions (non-`1.0`) in model constructors and `parse_execution_result`, tightening cross-module contract enforcement.
 - 2026-02-28: Added `app.main` CLI support for `--max-attempts` with fail-fast validation so retry/DLQ limits are operator-configurable at runtime.
+- 2026-02-28: Hardened executor structured-output parsing to emit explicit missing-field errors for nested required keys (`message_body_required`, `action_type_required`, `config_update_path_required`) to tighten P0 schema-drift controls.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

@@ -56,3 +56,4 @@ Notes:
 - 2026-02-28: Post-milestone hardening: added bounded retry behavior in `app.main.run_bootstrap` with `dead_letter` terminal status and audit details when attempts are exhausted.
 - 2026-02-28: Post-milestone P0 hardening: limited accepted `schema_version` values to `1.0` in top-level models and `parse_execution_result`, with regression tests for unsupported versions.
 - 2026-02-28: Post-milestone P0 hardening: exposed retry limits via `app.main --max-attempts` with positive-integer validation and CLI coverage tests.
+- 2026-02-28: Post-milestone P0 hardening: tightened executor parser required-field checks so missing nested keys in `messages`, `actions`, and `config_updates` fail with explicit `*_required` errors.

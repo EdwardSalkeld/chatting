@@ -203,7 +203,9 @@ def _parse_config_updates(value: Any) -> list[ConfigUpdate]:
 
 
 def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
-    value = payload.get(key)
+    if key not in payload:
+        raise ValueError(f"{context}_{key}_required")
+    value = payload[key]
     if not isinstance(value, str):
         raise ValueError(f"{context}_{key}_must_be_string")
     if not value:

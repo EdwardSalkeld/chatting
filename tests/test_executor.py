@@ -81,6 +81,26 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown_message_keys"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_message_missing_required_field(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [
+                    {
+                        "channel": "email",
+                        "target": "alice@example.com",
+                    }
+                ],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "message_body_required"):
+            parse_execution_result(payload)
+
     def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
         payload = json.dumps(
             {
@@ -102,6 +122,21 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown_action_keys"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_action_missing_required_field(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"path": "docs/notes.md"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "action_type_required"):
+            parse_execution_result(payload)
+
     def test_parse_execution_result_rejects_unknown_config_update_keys(self) -> None:
         payload = json.dumps(
             {
@@ -121,6 +156,21 @@ class ParseExecutionResultTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "unknown_config_update_keys"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_config_update_missing_required_path(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [],
+                "config_updates": [{"value": 240}],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "config_update_path_required"):
             parse_execution_result(payload)
 
     def test_parse_execution_result_rejects_missing_schema_version(self) -> None:
