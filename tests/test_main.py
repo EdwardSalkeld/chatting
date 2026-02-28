@@ -77,6 +77,17 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(first_success_event.detail["skipped_action_count"], 0)
             self.assertEqual(first_success_event.detail["dispatched_message_count"], 1)
             self.assertEqual(first_success_event.detail["apply_reason_codes"], [])
+            self.assertEqual(
+                first_success_event.detail["execution_summary"],
+                {
+                    "message_count": 1,
+                    "action_count": 0,
+                    "config_update_count": 0,
+                    "error_count": 0,
+                    "action_types": [],
+                    "requires_human_review": False,
+                },
+            )
 
             blocked_event = next(event for event in audit_events if event.run_id == "run:email:blocked-1")
             self.assertEqual(blocked_event.detail["applied_action_count"], 0)
@@ -127,6 +138,17 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(target_event.detail["skipped_action_count"], 0)
             self.assertEqual(target_event.detail["dispatched_message_count"], 1)
             self.assertEqual(target_event.detail["apply_reason_codes"], [])
+            self.assertEqual(
+                target_event.detail["execution_summary"],
+                {
+                    "message_count": 1,
+                    "action_count": 0,
+                    "config_update_count": 0,
+                    "error_count": 0,
+                    "action_types": [],
+                    "requires_human_review": False,
+                },
+            )
             self.assertIsNotNone(target_event.detail["last_error"])
 
     def test_run_bootstrap_marks_dead_letter_when_retries_exhausted(self) -> None:
@@ -159,6 +181,17 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(audit_events[0].detail["skipped_action_count"], 0)
             self.assertEqual(audit_events[0].detail["dispatched_message_count"], 0)
             self.assertEqual(audit_events[0].detail["apply_reason_codes"], [])
+            self.assertEqual(
+                audit_events[0].detail["execution_summary"],
+                {
+                    "message_count": 0,
+                    "action_count": 0,
+                    "config_update_count": 0,
+                    "error_count": 0,
+                    "action_types": [],
+                    "requires_human_review": False,
+                },
+            )
             self.assertIn("RuntimeError", audit_events[0].detail["last_error"])
 
 

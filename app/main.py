@@ -153,6 +153,12 @@ def _process_envelope(
     approved_action_count = 0
     blocked_action_count = 0
     approved_message_count = 0
+    execution_message_count = 0
+    execution_action_count = 0
+    execution_config_update_count = 0
+    execution_error_count = 0
+    execution_action_types: list[str] = []
+    requires_human_review = False
     applied_action_count = 0
     skipped_action_count = 0
     dispatched_message_count = 0
@@ -164,6 +170,12 @@ def _process_envelope(
         attempt_count = attempt
         try:
             execution_result = executor_impl.execute(task)
+            execution_message_count = len(execution_result.messages)
+            execution_action_count = len(execution_result.actions)
+            execution_config_update_count = len(execution_result.config_updates)
+            execution_error_count = len(execution_result.errors)
+            execution_action_types = [action.type for action in execution_result.actions]
+            requires_human_review = execution_result.requires_human_review
             decision = policy.evaluate(execution_result)
             apply_result = applier.apply(decision)
             reason_codes = decision.reason_codes
@@ -216,6 +228,14 @@ def _process_envelope(
                 "approved_action_count": approved_action_count,
                 "blocked_action_count": blocked_action_count,
                 "approved_message_count": approved_message_count,
+                "execution_summary": {
+                    "message_count": execution_message_count,
+                    "action_count": execution_action_count,
+                    "config_update_count": execution_config_update_count,
+                    "error_count": execution_error_count,
+                    "action_types": execution_action_types,
+                    "requires_human_review": requires_human_review,
+                },
                 "applied_action_count": applied_action_count,
                 "skipped_action_count": skipped_action_count,
                 "dispatched_message_count": dispatched_message_count,

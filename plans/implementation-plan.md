@@ -116,6 +116,7 @@ Acceptance criteria:
 Progress notes:
 - 2026-02-27: Added per-run audit logging baseline via `AuditEvent` model and SQLite persistence; bootstrap flow now emits one audit event for each processed run with policy decision counts and reason codes.
 - 2026-02-28: Extended run audit-event detail to include apply-phase outcomes from `ApplyResult` (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`) so operators can correlate policy approvals with actual side effects.
+- 2026-02-28: Extended bootstrap/live audit-event detail with executor output summaries (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`) so run history captures execution-output shape alongside policy/apply outcomes.
 
 ## Phase 5: Connector Expansion (Optional)
 Duration: 3-5 days

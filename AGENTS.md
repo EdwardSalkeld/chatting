@@ -25,6 +25,7 @@
 - Run audit logging checks: `python3 -m unittest tests.test_models tests.test_sqlite_store tests.test_main`
 - Run bootstrap observability log checks: `python3 -m unittest tests.test_main`
 - Run bootstrap apply-audit detail checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
+- Run bootstrap execution-summary audit checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
 - Run bootstrap retry/DLQ checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
 - Run idempotency contract checks: `python3 -m unittest tests.test_sqlite_store tests.test_main`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
