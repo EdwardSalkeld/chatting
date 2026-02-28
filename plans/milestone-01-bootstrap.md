@@ -65,3 +65,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: tightened executor required-string checks to reject whitespace-only values for `message.body`, `action.type`, `config_update.path`, and `write_file` path/content fields.
 - 2026-02-28: Post-milestone integration progress: added live runtime mode in `app.main` (`--run-live`) plus IMAP/schedule connector wiring and SMTP dispatch wiring so the app can operate beyond fake bootstrap inputs.
 - 2026-02-28: Post-milestone integration hardening: added live smoke-run support (`--use-stub-executor`), IMAP+SMTP startup validation, and first-run operator artifacts (`docs/run-live.md`, sample schedule JSON).
+- 2026-02-28: Post-milestone integration hardening: added `--config` runtime JSON support and a full example config template so live runs no longer require long argument chains.

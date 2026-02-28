@@ -39,6 +39,7 @@ Progress notes:
 - 2026-02-28: Added live worker execution mode in `app.main` with connector polling loop (`run_live`), CLI configuration for schedule/IMAP/SMTP/Codex wiring, and tests covering live flow and CLI branch selection.
 - 2026-02-28: Added reply-channel propagation in routed task context (router + models + stub executor) so email responses can target sender channels correctly during integrated live runs.
 - 2026-02-28: Added live-mode startup safety (`--imap-host` now requires SMTP config), smoke-path execution (`--use-stub-executor`), and runnable artifacts (`docs/run-live.md`, `configs/live-schedule.example.json`) to accelerate deployment validation.
+- 2026-02-28: Added live-mode JSON config ingestion (`--config`) plus template config (`configs/live-runtime.example.json`), reducing command-line verbosity while preserving CLI override behavior.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

@@ -279,14 +279,17 @@ def _result_status(reason_codes: list[str]) -> str:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run bootstrap prototype flow.")
     parser.add_argument(
+        "--config",
+        help="Path to JSON config file. CLI flags override config values.",
+    )
+    parser.add_argument(
         "--db-path",
         help="Path to SQLite state database. Uses a temp file when omitted.",
     )
     parser.add_argument(
         "--max-attempts",
         type=_positive_int,
-        default=2,
-        help="Maximum executor attempts per task before marking dead-letter (default: 2).",
+        help="Maximum executor attempts per task before marking dead-letter.",
     )
     parser.add_argument(
         "--run-live",
@@ -296,8 +299,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--poll-interval-seconds",
         type=_positive_float,
-        default=30.0,
-        help="Polling interval between live connector sweeps (default: 30).",
+        help="Polling interval between live connector sweeps.",
     )
     parser.add_argument(
         "--max-loops",
@@ -306,8 +308,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--base-dir",
-        default=".",
-        help="Base directory for write_file actions in live mode (default: current directory).",
+        help="Base directory for write_file actions in live mode.",
     )
     parser.add_argument(
         "--schedule-file",
@@ -317,36 +318,30 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--imap-port",
         type=_positive_int,
-        default=993,
-        help="IMAP port (default: 993).",
+        help="IMAP port.",
     )
     parser.add_argument("--imap-username", help="IMAP username.")
     parser.add_argument(
         "--imap-password-env",
-        default="CHATTING_IMAP_PASSWORD",
         help="Environment variable name containing IMAP password.",
     )
     parser.add_argument(
         "--imap-mailbox",
-        default="INBOX",
-        help="IMAP mailbox name (default: INBOX).",
+        help="IMAP mailbox name.",
     )
     parser.add_argument(
         "--imap-search",
-        default="UNSEEN",
-        help="IMAP search criterion (default: UNSEEN).",
+        help="IMAP search criterion.",
     )
     parser.add_argument("--smtp-host", help="SMTP host for outbound email dispatch.")
     parser.add_argument(
         "--smtp-port",
         type=_positive_int,
-        default=465,
-        help="SMTP port (default: 465).",
+        help="SMTP port.",
     )
     parser.add_argument("--smtp-username", help="SMTP username.")
     parser.add_argument(
         "--smtp-password-env",
-        default="CHATTING_SMTP_PASSWORD",
         help="Environment variable name containing SMTP password.",
     )
     parser.add_argument(
@@ -366,8 +361,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--codex-command",
-        default="codex exec --json",
-        help="Command used for live Codex execution (default: 'codex exec --json').",
+        help="Command used for live Codex execution.",
     )
     parser.add_argument(
         "--use-stub-executor",
@@ -379,94 +373,211 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    if args.db_path:
-        db_path = args.db_path
-    else:
-        db_path = str(Path(tempfile.gettempdir()) / "chatting-bootstrap-state.db")
+    config = _load_runtime_config(args.config)
+    db_path = _resolve_str(
+        cli_value=args.db_path,
+        config_value=config.get("db_path"),
+        default_value=str(Path(tempfile.gettempdir()) / "chatting-bootstrap-state.db"),
+        setting_name="db_path",
+    )
+    max_attempts = _resolve_positive_int(
+        cli_value=args.max_attempts,
+        config_value=config.get("max_attempts"),
+        default_value=2,
+        setting_name="max_attempts",
+    )
 
     if args.run_live:
-        if args.imap_host and not args.smtp_host:
+        imap_host = _resolve_optional_str(
+            cli_value=args.imap_host,
+            config_value=config.get("imap_host"),
+            setting_name="imap_host",
+        )
+        smtp_host = _resolve_optional_str(
+            cli_value=args.smtp_host,
+            config_value=config.get("smtp_host"),
+            setting_name="smtp_host",
+        )
+        if imap_host and not smtp_host:
             raise ValueError("--smtp-host is required when --imap-host is set in live mode")
-        connectors = _build_live_connectors(args)
-        email_sender = _build_email_sender(args)
-        executor = _build_codex_executor(args)
+        connectors = _build_live_connectors(args, config)
+        email_sender = _build_email_sender(args, config)
+        executor = _build_codex_executor(args, config)
+        poll_interval_seconds = _resolve_positive_float(
+            cli_value=args.poll_interval_seconds,
+            config_value=config.get("poll_interval_seconds"),
+            default_value=30.0,
+            setting_name="poll_interval_seconds",
+        )
+        max_loops = _resolve_optional_positive_int(
+            cli_value=args.max_loops,
+            config_value=config.get("max_loops"),
+            setting_name="max_loops",
+        )
+        base_dir = _resolve_str(
+            cli_value=args.base_dir,
+            config_value=config.get("base_dir"),
+            default_value=".",
+            setting_name="base_dir",
+        )
         run_live(
             db_path,
             connectors=connectors,
             executor=executor,
-            max_attempts=args.max_attempts,
-            poll_interval_seconds=args.poll_interval_seconds,
-            max_loops=args.max_loops,
-            base_dir=args.base_dir,
+            max_attempts=max_attempts,
+            poll_interval_seconds=poll_interval_seconds,
+            max_loops=max_loops,
+            base_dir=base_dir,
             email_sender=email_sender,
         )
         return 0
 
-    run_bootstrap(db_path, max_attempts=args.max_attempts)
+    run_bootstrap(db_path, max_attempts=max_attempts)
     return 0
 
 
-def _build_live_connectors(args: argparse.Namespace) -> list[Connector]:
+def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) -> list[Connector]:
     connectors: list[Connector] = []
 
-    if args.schedule_file:
-        jobs = _load_schedule_jobs(args.schedule_file)
+    schedule_file = _resolve_optional_str(
+        cli_value=args.schedule_file,
+        config_value=config.get("schedule_file"),
+        setting_name="schedule_file",
+    )
+    if schedule_file:
+        jobs = _load_schedule_jobs(schedule_file)
         connectors.append(IntervalScheduleConnector(jobs=jobs))
 
-    if args.imap_host:
-        if not args.imap_username:
+    imap_host = _resolve_optional_str(
+        cli_value=args.imap_host,
+        config_value=config.get("imap_host"),
+        setting_name="imap_host",
+    )
+    if imap_host:
+        imap_username = _resolve_optional_str(
+            cli_value=args.imap_username,
+            config_value=config.get("imap_username"),
+            setting_name="imap_username",
+        )
+        if not imap_username:
             raise ValueError("--imap-username is required when --imap-host is set")
-        password = os.environ.get(args.imap_password_env, "")
+        imap_password_env = _resolve_str(
+            cli_value=args.imap_password_env,
+            config_value=config.get("imap_password_env"),
+            default_value="CHATTING_IMAP_PASSWORD",
+            setting_name="imap_password_env",
+        )
+        password = os.environ.get(imap_password_env, "")
         if not password:
-            raise ValueError(f"missing IMAP password env var: {args.imap_password_env}")
+            raise ValueError(f"missing IMAP password env var: {imap_password_env}")
+        context_refs = _resolve_context_refs(args.context_ref, config)
         connectors.append(
             ImapEmailConnector(
-                host=args.imap_host,
-                port=args.imap_port,
-                username=args.imap_username,
+                host=imap_host,
+                port=_resolve_positive_int(
+                    cli_value=args.imap_port,
+                    config_value=config.get("imap_port"),
+                    default_value=993,
+                    setting_name="imap_port",
+                ),
+                username=imap_username,
                 password=password,
-                mailbox=args.imap_mailbox,
-                search_criterion=args.imap_search,
-                context_refs=list(args.context_ref),
+                mailbox=_resolve_str(
+                    cli_value=args.imap_mailbox,
+                    config_value=config.get("imap_mailbox"),
+                    default_value="INBOX",
+                    setting_name="imap_mailbox",
+                ),
+                search_criterion=_resolve_str(
+                    cli_value=args.imap_search,
+                    config_value=config.get("imap_search"),
+                    default_value="UNSEEN",
+                    setting_name="imap_search",
+                ),
+                context_refs=context_refs,
             )
         )
 
     if not connectors:
         raise ValueError(
             "live mode requires at least one connector (--schedule-file and/or --imap-host)"
-        )
+    )
     return connectors
 
 
-def _build_email_sender(args: argparse.Namespace) -> SmtpEmailSender | None:
-    if not args.smtp_host:
+def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> SmtpEmailSender | None:
+    smtp_host = _resolve_optional_str(
+        cli_value=args.smtp_host,
+        config_value=config.get("smtp_host"),
+        setting_name="smtp_host",
+    )
+    if not smtp_host:
         return None
 
-    from_address = args.smtp_from or args.smtp_username
+    smtp_username = _resolve_optional_str(
+        cli_value=args.smtp_username,
+        config_value=config.get("smtp_username"),
+        setting_name="smtp_username",
+    )
+    from_address = _resolve_optional_str(
+        cli_value=args.smtp_from,
+        config_value=config.get("smtp_from"),
+        setting_name="smtp_from",
+    ) or smtp_username
     if not from_address:
         raise ValueError("--smtp-from or --smtp-username is required when --smtp-host is set")
 
     password = None
-    if args.smtp_username:
-        password = os.environ.get(args.smtp_password_env, "")
+    if smtp_username:
+        smtp_password_env = _resolve_str(
+            cli_value=args.smtp_password_env,
+            config_value=config.get("smtp_password_env"),
+            default_value="CHATTING_SMTP_PASSWORD",
+            setting_name="smtp_password_env",
+        )
+        password = os.environ.get(smtp_password_env, "")
         if not password:
-            raise ValueError(f"missing SMTP password env var: {args.smtp_password_env}")
+            raise ValueError(f"missing SMTP password env var: {smtp_password_env}")
+
+    smtp_starttls = _resolve_bool(
+        cli_value=args.smtp_starttls,
+        config_value=config.get("smtp_starttls"),
+        default_value=False,
+        setting_name="smtp_starttls",
+    )
 
     return SmtpEmailSender(
-        host=args.smtp_host,
-        port=args.smtp_port,
+        host=smtp_host,
+        port=_resolve_positive_int(
+            cli_value=args.smtp_port,
+            config_value=config.get("smtp_port"),
+            default_value=465,
+            setting_name="smtp_port",
+        ),
         from_address=from_address,
-        username=args.smtp_username,
+        username=smtp_username,
         password=password,
-        use_ssl=not args.smtp_starttls,
-        starttls=args.smtp_starttls,
+        use_ssl=not smtp_starttls,
+        starttls=smtp_starttls,
     )
 
 
-def _build_codex_executor(args: argparse.Namespace) -> Executor:
-    if args.use_stub_executor:
+def _build_codex_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
+    use_stub_executor = _resolve_bool(
+        cli_value=args.use_stub_executor,
+        config_value=config.get("use_stub_executor"),
+        default_value=False,
+        setting_name="use_stub_executor",
+    )
+    if use_stub_executor:
         return StubExecutor()
-    command = tuple(shlex.split(args.codex_command))
+    codex_command = _resolve_str(
+        cli_value=args.codex_command,
+        config_value=config.get("codex_command"),
+        default_value="codex exec --json",
+        setting_name="codex_command",
+    )
+    command = tuple(shlex.split(codex_command))
     if not command:
         raise ValueError("--codex-command must not be empty")
     return CodexExecutor(command=command)
@@ -502,6 +613,135 @@ def _parse_optional_rfc3339(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("schedule job start_at must be timezone-aware")
     return parsed.astimezone(timezone.utc)
+
+
+def _load_runtime_config(config_path: str | None) -> dict[str, object]:
+    if not config_path:
+        return {}
+    payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("config file must contain a JSON object")
+    return payload
+
+
+def _resolve_str(
+    *,
+    cli_value: str | None,
+    config_value: object,
+    default_value: str,
+    setting_name: str,
+) -> str:
+    if cli_value is not None:
+        return cli_value
+    if config_value is None:
+        return default_value
+    if not isinstance(config_value, str):
+        raise ValueError(f"config {setting_name} must be a string")
+    if not config_value:
+        raise ValueError(f"config {setting_name} must not be empty")
+    return config_value
+
+
+def _resolve_optional_str(
+    *,
+    cli_value: str | None,
+    config_value: object,
+    setting_name: str,
+) -> str | None:
+    if cli_value is not None:
+        return cli_value
+    if config_value is None:
+        return None
+    if not isinstance(config_value, str):
+        raise ValueError(f"config {setting_name} must be a string")
+    if not config_value:
+        raise ValueError(f"config {setting_name} must not be empty")
+    return config_value
+
+
+def _resolve_positive_int(
+    *,
+    cli_value: int | None,
+    config_value: object,
+    default_value: int,
+    setting_name: str,
+) -> int:
+    if cli_value is not None:
+        return cli_value
+    candidate = config_value if config_value is not None else default_value
+    if not isinstance(candidate, int):
+        raise ValueError(f"config {setting_name} must be an integer")
+    if candidate <= 0:
+        raise ValueError(f"config {setting_name} must be positive")
+    return candidate
+
+
+def _resolve_optional_positive_int(
+    *,
+    cli_value: int | None,
+    config_value: object,
+    setting_name: str,
+) -> int | None:
+    if cli_value is not None:
+        return cli_value
+    if config_value is None:
+        return None
+    if not isinstance(config_value, int):
+        raise ValueError(f"config {setting_name} must be an integer")
+    if config_value <= 0:
+        raise ValueError(f"config {setting_name} must be positive")
+    return config_value
+
+
+def _resolve_positive_float(
+    *,
+    cli_value: float | None,
+    config_value: object,
+    default_value: float,
+    setting_name: str,
+) -> float:
+    if cli_value is not None:
+        return cli_value
+    candidate = config_value if config_value is not None else default_value
+    if not isinstance(candidate, (int, float)):
+        raise ValueError(f"config {setting_name} must be numeric")
+    parsed = float(candidate)
+    if parsed <= 0:
+        raise ValueError(f"config {setting_name} must be positive")
+    return parsed
+
+
+def _resolve_bool(
+    *,
+    cli_value: bool,
+    config_value: object,
+    default_value: bool,
+    setting_name: str,
+) -> bool:
+    if cli_value:
+        return True
+    if config_value is None:
+        return default_value
+    if not isinstance(config_value, bool):
+        raise ValueError(f"config {setting_name} must be a boolean")
+    return config_value
+
+
+def _resolve_context_refs(cli_values: list[str], config: dict[str, object]) -> list[str]:
+    raw_config_values = config.get("context_ref")
+    if raw_config_values is None:
+        raw_config_values = config.get("context_refs")
+
+    if raw_config_values is None:
+        config_values: list[str] = []
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config context_ref/context_refs must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config context_ref/context_refs must be a list of strings")
+        config_values = list(raw_config_values)
+
+    return [*config_values, *cli_values]
 
 
 if __name__ == "__main__":

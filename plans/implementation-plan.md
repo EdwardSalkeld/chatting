@@ -73,6 +73,7 @@ Progress notes:
 - 2026-02-28: Added live runtime mode in `app.main` (`--run-live`) with long-lived connector polling, retry/DLQ handling, Codex command wiring, and CLI-configurable IMAP/schedule/SMTP integration parameters.
 - 2026-02-28: Extended `RoutedTask` context to include source/actor/content/reply-channel metadata and propagated it through routing + stub execution so email-origin tasks can produce dispatchable email responses in live mode.
 - 2026-02-28: Added live-mode operability guardrails and startup artifacts: `--use-stub-executor` smoke option, SMTP-required validation for IMAP mode, plus runnable docs and a scheduler JSON example.
+- 2026-02-28: Added JSON runtime config-file support (`--config`) for live-mode settings (DB path, scheduler/IMAP/SMTP/Codex wiring, loop controls), with CLI override precedence and test coverage.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days

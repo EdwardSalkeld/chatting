@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -220,6 +221,25 @@ class MainCliTests(unittest.TestCase):
                 ):
                     main()
 
+    def test_main_run_live_with_config_imap_requires_smtp_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "imap_host": "imap.example.com",
+                        "imap_username": "bot@example.com",
+                        "max_loops": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]):
+                with self.assertRaisesRegex(
+                    ValueError, "--smtp-host is required when --imap-host is set"
+                ):
+                    main()
+
     @patch("app.main._build_codex_executor")
     @patch("app.main._build_email_sender")
     @patch("app.main._build_live_connectors")
@@ -286,6 +306,52 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         executor_arg = run_live_mock.call_args.kwargs["executor"]
         self.assertIsInstance(executor_arg, StubExecutor)
+
+    @patch("app.main._build_codex_executor")
+    @patch("app.main._build_email_sender")
+    @patch("app.main._build_live_connectors")
+    @patch("app.main.run_live")
+    def test_main_run_live_mode_reads_defaults_from_config_file(
+        self,
+        run_live_mock,
+        connectors_mock,
+        email_sender_mock,
+        executor_mock,
+    ) -> None:
+        run_live_mock.return_value = []
+        connectors_mock.return_value = []
+        email_sender_mock.return_value = None
+        executor_mock.return_value = StubExecutor()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "db_path": str(Path(tmpdir) / "state-from-config.db"),
+                        "max_attempts": 5,
+                        "poll_interval_seconds": 5.5,
+                        "max_loops": 3,
+                        "base_dir": "/tmp/chatting",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_live_mock.assert_called_once_with(
+            str(Path(tmpdir) / "state-from-config.db"),
+            connectors=[],
+            executor=executor_mock.return_value,
+            max_attempts=5,
+            poll_interval_seconds=5.5,
+            max_loops=3,
+            base_dir="/tmp/chatting",
+            email_sender=None,
+        )
 
 
 def _single_email_envelope() -> TaskEnvelope:

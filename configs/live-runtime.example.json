@@ -1,0 +1,23 @@
+{
+  "db_path": "/tmp/chatting-live.db",
+  "max_attempts": 2,
+  "poll_interval_seconds": 30.0,
+  "max_loops": 1,
+  "base_dir": ".",
+  "schedule_file": "configs/live-schedule.example.json",
+  "imap_host": "imap.example.com",
+  "imap_port": 993,
+  "imap_username": "bot@example.com",
+  "imap_password_env": "CHATTING_IMAP_PASSWORD",
+  "imap_mailbox": "INBOX",
+  "imap_search": "UNSEEN",
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 465,
+  "smtp_username": "bot@example.com",
+  "smtp_password_env": "CHATTING_SMTP_PASSWORD",
+  "smtp_from": "bot@example.com",
+  "smtp_starttls": false,
+  "codex_command": "codex exec --json",
+  "use_stub_executor": true,
+  "context_ref": ["repo:/home/edward/chatting"]
+}
