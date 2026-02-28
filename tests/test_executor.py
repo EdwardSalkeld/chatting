@@ -203,6 +203,36 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "write_file_content_required"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_non_write_file_action_with_path(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "run_shell", "path": "echo hi"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "non_write_file_path_forbidden"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_non_write_file_action_with_content(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "run_shell", "content": "echo hi"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "non_write_file_content_forbidden"):
+            parse_execution_result(payload)
+
     def test_parse_execution_result_rejects_unknown_config_update_keys(self) -> None:
         payload = json.dumps(
             {

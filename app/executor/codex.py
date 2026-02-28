@@ -215,12 +215,17 @@ def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
 
 
 def _validate_action_payload(action: ActionProposal) -> None:
-    if action.type != "write_file":
+    if action.type == "write_file":
+        if action.path is None or not action.path:
+            raise ValueError("write_file_path_required")
+        if action.content is None or not action.content:
+            raise ValueError("write_file_content_required")
         return
-    if action.path is None or not action.path:
-        raise ValueError("write_file_path_required")
-    if action.content is None or not action.content:
-        raise ValueError("write_file_content_required")
+
+    if action.path is not None:
+        raise ValueError("non_write_file_path_forbidden")
+    if action.content is not None:
+        raise ValueError("non_write_file_content_forbidden")
 
 
 def _error_result(error: str) -> ExecutionResult:

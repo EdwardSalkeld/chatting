@@ -38,6 +38,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Schema-version compatibility hardened to reject unsupported versions beyond `1.0` across top-level model payloads and executor parsing
 - [x] Bootstrap worker loop retries transient execution failures and records exhausted attempts as `dead_letter`
 - [x] Executor parser requires non-empty `write_file.path` and `write_file.content` in action payloads
+- [x] Executor parser rejects `path`/`content` fields on non-`write_file` action payloads
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -59,3 +60,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: exposed retry limits via `app.main --max-attempts` with positive-integer validation and CLI coverage tests.
 - 2026-02-28: Post-milestone P0 hardening: tightened executor parser required-field checks so missing nested keys in `messages`, `actions`, and `config_updates` fail with explicit `*_required` errors.
 - 2026-02-28: Post-milestone P0 hardening: tightened executor action parsing so `write_file` actions with missing/empty `path` or `content` are rejected before policy evaluation.
+- 2026-02-28: Post-milestone P0 hardening: tightened executor action-shape parsing so non-`write_file` actions reject `path` and `content` fields.

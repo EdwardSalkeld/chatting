@@ -32,6 +32,7 @@ Progress notes:
 - 2026-02-28: Added `app.main` CLI support for `--max-attempts` with fail-fast validation so retry/DLQ limits are operator-configurable at runtime.
 - 2026-02-28: Hardened executor structured-output parsing to emit explicit missing-field errors for nested required keys (`message_body_required`, `action_type_required`, `config_update_path_required`) to tighten P0 schema-drift controls.
 - 2026-02-28: Hardened executor action schema enforcement so `write_file` actions require non-empty `path` and `content`, preventing incomplete file-write proposals from entering policy/apply flow.
+- 2026-02-28: Hardened executor action-shape schema so non-`write_file` actions reject `path`/`content` fields, tightening contract isolation between action types.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility
