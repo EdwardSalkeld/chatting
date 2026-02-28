@@ -360,6 +360,32 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 schema_version="",
             )
 
+    def test_top_level_models_reject_unsupported_schema_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
+            TaskEnvelope(
+                id="evt_1",
+                source="email",
+                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="content",
+                attachments=[],
+                context_refs=[],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:1",
+                schema_version="2.0",
+            )
+
+        with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
+            ExecutionResult(
+                messages=[],
+                actions=[],
+                config_updates=[],
+                requires_human_review=False,
+                errors=[],
+                schema_version="2.0",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

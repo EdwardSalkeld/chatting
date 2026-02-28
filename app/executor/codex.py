@@ -13,6 +13,7 @@ from app.models import (
     ExecutionResult,
     OutboundMessage,
     RoutedTask,
+    SCHEMA_VERSION,
 )
 
 _ALLOWED_TOP_LEVEL_KEYS = {
@@ -106,6 +107,8 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
         raise ValueError("schema_version_must_be_string")
     if not schema_version:
         raise ValueError("schema_version_required")
+    if schema_version != SCHEMA_VERSION:
+        raise ValueError(f"unsupported_schema_version:{schema_version}")
 
     return ExecutionResult(
         messages=messages,
@@ -119,7 +122,7 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
 
 def _task_payload(task: RoutedTask) -> dict[str, Any]:
     return {
-        "schema_version": "1.0",
+        "schema_version": SCHEMA_VERSION,
         "task": task.to_dict(),
     }
 

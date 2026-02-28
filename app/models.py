@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 SOURCE_TYPES = ("cron", "email", "im", "webhook")
 PRIORITY_TYPES = ("low", "normal", "high")
+SCHEMA_VERSION = "1.0"
 
 
 def _validate_schema_version(schema_version: str) -> None:
@@ -15,6 +16,8 @@ def _validate_schema_version(schema_version: str) -> None:
         raise ValueError("schema_version must be a string")
     if not schema_version:
         raise ValueError("schema_version is required")
+    if schema_version != SCHEMA_VERSION:
+        raise ValueError(f"unsupported_schema_version:{schema_version}")
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,7 @@ class TaskEnvelope:
     policy_profile: str
     reply_channel: ReplyChannel
     dedupe_key: str
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -108,7 +111,7 @@ class RoutedTask:
     priority: Literal["low", "normal", "high"]
     execution_constraints: ExecutionConstraints
     policy_profile: str
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -210,7 +213,7 @@ class ExecutionResult:
     config_updates: list[ConfigUpdate]
     requires_human_review: bool
     errors: list[str]
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -251,7 +254,7 @@ class PolicyDecision:
     approved_messages: list[OutboundMessage]
     config_updates: ConfigUpdateDecision
     reason_codes: list[str]
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -275,7 +278,7 @@ class ApplyResult:
     skipped_actions: list[ActionProposal]
     dispatched_messages: list[OutboundMessage]
     reason_codes: list[str]
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -304,7 +307,7 @@ class RunRecord:
     latency_ms: int
     result_status: str
     created_at: datetime
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -351,7 +354,7 @@ class AuditEvent:
     result_status: str
     detail: dict[str, Any]
     created_at: datetime
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
