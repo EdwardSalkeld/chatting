@@ -72,6 +72,17 @@ class MainBootstrapFlowTests(unittest.TestCase):
                 [event.result_status for event in audit_events],
                 [run.result_status for run in runs],
             )
+            first_success_event = next(event for event in audit_events if event.run_id == "run:cron:daily-summary:2026-02-27T09:00:00+00:00")
+            self.assertEqual(first_success_event.detail["applied_action_count"], 0)
+            self.assertEqual(first_success_event.detail["skipped_action_count"], 0)
+            self.assertEqual(first_success_event.detail["dispatched_message_count"], 1)
+            self.assertEqual(first_success_event.detail["apply_reason_codes"], [])
+
+            blocked_event = next(event for event in audit_events if event.run_id == "run:email:blocked-1")
+            self.assertEqual(blocked_event.detail["applied_action_count"], 0)
+            self.assertEqual(blocked_event.detail["skipped_action_count"], 0)
+            self.assertEqual(blocked_event.detail["dispatched_message_count"], 1)
+            self.assertEqual(blocked_event.detail["apply_reason_codes"], ["policy_blocked_actions_present"])
 
             observed_lines = [
                 line
@@ -112,6 +123,10 @@ class MainBootstrapFlowTests(unittest.TestCase):
             target_event = next(event for event in audit_events if event.run_id == "run:email:ok-1")
             self.assertEqual(target_event.detail["attempt_count"], 2)
             self.assertEqual(target_event.detail["reason_codes"], [])
+            self.assertEqual(target_event.detail["applied_action_count"], 0)
+            self.assertEqual(target_event.detail["skipped_action_count"], 0)
+            self.assertEqual(target_event.detail["dispatched_message_count"], 1)
+            self.assertEqual(target_event.detail["apply_reason_codes"], [])
             self.assertIsNotNone(target_event.detail["last_error"])
 
     def test_run_bootstrap_marks_dead_letter_when_retries_exhausted(self) -> None:
@@ -140,6 +155,10 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(audit_events[0].result_status, "dead_letter")
             self.assertEqual(audit_events[0].detail["reason_codes"], ["retry_exhausted"])
             self.assertEqual(audit_events[0].detail["attempt_count"], 2)
+            self.assertEqual(audit_events[0].detail["applied_action_count"], 0)
+            self.assertEqual(audit_events[0].detail["skipped_action_count"], 0)
+            self.assertEqual(audit_events[0].detail["dispatched_message_count"], 0)
+            self.assertEqual(audit_events[0].detail["apply_reason_codes"], [])
             self.assertIn("RuntimeError", audit_events[0].detail["last_error"])
 
 

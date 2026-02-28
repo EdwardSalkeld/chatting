@@ -153,6 +153,10 @@ def _process_envelope(
     approved_action_count = 0
     blocked_action_count = 0
     approved_message_count = 0
+    applied_action_count = 0
+    skipped_action_count = 0
+    dispatched_message_count = 0
+    apply_reason_codes: list[str] = []
     attempt_count = 0
     last_error: str | None = None
 
@@ -161,11 +165,15 @@ def _process_envelope(
         try:
             execution_result = executor_impl.execute(task)
             decision = policy.evaluate(execution_result)
-            applier.apply(decision)
+            apply_result = applier.apply(decision)
             reason_codes = decision.reason_codes
             approved_action_count = len(decision.approved_actions)
             blocked_action_count = len(decision.blocked_actions)
             approved_message_count = len(decision.approved_messages)
+            applied_action_count = len(apply_result.applied_actions)
+            skipped_action_count = len(apply_result.skipped_actions)
+            dispatched_message_count = len(apply_result.dispatched_messages)
+            apply_reason_codes = apply_result.reason_codes
             result_status = _result_status(reason_codes)
             break
         except Exception as exc:  # noqa: BLE001 - convert failures into retry/DLQ state
@@ -208,6 +216,10 @@ def _process_envelope(
                 "approved_action_count": approved_action_count,
                 "blocked_action_count": blocked_action_count,
                 "approved_message_count": approved_message_count,
+                "applied_action_count": applied_action_count,
+                "skipped_action_count": skipped_action_count,
+                "dispatched_message_count": dispatched_message_count,
+                "apply_reason_codes": apply_reason_codes,
                 "attempt_count": attempt_count,
                 "max_attempts": max_attempts,
                 "last_error": last_error,

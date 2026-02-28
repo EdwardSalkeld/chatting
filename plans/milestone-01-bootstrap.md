@@ -45,6 +45,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Config-update contracts reject whitespace-only `path` values and require parser-level `value` presence
 - [x] Model-layer required-string fields reject whitespace-only values without regressing executor parser error-code contracts
 - [x] `TaskEnvelope` enforces runtime attachment/context-ref list contracts (typed attachments + non-empty refs)
+- [x] Run audit events include apply-phase outcome fields (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`)
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -76,3 +77,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: aligned config-update strictness across layers by rejecting whitespace-only `ConfigUpdate.path` in model constructors and adding parser regression coverage for missing `config_update.value`.
 - 2026-02-28: Post-milestone P0 hardening: expanded model-level required-string validation to reject whitespace-only values in reply-channel, envelope/routed-task identifiers/content, action/message fields, and run/audit metadata; updated executor action parsing order so `write_file_*_required` parser errors remain unchanged.
 - 2026-02-28: Post-milestone P0 hardening: enforced `TaskEnvelope` runtime list contracts so `attachments` contain only `AttachmentRef` values (with non-empty URI/name fields) and `context_refs` entries are non-empty strings.
+- 2026-02-28: Post-milestone P0 hardening: updated bootstrap/live processing to persist apply-phase audit outcomes (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`) so audit records reflect what the applier actually executed or skipped.
