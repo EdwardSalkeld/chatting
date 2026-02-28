@@ -7,6 +7,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 from app.applier import NoOpApplier
 from app.connectors import (
@@ -15,22 +16,32 @@ from app.connectors import (
     FakeCronConnector,
     FakeEmailConnector,
 )
-from app.executor import StubExecutor
+from app.executor import Executor, StubExecutor
 from app.models import AuditEvent, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 
 
-def run_bootstrap(db_path: str) -> list[RunRecord]:
+def run_bootstrap(
+    db_path: str,
+    *,
+    envelopes: Sequence[TaskEnvelope] | None = None,
+    executor: Executor | None = None,
+    max_attempts: int = 2,
+) -> list[RunRecord]:
     """Run one deterministic pass of the bootstrap control flow."""
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be positive")
+
     store: StateStore = SQLiteStateStore(db_path)
     router = RuleBasedRouter()
-    executor = StubExecutor()
+    executor_impl = executor if executor is not None else StubExecutor()
     policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
     applier = NoOpApplier()
+    pending_envelopes = list(envelopes) if envelopes is not None else _default_envelopes()
 
-    for envelope in _default_envelopes():
+    for envelope in pending_envelopes:
         if store.seen(envelope.source, envelope.dedupe_key):
             print(f"skip duplicate source={envelope.source} dedupe_key={envelope.dedupe_key}")
             continue
@@ -39,9 +50,40 @@ def run_bootstrap(db_path: str) -> list[RunRecord]:
 
         started = time.perf_counter()
         task = router.route(envelope)
-        execution_result = executor.execute(task)
-        decision = policy.evaluate(execution_result)
-        applier.apply(decision)
+        reason_codes: list[str] = []
+        result_status = "dead_letter"
+        approved_action_count = 0
+        blocked_action_count = 0
+        approved_message_count = 0
+        attempt_count = 0
+        last_error: str | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            attempt_count = attempt
+            try:
+                execution_result = executor_impl.execute(task)
+                decision = policy.evaluate(execution_result)
+                applier.apply(decision)
+                reason_codes = decision.reason_codes
+                approved_action_count = len(decision.approved_actions)
+                blocked_action_count = len(decision.blocked_actions)
+                approved_message_count = len(decision.approved_messages)
+                result_status = _result_status(reason_codes)
+                break
+            except Exception as exc:  # noqa: BLE001 - convert failures into retry/DLQ state
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < max_attempts:
+                    print(
+                        f"retry_scheduled run_id=run:{envelope.id} attempt={attempt} "
+                        f"next_attempt={attempt + 1} max_attempts={max_attempts} error={last_error}"
+                    )
+                else:
+                    reason_codes = ["retry_exhausted"]
+                    print(
+                        f"dead_letter run_id=run:{envelope.id} attempts={attempt} "
+                        f"max_attempts={max_attempts} error={last_error}"
+                    )
+
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         record = RunRecord(
@@ -51,7 +93,7 @@ def run_bootstrap(db_path: str) -> list[RunRecord]:
             workflow=task.workflow,
             policy_profile=task.policy_profile,
             latency_ms=latency_ms,
-            result_status=_result_status(decision.reason_codes),
+            result_status=result_status,
             created_at=datetime.now(timezone.utc),
         )
         store.append_run(record)
@@ -64,10 +106,13 @@ def run_bootstrap(db_path: str) -> list[RunRecord]:
                 policy_profile=record.policy_profile,
                 result_status=record.result_status,
                 detail={
-                    "reason_codes": decision.reason_codes,
-                    "approved_action_count": len(decision.approved_actions),
-                    "blocked_action_count": len(decision.blocked_actions),
-                    "approved_message_count": len(decision.approved_messages),
+                    "reason_codes": reason_codes,
+                    "approved_action_count": approved_action_count,
+                    "blocked_action_count": blocked_action_count,
+                    "approved_message_count": approved_message_count,
+                    "attempt_count": attempt_count,
+                    "max_attempts": max_attempts,
+                    "last_error": last_error,
                 },
                 created_at=record.created_at,
             )

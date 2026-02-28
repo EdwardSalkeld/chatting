@@ -27,6 +27,7 @@ Progress notes:
 - 2026-02-27: Hardened protocol contracts for connectors/router/executor/policy/applier with `@runtime_checkable` interfaces plus runtime conformance tests for shipped implementations.
 - 2026-02-27: Hardened idempotency storage semantics to use source-scoped dedupe (`source + dedupe_key`) at the `StateStore` boundary, with SQLite legacy-schema migration and collision regression coverage.
 - 2026-02-27: Hardened schema-version handling by rejecting blank `schema_version` values in top-level model constructors and executor output parsing.
+- 2026-02-28: Added bootstrap retry enforcement in `app.main` with bounded attempts and `dead_letter` terminal status on retry exhaustion, including audit metadata for attempts and terminal error details.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

@@ -35,6 +35,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Core module interface protocols made runtime-checkable with implementation conformance tests
 - [x] Idempotency contract hardened to dedupe by `source + dedupe_key` with SQLite compatibility migration
 - [x] Schema-version contract hardened to reject blank `schema_version` values across top-level model payloads
+- [x] Bootstrap worker loop retries transient execution failures and records exhausted attempts as `dead_letter`
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -51,3 +52,4 @@ Notes:
 - 2026-02-27: Post-milestone P0 hardening: marked connector/router/executor/policy/applier protocols as runtime-checkable and added interface conformance tests for default implementations.
 - 2026-02-27: Post-milestone P0 hardening: updated `StateStore` idempotency methods and SQLite schema to key dedupe on `(source, dedupe_key)`; added regression coverage for cross-source collisions and legacy idempotency-table migration.
 - 2026-02-27: Post-milestone P0 hardening: added non-empty `schema_version` validation in top-level contracts and executor parser checks so invalid version metadata is rejected early.
+- 2026-02-28: Post-milestone hardening: added bounded retry behavior in `app.main.run_bootstrap` with `dead_letter` terminal status and audit details when attempts are exhausted.

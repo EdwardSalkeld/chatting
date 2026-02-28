@@ -15,6 +15,7 @@
 - Run full interface contract tests: `python3 -m unittest tests.test_interface_contracts tests.test_state_contract`
 - Run audit logging checks: `python3 -m unittest tests.test_models tests.test_sqlite_store tests.test_main`
 - Run bootstrap observability log checks: `python3 -m unittest tests.test_main`
+- Run bootstrap retry/DLQ checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
 - Run idempotency contract checks: `python3 -m unittest tests.test_sqlite_store tests.test_main`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
 - If `rg` is unavailable locally, use `find . -type f` for file discovery.
