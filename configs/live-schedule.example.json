@@ -1,0 +1,10 @@
+[
+  {
+    "job_name": "heartbeat-5m",
+    "content": "Summarize important updates from the last 5 minutes.",
+    "interval_seconds": 300,
+    "context_refs": ["repo:/home/edward/chatting"],
+    "policy_profile": "default",
+    "start_at": "2026-02-28T00:00:00Z"
+  }
+]

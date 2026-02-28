@@ -197,6 +197,29 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, 2)
 
+    def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--db-path",
+                    db_path,
+                    "--imap-host",
+                    "imap.example.com",
+                    "--imap-username",
+                    "bot@example.com",
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "--smtp-host is required when --imap-host is set"
+                ):
+                    main()
+
     @patch("app.main._build_codex_executor")
     @patch("app.main._build_email_sender")
     @patch("app.main._build_live_connectors")
@@ -230,6 +253,39 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         run_live_mock.assert_called_once()
+
+    @patch("app.main.run_live")
+    @patch("app.main._build_live_connectors")
+    @patch("app.main._build_email_sender")
+    def test_main_run_live_mode_accepts_stub_executor(
+        self,
+        email_sender_mock,
+        connectors_mock,
+        run_live_mock,
+    ) -> None:
+        run_live_mock.return_value = []
+        connectors_mock.return_value = []
+        email_sender_mock.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--use-stub-executor",
+                    "--db-path",
+                    db_path,
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        executor_arg = run_live_mock.call_args.kwargs["executor"]
+        self.assertIsInstance(executor_arg, StubExecutor)
 
 
 def _single_email_envelope() -> TaskEnvelope:

@@ -369,6 +369,11 @@ def _parse_args() -> argparse.Namespace:
         default="codex exec --json",
         help="Command used for live Codex execution (default: 'codex exec --json').",
     )
+    parser.add_argument(
+        "--use-stub-executor",
+        action="store_true",
+        help="Use deterministic stub executor in live mode (smoke/integration testing).",
+    )
     return parser.parse_args()
 
 
@@ -380,6 +385,8 @@ def main() -> int:
         db_path = str(Path(tempfile.gettempdir()) / "chatting-bootstrap-state.db")
 
     if args.run_live:
+        if args.imap_host and not args.smtp_host:
+            raise ValueError("--smtp-host is required when --imap-host is set in live mode")
         connectors = _build_live_connectors(args)
         email_sender = _build_email_sender(args)
         executor = _build_codex_executor(args)
@@ -456,7 +463,9 @@ def _build_email_sender(args: argparse.Namespace) -> SmtpEmailSender | None:
     )
 
 
-def _build_codex_executor(args: argparse.Namespace) -> CodexExecutor:
+def _build_codex_executor(args: argparse.Namespace) -> Executor:
+    if args.use_stub_executor:
+        return StubExecutor()
     command = tuple(shlex.split(args.codex_command))
     if not command:
         raise ValueError("--codex-command must not be empty")
