@@ -49,6 +49,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Run audit events include executor output summary fields (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`)
 - [x] Runtime config resolution rejects whitespace-only CLI/config string inputs and blank live `context_ref(s)` entries
 - [x] Runtime config supports environment-provided config path (`CHATTING_CONFIG_PATH`) with CLI `--config` precedence
+- [x] Runtime JSON config rejects unknown keys to fail fast on typo/misnamed settings
 - [x] Model typed-collection fields enforce runtime item/object contracts across execution/policy/apply payload models
 - [x] Bootstrap/live observability emits per-run `trace_id` in logs and audit-event detail
 
@@ -88,3 +89,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: added constructor-level typed-collection validation for `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult` so malformed list item/object shapes fail fast, with regression coverage in `tests.test_models`.
 - 2026-02-28: Post-milestone P0/Phase-0 config progress: added `CHATTING_CONFIG_PATH` support so bootstrap/live runtime config can be sourced from environment when `--config` is omitted, with tests covering env loading, CLI override precedence, and blank env-path rejection.
 - 2026-02-28: Post-milestone Phase-0 observability hardening: added per-run `trace_id` emission for retry/dead-letter/run-observed logs and persisted the same trace identifier in audit-event detail for run-correlation diagnostics.
+- 2026-02-28: Post-milestone P0/Phase-0 config hardening: runtime JSON config now rejects unknown keys before execution, covering both CLI `--config` and environment-configured paths.

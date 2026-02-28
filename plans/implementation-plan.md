@@ -23,6 +23,7 @@ Progress notes:
 - 2026-02-28: Hardened `TaskEnvelope` model runtime validation to enforce canonical list contracts for `attachments` and `context_refs` (including non-empty `AttachmentRef.uri`/`name` and non-blank context refs), with regression coverage in `tests.test_models`.
 - 2026-02-28: Hardened runtime config-string validation in `app.main` to fail fast on whitespace-only CLI/config values (including live `context_ref(s)` entries), with regression coverage in `tests.test_main`.
 - 2026-02-28: Added environment-based runtime config loading in `app.main` via `CHATTING_CONFIG_PATH` (used when `--config` is omitted), with explicit blank-value rejection and CLI-precedence regression coverage in `tests.test_main`.
+- 2026-02-28: Hardened runtime JSON config contract in `app.main` to reject unknown keys (for both `--config` and `CHATTING_CONFIG_PATH`), preventing silent misconfiguration drift from typos.
 
 ## Phase 1: Ingestion + Queue
 Duration: 3-4 days

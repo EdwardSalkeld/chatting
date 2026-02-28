@@ -270,6 +270,19 @@ class MainCliTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "config db_path must not be empty"):
                     main()
 
+    def test_main_rejects_unknown_config_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "bootstrap-config.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(Path(tmpdir) / "state.db"), "unexpected_key": True}),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["app.main", "--config", str(config_path)]):
+                with self.assertRaisesRegex(
+                    ValueError, r"config contains unknown keys: unexpected_key"
+                ):
+                    main()
+
     @patch("app.main.run_bootstrap")
     def test_main_reads_config_path_from_environment(self, run_bootstrap_mock) -> None:
         run_bootstrap_mock.return_value = []
@@ -320,6 +333,20 @@ class MainCliTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "CHATTING_CONFIG_PATH must not be empty"):
                 main()
+
+    def test_main_rejects_unknown_keys_from_environment_config_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "bootstrap-config.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(Path(tmpdir) / "state.db"), "bad": "value"}),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_CONFIG_PATH": str(config_path)}, clear=False),
+                patch("sys.argv", ["app.main"]),
+            ):
+                with self.assertRaisesRegex(ValueError, r"config contains unknown keys: bad"):
+                    main()
 
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

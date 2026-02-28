@@ -30,6 +30,32 @@ from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 
 CONFIG_PATH_ENV_VAR = "CHATTING_CONFIG_PATH"
+ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
+    {
+        "base_dir",
+        "codex_command",
+        "context_ref",
+        "context_refs",
+        "db_path",
+        "imap_host",
+        "imap_mailbox",
+        "imap_password_env",
+        "imap_port",
+        "imap_search",
+        "imap_username",
+        "max_attempts",
+        "max_loops",
+        "poll_interval_seconds",
+        "schedule_file",
+        "smtp_from",
+        "smtp_host",
+        "smtp_password_env",
+        "smtp_port",
+        "smtp_starttls",
+        "smtp_username",
+        "use_stub_executor",
+    }
+)
 
 
 def _positive_int(value: str) -> int:
@@ -670,6 +696,10 @@ def _load_runtime_config(
     payload = json.loads(Path(config_source).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("config file must contain a JSON object")
+    unknown_keys = sorted(set(payload.keys()) - ALLOWED_RUNTIME_CONFIG_KEYS)
+    if unknown_keys:
+        keys = ", ".join(unknown_keys)
+        raise ValueError(f"config contains unknown keys: {keys}")
     return payload
 
 
