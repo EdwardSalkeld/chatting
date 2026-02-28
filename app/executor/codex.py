@@ -209,16 +209,16 @@ def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
     value = payload[key]
     if not isinstance(value, str):
         raise ValueError(f"{context}_{key}_must_be_string")
-    if not value:
+    if _is_blank(value):
         raise ValueError(f"{context}_{key}_required")
     return value
 
 
 def _validate_action_payload(action: ActionProposal) -> None:
     if action.type == "write_file":
-        if action.path is None or not action.path:
+        if action.path is None or _is_blank(action.path):
             raise ValueError("write_file_path_required")
-        if action.content is None or not action.content:
+        if action.content is None or _is_blank(action.content):
             raise ValueError("write_file_content_required")
         return
 
@@ -236,6 +236,10 @@ def _error_result(error: str) -> ExecutionResult:
         requires_human_review=False,
         errors=[error],
     )
+
+
+def _is_blank(value: str) -> bool:
+    return not value.strip()
 
 
 __all__ = ["CodexExecutor", "parse_execution_result"]

@@ -107,6 +107,27 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "message_body_required"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_message_body_with_only_whitespace(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [
+                    {
+                        "channel": "email",
+                        "target": "alice@example.com",
+                        "body": "   ",
+                    }
+                ],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "message_body_required"):
+            parse_execution_result(payload)
+
     def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
         payload = json.dumps(
             {
@@ -134,6 +155,21 @@ class ParseExecutionResultTests(unittest.TestCase):
                 "schema_version": "1.0",
                 "messages": [],
                 "actions": [{"path": "docs/notes.md"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "action_type_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_action_type_with_only_whitespace(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "  "}],
                 "config_updates": [],
                 "requires_human_review": False,
                 "errors": [],
@@ -188,12 +224,46 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "write_file_path_required"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_write_file_action_with_whitespace_path(
+        self,
+    ) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "write_file", "path": "   ", "content": "hello"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "write_file_path_required"):
+            parse_execution_result(payload)
+
     def test_parse_execution_result_rejects_write_file_action_with_empty_content(self) -> None:
         payload = json.dumps(
             {
                 "schema_version": "1.0",
                 "messages": [],
                 "actions": [{"type": "write_file", "path": "docs/notes.md", "content": ""}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "write_file_content_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_write_file_action_with_whitespace_content(
+        self,
+    ) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "write_file", "path": "docs/notes.md", "content": "   "}],
                 "config_updates": [],
                 "requires_human_review": False,
                 "errors": [],
@@ -261,6 +331,23 @@ class ParseExecutionResultTests(unittest.TestCase):
                 "messages": [],
                 "actions": [],
                 "config_updates": [{"value": 240}],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "config_update_path_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_config_update_path_with_only_whitespace(
+        self,
+    ) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [],
+                "config_updates": [{"path": " ", "value": 240}],
                 "requires_human_review": False,
                 "errors": [],
             }

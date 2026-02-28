@@ -68,6 +68,7 @@ Progress notes:
 - 2026-02-28: Hardened executor nested required-field validation so missing `message.body`, `action.type`, and `config_update.path` fail with explicit `*_required` parser errors to reduce structured-output ambiguity.
 - 2026-02-28: Hardened executor action contract validation so `write_file` proposals must include non-empty `path` and `content`, with parser regression tests for missing/empty values.
 - 2026-02-28: Hardened executor action-shape validation so non-`write_file` actions cannot include `path` or `content`, preventing cross-action payload drift in structured outputs.
+- 2026-02-28: Hardened executor required-string parsing to reject whitespace-only `messages`/`actions`/`config_updates` fields and whitespace-only `write_file.path`/`write_file.content`, with parser regression coverage.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days
