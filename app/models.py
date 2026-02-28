@@ -225,7 +225,7 @@ class ConfigUpdate:
     value: Any
 
     def __post_init__(self) -> None:
-        if not self.path:
+        if not isinstance(self.path, str) or not self.path.strip():
             raise ValueError("path is required")
 
     def to_dict(self) -> dict[str, Any]:

@@ -178,6 +178,12 @@ class PolicyDecisionTests(unittest.TestCase):
             ActionProposal(type="")
 
 
+class ConfigUpdateTests(unittest.TestCase):
+    def test_config_update_rejects_whitespace_only_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "path is required"):
+            ConfigUpdate(path="   ", value=240)
+
+
 class RunRecordTests(unittest.TestCase):
     def test_run_record_serializes_expected_shape(self) -> None:
         record = RunRecord(

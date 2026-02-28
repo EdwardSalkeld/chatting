@@ -71,6 +71,7 @@ Progress notes:
 - 2026-02-28: Hardened executor action-shape validation so non-`write_file` actions cannot include `path` or `content`, preventing cross-action payload drift in structured outputs.
 - 2026-02-28: Hardened executor required-string parsing to reject whitespace-only `messages`/`actions`/`config_updates` fields and whitespace-only `write_file.path`/`write_file.content`, with parser regression coverage.
 - 2026-02-28: Hardened executor parser error-list validation to reject empty/whitespace-only entries in `errors`, keeping failure telemetry and audit records semantically useful.
+- 2026-02-28: Hardened config-update contract consistency by rejecting whitespace-only `ConfigUpdate.path` values at the model layer and adding parser regression coverage for missing `config_update.value`.
 - 2026-02-28: Added live runtime mode in `app.main` (`--run-live`) with long-lived connector polling, retry/DLQ handling, Codex command wiring, and CLI-configurable IMAP/schedule/SMTP integration parameters.
 - 2026-02-28: Extended `RoutedTask` context to include source/actor/content/reply-channel metadata and propagated it through routing + stub execution so email-origin tasks can produce dispatchable email responses in live mode.
 - 2026-02-28: Added live-mode operability guardrails and startup artifacts: `--use-stub-executor` smoke option, SMTP-required validation for IMAP mode, plus runnable docs and a scheduler JSON example.

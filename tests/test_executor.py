@@ -360,6 +360,23 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "config_update_path_required"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_rejects_config_update_missing_required_value(
+        self,
+    ) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [],
+                "config_updates": [{"path": "routing.default_timeout"}],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "config_update_value_required"):
+            parse_execution_result(payload)
+
     def test_parse_execution_result_rejects_missing_schema_version(self) -> None:
         payload = json.dumps(
             {
