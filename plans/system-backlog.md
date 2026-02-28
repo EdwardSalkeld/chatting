@@ -52,6 +52,7 @@ Progress notes:
 - 2026-02-28: Hardened model typed-collection contract enforcement by validating structured-list/object fields in `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult`, preventing invalid payload shapes from bypassing constructor-level schema checks.
 - 2026-02-28: Added environment-driven runtime config loading (`CHATTING_CONFIG_PATH`) with strict non-empty validation and explicit `--config` override precedence, advancing the Phase 0 config-system deliverable while preserving current CLI contracts.
 - 2026-02-28: Hardened runtime config-file validation to reject unknown JSON keys in `app.main`, so operator typos fail fast instead of being silently ignored.
+- 2026-02-28: Hardened runtime numeric config validation in `app.main` to reject boolean values for integer/float settings (including `max_attempts` and `poll_interval_seconds`), closing a JSON type-coercion gap in fail-fast config handling.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

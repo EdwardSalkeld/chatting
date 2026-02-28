@@ -348,6 +348,50 @@ class MainCliTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, r"config contains unknown keys: bad"):
                     main()
 
+    def test_main_rejects_boolean_max_attempts_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "bootstrap-config.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(Path(tmpdir) / "state.db"), "max_attempts": True}),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["app.main", "--config", str(config_path)]):
+                with self.assertRaisesRegex(ValueError, "config max_attempts must be an integer"):
+                    main()
+
+    def test_main_rejects_boolean_poll_interval_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "db_path": str(Path(tmpdir) / "state.db"),
+                        "schedule_file": str(Path(tmpdir) / "schedule.json"),
+                        "poll_interval_seconds": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            schedule_file = Path(tmpdir) / "schedule.json"
+            schedule_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "ping",
+                            "interval_seconds": 60,
+                            "context_refs": ["repo:/home/edward/chatting"],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]):
+                with self.assertRaisesRegex(
+                    ValueError, "config poll_interval_seconds must be numeric"
+                ):
+                    main()
+
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")

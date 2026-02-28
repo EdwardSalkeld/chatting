@@ -58,6 +58,14 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
 )
 
 
+def _is_int_like(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_numeric_like(value: object) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool)) or isinstance(value, float)
+
+
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
@@ -754,7 +762,7 @@ def _resolve_positive_int(
     if cli_value is not None:
         return cli_value
     candidate = config_value if config_value is not None else default_value
-    if not isinstance(candidate, int):
+    if not _is_int_like(candidate):
         raise ValueError(f"config {setting_name} must be an integer")
     if candidate <= 0:
         raise ValueError(f"config {setting_name} must be positive")
@@ -771,7 +779,7 @@ def _resolve_optional_positive_int(
         return cli_value
     if config_value is None:
         return None
-    if not isinstance(config_value, int):
+    if not _is_int_like(config_value):
         raise ValueError(f"config {setting_name} must be an integer")
     if config_value <= 0:
         raise ValueError(f"config {setting_name} must be positive")
@@ -788,7 +796,7 @@ def _resolve_positive_float(
     if cli_value is not None:
         return cli_value
     candidate = config_value if config_value is not None else default_value
-    if not isinstance(candidate, (int, float)):
+    if not _is_numeric_like(candidate):
         raise ValueError(f"config {setting_name} must be numeric")
     parsed = float(candidate)
     if parsed <= 0:

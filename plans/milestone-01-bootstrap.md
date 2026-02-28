@@ -50,6 +50,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Runtime config resolution rejects whitespace-only CLI/config string inputs and blank live `context_ref(s)` entries
 - [x] Runtime config supports environment-provided config path (`CHATTING_CONFIG_PATH`) with CLI `--config` precedence
 - [x] Runtime JSON config rejects unknown keys to fail fast on typo/misnamed settings
+- [x] Runtime numeric config fields reject boolean values to prevent implicit JSON bool-to-number coercion
 - [x] Model typed-collection fields enforce runtime item/object contracts across execution/policy/apply payload models
 - [x] Bootstrap/live observability emits per-run `trace_id` in logs and audit-event detail
 
@@ -90,3 +91,4 @@ Notes:
 - 2026-02-28: Post-milestone P0/Phase-0 config progress: added `CHATTING_CONFIG_PATH` support so bootstrap/live runtime config can be sourced from environment when `--config` is omitted, with tests covering env loading, CLI override precedence, and blank env-path rejection.
 - 2026-02-28: Post-milestone Phase-0 observability hardening: added per-run `trace_id` emission for retry/dead-letter/run-observed logs and persisted the same trace identifier in audit-event detail for run-correlation diagnostics.
 - 2026-02-28: Post-milestone P0/Phase-0 config hardening: runtime JSON config now rejects unknown keys before execution, covering both CLI `--config` and environment-configured paths.
+- 2026-02-28: Post-milestone P0/Phase-0 config hardening: runtime numeric config parsing now rejects JSON booleans for integer/float settings so values like `true` cannot silently pass as `1`.
