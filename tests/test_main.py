@@ -250,6 +250,19 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, 2)
 
+    def test_main_rejects_whitespace_only_cli_db_path(self) -> None:
+        with patch("sys.argv", ["app.main", "--db-path", "   "]):
+            with self.assertRaisesRegex(ValueError, "db_path must not be empty"):
+                main()
+
+    def test_main_rejects_whitespace_only_config_db_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "bootstrap-config.json"
+            config_path.write_text(json.dumps({"db_path": "   "}), encoding="utf-8")
+            with patch("sys.argv", ["app.main", "--config", str(config_path)]):
+                with self.assertRaisesRegex(ValueError, "config db_path must not be empty"):
+                    main()
+
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
@@ -289,6 +302,29 @@ class MainCliTests(unittest.TestCase):
             with patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]):
                 with self.assertRaisesRegex(
                     ValueError, "--smtp-host is required when --imap-host is set"
+                ):
+                    main()
+
+    def test_main_run_live_rejects_blank_context_refs_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "imap_host": "imap.example.com",
+                        "imap_username": "bot@example.com",
+                        "smtp_host": "smtp.example.com",
+                        "context_refs": ["   "],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_IMAP_PASSWORD": "secret"}, clear=False),
+                patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "context_ref/context_refs entries must not be empty"
                 ):
                     main()
 

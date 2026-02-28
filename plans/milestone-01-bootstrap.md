@@ -47,6 +47,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] `TaskEnvelope` enforces runtime attachment/context-ref list contracts (typed attachments + non-empty refs)
 - [x] Run audit events include apply-phase outcome fields (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`)
 - [x] Run audit events include executor output summary fields (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`)
+- [x] Runtime config resolution rejects whitespace-only CLI/config string inputs and blank live `context_ref(s)` entries
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -80,3 +81,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: enforced `TaskEnvelope` runtime list contracts so `attachments` contain only `AttachmentRef` values (with non-empty URI/name fields) and `context_refs` entries are non-empty strings.
 - 2026-02-28: Post-milestone P0 hardening: updated bootstrap/live processing to persist apply-phase audit outcomes (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`) so audit records reflect what the applier actually executed or skipped.
 - 2026-02-28: Post-milestone P0 hardening: updated bootstrap/live processing to persist executor output summaries (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`) in audit-event detail for stronger run forensics.
+- 2026-02-28: Post-milestone P0 hardening: updated runtime config resolution in `app.main` to reject whitespace-only CLI/config strings and blank live `context_ref(s)` values, with regression coverage in `tests.test_main`.

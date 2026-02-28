@@ -664,12 +664,16 @@ def _resolve_str(
     setting_name: str,
 ) -> str:
     if cli_value is not None:
+        if not cli_value.strip():
+            raise ValueError(f"{setting_name} must not be empty")
         return cli_value
     if config_value is None:
+        if not default_value.strip():
+            raise ValueError(f"default {setting_name} must not be empty")
         return default_value
     if not isinstance(config_value, str):
         raise ValueError(f"config {setting_name} must be a string")
-    if not config_value:
+    if not config_value.strip():
         raise ValueError(f"config {setting_name} must not be empty")
     return config_value
 
@@ -681,12 +685,14 @@ def _resolve_optional_str(
     setting_name: str,
 ) -> str | None:
     if cli_value is not None:
+        if not cli_value.strip():
+            raise ValueError(f"{setting_name} must not be empty")
         return cli_value
     if config_value is None:
         return None
     if not isinstance(config_value, str):
         raise ValueError(f"config {setting_name} must be a string")
-    if not config_value:
+    if not config_value.strip():
         raise ValueError(f"config {setting_name} must not be empty")
     return config_value
 
@@ -773,7 +779,10 @@ def _resolve_context_refs(cli_values: list[str], config: dict[str, object]) -> l
             raise ValueError("config context_ref/context_refs must be a list of strings")
         config_values = list(raw_config_values)
 
-    return [*config_values, *cli_values]
+    merged_values = [*config_values, *cli_values]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("context_ref/context_refs entries must not be empty")
+    return merged_values
 
 
 if __name__ == "__main__":
