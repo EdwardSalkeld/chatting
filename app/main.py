@@ -147,6 +147,7 @@ def _process_envelope(
         return None
 
     store.mark_seen(envelope.source, envelope.dedupe_key)
+    trace_id = f"trace:{envelope.id}"
 
     started = time.perf_counter()
     task = router.route(envelope)
@@ -194,13 +195,13 @@ def _process_envelope(
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt < max_attempts:
                 print(
-                    f"retry_scheduled run_id=run:{envelope.id} attempt={attempt} "
+                    f"retry_scheduled trace_id={trace_id} run_id=run:{envelope.id} attempt={attempt} "
                     f"next_attempt={attempt + 1} max_attempts={max_attempts} error={last_error}"
                 )
             else:
                 reason_codes = ["retry_exhausted"]
                 print(
-                    f"dead_letter run_id=run:{envelope.id} attempts={attempt} "
+                    f"dead_letter trace_id={trace_id} run_id=run:{envelope.id} attempts={attempt} "
                     f"max_attempts={max_attempts} error={last_error}"
                 )
 
@@ -226,6 +227,7 @@ def _process_envelope(
             policy_profile=record.policy_profile,
             result_status=record.result_status,
             detail={
+                "trace_id": trace_id,
                 "reason_codes": reason_codes,
                 "approved_action_count": approved_action_count,
                 "blocked_action_count": blocked_action_count,
@@ -250,7 +252,7 @@ def _process_envelope(
         )
     )
     print(
-        f"run_observed run_id={record.run_id} envelope_id={record.envelope_id} "
+        f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
         f"source={record.source} workflow={record.workflow} "
         f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
         f"result_status={record.result_status}"

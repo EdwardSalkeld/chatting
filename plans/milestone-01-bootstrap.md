@@ -50,6 +50,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Runtime config resolution rejects whitespace-only CLI/config string inputs and blank live `context_ref(s)` entries
 - [x] Runtime config supports environment-provided config path (`CHATTING_CONFIG_PATH`) with CLI `--config` precedence
 - [x] Model typed-collection fields enforce runtime item/object contracts across execution/policy/apply payload models
+- [x] Bootstrap/live observability emits per-run `trace_id` in logs and audit-event detail
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -86,3 +87,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: updated runtime config resolution in `app.main` to reject whitespace-only CLI/config strings and blank live `context_ref(s)` values, with regression coverage in `tests.test_main`.
 - 2026-02-28: Post-milestone P0 hardening: added constructor-level typed-collection validation for `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult` so malformed list item/object shapes fail fast, with regression coverage in `tests.test_models`.
 - 2026-02-28: Post-milestone P0/Phase-0 config progress: added `CHATTING_CONFIG_PATH` support so bootstrap/live runtime config can be sourced from environment when `--config` is omitted, with tests covering env loading, CLI override precedence, and blank env-path rejection.
+- 2026-02-28: Post-milestone Phase-0 observability hardening: added per-run `trace_id` emission for retry/dead-letter/run-observed logs and persisted the same trace identifier in audit-event detail for run-correlation diagnostics.

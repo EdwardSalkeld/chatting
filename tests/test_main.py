@@ -73,6 +73,10 @@ class MainBootstrapFlowTests(unittest.TestCase):
                 [run.result_status for run in runs],
             )
             first_success_event = next(event for event in audit_events if event.run_id == "run:cron:daily-summary:2026-02-27T09:00:00+00:00")
+            self.assertEqual(
+                first_success_event.detail["trace_id"],
+                "trace:cron:daily-summary:2026-02-27T09:00:00+00:00",
+            )
             self.assertEqual(first_success_event.detail["applied_action_count"], 0)
             self.assertEqual(first_success_event.detail["skipped_action_count"], 0)
             self.assertEqual(first_success_event.detail["dispatched_message_count"], 1)
@@ -102,6 +106,7 @@ class MainBootstrapFlowTests(unittest.TestCase):
             ]
             self.assertEqual(len(observed_lines), 3)
             for line in observed_lines:
+                self.assertIn("trace_id=", line)
                 self.assertIn("run_id=", line)
                 self.assertIn("envelope_id=", line)
                 self.assertIn("source=", line)
@@ -126,12 +131,13 @@ class MainBootstrapFlowTests(unittest.TestCase):
                 ["success", "success", "blocked_action"],
             )
             self.assertIn(
-                "retry_scheduled run_id=run:email:ok-1 attempt=1 next_attempt=2 max_attempts=2",
+                "retry_scheduled trace_id=trace:email:ok-1 run_id=run:email:ok-1 attempt=1 next_attempt=2 max_attempts=2",
                 output_buffer.getvalue(),
             )
 
             audit_events = SQLiteStateStore(db_path).list_audit_events()
             target_event = next(event for event in audit_events if event.run_id == "run:email:ok-1")
+            self.assertEqual(target_event.detail["trace_id"], "trace:email:ok-1")
             self.assertEqual(target_event.detail["attempt_count"], 2)
             self.assertEqual(target_event.detail["reason_codes"], [])
             self.assertEqual(target_event.detail["applied_action_count"], 0)
@@ -168,13 +174,14 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(len(runs), 1)
             self.assertEqual(runs[0].result_status, "dead_letter")
             self.assertIn(
-                "dead_letter run_id=run:email:dlq-1 attempts=2 max_attempts=2",
+                "dead_letter trace_id=trace:email:dlq-1 run_id=run:email:dlq-1 attempts=2 max_attempts=2",
                 output_buffer.getvalue(),
             )
 
             audit_events = SQLiteStateStore(db_path).list_audit_events()
             self.assertEqual(len(audit_events), 1)
             self.assertEqual(audit_events[0].result_status, "dead_letter")
+            self.assertEqual(audit_events[0].detail["trace_id"], "trace:email:dlq-1")
             self.assertEqual(audit_events[0].detail["reason_codes"], ["retry_exhausted"])
             self.assertEqual(audit_events[0].detail["attempt_count"], 2)
             self.assertEqual(audit_events[0].detail["applied_action_count"], 0)

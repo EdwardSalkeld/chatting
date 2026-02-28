@@ -114,6 +114,7 @@ class StateStore(Protocol):
 
 ## Observability Contract
 Each run must emit:
+- `trace_id`
 - `run_id`
 - `envelope_id`
 - `source`
