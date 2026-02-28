@@ -66,6 +66,7 @@ Progress notes:
 - 2026-02-28: Hardened schema-version compatibility to reject unsupported versions (currently only `1.0` is accepted) in top-level models and executor parsing, preventing silent cross-version contract drift.
 - 2026-02-28: Added bootstrap CLI retry control (`python -m app.main --max-attempts <N>`) with positive-integer validation and tests, so retry/DLQ behavior can be tuned without code edits.
 - 2026-02-28: Hardened executor nested required-field validation so missing `message.body`, `action.type`, and `config_update.path` fail with explicit `*_required` parser errors to reduce structured-output ambiguity.
+- 2026-02-28: Hardened executor action contract validation so `write_file` proposals must include non-empty `path` and `content`, with parser regression tests for missing/empty values.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days

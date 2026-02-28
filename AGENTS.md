@@ -10,6 +10,7 @@
 - Run executor tests: `python3 -m unittest tests.test_executor`
 - Run executor parser-only checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests`
 - Run targeted nested required-field parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_message_missing_required_field tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_action_missing_required_field tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_config_update_missing_required_path`
+- Run targeted write-file contract parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_missing_path tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_missing_content tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_with_empty_path tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_with_empty_content`
 - For executor schema-contract changes, run parser-only checks first, then full executor tests: `python3 -m unittest tests.test_executor.ParseExecutionResultTests && python3 -m unittest tests.test_executor`
 - For schema-version contract hardening across models + executor parser, run: `python3 -m unittest tests.test_models tests.test_executor.ParseExecutionResultTests`
 - Run state contract tests: `python3 -m unittest tests.test_state_contract`

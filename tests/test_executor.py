@@ -30,7 +30,13 @@ class ParseExecutionResultTests(unittest.TestCase):
                         "body": "Done.",
                     }
                 ],
-                "actions": [{"type": "write_file", "path": "docs/notes.md"}],
+                "actions": [
+                    {
+                        "type": "write_file",
+                        "path": "docs/notes.md",
+                        "content": "hello",
+                    }
+                ],
                 "config_updates": [{"path": "routing.default_timeout", "value": 240}],
                 "requires_human_review": False,
                 "errors": [],
@@ -135,6 +141,66 @@ class ParseExecutionResultTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "action_type_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_write_file_action_missing_path(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "write_file", "content": "hello"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "write_file_path_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_write_file_action_missing_content(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "write_file", "path": "docs/notes.md"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "write_file_content_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_write_file_action_with_empty_path(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "write_file", "path": "", "content": "hello"}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "write_file_path_required"):
+            parse_execution_result(payload)
+
+    def test_parse_execution_result_rejects_write_file_action_with_empty_content(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [],
+                "actions": [{"type": "write_file", "path": "docs/notes.md", "content": ""}],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "write_file_content_required"):
             parse_execution_result(payload)
 
     def test_parse_execution_result_rejects_unknown_config_update_keys(self) -> None:

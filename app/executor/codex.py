@@ -175,6 +175,7 @@ def _parse_actions(value: Any) -> list[ActionProposal]:
                 content=content,
             )
         )
+        _validate_action_payload(actions[-1])
     return actions
 
 
@@ -211,6 +212,15 @@ def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
     if not value:
         raise ValueError(f"{context}_{key}_required")
     return value
+
+
+def _validate_action_payload(action: ActionProposal) -> None:
+    if action.type != "write_file":
+        return
+    if action.path is None or not action.path:
+        raise ValueError("write_file_path_required")
+    if action.content is None or not action.content:
+        raise ValueError("write_file_content_required")
 
 
 def _error_result(error: str) -> ExecutionResult:
