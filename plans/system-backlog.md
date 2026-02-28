@@ -48,6 +48,7 @@ Progress notes:
 - 2026-02-28: Hardened run audit fidelity by recording apply-phase outcomes from `ApplyResult` (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`) alongside policy decision metadata for each processed run.
 - 2026-02-28: Hardened run audit fidelity by recording executor output summaries (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`) for each processed run, improving post-run forensics without changing policy/apply boundaries.
 - 2026-02-28: Hardened `app.main` runtime config validation to reject whitespace-only string settings at CLI/config boundaries (including `context_ref(s)` entries for live connectors), preserving fail-fast behavior and envelope contract integrity.
+- 2026-02-28: Hardened model typed-collection contract enforcement by validating structured-list/object fields in `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult`, preventing invalid payload shapes from bypassing constructor-level schema checks.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

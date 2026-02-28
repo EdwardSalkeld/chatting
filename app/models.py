@@ -33,6 +33,14 @@ def _validate_required_string(value: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} is required")
 
 
+def _validate_typed_list(values: list[Any], *, field_name: str, item_type: type[Any]) -> None:
+    if not isinstance(values, list):
+        raise ValueError(f"{field_name} must be a list")
+    for item in values:
+        if not isinstance(item, item_type):
+            raise ValueError(f"{field_name} items must be {item_type.__name__}")
+
+
 def _validate_context_refs(values: list[str]) -> None:
     if not isinstance(values, list):
         raise ValueError("context_refs must be a list")
@@ -276,6 +284,21 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
+        _validate_typed_list(
+            self.messages,
+            field_name="messages",
+            item_type=OutboundMessage,
+        )
+        _validate_typed_list(
+            self.actions,
+            field_name="actions",
+            item_type=ActionProposal,
+        )
+        _validate_typed_list(
+            self.config_updates,
+            field_name="config_updates",
+            item_type=ConfigUpdate,
+        )
         _validate_string_list(self.errors, field_name="errors")
 
     def to_dict(self) -> dict[str, Any]:
@@ -296,6 +319,23 @@ class ConfigUpdateDecision:
     approved: list[ConfigUpdate] = field(default_factory=list)
     pending_review: list[ConfigUpdate] = field(default_factory=list)
     rejected: list[ConfigUpdate] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _validate_typed_list(
+            self.approved,
+            field_name="approved",
+            item_type=ConfigUpdate,
+        )
+        _validate_typed_list(
+            self.pending_review,
+            field_name="pending_review",
+            item_type=ConfigUpdate,
+        )
+        _validate_typed_list(
+            self.rejected,
+            field_name="rejected",
+            item_type=ConfigUpdate,
+        )
 
     def to_dict(self) -> dict[str, list[dict[str, Any]]]:
         return {
@@ -318,6 +358,23 @@ class PolicyDecision:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
+        _validate_typed_list(
+            self.approved_actions,
+            field_name="approved_actions",
+            item_type=ActionProposal,
+        )
+        _validate_typed_list(
+            self.blocked_actions,
+            field_name="blocked_actions",
+            item_type=ActionProposal,
+        )
+        _validate_typed_list(
+            self.approved_messages,
+            field_name="approved_messages",
+            item_type=OutboundMessage,
+        )
+        if not isinstance(self.config_updates, ConfigUpdateDecision):
+            raise ValueError("config_updates must be ConfigUpdateDecision")
         _validate_string_list(self.reason_codes, field_name="reason_codes")
 
     def to_dict(self) -> dict[str, Any]:
@@ -343,6 +400,21 @@ class ApplyResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
+        _validate_typed_list(
+            self.applied_actions,
+            field_name="applied_actions",
+            item_type=ActionProposal,
+        )
+        _validate_typed_list(
+            self.skipped_actions,
+            field_name="skipped_actions",
+            item_type=ActionProposal,
+        )
+        _validate_typed_list(
+            self.dispatched_messages,
+            field_name="dispatched_messages",
+            item_type=OutboundMessage,
+        )
         _validate_string_list(self.reason_codes, field_name="reason_codes")
 
     def to_dict(self) -> dict[str, Any]:

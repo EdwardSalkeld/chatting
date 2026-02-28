@@ -432,6 +432,117 @@ class StringListContractValidationTests(unittest.TestCase):
             )
 
 
+class TypedCollectionContractValidationTests(unittest.TestCase):
+    def test_execution_result_rejects_invalid_typed_collections(self) -> None:
+        with self.assertRaisesRegex(ValueError, "messages items must be OutboundMessage"):
+            ExecutionResult(
+                messages=[object()],  # type: ignore[list-item]
+                actions=[],
+                config_updates=[],
+                requires_human_review=False,
+                errors=[],
+            )
+
+        with self.assertRaisesRegex(ValueError, "actions items must be ActionProposal"):
+            ExecutionResult(
+                messages=[],
+                actions=[object()],  # type: ignore[list-item]
+                config_updates=[],
+                requires_human_review=False,
+                errors=[],
+            )
+
+        with self.assertRaisesRegex(ValueError, "config_updates items must be ConfigUpdate"):
+            ExecutionResult(
+                messages=[],
+                actions=[],
+                config_updates=[object()],  # type: ignore[list-item]
+                requires_human_review=False,
+                errors=[],
+            )
+
+    def test_policy_decision_rejects_invalid_config_update_decision_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "config_updates must be ConfigUpdateDecision"):
+            PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[],
+                config_updates={},  # type: ignore[arg-type]
+                reason_codes=[],
+            )
+
+    def test_policy_decision_rejects_invalid_typed_action_and_message_lists(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "approved_actions items must be ActionProposal"
+        ):
+            PolicyDecision(
+                approved_actions=[object()],  # type: ignore[list-item]
+                blocked_actions=[],
+                approved_messages=[],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+        with self.assertRaisesRegex(
+            ValueError, "blocked_actions items must be ActionProposal"
+        ):
+            PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[object()],  # type: ignore[list-item]
+                approved_messages=[],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+        with self.assertRaisesRegex(
+            ValueError, "approved_messages items must be OutboundMessage"
+        ):
+            PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[object()],  # type: ignore[list-item]
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+    def test_config_update_decision_rejects_invalid_typed_lists(self) -> None:
+        with self.assertRaisesRegex(ValueError, "approved items must be ConfigUpdate"):
+            ConfigUpdateDecision(approved=[object()])  # type: ignore[list-item]
+
+        with self.assertRaisesRegex(ValueError, "pending_review items must be ConfigUpdate"):
+            ConfigUpdateDecision(pending_review=[object()])  # type: ignore[list-item]
+
+        with self.assertRaisesRegex(ValueError, "rejected items must be ConfigUpdate"):
+            ConfigUpdateDecision(rejected=[object()])  # type: ignore[list-item]
+
+    def test_apply_result_rejects_invalid_typed_collections(self) -> None:
+        with self.assertRaisesRegex(ValueError, "applied_actions items must be ActionProposal"):
+            ApplyResult(
+                applied_actions=[object()],  # type: ignore[list-item]
+                skipped_actions=[],
+                dispatched_messages=[],
+                reason_codes=[],
+            )
+
+        with self.assertRaisesRegex(ValueError, "skipped_actions items must be ActionProposal"):
+            ApplyResult(
+                applied_actions=[],
+                skipped_actions=[object()],  # type: ignore[list-item]
+                dispatched_messages=[],
+                reason_codes=[],
+            )
+
+        with self.assertRaisesRegex(
+            ValueError, "dispatched_messages items must be OutboundMessage"
+        ):
+            ApplyResult(
+                applied_actions=[],
+                skipped_actions=[],
+                dispatched_messages=[object()],  # type: ignore[list-item]
+                reason_codes=[],
+            )
+
+
 class RequiredStringContractValidationTests(unittest.TestCase):
     def test_attachment_ref_rejects_blank_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "uri is required"):

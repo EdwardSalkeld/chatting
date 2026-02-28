@@ -80,6 +80,7 @@ Progress notes:
 - 2026-02-28: Added JSON runtime config-file support (`--config`) for live-mode settings (DB path, scheduler/IMAP/SMTP/Codex wiring, loop controls), with CLI override precedence and test coverage.
 - 2026-02-28: Hardened top-level model contracts so `ExecutionResult.errors`, `PolicyDecision.reason_codes`, and `ApplyResult.reason_codes` reject empty/whitespace-only entries, with regression coverage in `tests.test_models`.
 - 2026-02-28: Hardened model-level required-string validation (including `ReplyChannel`, `TaskEnvelope`, `RoutedTask`, `OutboundMessage`, `ActionProposal`, `RunRecord`, `AuditEvent`) to reject whitespace-only values, and preserved executor parser-specific `write_file_*_required` error codes by validating action payloads before model construction.
+- 2026-02-28: Hardened model typed-collection contracts so `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult` reject invalid list item/object types at construction time; added regression coverage in `tests.test_models`.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days
