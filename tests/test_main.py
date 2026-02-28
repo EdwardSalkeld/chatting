@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from app.executor import StubExecutor
 from app.models import RoutedTask, TaskEnvelope
-from app.main import run_bootstrap
+from app.main import main, run_bootstrap
 from app.connectors import EmailMessage, FakeEmailConnector
 from app.state import SQLiteStateStore
 
@@ -139,6 +140,29 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(audit_events[0].detail["reason_codes"], ["retry_exhausted"])
             self.assertEqual(audit_events[0].detail["attempt_count"], 2)
             self.assertIn("RuntimeError", audit_events[0].detail["last_error"])
+
+
+class MainCliTests(unittest.TestCase):
+    @patch("app.main.run_bootstrap")
+    def test_main_passes_configured_max_attempts(self, run_bootstrap_mock) -> None:
+        run_bootstrap_mock.return_value = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                ["app.main", "--db-path", db_path, "--max-attempts", "4"],
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_bootstrap_mock.assert_called_once_with(db_path, max_attempts=4)
+
+    def test_main_rejects_non_positive_max_attempts(self) -> None:
+        with patch("sys.argv", ["app.main", "--max-attempts", "0"]):
+            with self.assertRaises(SystemExit) as context:
+                main()
+
+        self.assertEqual(context.exception.code, 2)
 
 
 def _single_email_envelope() -> TaskEnvelope:

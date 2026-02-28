@@ -64,6 +64,7 @@ Progress notes:
 - 2026-02-27: Hardened schema-version contract validation to reject empty `schema_version` values in top-level models and executor parsing, preventing invalid version metadata from entering state/audit records.
 - 2026-02-28: Added bounded retry handling in `app.main.run_bootstrap` (configurable `max_attempts`) so transient executor failures retry and exhausted attempts are recorded as `dead_letter` run outcomes with audit detail (`attempt_count`, `last_error`, `reason_codes=["retry_exhausted"]`).
 - 2026-02-28: Hardened schema-version compatibility to reject unsupported versions (currently only `1.0` is accepted) in top-level models and executor parsing, preventing silent cross-version contract drift.
+- 2026-02-28: Added bootstrap CLI retry control (`python -m app.main --max-attempts <N>`) with positive-integer validation and tests, so retry/DLQ behavior can be tuned without code edits.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days

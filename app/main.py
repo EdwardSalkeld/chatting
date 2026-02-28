@@ -23,6 +23,13 @@ from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("max_attempts must be a positive integer")
+    return parsed
+
+
 def run_bootstrap(
     db_path: str,
     *,
@@ -187,6 +194,12 @@ def _parse_args() -> argparse.Namespace:
         "--db-path",
         help="Path to SQLite state database. Uses a temp file when omitted.",
     )
+    parser.add_argument(
+        "--max-attempts",
+        type=_positive_int,
+        default=2,
+        help="Maximum executor attempts per task before marking dead-letter (default: 2).",
+    )
     return parser.parse_args()
 
 
@@ -196,7 +209,7 @@ def main() -> int:
         db_path = args.db_path
     else:
         db_path = str(Path(tempfile.gettempdir()) / "chatting-bootstrap-state.db")
-    run_bootstrap(db_path)
+    run_bootstrap(db_path, max_attempts=args.max_attempts)
     return 0
 
 

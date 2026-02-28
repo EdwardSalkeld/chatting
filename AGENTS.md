@@ -18,4 +18,5 @@
 - Run bootstrap retry/DLQ checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
 - Run idempotency contract checks: `python3 -m unittest tests.test_sqlite_store tests.test_main`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
+- Run bootstrap app with custom retry limit: `python3 -m app.main --db-path /tmp/chatting-state.db --max-attempts 4`
 - If `rg` is unavailable locally (confirmed in this environment), use `find . -type f` for file discovery and `grep -n` for content search.
