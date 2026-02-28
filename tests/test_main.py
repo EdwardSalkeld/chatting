@@ -263,6 +263,57 @@ class MainCliTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "config db_path must not be empty"):
                     main()
 
+    @patch("app.main.run_bootstrap")
+    def test_main_reads_config_path_from_environment(self, run_bootstrap_mock) -> None:
+        run_bootstrap_mock.return_value = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state-from-env.db")
+            config_path = Path(tmpdir) / "bootstrap-config.json"
+            config_path.write_text(
+                json.dumps({"db_path": db_path, "max_attempts": 3}),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_CONFIG_PATH": str(config_path)}, clear=False),
+                patch("sys.argv", ["app.main"]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_bootstrap_mock.assert_called_once_with(db_path, max_attempts=3)
+
+    @patch("app.main.run_bootstrap")
+    def test_main_cli_config_overrides_environment_config_path(self, run_bootstrap_mock) -> None:
+        run_bootstrap_mock.return_value = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_config_path = Path(tmpdir) / "env-config.json"
+            env_config_path.write_text(
+                json.dumps({"db_path": str(Path(tmpdir) / "state-from-env.db"), "max_attempts": 3}),
+                encoding="utf-8",
+            )
+            cli_db_path = str(Path(tmpdir) / "state-from-cli-config.db")
+            cli_config_path = Path(tmpdir) / "cli-config.json"
+            cli_config_path.write_text(
+                json.dumps({"db_path": cli_db_path, "max_attempts": 4}),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_CONFIG_PATH": str(env_config_path)}, clear=False),
+                patch("sys.argv", ["app.main", "--config", str(cli_config_path)]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_bootstrap_mock.assert_called_once_with(cli_db_path, max_attempts=4)
+
+    def test_main_rejects_whitespace_only_environment_config_path(self) -> None:
+        with (
+            patch.dict("os.environ", {"CHATTING_CONFIG_PATH": "   "}, clear=False),
+            patch("sys.argv", ["app.main"]),
+        ):
+            with self.assertRaisesRegex(ValueError, "CHATTING_CONFIG_PATH must not be empty"):
+                main()
+
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")

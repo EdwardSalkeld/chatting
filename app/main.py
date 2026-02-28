@@ -10,7 +10,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from app.applier import IntegratedApplier, NoOpApplier, SmtpEmailSender
 from app.connectors import (
@@ -28,6 +28,8 @@ from app.models import AuditEvent, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
+
+CONFIG_PATH_ENV_VAR = "CHATTING_CONFIG_PATH"
 
 
 def _positive_int(value: str) -> int:
@@ -405,7 +407,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    config = _load_runtime_config(args.config)
+    config = _load_runtime_config(args.config, os.environ)
     db_path = _resolve_str(
         cli_value=args.db_path,
         config_value=config.get("db_path"),
@@ -647,10 +649,23 @@ def _parse_optional_rfc3339(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _load_runtime_config(config_path: str | None) -> dict[str, object]:
-    if not config_path:
+def _load_runtime_config(
+    config_path: str | None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    config_source = config_path
+    env = os.environ if environ is None else environ
+
+    if config_source is None:
+        raw_env_path = env.get(CONFIG_PATH_ENV_VAR)
+        if raw_env_path is not None:
+            if not raw_env_path.strip():
+                raise ValueError(f"{CONFIG_PATH_ENV_VAR} must not be empty")
+            config_source = raw_env_path
+
+    if not config_source:
         return {}
-    payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    payload = json.loads(Path(config_source).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("config file must contain a JSON object")
     return payload

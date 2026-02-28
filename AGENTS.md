@@ -29,7 +29,9 @@
 - Run bootstrap execution-summary audit checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
 - Run bootstrap retry/DLQ checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
 - Run runtime config string-validation checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_whitespace_only_cli_db_path tests.test_main.MainCliTests.test_main_rejects_whitespace_only_config_db_path tests.test_main.MainCliTests.test_main_run_live_rejects_blank_context_refs_from_config`
+- Run runtime config env-loading checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_reads_config_path_from_environment tests.test_main.MainCliTests.test_main_cli_config_overrides_environment_config_path tests.test_main.MainCliTests.test_main_rejects_whitespace_only_environment_config_path`
 - Run idempotency contract checks: `python3 -m unittest tests.test_sqlite_store tests.test_main`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
 - Run bootstrap app with custom retry limit: `python3 -m app.main --db-path /tmp/chatting-state.db --max-attempts 4`
+- Run bootstrap app with env-provided config path: `CHATTING_CONFIG_PATH=configs/live-runtime.example.json python3 -m app.main`
 - If `rg` is unavailable locally (confirmed in this environment), use `find . -type f` for file discovery and `grep -n` for content search.

@@ -48,6 +48,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Run audit events include apply-phase outcome fields (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`)
 - [x] Run audit events include executor output summary fields (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`)
 - [x] Runtime config resolution rejects whitespace-only CLI/config string inputs and blank live `context_ref(s)` entries
+- [x] Runtime config supports environment-provided config path (`CHATTING_CONFIG_PATH`) with CLI `--config` precedence
 - [x] Model typed-collection fields enforce runtime item/object contracts across execution/policy/apply payload models
 
 Notes:
@@ -84,3 +85,4 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: updated bootstrap/live processing to persist executor output summaries (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`) in audit-event detail for stronger run forensics.
 - 2026-02-28: Post-milestone P0 hardening: updated runtime config resolution in `app.main` to reject whitespace-only CLI/config strings and blank live `context_ref(s)` values, with regression coverage in `tests.test_main`.
 - 2026-02-28: Post-milestone P0 hardening: added constructor-level typed-collection validation for `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult` so malformed list item/object shapes fail fast, with regression coverage in `tests.test_models`.
+- 2026-02-28: Post-milestone P0/Phase-0 config progress: added `CHATTING_CONFIG_PATH` support so bootstrap/live runtime config can be sourced from environment when `--config` is omitted, with tests covering env loading, CLI override precedence, and blank env-path rejection.
