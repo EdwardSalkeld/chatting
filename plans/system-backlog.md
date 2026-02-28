@@ -36,6 +36,7 @@ Progress notes:
 - 2026-02-28: Hardened executor required-string schema checks to reject whitespace-only required fields in `messages`, `actions`, and `config_updates`, including whitespace-only `write_file.path`/`write_file.content`.
 - 2026-02-28: Added integration-ready connector primitives for real sources: interval-based cron scheduling (`IntervalScheduleConnector`) and IMAP polling (`ImapEmailConnector`), with unit tests validating canonical envelope normalization.
 - 2026-02-28: Added integration-ready apply path via `IntegratedApplier` and `SmtpEmailSender` so approved `write_file` actions and outbound email/log messages can be executed beyond bootstrap no-op mode.
+- 2026-02-28: Added live worker execution mode in `app.main` with connector polling loop (`run_live`), CLI configuration for schedule/IMAP/SMTP/Codex wiring, and tests covering live flow and CLI branch selection.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from app.executor import StubExecutor
 from app.models import RoutedTask, TaskEnvelope
-from app.main import main, run_bootstrap
+from app.main import main, run_bootstrap, run_live
 from app.connectors import EmailMessage, FakeEmailConnector
 from app.state import SQLiteStateStore
 
@@ -142,6 +142,39 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertIn("RuntimeError", audit_events[0].detail["last_error"])
 
 
+@dataclass
+class OneShotConnector:
+    envelopes: list[TaskEnvelope]
+    _consumed: bool = False
+
+    def poll(self) -> list[TaskEnvelope]:
+        if self._consumed:
+            return []
+        self._consumed = True
+        return list(self.envelopes)
+
+
+class MainLiveFlowTests(unittest.TestCase):
+    def test_run_live_processes_connector_envelopes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            envelope = _single_email_envelope()
+
+            runs = run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=[envelope])],
+                executor=StubExecutor(),
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+            )
+
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0].source, "email")
+            self.assertEqual(runs[0].result_status, "success")
+
+
 class MainCliTests(unittest.TestCase):
     @patch("app.main.run_bootstrap")
     def test_main_passes_configured_max_attempts(self, run_bootstrap_mock) -> None:
@@ -163,6 +196,40 @@ class MainCliTests(unittest.TestCase):
                 main()
 
         self.assertEqual(context.exception.code, 2)
+
+    @patch("app.main._build_codex_executor")
+    @patch("app.main._build_email_sender")
+    @patch("app.main._build_live_connectors")
+    @patch("app.main.run_live")
+    def test_main_run_live_mode_uses_live_flow(
+        self,
+        run_live_mock,
+        connectors_mock,
+        email_sender_mock,
+        executor_mock,
+    ) -> None:
+        run_live_mock.return_value = []
+        connectors_mock.return_value = []
+        email_sender_mock.return_value = None
+        executor_mock.return_value = StubExecutor()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--db-path",
+                    db_path,
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_live_mock.assert_called_once()
 
 
 def _single_email_envelope() -> TaskEnvelope:
