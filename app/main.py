@@ -413,6 +413,11 @@ def _parse_args() -> argparse.Namespace:
         help="List persisted run records as JSON and exit.",
     )
     parser.add_argument(
+        "--list-audit-events",
+        action="store_true",
+        help="List persisted audit events as JSON and exit.",
+    )
+    parser.add_argument(
         "--result-status",
         help="Optional run status filter used with --list-runs.",
     )
@@ -521,16 +526,30 @@ def main() -> int:
         default_value=2,
         setting_name="max_attempts",
     )
-    if args.list_runs:
+    if args.list_runs and args.list_audit_events:
+        raise ValueError("--list-runs cannot be combined with --list-audit-events")
+
+    if args.list_runs or args.list_audit_events:
         if args.run_live:
-            raise ValueError("--list-runs cannot be combined with --run-live")
+            raise ValueError(
+                "--list-runs/--list-audit-events cannot be combined with --run-live"
+            )
         result_status = args.result_status
         if result_status is not None:
             if not result_status.strip():
                 raise ValueError("result_status must not be empty")
             result_status = result_status.strip()
-        runs = _query_runs(db_path, limit=args.limit, result_status=result_status)
-        print(json.dumps([run.to_dict() for run in runs], sort_keys=True))
+        if args.list_runs:
+            runs = _query_runs(db_path, limit=args.limit, result_status=result_status)
+            payload = [run.to_dict() for run in runs]
+        else:
+            audit_events = _query_audit_events(
+                db_path,
+                limit=args.limit,
+                result_status=result_status,
+            )
+            payload = [event.to_dict() for event in audit_events]
+        print(json.dumps(payload, sort_keys=True))
         return 0
 
     if args.run_live:
@@ -929,6 +948,21 @@ def _query_runs(
     if limit is not None:
         runs = runs[-limit:]
     return runs
+
+
+def _query_audit_events(
+    db_path: str,
+    *,
+    limit: int | None,
+    result_status: str | None,
+) -> list[AuditEvent]:
+    store = SQLiteStateStore(db_path)
+    audit_events = store.list_audit_events()
+    if result_status is not None:
+        audit_events = [event for event in audit_events if event.result_status == result_status]
+    if limit is not None:
+        audit_events = audit_events[-limit:]
+    return audit_events
 
 
 if __name__ == "__main__":

@@ -330,6 +330,41 @@ class MainCliTests(unittest.TestCase):
             ["blocked_action", "duplicate_skipped"],
         )
 
+    @patch("app.main.run_bootstrap")
+    def test_main_list_audit_events_outputs_json_and_skips_bootstrap(
+        self, run_bootstrap_mock
+    ) -> None:
+        run_bootstrap_mock.return_value = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(db_path)
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-audit-events",
+                        "--limit",
+                        "2",
+                    ],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_bootstrap_mock.assert_not_called()
+        listed_events = json.loads(output_buffer.getvalue().strip())
+        self.assertEqual(len(listed_events), 2)
+        self.assertEqual(
+            [event["result_status"] for event in listed_events],
+            ["blocked_action", "duplicate_skipped"],
+        )
+
     def test_main_list_runs_supports_result_status_filter(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
@@ -356,6 +391,70 @@ class MainCliTests(unittest.TestCase):
         listed_runs = json.loads(output_buffer.getvalue().strip())
         self.assertEqual(len(listed_runs), 1)
         self.assertEqual(listed_runs[0]["result_status"], "duplicate_skipped")
+
+    def test_main_list_audit_events_supports_result_status_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(db_path)
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-audit-events",
+                        "--result-status",
+                        "duplicate_skipped",
+                    ],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        listed_events = json.loads(output_buffer.getvalue().strip())
+        self.assertEqual(len(listed_events), 1)
+        self.assertEqual(listed_events[0]["result_status"], "duplicate_skipped")
+
+    def test_main_rejects_combined_list_query_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--db-path",
+                    db_path,
+                    "--list-runs",
+                    "--list-audit-events",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "--list-runs cannot be combined with --list-audit-events"
+                ):
+                    main()
+
+    def test_main_rejects_list_audit_events_with_run_live(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--db-path",
+                    db_path,
+                    "--list-audit-events",
+                    "--run-live",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "--list-runs/--list-audit-events cannot be combined with --run-live",
+                ):
+                    main()
 
     def test_main_rejects_whitespace_only_result_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -126,6 +126,7 @@ Progress notes:
 - 2026-02-28: Extended bootstrap/live audit-event detail with executor output summaries (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`) so run history captures execution-output shape alongside policy/apply outcomes.
 - 2026-03-01: Deepened run-audit fidelity in `app.main` by persisting full structured `execution_result`, `policy_decision`, and `apply_result` payload snapshots alongside existing summary counters, with regression coverage in `tests.test_main`.
 - 2026-03-01: Added read-only run-history querying in `app.main` (`--list-runs` with optional `--result-status` and `--limit`) so operators can inspect persisted SQLite run records without executing bootstrap/live processing.
+- 2026-03-01: Added read-only audit-event querying in `app.main` (`--list-audit-events` with optional `--result-status` and `--limit`) so operators can inspect persisted audit trails without executing bootstrap/live processing.
 
 ## Phase 5: Connector Expansion (Optional)
 Duration: 3-5 days

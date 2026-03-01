@@ -58,6 +58,7 @@ Progress notes:
 
 ## P1 (Should Have)
 - [x] Run-history query mode for persisted SQLite run records (`app.main --list-runs`)
+- [x] Audit-trail query mode for persisted SQLite audit events (`app.main --list-audit-events`)
 - Dead-letter queue state and replay utility
 - Human approval workflow for sensitive actions
 - Metrics endpoint and dashboard starter
@@ -83,3 +84,4 @@ Progress notes:
 Planning notes:
 - 2026-02-28: Added scoped delivery plan for Telegram integration in `plans/milestone-02-telegram-integration.md` to de-risk P2 connector expansion with explicit acceptance criteria and rollout stages.
 - 2026-03-01: Added read-only run query mode in `app.main` (`--list-runs` plus optional `--result-status`/`--limit`) to improve operator access to persisted run history.
+- 2026-03-01: Added read-only audit-event query mode in `app.main` (`--list-audit-events` plus optional `--result-status`/`--limit`) to improve operator access to persisted audit trails.
