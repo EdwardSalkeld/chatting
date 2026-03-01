@@ -4,7 +4,12 @@ from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from app.applier import IntegratedApplier, NoOpApplier, SmtpEmailSender
+from app.applier import (
+    IntegratedApplier,
+    NoOpApplier,
+    SmtpEmailSender,
+    TelegramMessageSender,
+)
 from app.models import (
     ActionProposal,
     ConfigUpdateDecision,
@@ -97,6 +102,32 @@ class IntegratedApplierTests(unittest.TestCase):
             )
             self.assertEqual(result.reason_codes, [])
 
+    def test_apply_dispatches_telegram_message_with_sender(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingTelegramSender(sent=[])
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        body="Done via telegram.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(sender.sent, [("12345", "Done via telegram.")])
+            self.assertEqual(
+                [message.channel for message in result.dispatched_messages],
+                ["telegram"],
+            )
+            self.assertEqual(result.reason_codes, [])
+
     def test_apply_skips_write_outside_base_dir(self) -> None:
         with TemporaryDirectory() as tmpdir:
             decision = PolicyDecision(
@@ -136,6 +167,27 @@ class IntegratedApplierTests(unittest.TestCase):
             self.assertEqual(result.dispatched_messages, [])
             self.assertEqual(result.reason_codes, ["email_dispatch_not_configured"])
 
+    def test_apply_marks_telegram_dispatch_unconfigured(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        body="Done.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir).apply(decision)
+
+            self.assertEqual(result.dispatched_messages, [])
+            self.assertEqual(result.reason_codes, ["telegram_dispatch_not_configured"])
+
 
 class SmtpEmailSenderTests(unittest.TestCase):
     def test_send_uses_smtp_client(self) -> None:
@@ -160,6 +212,44 @@ class SmtpEmailSenderTests(unittest.TestCase):
         self.assertTrue(client.quit_called)
 
 
+class TelegramMessageSenderTests(unittest.TestCase):
+    def test_send_posts_message_and_validates_ok_response(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": {"message_id": 1}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send("12345", "hello")
+
+        self.assertEqual(len(seen_calls), 1)
+        call_url, call_payload, call_timeout = seen_calls[0]
+        self.assertEqual(
+            call_url,
+            "https://api.telegram.org/bottoken/sendMessage",
+        )
+        self.assertEqual(call_payload, {"chat_id": "12345", "text": "hello"})
+        self.assertEqual(call_timeout, 10.0)
+
+    def test_send_raises_when_response_not_ok(self) -> None:
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=lambda _url, _payload, _timeout: {"ok": False},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "telegram_send_failed"):
+            sender.send("12345", "hello")
+
+
 class _FakeSmtpClient:
     def __init__(self) -> None:
         self.login_args: tuple[str, str] | None = None
@@ -174,6 +264,14 @@ class _FakeSmtpClient:
 
     def quit(self) -> None:
         self.quit_called = True
+
+
+@dataclass
+class _RecordingTelegramSender:
+    sent: list[tuple[str, str]]
+
+    def send(self, target: str, body: str) -> None:
+        self.sent.append((target, body))
 
 
 if __name__ == "__main__":

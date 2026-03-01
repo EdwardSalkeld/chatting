@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import smtplib
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
@@ -16,6 +19,13 @@ class EmailSender(Protocol):
 
     def send(self, target: str, body: str) -> None:
         """Send one outbound email message."""
+
+
+class TelegramSender(Protocol):
+    """Dispatch outbound Telegram messages."""
+
+    def send(self, target: str, body: str) -> None:
+        """Send one outbound Telegram message."""
 
 
 @dataclass(frozen=True)
@@ -76,7 +86,41 @@ class SmtpEmailSender:
             host,
             port,
             timeout=self.timeout_seconds,
+            )
+
+
+@dataclass(frozen=True)
+class TelegramMessageSender:
+    """Telegram Bot API sender used by the integrated applier."""
+
+    bot_token: str
+    api_base_url: str = "https://api.telegram.org"
+    timeout_seconds: float = 10.0
+    http_post_json: Callable[[str, dict[str, object], float], dict[str, object]] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.bot_token:
+            raise ValueError("bot_token is required")
+        if not self.api_base_url:
+            raise ValueError("api_base_url is required")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+
+    def send(self, target: str, body: str) -> None:
+        if not target:
+            raise ValueError("target is required")
+        if not body.strip():
+            raise ValueError("body is required")
+
+        client = self.http_post_json or _default_http_post_json
+        url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/sendMessage"
+        response = client(
+            url,
+            {"chat_id": target, "text": body},
+            self.timeout_seconds,
         )
+        if response.get("ok") is not True:
+            raise RuntimeError("telegram_send_failed")
 
 
 @dataclass(frozen=True)
@@ -85,6 +129,7 @@ class IntegratedApplier:
 
     base_dir: str
     email_sender: EmailSender | None = None
+    telegram_sender: TelegramSender | None = None
 
     def apply(self, decision: PolicyDecision) -> ApplyResult:
         applied_actions: list[ActionProposal] = []
@@ -127,6 +172,16 @@ class IntegratedApplier:
                 except Exception:  # noqa: BLE001
                     reason_codes.append("email_dispatch_failed")
                 continue
+            if message.channel == "telegram":
+                if self.telegram_sender is None:
+                    reason_codes.append("telegram_dispatch_not_configured")
+                    continue
+                try:
+                    self.telegram_sender.send(message.target, message.body)
+                    dispatched_messages.append(message)
+                except Exception:  # noqa: BLE001
+                    reason_codes.append("telegram_dispatch_failed")
+                continue
             reason_codes.append("unsupported_message_channel")
 
         if decision.blocked_actions:
@@ -161,4 +216,36 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
-__all__ = ["EmailSender", "IntegratedApplier", "SmtpEmailSender"]
+def _default_http_post_json(
+    url: str,
+    payload: dict[str, object],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    body = json.dumps(payload, sort_keys=True).encode("utf-8")
+    request = urllib.request.Request(
+        url=url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.URLError as error:
+        raise RuntimeError("telegram_http_error") from error
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("telegram_invalid_json") from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError("telegram_invalid_response_shape")
+    return parsed
+
+
+__all__ = [
+    "EmailSender",
+    "IntegratedApplier",
+    "SmtpEmailSender",
+    "TelegramMessageSender",
+    "TelegramSender",
+]

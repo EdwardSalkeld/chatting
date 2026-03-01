@@ -9,6 +9,10 @@ from app.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
 )
+from app.connectors.telegram_connector import (
+    TelegramConnector,
+    TelegramGetUpdatesResponse,
+)
 
 
 class FakeCronConnectorTests(unittest.TestCase):
@@ -198,6 +202,116 @@ class ImapEmailConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].received_at, fallback_now)
+
+
+class TelegramConnectorTests(unittest.TestCase):
+    def test_poll_normalizes_supported_updates_and_advances_offset(self) -> None:
+        responses = [
+            TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 1001,
+                        "message": {
+                            "message_id": 1,
+                            "date": 1772272800,
+                            "text": "hello from telegram",
+                            "chat": {"id": 12345},
+                            "from": {"id": 77, "username": "alice"},
+                        },
+                    },
+                    {
+                        "update_id": 1002,
+                        "channel_post": {"message_id": 2},
+                    },
+                ],
+            ),
+            TelegramGetUpdatesResponse(ok=True, result=[]),
+        ]
+        seen_urls: list[str] = []
+
+        def fake_http_get_json(url: str, _timeout: float) -> TelegramGetUpdatesResponse:
+            seen_urls.append(url)
+            return responses.pop(0)
+
+        connector = TelegramConnector(
+            bot_token="token",
+            api_base_url="https://api.telegram.org",
+            context_refs=["repo:/home/edward/chatting"],
+            http_get_json=fake_http_get_json,
+        )
+
+        first_poll = connector.poll()
+        second_poll = connector.poll()
+
+        self.assertEqual(len(first_poll), 1)
+        envelope = first_poll[0]
+        self.assertEqual(envelope.source, "im")
+        self.assertEqual(envelope.id, "telegram:1001")
+        self.assertEqual(envelope.dedupe_key, "telegram:1001")
+        self.assertEqual(envelope.actor, "77:alice")
+        self.assertEqual(envelope.reply_channel.type, "telegram")
+        self.assertEqual(envelope.reply_channel.target, "12345")
+        self.assertEqual(envelope.content, "hello from telegram")
+        self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
+        self.assertEqual(second_poll, [])
+        self.assertIn("timeout=20", seen_urls[0])
+        self.assertIn("offset=1003", seen_urls[1])
+
+    def test_poll_respects_allowed_chat_ids_and_skips_unsupported_payloads(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            allowed_chat_ids=["12345"],
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 2001,
+                        "message": {
+                            "message_id": 1,
+                            "date": 1772272800,
+                            "text": "allowed",
+                            "chat": {"id": 12345},
+                        },
+                    },
+                    {
+                        "update_id": 2002,
+                        "message": {
+                            "message_id": 2,
+                            "date": 1772272801,
+                            "text": "blocked",
+                            "chat": {"id": 67890},
+                        },
+                    },
+                    {
+                        "update_id": 2003,
+                        "message": {
+                            "message_id": 3,
+                            "date": 1772272802,
+                            "text": "   ",
+                            "chat": {"id": 12345},
+                        },
+                    },
+                ],
+            ),
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(envelopes[0].id, "telegram:2001")
+
+    def test_poll_raises_when_telegram_returns_not_ok(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=False,
+                result=[],
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "telegram_get_updates_failed"):
+            connector.poll()
 
 
 class _MutableClock:

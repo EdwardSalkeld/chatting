@@ -148,8 +148,12 @@ Notes:
 4. Expand to additional chats after audit/retry behavior is confirmed.
 
 ## Exit Checklist
-- [ ] Telegram connector implemented and tested
-- [ ] Telegram outbound dispatch implemented and tested
+- [x] Telegram connector implemented and tested
+- [x] Telegram outbound dispatch implemented and tested
 - [ ] Live config + docs updated
 - [ ] End-to-end smoke run documented and reproducible
 - [ ] Plan/backlog progress notes updated with concrete completion dates
+
+## Progress Notes
+- 2026-03-01: Implemented `app.connectors.TelegramConnector` (Bot API `getUpdates` long polling with offset progression, supported message normalization to canonical `TaskEnvelope`, optional chat allowlist filtering, unsupported-update skipping, and deterministic unit coverage).
+- 2026-03-01: Implemented outbound Telegram dispatch in `app.applier.IntegratedApplier` via new `TelegramMessageSender` (`sendMessage` API), including deterministic dispatch error reason codes (`telegram_dispatch_not_configured`/`telegram_dispatch_failed`) and unit coverage.

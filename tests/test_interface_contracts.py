@@ -10,7 +10,9 @@ from app.connectors import (
     EmailMessage,
     FakeCronConnector,
     FakeEmailConnector,
+    TelegramConnector,
 )
+from app.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.executor import CodexExecutor, Executor, StubExecutor
 from app.policy import AllowlistPolicyEngine, PolicyEngine
 from app.router import Router, RuleBasedRouter
@@ -44,6 +46,13 @@ class InterfaceContractTests(unittest.TestCase):
 
         self.assertIsInstance(cron, Connector)
         self.assertIsInstance(email, Connector)
+        self.assertIsInstance(
+            TelegramConnector(
+                bot_token="token",
+                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(ok=True, result=[]),
+            ),
+            Connector,
+        )
 
     def test_router_implementation_matches_protocol(self) -> None:
         self.assertIsInstance(RuleBasedRouter(), Router)
