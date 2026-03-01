@@ -67,8 +67,8 @@ Progress notes:
 
 ## P2 (Nice to Have)
 - [x] Telegram connector + outbound dispatch path
-- Slack connector
-- Webhook connector
+- [x] Slack connector
+- [x] Webhook connector
 - Queue backend abstraction (Redis/SQS)
 - Multi-worker horizontal scaling
 
@@ -91,3 +91,4 @@ Planning notes:
 - 2026-03-01: Added sensitive config human-approval workflow state and operator commands: pending-review config updates are persisted to SQLite (`pending_approvals`), queryable via `--list-pending-approvals`, and resolvable via `--approve-pending-approval` / `--reject-pending-approval`.
 - 2026-03-01: Added config versioning + rollback runtime utilities backed by SQLite (`config_versions` + `current_config`) with CLI query/rollback commands (`--list-config-versions`, `--rollback-config-version`) and approval-integration so approved pending updates create version entries automatically.
 - 2026-03-01: Added operability metrics surfaces in `app.main`: JSON metrics query mode (`--list-metrics`) plus lightweight HTTP endpoint (`--serve-metrics`, `/metrics`) and starter dashboard (`/dashboard`) computed from persisted run records.
+- 2026-03-01: Added new canonical connector modules for Slack and webhook sources (`app.connectors.SlackConnector`, `app.connectors.WebhookConnector`) with protocol conformance and unit test coverage.

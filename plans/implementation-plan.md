@@ -148,6 +148,7 @@ Acceptance criteria:
 Progress notes:
 - 2026-02-28: Authored `plans/milestone-02-telegram-integration.md` to define phased Telegram connector + dispatch implementation (contracts, config, tests, rollout) as the first concrete Phase 5 workstream.
 - 2026-03-01: Completed Telegram integration baseline (inbound connector + outbound dispatch + live runtime/config wiring + smoke-run docs) via `app.connectors.TelegramConnector`, `TelegramMessageSender`, `app.main` Telegram config branch, and regression coverage in `tests.test_connectors`, `tests.test_applier`, and `tests.test_main`.
+- 2026-03-01: Added Phase 5 connector expansion foundations for Slack and webhook sources (`SlackConnector`, `WebhookConnector`) with canonical `TaskEnvelope` normalization and connector protocol conformance tests.
 
 ## Cross-Cutting Test Plan
 - Unit tests: models, router, policy, parser

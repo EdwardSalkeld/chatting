@@ -13,6 +13,8 @@ from app.connectors.telegram_connector import (
     TelegramConnector,
     TelegramGetUpdatesResponse,
 )
+from app.connectors.slack_connector import SlackConnector
+from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
 
 
 class FakeCronConnectorTests(unittest.TestCase):
@@ -311,6 +313,91 @@ class TelegramConnectorTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "telegram_get_updates_failed"):
+            connector.poll()
+
+
+class SlackConnectorTests(unittest.TestCase):
+    def test_poll_normalizes_messages_to_im_envelopes(self) -> None:
+        connector = SlackConnector(
+            fetch_messages=lambda: [
+                {
+                    "id": "m-1",
+                    "user": "U123",
+                    "channel": "C999",
+                    "text": "Ship it",
+                    "ts": "1772272800.100",
+                }
+            ],
+            context_refs=["repo:/home/edward/chatting"],
+            allowed_channel_ids=["C999"],
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        envelope = envelopes[0]
+        self.assertEqual(envelope.source, "im")
+        self.assertEqual(envelope.id, "slack:m-1")
+        self.assertEqual(envelope.actor, "U123")
+        self.assertEqual(envelope.reply_channel.type, "slack")
+        self.assertEqual(envelope.reply_channel.target, "C999")
+        self.assertEqual(envelope.dedupe_key, "slack:m-1")
+
+    def test_poll_skips_disallowed_channels_and_invalid_payloads(self) -> None:
+        connector = SlackConnector(
+            fetch_messages=lambda: [
+                {"id": "m-1", "user": "U123", "channel": "C111", "text": "Hi"},
+                {"id": "m-2", "user": "U123", "channel": "C999", "text": "   "},
+                {"id": "m-3", "user": "U123", "channel": "C999", "text": "ok"},
+            ],
+            allowed_channel_ids=["C999"],
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(envelopes[0].id, "slack:m-3")
+
+
+class WebhookConnectorTests(unittest.TestCase):
+    def test_poll_drains_enqueued_webhook_events(self) -> None:
+        connector = WebhookConnector()
+        connector.enqueue(
+            WebhookEvent(
+                event_id="evt-1",
+                actor="svc:deploy",
+                content="Deploy finished",
+                received_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
+                reply_target="https://example.com/reply",
+                context_refs=["repo:/home/edward/chatting"],
+            )
+        )
+
+        first = connector.poll()
+        second = connector.poll()
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].source, "webhook")
+        self.assertEqual(first[0].reply_channel.type, "webhook")
+        self.assertEqual(first[0].reply_channel.target, "https://example.com/reply")
+        self.assertEqual(first[0].dedupe_key, "webhook:evt-1")
+        self.assertEqual(second, [])
+
+    def test_poll_rejects_naive_received_time(self) -> None:
+        connector = WebhookConnector(
+            events=[
+                WebhookEvent(
+                    event_id="evt-1",
+                    actor="svc:deploy",
+                    content="Deploy finished",
+                    received_at=datetime(2026, 3, 1, 12, 0),
+                    reply_target="https://example.com/reply",
+                    context_refs=[],
+                )
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
 
 

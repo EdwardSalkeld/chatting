@@ -8,7 +8,9 @@ from app.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
 )
+from app.connectors.slack_connector import SlackConnector
 from app.connectors.telegram_connector import TelegramConnector
+from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
 
 __all__ = [
     "Connector",
@@ -19,5 +21,8 @@ __all__ = [
     "ImapEmailConnector",
     "IntervalScheduleConnector",
     "IntervalScheduleJob",
+    "SlackConnector",
     "TelegramConnector",
+    "WebhookConnector",
+    "WebhookEvent",
 ]

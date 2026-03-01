@@ -10,7 +10,10 @@ from app.connectors import (
     EmailMessage,
     FakeCronConnector,
     FakeEmailConnector,
+    SlackConnector,
     TelegramConnector,
+    WebhookConnector,
+    WebhookEvent,
 )
 from app.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.executor import CodexExecutor, Executor, StubExecutor
@@ -47,9 +50,28 @@ class InterfaceContractTests(unittest.TestCase):
         self.assertIsInstance(cron, Connector)
         self.assertIsInstance(email, Connector)
         self.assertIsInstance(
+            SlackConnector(fetch_messages=lambda: []),
+            Connector,
+        )
+        self.assertIsInstance(
             TelegramConnector(
                 bot_token="token",
                 http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(ok=True, result=[]),
+            ),
+            Connector,
+        )
+        self.assertIsInstance(
+            WebhookConnector(
+                events=[
+                    WebhookEvent(
+                        event_id="evt-1",
+                        actor="svc:test",
+                        content="hello",
+                        received_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
+                        reply_target="https://example.com",
+                        context_refs=[],
+                    )
+                ]
             ),
             Connector,
         )
