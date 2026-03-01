@@ -3,6 +3,7 @@
   "max_attempts": 2,
   "poll_interval_seconds": 30.0,
   "max_loops": 1,
+  "worker_count": 1,
   "base_dir": ".",
   "schedule_file": "configs/live-schedule.example.json",
   "imap_host": "imap.example.com",

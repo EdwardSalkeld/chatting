@@ -18,6 +18,7 @@ from app.connectors import (
 from app.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.executor import CodexExecutor, Executor, StubExecutor
 from app.policy import AllowlistPolicyEngine, PolicyEngine
+from app.queue import InMemoryQueueBackend, QueueBackend
 from app.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 
@@ -95,6 +96,9 @@ class InterfaceContractTests(unittest.TestCase):
             db_path = str(Path(tmpdir) / "state.db")
             store = SQLiteStateStore(db_path)
             self.assertIsInstance(store, StateStore)
+
+    def test_queue_backend_implementation_matches_protocol(self) -> None:
+        self.assertIsInstance(InMemoryQueueBackend(), QueueBackend)
 
 
 if __name__ == "__main__":

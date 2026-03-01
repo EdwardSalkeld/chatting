@@ -49,6 +49,7 @@ python3 -m app.main --run-live --config configs/live-runtime.example.json
 
 - `--smtp-host` is required when `--imap-host` is set, so inbound email can be answered.
 - Set `"telegram_enabled": true` to turn on Telegram long polling + outbound Telegram replies.
+- Increase `"worker_count"` (or pass `--worker-count`) to process queued envelopes in parallel in live mode.
 - CLI flags override config file values.
 - Add one or more `--context-ref` flags to append extra context refs beyond config.
 - Run `python3 -m app.main --db-path /tmp/chatting-live.db --list-metrics` to output run metrics JSON.

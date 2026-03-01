@@ -303,6 +303,39 @@ class MainLiveFlowTests(unittest.TestCase):
             self.assertEqual(runs[0].source, "email")
             self.assertEqual(runs[0].result_status, "success")
 
+    def test_run_live_supports_parallel_worker_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            envelopes = [
+                _single_email_envelope(),
+                FakeEmailConnector(
+                    messages=[
+                        EmailMessage(
+                            provider_message_id="dlq-2",
+                            from_address="two@example.com",
+                            subject="Second",
+                            body="Second message",
+                            received_at=datetime(2026, 2, 27, 20, 1, tzinfo=timezone.utc),
+                            context_refs=["repo:/home/edward/chatting"],
+                        )
+                    ]
+                ).poll()[0],
+            ]
+
+            runs = run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=envelopes)],
+                executor=StubExecutor(),
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                worker_count=2,
+            )
+
+            self.assertEqual(len(runs), 2)
+            self.assertEqual({run.envelope_id for run in runs}, {"email:dlq-1", "email:dlq-2"})
+
 
 class MainCliTests(unittest.TestCase):
     @patch("app.main.run_bootstrap")
@@ -1106,6 +1139,7 @@ class MainCliTests(unittest.TestCase):
             base_dir="/tmp/chatting",
             email_sender=None,
             telegram_sender=None,
+            worker_count=1,
         )
 
     @patch("app.main._build_codex_executor")

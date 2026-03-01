@@ -69,8 +69,8 @@ Progress notes:
 - [x] Telegram connector + outbound dispatch path
 - [x] Slack connector
 - [x] Webhook connector
-- Queue backend abstraction (Redis/SQS)
-- Multi-worker horizontal scaling
+- [x] Queue backend abstraction (Redis/SQS)
+- [x] Multi-worker horizontal scaling
 
 ## Risks
 - Output schema drift from Codex
@@ -92,3 +92,4 @@ Planning notes:
 - 2026-03-01: Added config versioning + rollback runtime utilities backed by SQLite (`config_versions` + `current_config`) with CLI query/rollback commands (`--list-config-versions`, `--rollback-config-version`) and approval-integration so approved pending updates create version entries automatically.
 - 2026-03-01: Added operability metrics surfaces in `app.main`: JSON metrics query mode (`--list-metrics`) plus lightweight HTTP endpoint (`--serve-metrics`, `/metrics`) and starter dashboard (`/dashboard`) computed from persisted run records.
 - 2026-03-01: Added new canonical connector modules for Slack and webhook sources (`app.connectors.SlackConnector`, `app.connectors.WebhookConnector`) with protocol conformance and unit test coverage.
+- 2026-03-01: Added queue backend abstraction (`app.queue.QueueBackend` + `InMemoryQueueBackend`) and parallel live-worker execution control (`worker_count` in `run_live`, `--worker-count` / config support), enabling multi-worker processing without changing connector/router/executor interfaces.

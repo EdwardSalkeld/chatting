@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import shlex
@@ -35,6 +36,7 @@ from app.executor import CodexExecutor, Executor, StubExecutor
 from app.models import AuditEvent, DeadLetterRecord, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
+from app.queue import InMemoryQueueBackend, QueueBackend
 from app.state import SQLiteStateStore, StateStore
 
 CONFIG_PATH_ENV_VAR = "CHATTING_CONFIG_PATH"
@@ -67,6 +69,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "telegram_context_refs",
         "telegram_enabled",
         "telegram_poll_timeout_seconds",
+        "worker_count",
         "use_stub_executor",
     }
 )
@@ -150,6 +153,8 @@ def run_live(
     base_dir: str = ".",
     email_sender: SmtpEmailSender | None = None,
     telegram_sender: TelegramSender | None = None,
+    queue_backend: QueueBackend | None = None,
+    worker_count: int = 1,
 ) -> list[RunRecord]:
     """Run a long-lived polling loop for scheduled and email integrations."""
     if max_attempts <= 0:
@@ -158,6 +163,8 @@ def run_live(
         raise ValueError("poll_interval_seconds must be positive")
     if max_loops is not None and max_loops <= 0:
         raise ValueError("max_loops must be positive when provided")
+    if worker_count <= 0:
+        raise ValueError("worker_count must be positive")
 
     store: StateStore = SQLiteStateStore(db_path)
     router = RuleBasedRouter()
@@ -168,6 +175,7 @@ def run_live(
         email_sender=email_sender,
         telegram_sender=telegram_sender,
     )
+    queue = queue_backend or InMemoryQueueBackend()
 
     loop_count = 0
     while True:
@@ -175,6 +183,17 @@ def run_live(
         processed_count = 0
         for connector in connectors:
             for envelope in connector.poll():
+                queue.enqueue(envelope)
+
+        pending_envelopes: list[TaskEnvelope] = []
+        while True:
+            envelope = queue.dequeue()
+            if envelope is None:
+                break
+            pending_envelopes.append(envelope)
+
+        if worker_count == 1:
+            for envelope in pending_envelopes:
                 record = _process_envelope(
                     store=store,
                     envelope=envelope,
@@ -186,6 +205,25 @@ def run_live(
                 )
                 if record is not None:
                     processed_count += 1
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor_pool:
+                futures = [
+                    executor_pool.submit(
+                        _process_envelope,
+                        store=store,
+                        envelope=envelope_item,
+                        router=router,
+                        executor_impl=executor_impl,
+                        policy=policy,
+                        applier=applier,
+                        max_attempts=max_attempts,
+                    )
+                    for envelope_item in pending_envelopes
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    record = future.result()
+                    if record is not None:
+                        processed_count += 1
 
         print(f"live_loop_completed loop={loop_count} processed={processed_count}")
 
@@ -542,6 +580,11 @@ def _parse_args() -> argparse.Namespace:
         help="Port for --serve-metrics.",
     )
     parser.add_argument(
+        "--worker-count",
+        type=_positive_int,
+        help="Worker count for parallel live processing.",
+    )
+    parser.add_argument(
         "--result-status",
         help="Optional run status filter used with --list-runs.",
     )
@@ -821,6 +864,12 @@ def main() -> int:
             base_dir=base_dir,
             email_sender=email_sender,
             telegram_sender=telegram_sender,
+            worker_count=_resolve_positive_int(
+                cli_value=args.worker_count,
+                config_value=config.get("worker_count"),
+                default_value=1,
+                setting_name="worker_count",
+            ),
         )
         return 0
 
