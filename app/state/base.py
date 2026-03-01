@@ -6,6 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from app.models import (
     AuditEvent,
+    ConfigVersionRecord,
     DeadLetterRecord,
     PendingApprovalRecord,
     RunRecord,
@@ -67,6 +68,25 @@ class StateStore(Protocol):
 
     def resolve_pending_approval(self, approval_id: int, status: str) -> None:
         """Mark one pending-approval item as approved or rejected."""
+
+    def get_pending_approval(self, approval_id: int) -> PendingApprovalRecord | None:
+        """Return one pending-approval item by ID, if present."""
+
+    def apply_config_update(
+        self,
+        *,
+        config_path: str,
+        new_value: object,
+        source: str,
+        source_ref: str | None,
+    ) -> int:
+        """Apply a config update and append one config version record."""
+
+    def list_config_versions(self) -> list[ConfigVersionRecord]:
+        """Return config version records in storage order."""
+
+    def rollback_config_version(self, version_id: int) -> int:
+        """Rollback one config version and return the new rollback version ID."""
 
 
 __all__ = ["StateStore"]

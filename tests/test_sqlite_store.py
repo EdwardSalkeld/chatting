@@ -150,6 +150,29 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(approved[0].approval_id, approval_id)
             self.assertEqual(approved[0].status, "approved")
 
+    def test_apply_config_update_and_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+
+            version_id = store.apply_config_update(
+                config_path="routing.default_timeout",
+                new_value=240,
+                source="pending_approval",
+                source_ref="approval:1",
+            )
+            versions = store.list_config_versions()
+            self.assertEqual(len(versions), 1)
+            self.assertEqual(versions[0].version_id, version_id)
+            self.assertEqual(versions[0].old_value, None)
+            self.assertEqual(versions[0].new_value, 240)
+
+            rollback_version_id = store.rollback_config_version(version_id)
+            versions = store.list_config_versions()
+            self.assertEqual(len(versions), 2)
+            self.assertEqual(versions[1].version_id, rollback_version_id)
+            self.assertEqual(versions[1].source, "rollback")
+
 
 if __name__ == "__main__":
     unittest.main()

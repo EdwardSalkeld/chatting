@@ -510,6 +510,16 @@ def _parse_args() -> argparse.Namespace:
         help="Mark one pending approval ID as rejected (repeatable).",
     )
     parser.add_argument(
+        "--list-config-versions",
+        action="store_true",
+        help="List persisted config version records as JSON and exit.",
+    )
+    parser.add_argument(
+        "--rollback-config-version",
+        type=_positive_int,
+        help="Rollback one config version ID and record a new rollback version.",
+    )
+    parser.add_argument(
         "--result-status",
         help="Optional run status filter used with --list-runs.",
     )
@@ -657,12 +667,15 @@ def main() -> int:
             args.list_pending_approvals,
             bool(args.approve_pending_approval),
             bool(args.reject_pending_approval),
+            args.list_config_versions,
+            args.rollback_config_version is not None,
         ]
     )
     if list_mode_count > 1:
         raise ValueError(
             "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
-            "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval "
+            "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/"
+            "--list-config-versions/--rollback-config-version "
             "cannot be combined"
         )
 
@@ -674,11 +687,14 @@ def main() -> int:
         or args.list_pending_approvals
         or args.approve_pending_approval
         or args.reject_pending_approval
+        or args.list_config_versions
+        or args.rollback_config_version is not None
     ):
         if args.run_live:
             raise ValueError(
                 "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
-                "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval "
+                "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/"
+                "--list-config-versions/--rollback-config-version "
                 "cannot be combined with --run-live"
             )
         result_status = args.result_status
@@ -714,6 +730,11 @@ def main() -> int:
                 approval_ids=args.reject_pending_approval,
                 status="rejected",
             )
+        elif args.list_config_versions:
+            versions = _query_config_versions(db_path, limit=args.limit)
+            payload = [entry.to_dict() for entry in versions]
+        elif args.rollback_config_version is not None:
+            payload = _rollback_config_version(db_path, version_id=args.rollback_config_version)
         else:
             replayed = _replay_dead_letters(
                 db_path,
@@ -1338,14 +1359,52 @@ def _resolve_pending_approvals(
     status: str,
 ) -> list[dict[str, object]]:
     store = SQLiteStateStore(db_path)
+    if status not in {"approved", "rejected"}:
+        raise ValueError("status must be approved or rejected")
+    results: list[dict[str, object]] = []
     for approval_id in approval_ids:
+        version_id: int | None = None
+        if status == "approved":
+            approval = store.get_pending_approval(approval_id)
+            if approval is None:
+                raise ValueError(f"pending approval not found: {approval_id}")
+            version_id = store.apply_config_update(
+                config_path=approval.config_path,
+                new_value=approval.config_value,
+                source="pending_approval",
+                source_ref=f"approval:{approval_id}",
+            )
         store.resolve_pending_approval(approval_id, status)
-    return [
-        {
+        payload: dict[str, object] = {
             "approval_id": approval_id,
             "status": status,
         }
-        for approval_id in approval_ids
+        if version_id is not None:
+            payload["version_id"] = version_id
+        results.append(payload)
+    return results
+
+
+def _query_config_versions(
+    db_path: str,
+    *,
+    limit: int | None,
+):
+    store = SQLiteStateStore(db_path)
+    versions = store.list_config_versions()
+    if limit is not None:
+        versions = versions[-limit:]
+    return versions
+
+
+def _rollback_config_version(db_path: str, *, version_id: int) -> list[dict[str, object]]:
+    store = SQLiteStateStore(db_path)
+    rollback_version_id = store.rollback_config_version(version_id)
+    return [
+        {
+            "rolled_back_version_id": version_id,
+            "rollback_version_id": rollback_version_id,
+        }
     ]
 
 

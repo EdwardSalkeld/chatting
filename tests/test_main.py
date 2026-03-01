@@ -449,7 +449,7 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval cannot be combined",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/--list-config-versions/--rollback-config-version cannot be combined",
                 ):
                     main()
 
@@ -468,7 +468,7 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval cannot be combined with --run-live",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/--list-config-versions/--rollback-config-version cannot be combined with --run-live",
                 ):
                     main()
 
@@ -592,12 +592,58 @@ class MainCliTests(unittest.TestCase):
 
             self.assertEqual(approve_exit_code, 0)
             approval_result = json.loads(approve_output.getvalue().strip())
-            self.assertEqual(approval_result, [{"approval_id": approval_id, "status": "approved"}])
+            self.assertEqual(len(approval_result), 1)
+            self.assertEqual(approval_result[0]["approval_id"], approval_id)
+            self.assertEqual(approval_result[0]["status"], "approved")
+            self.assertIn("version_id", approval_result[0])
 
             approved = SQLiteStateStore(db_path).list_pending_approvals(status="approved")
             self.assertEqual(len(approved), 1)
             self.assertEqual(approved[0].approval_id, approval_id)
             self.assertEqual(approved[0].status, "approved")
+
+            versions_output = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-config-versions",
+                    ],
+                ),
+                redirect_stdout(versions_output),
+            ):
+                versions_exit_code = main()
+
+            self.assertEqual(versions_exit_code, 0)
+            versions = json.loads(versions_output.getvalue().strip())
+            self.assertEqual(len(versions), 1)
+            self.assertEqual(versions[0]["source"], "pending_approval")
+            self.assertEqual(versions[0]["config_path"], "secrets.api_key")
+
+            rollback_output = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--rollback-config-version",
+                        str(versions[0]["version_id"]),
+                    ],
+                ),
+                redirect_stdout(rollback_output),
+            ):
+                rollback_exit_code = main()
+
+            self.assertEqual(rollback_exit_code, 0)
+            rollback_payload = json.loads(rollback_output.getvalue().strip())
+            self.assertEqual(len(rollback_payload), 1)
+            self.assertEqual(rollback_payload[0]["rolled_back_version_id"], versions[0]["version_id"])
+            self.assertIn("rollback_version_id", rollback_payload[0])
 
     def test_main_rejects_whitespace_only_result_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

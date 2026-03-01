@@ -63,7 +63,7 @@ Progress notes:
 - [x] Dead-letter queue state and replay utility
 - [x] Human approval workflow for sensitive actions
 - Metrics endpoint and dashboard starter
-- Config versioning + rollback command
+- [x] Config versioning + rollback command
 
 ## P2 (Nice to Have)
 - [x] Telegram connector + outbound dispatch path
@@ -89,3 +89,4 @@ Planning notes:
 - 2026-03-01: Completed Telegram inbound/outbound integration and live-mode wiring (config/CLI/runtime/docs/tests), closing the P2 Telegram expansion item while preserving existing scheduler/email paths.
 - 2026-03-01: Added SQLite-backed dead-letter queue state (`dead_letters` table) and CLI replay/query utility in `app.main` (`--list-dead-letters`, `--replay-dead-letters`) with regression coverage in `tests.test_main` and `tests.test_sqlite_store`.
 - 2026-03-01: Added sensitive config human-approval workflow state and operator commands: pending-review config updates are persisted to SQLite (`pending_approvals`), queryable via `--list-pending-approvals`, and resolvable via `--approve-pending-approval` / `--reject-pending-approval`.
+- 2026-03-01: Added config versioning + rollback runtime utilities backed by SQLite (`config_versions` + `current_config`) with CLI query/rollback commands (`--list-config-versions`, `--rollback-config-version`) and approval-integration so approved pending updates create version entries automatically.

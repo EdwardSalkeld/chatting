@@ -604,3 +604,40 @@ class PendingApprovalRecord:
                 else None
             ),
         }
+
+
+@dataclass(frozen=True)
+class ConfigVersionRecord:
+    """Persisted config version entry for approved updates and rollbacks."""
+
+    version_id: int
+    config_path: str
+    old_value: Any
+    new_value: Any
+    source: str
+    source_ref: str | None
+    created_at: datetime
+    schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
+        if self.version_id <= 0:
+            raise ValueError("version_id must be positive")
+        _validate_required_string(self.config_path, field_name="config_path")
+        _validate_required_string(self.source, field_name="source")
+        if self.source_ref is not None:
+            _validate_required_string(self.source_ref, field_name="source_ref")
+        if self.created_at.tzinfo is None:
+            raise ValueError("created_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "version_id": self.version_id,
+            "config_path": self.config_path,
+            "old_value": self.old_value,
+            "new_value": self.new_value,
+            "source": self.source,
+            "source_ref": self.source_ref,
+            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
