@@ -66,7 +66,7 @@ Progress notes:
 - Config versioning + rollback command
 
 ## P2 (Nice to Have)
-- Telegram connector + outbound dispatch path
+- [x] Telegram connector + outbound dispatch path
 - Slack connector
 - Webhook connector
 - Queue backend abstraction (Redis/SQS)
@@ -86,3 +86,4 @@ Planning notes:
 - 2026-02-28: Added scoped delivery plan for Telegram integration in `plans/milestone-02-telegram-integration.md` to de-risk P2 connector expansion with explicit acceptance criteria and rollout stages.
 - 2026-03-01: Added read-only run query mode in `app.main` (`--list-runs` plus optional `--result-status`/`--limit`) to improve operator access to persisted run history.
 - 2026-03-01: Added read-only audit-event query mode in `app.main` (`--list-audit-events` plus optional `--result-status`/`--limit`) to improve operator access to persisted audit trails.
+- 2026-03-01: Completed Telegram inbound/outbound integration and live-mode wiring (config/CLI/runtime/docs/tests), closing the P2 Telegram expansion item while preserving existing scheduler/email paths.

@@ -17,6 +17,12 @@
   "smtp_password_env": "CHATTING_SMTP_PASSWORD",
   "smtp_from": "bot@example.com",
   "smtp_starttls": false,
+  "telegram_enabled": false,
+  "telegram_bot_token_env": "CHATTING_TELEGRAM_BOT_TOKEN",
+  "telegram_api_base_url": "https://api.telegram.org",
+  "telegram_poll_timeout_seconds": 20,
+  "telegram_allowed_chat_ids": ["123456789"],
+  "telegram_context_refs": ["repo:/home/edward/chatting"],
   "codex_command": "codex exec --json",
   "use_stub_executor": true,
   "context_ref": ["repo:/home/edward/chatting"]

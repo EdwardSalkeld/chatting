@@ -150,10 +150,12 @@ Notes:
 ## Exit Checklist
 - [x] Telegram connector implemented and tested
 - [x] Telegram outbound dispatch implemented and tested
-- [ ] Live config + docs updated
-- [ ] End-to-end smoke run documented and reproducible
-- [ ] Plan/backlog progress notes updated with concrete completion dates
+- [x] Live config + docs updated
+- [x] End-to-end smoke run documented and reproducible
+- [x] Plan/backlog progress notes updated with concrete completion dates
 
 ## Progress Notes
 - 2026-03-01: Implemented `app.connectors.TelegramConnector` (Bot API `getUpdates` long polling with offset progression, supported message normalization to canonical `TaskEnvelope`, optional chat allowlist filtering, unsupported-update skipping, and deterministic unit coverage).
 - 2026-03-01: Implemented outbound Telegram dispatch in `app.applier.IntegratedApplier` via new `TelegramMessageSender` (`sendMessage` API), including deterministic dispatch error reason codes (`telegram_dispatch_not_configured`/`telegram_dispatch_failed`) and unit coverage.
+- 2026-03-01: Wired Telegram into `app.main` live runtime/config (`telegram_enabled`, token-env indirection, API base URL, poll timeout, allowlisted inbound chat IDs, Telegram-specific context refs, and CLI override flags), with live-branch coverage in `tests.test_main`.
+- 2026-03-01: Updated operator artifacts for Telegram (`configs/live-runtime.example.json` and `docs/run-live.md`) including Telegram-enabled smoke-run instructions.

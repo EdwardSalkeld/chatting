@@ -11,7 +11,8 @@ from unittest.mock import patch
 from app.executor import StubExecutor
 from app.models import RoutedTask, TaskEnvelope
 from app.main import main, run_bootstrap, run_live
-from app.connectors import EmailMessage, FakeEmailConnector
+from app.connectors import EmailMessage, FakeEmailConnector, TelegramConnector
+from app.applier import TelegramMessageSender
 from app.state import SQLiteStateStore
 
 
@@ -889,7 +890,88 @@ class MainCliTests(unittest.TestCase):
             max_loops=3,
             base_dir="/tmp/chatting",
             email_sender=None,
+            telegram_sender=None,
         )
+
+    @patch("app.main._build_codex_executor")
+    @patch("app.main.run_live")
+    def test_main_run_live_with_telegram_config_wires_connector_and_sender(
+        self,
+        run_live_mock,
+        executor_mock,
+    ) -> None:
+        run_live_mock.return_value = []
+        executor_mock.return_value = StubExecutor()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "db_path": str(Path(tmpdir) / "state.db"),
+                        "telegram_enabled": True,
+                        "max_loops": 1,
+                        "poll_interval_seconds": 1.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_TELEGRAM_BOT_TOKEN": "token"}, clear=False),
+                patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_live_mock.assert_called_once()
+        connectors_arg = run_live_mock.call_args.kwargs["connectors"]
+        self.assertEqual(len(connectors_arg), 1)
+        self.assertIsInstance(connectors_arg[0], TelegramConnector)
+        self.assertIsInstance(
+            run_live_mock.call_args.kwargs["telegram_sender"],
+            TelegramMessageSender,
+        )
+
+    def test_main_run_live_rejects_missing_telegram_token_env_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "telegram_enabled": True,
+                        "max_loops": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "missing Telegram bot token env var: CHATTING_TELEGRAM_BOT_TOKEN",
+                ):
+                    main()
+
+    def test_main_run_live_rejects_blank_telegram_allowed_chat_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "telegram_enabled": True,
+                        "telegram_allowed_chat_ids": ["   "],
+                        "max_loops": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_TELEGRAM_BOT_TOKEN": "token"}, clear=False),
+                patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "telegram_allowed_chat_id\\(s\\) entries must not be empty",
+                ):
+                    main()
 
 
 def _single_email_envelope() -> TaskEnvelope:

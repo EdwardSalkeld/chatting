@@ -12,7 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from app.applier import IntegratedApplier, NoOpApplier, SmtpEmailSender
+from app.applier import (
+    IntegratedApplier,
+    NoOpApplier,
+    SmtpEmailSender,
+    TelegramMessageSender,
+    TelegramSender,
+)
 from app.connectors import (
     Connector,
     CronTrigger,
@@ -22,6 +28,7 @@ from app.connectors import (
     ImapEmailConnector,
     IntervalScheduleConnector,
     IntervalScheduleJob,
+    TelegramConnector,
 )
 from app.executor import CodexExecutor, Executor, StubExecutor
 from app.models import AuditEvent, RunRecord, TaskEnvelope
@@ -53,6 +60,12 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "smtp_port",
         "smtp_starttls",
         "smtp_username",
+        "telegram_allowed_chat_ids",
+        "telegram_api_base_url",
+        "telegram_bot_token_env",
+        "telegram_context_refs",
+        "telegram_enabled",
+        "telegram_poll_timeout_seconds",
         "use_stub_executor",
     }
 )
@@ -135,6 +148,7 @@ def run_live(
     max_loops: int | None = None,
     base_dir: str = ".",
     email_sender: SmtpEmailSender | None = None,
+    telegram_sender: TelegramSender | None = None,
 ) -> list[RunRecord]:
     """Run a long-lived polling loop for scheduled and email integrations."""
     if max_attempts <= 0:
@@ -148,7 +162,11 @@ def run_live(
     router = RuleBasedRouter()
     executor_impl = executor if executor is not None else CodexExecutor()
     policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
-    applier = IntegratedApplier(base_dir=base_dir, email_sender=email_sender)
+    applier = IntegratedApplier(
+        base_dir=base_dir,
+        email_sender=email_sender,
+        telegram_sender=telegram_sender,
+    )
 
     loop_count = 0
     while True:
@@ -505,6 +523,36 @@ def _parse_args() -> argparse.Namespace:
         help="Use STARTTLS (plain SMTP + TLS upgrade) instead of implicit SSL.",
     )
     parser.add_argument(
+        "--telegram-enabled",
+        action="store_true",
+        help="Enable Telegram long-polling connector + outbound dispatch in live mode.",
+    )
+    parser.add_argument(
+        "--telegram-bot-token-env",
+        help="Environment variable name containing Telegram bot token.",
+    )
+    parser.add_argument(
+        "--telegram-api-base-url",
+        help="Telegram API base URL for getUpdates/sendMessage.",
+    )
+    parser.add_argument(
+        "--telegram-poll-timeout-seconds",
+        type=_positive_int,
+        help="Long-poll timeout used by Telegram getUpdates.",
+    )
+    parser.add_argument(
+        "--telegram-allowed-chat-id",
+        action="append",
+        default=[],
+        help="Optional inbound Telegram chat allowlist entry (repeatable).",
+    )
+    parser.add_argument(
+        "--telegram-context-ref",
+        action="append",
+        default=[],
+        help="Context reference added to Telegram envelopes (repeatable).",
+    )
+    parser.add_argument(
         "--context-ref",
         action="append",
         default=[],
@@ -578,6 +626,7 @@ def main() -> int:
             raise ValueError("--smtp-host is required when --imap-host is set in live mode")
         connectors = _build_live_connectors(args, config)
         email_sender = _build_email_sender(args, config)
+        telegram_sender = _build_telegram_sender(args, config)
         executor = _build_codex_executor(args, config)
         poll_interval_seconds = _resolve_positive_float(
             cli_value=args.poll_interval_seconds,
@@ -605,6 +654,7 @@ def main() -> int:
             max_loops=max_loops,
             base_dir=base_dir,
             email_sender=email_sender,
+            telegram_sender=telegram_sender,
         )
         return 0
 
@@ -674,6 +724,43 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
             )
         )
 
+    telegram_enabled = _resolve_bool(
+        cli_value=args.telegram_enabled,
+        config_value=config.get("telegram_enabled"),
+        default_value=False,
+        setting_name="telegram_enabled",
+    )
+    if telegram_enabled:
+        telegram_bot_token_env = _resolve_str(
+            cli_value=args.telegram_bot_token_env,
+            config_value=config.get("telegram_bot_token_env"),
+            default_value="CHATTING_TELEGRAM_BOT_TOKEN",
+            setting_name="telegram_bot_token_env",
+        )
+        bot_token = os.environ.get(telegram_bot_token_env, "")
+        if not bot_token:
+            raise ValueError(f"missing Telegram bot token env var: {telegram_bot_token_env}")
+        telegram_context_refs = _resolve_telegram_context_refs(args, config)
+        connectors.append(
+            TelegramConnector(
+                bot_token=bot_token,
+                api_base_url=_resolve_str(
+                    cli_value=args.telegram_api_base_url,
+                    config_value=config.get("telegram_api_base_url"),
+                    default_value="https://api.telegram.org",
+                    setting_name="telegram_api_base_url",
+                ),
+                poll_timeout_seconds=_resolve_positive_int(
+                    cli_value=args.telegram_poll_timeout_seconds,
+                    config_value=config.get("telegram_poll_timeout_seconds"),
+                    default_value=20,
+                    setting_name="telegram_poll_timeout_seconds",
+                ),
+                allowed_chat_ids=_resolve_telegram_allowed_chat_ids(args, config),
+                context_refs=telegram_context_refs,
+            )
+        )
+
     if not connectors:
         raise ValueError(
             "live mode requires at least one connector (--schedule-file and/or --imap-host)"
@@ -735,6 +822,40 @@ def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> 
         password=password,
         use_ssl=not smtp_starttls,
         starttls=smtp_starttls,
+    )
+
+
+def _build_telegram_sender(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> TelegramMessageSender | None:
+    telegram_enabled = _resolve_bool(
+        cli_value=args.telegram_enabled,
+        config_value=config.get("telegram_enabled"),
+        default_value=False,
+        setting_name="telegram_enabled",
+    )
+    if not telegram_enabled:
+        return None
+
+    telegram_bot_token_env = _resolve_str(
+        cli_value=args.telegram_bot_token_env,
+        config_value=config.get("telegram_bot_token_env"),
+        default_value="CHATTING_TELEGRAM_BOT_TOKEN",
+        setting_name="telegram_bot_token_env",
+    )
+    bot_token = os.environ.get(telegram_bot_token_env, "")
+    if not bot_token:
+        raise ValueError(f"missing Telegram bot token env var: {telegram_bot_token_env}")
+
+    return TelegramMessageSender(
+        bot_token=bot_token,
+        api_base_url=_resolve_str(
+            cli_value=args.telegram_api_base_url,
+            config_value=config.get("telegram_api_base_url"),
+            default_value="https://api.telegram.org",
+            setting_name="telegram_api_base_url",
+        ),
     )
 
 
@@ -993,6 +1114,50 @@ def _resolve_context_refs(cli_values: list[str], config: dict[str, object]) -> l
     merged_values = [*config_values, *cli_values]
     if any(not value.strip() for value in merged_values):
         raise ValueError("context_ref/context_refs entries must not be empty")
+    return merged_values
+
+
+def _resolve_telegram_allowed_chat_ids(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str] | None:
+    raw_config_values = config.get("telegram_allowed_chat_ids")
+    config_values: list[str]
+    if raw_config_values is None:
+        config_values = []
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config telegram_allowed_chat_ids must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config telegram_allowed_chat_ids must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.telegram_allowed_chat_id]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("telegram_allowed_chat_id(s) entries must not be empty")
+    if not merged_values:
+        return None
+    return merged_values
+
+
+def _resolve_telegram_context_refs(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str]:
+    raw_config_values = config.get("telegram_context_refs")
+    config_values: list[str]
+    if raw_config_values is None:
+        config_values = _resolve_context_refs(args.context_ref, config)
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config telegram_context_refs must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config telegram_context_refs must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.telegram_context_ref]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("telegram_context_ref(s) entries must not be empty")
     return merged_values
 
 
