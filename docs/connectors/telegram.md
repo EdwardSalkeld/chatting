@@ -1,0 +1,32 @@
+# Connector: Telegram
+
+Module: `app.connectors.telegram_connector`
+
+## Purpose
+
+Long-poll Telegram Bot API `getUpdates` and normalize message updates to canonical IM envelopes.
+
+## Runtime config keys
+
+- `telegram_enabled` (bool)
+- `telegram_bot_token_env` (default `CHATTING_TELEGRAM_BOT_TOKEN`)
+- `telegram_api_base_url` (default `https://api.telegram.org`)
+- `telegram_poll_timeout_seconds` (default `20`)
+- `telegram_allowed_chat_ids` (optional list)
+- `telegram_context_refs` (optional list)
+
+Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.).
+
+## Output mapping
+
+- `source`: `im`
+- `id` / `dedupe_key`: `telegram:<update_id>`
+- `reply_channel`: `telegram:<chat_id>`
+- `actor`: `<user_id>:<username>` when available
+- `content`: text body (thread id is prefixed when present)
+
+## Notes
+
+- Unsupported update types are skipped.
+- Empty text messages are skipped.
+- Offset is advanced as `highest_update_id + 1` each poll.

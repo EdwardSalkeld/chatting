@@ -1,6 +1,11 @@
-# Running Live Email + Scheduler Mode
+# Running Live Mode
 
-This app now supports a long-running mode that polls scheduler jobs and IMAP email, executes tasks, and dispatches responses.
+This app supports a long-running mode that polls configured connectors, executes tasks, and dispatches responses for private single-user operation.
+
+See also:
+- [Quick Start](/home/edward/chatting/docs/quick-start.md)
+- [Debug And Test Guide](/home/edward/chatting/docs/debug-and-test.md)
+- [Connector Docs](/home/edward/chatting/docs/connectors/README.md)
 
 ## 1) Set secrets
 
@@ -49,7 +54,6 @@ python3 -m app.main --run-live --config configs/live-runtime.example.json
 
 - `--smtp-host` is required when `--imap-host` is set, so inbound email can be answered.
 - Set `"telegram_enabled": true` to turn on Telegram long polling + outbound Telegram replies.
-- Increase `"worker_count"` (or pass `--worker-count`) to process queued envelopes in parallel in live mode.
 - CLI flags override config file values.
 - Add one or more `--context-ref` flags to append extra context refs beyond config.
 - Run `python3 -m app.main --db-path /tmp/chatting-live.db --list-metrics` to output run metrics JSON.
