@@ -1,7 +1,12 @@
 # Implementation Plan (Python Prototype)
 
 ## Objective
-Deliver a production-shaped prototype that can ingest scheduled and email events, execute Codex non-interactively, and safely apply/respond with policy controls.
+Deliver a private single-user automation system that can ingest scheduled and message events, execute Codex non-interactively, and safely apply/respond with policy controls.
+
+## Scope Guardrails
+- Deployment model is one user on one machine.
+- Reliability and auditability are prioritized over throughput scaling.
+- No distributed scaling roadmap is planned for this project.
 
 ## Phase 0: Foundation
 Duration: 2-3 days
@@ -50,7 +55,7 @@ Progress notes:
 - 2026-02-27: Hardened interface boundaries across connectors/router/executor/policy/applier by marking protocols runtime-checkable and adding implementation conformance tests.
 - 2026-02-27: Hardened SQLite idempotency to scope dedupe by `(source, dedupe_key)` in the `StateStore` contract, including legacy table migration coverage to avoid cross-source collisions.
 - 2026-03-01: Updated duplicate-event handling in `app.main` so dedupe skips are still persisted as `RunRecord` + `AuditEvent` entries (`result_status="duplicate_skipped"`), improving run-history completeness for idempotency paths without changing connector/router boundaries.
-- 2026-03-01: Added explicit queue abstraction (`app.queue.QueueBackend`) and in-memory backend wiring in live mode plus configurable parallel worker execution (`worker_count`) to support multi-worker processing while preserving existing connector interfaces.
+- 2026-03-01: Added explicit queue abstraction (`app.queue.QueueBackend`) and in-memory backend wiring in live mode to keep the control flow modular for private single-user operation.
 
 ## Phase 2: Routing + Execution
 Duration: 3-5 days

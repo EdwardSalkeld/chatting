@@ -1,146 +1,90 @@
-# 0001: Python Prototype Architecture for Modular Chat-Powered Automation
+# 0001: Python Architecture For Private Single-User Automation
 
 ## Status
-Proposed (prototype baseline)
+Accepted
 
 ## Context
-We need a modular system that:
-- accepts multiple input types (scheduler, email, IM/webhooks)
-- normalizes incoming events into a single task format
-- runs Codex non-interactively with broad capabilities
-- returns responses in the correct channel
-- can propose and apply settings updates safely
 
-The prototype should optimize for speed of iteration in Python, while preserving boundaries that can be rebuilt later in Go.
+We need a reliable local automation assistant that:
+- ingests events from multiple private sources (schedule, email, IM, webhook)
+- normalizes all events to one envelope contract
+- runs Codex non-interactively with strict parsing and policy gates
+- persists full run/audit history for local traceability
+- supports safe config proposal/approval/rollback
+
+This system is intentionally scoped for private, single-user operation on one machine.
 
 ## Decision
-Use an event-driven worker architecture with explicit contracts:
 
-1. Connectors ingest source events and emit `TaskEnvelope` objects.
-2. Router classifies intent, priority, and workflow.
-3. Executor runs Codex in a controlled non-interactive step.
-4. Policy engine validates proposed actions.
-5. Applier performs approved actions and produces responses.
-6. State store tracks idempotency, run history, config versions, and audit trail.
+Use a modular, contract-driven single-process architecture:
 
-This will run as a long-lived worker process with queue semantics. Scheduler events are implemented as another connector so all paths stay unified.
+1. `connectors` produce canonical `TaskEnvelope` entries.
+2. `router` maps envelope -> `RoutedTask`.
+3. `executor` produces strict `ExecutionResult` payloads.
+4. `policy` gates actions/messages/config updates.
+5. `applier` executes approved operations and dispatches responses.
+6. `state` persists operational history and control-plane records.
 
-## Modules
+## Implementation modules
 
-### `connectors/`
-Responsibilities:
-- Poll/subscribe to external systems
-- Convert source-specific payloads to `TaskEnvelope`
-- Attach dedupe key and source metadata
+### `app/connectors/`
+- source adapters for cron/email/IM/webhook-style inputs
+- every connector emits canonical envelopes
 
-Initial connectors:
-- `cron_connector.py`
-- `email_connector.py`
+### `app/router/`
+- deterministic routing rules and execution constraints
 
-Future connectors:
-- `im_slack_connector.py`
-- `webhook_connector.py`
+### `app/executor/`
+- `StubExecutor` for deterministic smoke/testing
+- `CodexExecutor` for subprocess-based real execution
+- strict structured-output parser contract
 
-### `core/envelope.py`
-Canonical input schema:
-- `id: str`
-- `source: Literal["cron", "email", "im", "webhook"]`
-- `received_at: datetime`
-- `actor: str | None`
-- `content: str`
-- `attachments: list[AttachmentRef]`
-- `context_refs: list[str]`
-- `policy_profile: str`
-- `reply_channel: ReplyChannel`
-- `dedupe_key: str`
+### `app/policy/`
+- deny-by-default action policy
+- sensitive config updates become pending approvals
 
-### `router/`
-Responsibilities:
-- Map envelopes to workflow types
-- Set execution constraints (timeouts, budget, policy profile)
-- Prioritize queueing
+### `app/applier/`
+- action execution (`write_file`) with path safety
+- outbound dispatch support (log/email/telegram)
 
-Output contract: `RoutedTask`
+### `app/state/`
+SQLite-backed persistence for:
+- idempotency keys
+- run records
+- audit events
+- dead-letter queue
+- pending approvals
+- config versions + rollback
 
-### `executor/codex_runner.py`
-Responsibilities:
-- Build deterministic prompt package from `RoutedTask`
-- Launch Codex non-interactively
-- Enforce timeout/token budget
-- Parse structured output
+### `app/queue/`
+- in-memory queue abstraction used in live loop
+- scoped to local process usage
 
-Required structured output shape:
-- `messages`: channel-bound responses
-- `actions`: filesystem/command/API actions
-- `config_updates`: proposed settings deltas
-- `requires_human_review`: bool
-- `errors`: list[str]
+## Runtime topology
 
-### `policy/`
-Responsibilities:
-- Validate action types
-- Enforce allow/deny lists
-- Validate config update schema and key-level permissions
+- one process
+- local SQLite database
+- local queue abstraction
+- worker loop tuned for private single-user reliability
 
-Core principle: Codex proposes, policy decides.
+No distributed or multi-tenant scaling is planned.
 
-### `applier/`
-Responsibilities:
-- Execute approved actions
-- Persist applied changes and run outcomes
-- Send responses via source adapters
+## Safety controls
 
-### `state/`
-Responsibilities:
-- Store envelopes and run records
-- Maintain idempotency table by source + dedupe_key
-- Versioned settings storage with rollback points
-
-Prototype suggestion:
-- SQLite for metadata/state
-- File-based versioned settings snapshots
-
-## Runtime Topology
-Single process initially:
-- Input loop (connectors)
-- In-memory queue
-- Worker pool
-- Shared policy/state interfaces
-
-Scale path:
-- External queue (Redis/SQS)
-- Multiple worker replicas
-- Connector process split from execution workers
-
-## Safety and Reliability
-Mandatory controls in prototype:
-- Idempotency check before routing
-- Retry policy with max attempts and DLQ state
-- Global concurrency limits
-- Per-run timeout budget
-- Full audit log for prompt, output, and applied actions
-- Secret injection only via environment/secret manager references
-
-## Settings Self-Update Model
-Use proposal/apply workflow:
-1. Codex emits `config_updates` proposals.
-2. Policy validates allowed keys and schema.
-3. Sensitive changes require human approval flag.
-4. Approved updates are versioned with rollback metadata.
-
-## Why this supports a Go rewrite
-Portability boundaries are explicit:
-- Connectors, Router, Executor, Policy, Applier, State are interface-isolated.
-- Canonical envelope and routed task schemas become language-neutral contracts.
-- Queue and storage backends are abstracted, reducing rewrite risk.
+- strict schema validation
+- source-scoped dedupe checks
+- bounded retries with dead-letter capture
+- full audit payload persistence
+- human gate for sensitive config changes
+- versioned config updates with rollback command
 
 ## Consequences
+
 Pros:
-- Fast Python prototyping with strong architecture boundaries
-- Connector expansion without workflow rewrites
-- Clear governance over Codex actions
+- clear boundaries between modules
+- strong local observability and recoverability
+- safe-by-default automation behavior
 
 Tradeoffs:
-- Higher upfront contract design cost
-- More plumbing than a script-only approach
-- Need disciplined schema/version management
+- optimized for one user, one machine
+- not designed for distributed workload scaling

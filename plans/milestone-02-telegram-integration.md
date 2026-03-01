@@ -145,7 +145,7 @@ Notes:
 1. Ship behind config flag (`telegram_enabled` false by default).
 2. Validate in single test chat with `--use-stub-executor`.
 3. Enable Codex executor after inbound/outbound reliability is validated.
-4. Expand to additional chats after audit/retry behavior is confirmed.
+4. Keep rollout limited to private single-user chats; no broad scaling rollout is planned.
 
 ## Exit Checklist
 - [x] Telegram connector implemented and tested
