@@ -52,14 +52,19 @@ class MainBootstrapFlowTests(unittest.TestCase):
             with redirect_stdout(output_buffer):
                 runs = run_bootstrap(db_path)
 
-            self.assertEqual([run.source for run in runs], ["cron", "email", "email"])
+            self.assertEqual([run.source for run in runs], ["cron", "email", "email", "email"])
             self.assertEqual(
                 [run.envelope_id for run in runs],
-                ["cron:daily-summary:2026-02-27T09:00:00+00:00", "email:ok-1", "email:blocked-1"],
+                [
+                    "cron:daily-summary:2026-02-27T09:00:00+00:00",
+                    "email:ok-1",
+                    "email:blocked-1",
+                    "email:ok-1",
+                ],
             )
             self.assertEqual(
                 [run.result_status for run in runs],
-                ["success", "success", "blocked_action"],
+                ["success", "success", "blocked_action", "duplicate_skipped"],
             )
 
             audit_events = SQLiteStateStore(db_path).list_audit_events()
@@ -132,13 +137,22 @@ class MainBootstrapFlowTests(unittest.TestCase):
                 blocked_event.detail["apply_result"]["dispatched_messages"][0]["target"],
                 "bob@example.com",
             )
+            duplicate_event = next(
+                event for event in audit_events if event.result_status == "duplicate_skipped"
+            )
+            self.assertEqual(duplicate_event.envelope_id, "email:ok-1")
+            self.assertEqual(duplicate_event.workflow, "duplicate_skip")
+            self.assertEqual(duplicate_event.detail["reason_codes"], ["duplicate_dedupe_key"])
+            self.assertEqual(duplicate_event.detail["dedupe_key"], "email:ok-1")
+            self.assertEqual(duplicate_event.detail["attempt_count"], 0)
+            self.assertEqual(duplicate_event.detail["last_error"], None)
 
             observed_lines = [
                 line
                 for line in output_buffer.getvalue().splitlines()
                 if line.startswith("run_observed ")
             ]
-            self.assertEqual(len(observed_lines), 3)
+            self.assertEqual(len(observed_lines), 4)
             for line in observed_lines:
                 self.assertIn("trace_id=", line)
                 self.assertIn("run_id=", line)
@@ -162,7 +176,7 @@ class MainBootstrapFlowTests(unittest.TestCase):
 
             self.assertEqual(
                 [run.result_status for run in runs],
-                ["success", "success", "blocked_action"],
+                ["success", "success", "blocked_action", "duplicate_skipped"],
             )
             self.assertIn(
                 "retry_scheduled trace_id=trace:email:ok-1 run_id=run:email:ok-1 attempt=1 next_attempt=2 max_attempts=2",

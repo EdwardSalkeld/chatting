@@ -177,8 +177,50 @@ def _process_envelope(
     max_attempts: int,
 ) -> RunRecord | None:
     if store.seen(envelope.source, envelope.dedupe_key):
-        print(f"skip duplicate source={envelope.source} dedupe_key={envelope.dedupe_key}")
-        return None
+        run_id = f"run:{envelope.id}:duplicate:{time.time_ns()}"
+        trace_id = f"trace:{run_id}"
+        created_at = datetime.now(timezone.utc)
+        record = RunRecord(
+            run_id=run_id,
+            envelope_id=envelope.id,
+            source=envelope.source,
+            workflow="duplicate_skip",
+            policy_profile=envelope.policy_profile,
+            latency_ms=0,
+            result_status="duplicate_skipped",
+            created_at=created_at,
+        )
+        store.append_run(record)
+        store.append_audit_event(
+            AuditEvent(
+                run_id=record.run_id,
+                envelope_id=record.envelope_id,
+                source=record.source,
+                workflow=record.workflow,
+                policy_profile=record.policy_profile,
+                result_status=record.result_status,
+                detail={
+                    "trace_id": trace_id,
+                    "reason_codes": ["duplicate_dedupe_key"],
+                    "dedupe_key": envelope.dedupe_key,
+                    "attempt_count": 0,
+                    "max_attempts": max_attempts,
+                    "last_error": None,
+                },
+                created_at=record.created_at,
+            )
+        )
+        print(
+            f"skip duplicate trace_id={trace_id} run_id={run_id} source={envelope.source} "
+            f"dedupe_key={envelope.dedupe_key}"
+        )
+        print(
+            f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
+            f"source={record.source} workflow={record.workflow} "
+            f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
+            f"result_status={record.result_status}"
+        )
+        return record
 
     store.mark_seen(envelope.source, envelope.dedupe_key)
     trace_id = f"trace:{envelope.id}"

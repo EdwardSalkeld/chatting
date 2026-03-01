@@ -48,6 +48,7 @@ Progress notes:
 - 2026-02-27: Added explicit `StateStore` protocol contract and SQLite runtime conformance test to reinforce module boundary compatibility for future backend swaps.
 - 2026-02-27: Hardened interface boundaries across connectors/router/executor/policy/applier by marking protocols runtime-checkable and adding implementation conformance tests.
 - 2026-02-27: Hardened SQLite idempotency to scope dedupe by `(source, dedupe_key)` in the `StateStore` contract, including legacy table migration coverage to avoid cross-source collisions.
+- 2026-03-01: Updated duplicate-event handling in `app.main` so dedupe skips are still persisted as `RunRecord` + `AuditEvent` entries (`result_status="duplicate_skipped"`), improving run-history completeness for idempotency paths without changing connector/router boundaries.
 
 ## Phase 2: Routing + Execution
 Duration: 3-5 days

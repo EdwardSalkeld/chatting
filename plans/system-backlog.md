@@ -54,6 +54,7 @@ Progress notes:
 - 2026-02-28: Hardened runtime config-file validation to reject unknown JSON keys in `app.main`, so operator typos fail fast instead of being silently ignored.
 - 2026-02-28: Hardened runtime numeric config validation in `app.main` to reject boolean values for integer/float settings (including `max_attempts` and `poll_interval_seconds`), closing a JSON type-coercion gap in fail-fast config handling.
 - 2026-03-01: Expanded run-audit payload depth by persisting full `execution_result`, `policy_decision`, and `apply_result` snapshots in audit-event detail (not just aggregate counts), improving post-run diagnostics while keeping module boundaries unchanged.
+- 2026-03-01: Completed idempotency-path audit parity by recording duplicate-dedupe skips as explicit run/audit records (`duplicate_skipped`) so P0 run history covers processed, blocked, dead-letter, and skipped-duplicate outcomes.
 
 ## P1 (Should Have)
 - Dead-letter queue state and replay utility
