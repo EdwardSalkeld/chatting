@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.models import AuditEvent, DeadLetterRecord, RunRecord, TaskEnvelope
+from app.models import (
+    AuditEvent,
+    DeadLetterRecord,
+    PendingApprovalRecord,
+    RunRecord,
+    TaskEnvelope,
+)
 
 
 @runtime_checkable
@@ -45,6 +51,22 @@ class StateStore(Protocol):
 
     def mark_dead_letter_replayed(self, dead_letter_id: int, replayed_run_id: str) -> None:
         """Mark a dead-letter entry as replayed."""
+
+    def append_pending_approval(
+        self,
+        *,
+        run_id: str,
+        envelope_id: str,
+        config_path: str,
+        config_value: object,
+    ) -> int:
+        """Persist one pending human-approval item and return its ID."""
+
+    def list_pending_approvals(self, *, status: str | None = None) -> list[PendingApprovalRecord]:
+        """Return pending-approval entries in storage order."""
+
+    def resolve_pending_approval(self, approval_id: int, status: str) -> None:
+        """Mark one pending-approval item as approved or rejected."""
 
 
 __all__ = ["StateStore"]

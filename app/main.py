@@ -301,6 +301,13 @@ def _process_envelope(
             requires_human_review = execution_result.requires_human_review
             decision = policy.evaluate(execution_result)
             policy_decision_payload = decision.to_dict()
+            for update in decision.config_updates.pending_review:
+                store.append_pending_approval(
+                    run_id=base_run_id,
+                    envelope_id=envelope.id,
+                    config_path=update.path,
+                    config_value=update.value,
+                )
             apply_result = applier.apply(decision)
             apply_result_payload = apply_result.to_dict()
             reason_codes = decision.reason_codes
@@ -484,6 +491,25 @@ def _parse_args() -> argparse.Namespace:
         help="Replay pending dead-letter envelopes through the worker pipeline.",
     )
     parser.add_argument(
+        "--list-pending-approvals",
+        action="store_true",
+        help="List pending/approved/rejected config approval items as JSON and exit.",
+    )
+    parser.add_argument(
+        "--approve-pending-approval",
+        action="append",
+        type=_positive_int,
+        default=[],
+        help="Mark one pending approval ID as approved (repeatable).",
+    )
+    parser.add_argument(
+        "--reject-pending-approval",
+        action="append",
+        type=_positive_int,
+        default=[],
+        help="Mark one pending approval ID as rejected (repeatable).",
+    )
+    parser.add_argument(
         "--result-status",
         help="Optional run status filter used with --list-runs.",
     )
@@ -628,18 +654,31 @@ def main() -> int:
             args.list_audit_events,
             args.list_dead_letters,
             args.replay_dead_letters,
+            args.list_pending_approvals,
+            bool(args.approve_pending_approval),
+            bool(args.reject_pending_approval),
         ]
     )
     if list_mode_count > 1:
         raise ValueError(
-            "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters "
+            "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
+            "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval "
             "cannot be combined"
         )
 
-    if args.list_runs or args.list_audit_events or args.list_dead_letters or args.replay_dead_letters:
+    if (
+        args.list_runs
+        or args.list_audit_events
+        or args.list_dead_letters
+        or args.replay_dead_letters
+        or args.list_pending_approvals
+        or args.approve_pending_approval
+        or args.reject_pending_approval
+    ):
         if args.run_live:
             raise ValueError(
-                "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters "
+                "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
+                "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval "
                 "cannot be combined with --run-live"
             )
         result_status = args.result_status
@@ -660,6 +699,21 @@ def main() -> int:
         elif args.list_dead_letters:
             dead_letters = _query_dead_letters(db_path, limit=args.limit, status=result_status)
             payload = [entry.to_dict() for entry in dead_letters]
+        elif args.list_pending_approvals:
+            approvals = _query_pending_approvals(db_path, limit=args.limit, status=result_status)
+            payload = [entry.to_dict() for entry in approvals]
+        elif args.approve_pending_approval:
+            payload = _resolve_pending_approvals(
+                db_path,
+                approval_ids=args.approve_pending_approval,
+                status="approved",
+            )
+        elif args.reject_pending_approval:
+            payload = _resolve_pending_approvals(
+                db_path,
+                approval_ids=args.reject_pending_approval,
+                status="rejected",
+            )
         else:
             replayed = _replay_dead_letters(
                 db_path,
@@ -1262,6 +1316,37 @@ def _query_dead_letters(
     if limit is not None:
         dead_letters = dead_letters[-limit:]
     return dead_letters
+
+
+def _query_pending_approvals(
+    db_path: str,
+    *,
+    limit: int | None,
+    status: str | None,
+):
+    store = SQLiteStateStore(db_path)
+    approvals = store.list_pending_approvals(status=status)
+    if limit is not None:
+        approvals = approvals[-limit:]
+    return approvals
+
+
+def _resolve_pending_approvals(
+    db_path: str,
+    *,
+    approval_ids: list[int],
+    status: str,
+) -> list[dict[str, object]]:
+    store = SQLiteStateStore(db_path)
+    for approval_id in approval_ids:
+        store.resolve_pending_approval(approval_id, status)
+    return [
+        {
+            "approval_id": approval_id,
+            "status": status,
+        }
+        for approval_id in approval_ids
+    ]
 
 
 def _replay_dead_letters(

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.executor import StubExecutor
-from app.models import RoutedTask, TaskEnvelope
+from app.models import ConfigUpdate, ExecutionResult, RoutedTask, TaskEnvelope
 from app.main import main, run_bootstrap, run_live
 from app.connectors import EmailMessage, FakeEmailConnector, TelegramConnector
 from app.applier import TelegramMessageSender
@@ -42,6 +42,20 @@ class AlwaysFailExecutor:
 
     def execute(self, task: RoutedTask):
         raise RuntimeError(self.error_message)
+
+
+@dataclass(frozen=True)
+class PendingReviewExecutor:
+    """Executor used to emit one sensitive config update requiring approval."""
+
+    def execute(self, task: RoutedTask):
+        return ExecutionResult(
+            messages=[],
+            actions=[],
+            config_updates=[ConfigUpdate(path="secrets.api_key", value="new-secret")],
+            requires_human_review=False,
+            errors=[],
+        )
 
 
 class MainBootstrapFlowTests(unittest.TestCase):
@@ -435,7 +449,7 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters cannot be combined",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval cannot be combined",
                 ):
                     main()
 
@@ -454,7 +468,7 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters cannot be combined with --run-live",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval cannot be combined with --run-live",
                 ):
                     main()
 
@@ -525,6 +539,65 @@ class MainCliTests(unittest.TestCase):
             dead_letters = SQLiteStateStore(db_path).list_dead_letters(status="replayed")
             self.assertEqual(len(dead_letters), 1)
             self.assertEqual(dead_letters[0].status, "replayed")
+
+    def test_main_lists_and_resolves_pending_approvals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(
+                db_path,
+                envelopes=[_single_email_envelope()],
+                executor=PendingReviewExecutor(),
+                max_attempts=1,
+            )
+
+            list_output = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-pending-approvals",
+                        "--result-status",
+                        "pending",
+                    ],
+                ),
+                redirect_stdout(list_output),
+            ):
+                list_exit_code = main()
+
+            self.assertEqual(list_exit_code, 0)
+            pending = json.loads(list_output.getvalue().strip())
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["status"], "pending")
+            approval_id = pending[0]["approval_id"]
+            self.assertEqual(pending[0]["config_path"], "secrets.api_key")
+
+            approve_output = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--approve-pending-approval",
+                        str(approval_id),
+                    ],
+                ),
+                redirect_stdout(approve_output),
+            ):
+                approve_exit_code = main()
+
+            self.assertEqual(approve_exit_code, 0)
+            approval_result = json.loads(approve_output.getvalue().strip())
+            self.assertEqual(approval_result, [{"approval_id": approval_id, "status": "approved"}])
+
+            approved = SQLiteStateStore(db_path).list_pending_approvals(status="approved")
+            self.assertEqual(len(approved), 1)
+            self.assertEqual(approved[0].approval_id, approval_id)
+            self.assertEqual(approved[0].status, "approved")
 
     def test_main_rejects_whitespace_only_result_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

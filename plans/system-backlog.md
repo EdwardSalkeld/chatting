@@ -61,7 +61,7 @@ Progress notes:
 - [x] Run-history query mode for persisted SQLite run records (`app.main --list-runs`)
 - [x] Audit-trail query mode for persisted SQLite audit events (`app.main --list-audit-events`)
 - [x] Dead-letter queue state and replay utility
-- Human approval workflow for sensitive actions
+- [x] Human approval workflow for sensitive actions
 - Metrics endpoint and dashboard starter
 - Config versioning + rollback command
 
@@ -88,3 +88,4 @@ Planning notes:
 - 2026-03-01: Added read-only audit-event query mode in `app.main` (`--list-audit-events` plus optional `--result-status`/`--limit`) to improve operator access to persisted audit trails.
 - 2026-03-01: Completed Telegram inbound/outbound integration and live-mode wiring (config/CLI/runtime/docs/tests), closing the P2 Telegram expansion item while preserving existing scheduler/email paths.
 - 2026-03-01: Added SQLite-backed dead-letter queue state (`dead_letters` table) and CLI replay/query utility in `app.main` (`--list-dead-letters`, `--replay-dead-letters`) with regression coverage in `tests.test_main` and `tests.test_sqlite_store`.
+- 2026-03-01: Added sensitive config human-approval workflow state and operator commands: pending-review config updates are persisted to SQLite (`pending_approvals`), queryable via `--list-pending-approvals`, and resolvable via `--approve-pending-approval` / `--reject-pending-approval`.

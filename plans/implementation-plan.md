@@ -106,6 +106,7 @@ Progress notes:
 - 2026-02-27: Implemented `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, sensitive config pending-review classification, and unit tests.
 - 2026-02-27: Implemented `app.applier.NoOpApplier` and `ApplyResult` contract baseline with unit tests to complete the milestone's applier stub requirement without side effects.
 - 2026-02-28: Added `app.applier.IntegratedApplier` + `SmtpEmailSender` for live `write_file` application and outbound email/log dispatch, including path-safety checks and unit coverage.
+- 2026-03-01: Added persisted human-approval workflow for sensitive config updates: pending-review proposals are written to SQLite and exposed via CLI query/decision commands (`--list-pending-approvals`, `--approve-pending-approval`, `--reject-pending-approval`).
 
 ## Phase 4: Reliability + Ops
 Duration: 2-4 days

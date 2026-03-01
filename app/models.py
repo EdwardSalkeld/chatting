@@ -558,3 +558,49 @@ class DeadLetterRecord:
             "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "replayed_run_id": self.replayed_run_id,
         }
+
+
+@dataclass(frozen=True)
+class PendingApprovalRecord:
+    """Persisted human-approval item for sensitive config updates."""
+
+    approval_id: int
+    run_id: str
+    envelope_id: str
+    config_path: str
+    config_value: Any
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None = None
+    schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
+        if self.approval_id <= 0:
+            raise ValueError("approval_id must be positive")
+        _validate_required_string(self.run_id, field_name="run_id")
+        _validate_required_string(self.envelope_id, field_name="envelope_id")
+        _validate_required_string(self.config_path, field_name="config_path")
+        if self.status not in {"pending", "approved", "rejected"}:
+            raise ValueError("status must be pending, approved, or rejected")
+        if self.created_at.tzinfo is None:
+            raise ValueError("created_at must be timezone-aware")
+        if self.resolved_at is not None and self.resolved_at.tzinfo is None:
+            raise ValueError("resolved_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "approval_id": self.approval_id,
+            "run_id": self.run_id,
+            "envelope_id": self.envelope_id,
+            "config_path": self.config_path,
+            "config_value": self.config_value,
+            "status": self.status,
+            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "resolved_at": (
+                self.resolved_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                if self.resolved_at is not None
+                else None
+            ),
+        }

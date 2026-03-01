@@ -127,6 +127,29 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(replayed[0].dead_letter_id, dead_letter_id)
             self.assertEqual(replayed[0].replayed_run_id, "run:email:dead-1:replay:1")
 
+    def test_pending_approval_roundtrip_and_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+
+            approval_id = store.append_pending_approval(
+                run_id="run:email:1",
+                envelope_id="email:1",
+                config_path="secrets.api_key",
+                config_value="new-secret",
+            )
+            pending = store.list_pending_approvals(status="pending")
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].approval_id, approval_id)
+            self.assertEqual(pending[0].config_path, "secrets.api_key")
+            self.assertEqual(pending[0].status, "pending")
+
+            store.resolve_pending_approval(approval_id, "approved")
+            approved = store.list_pending_approvals(status="approved")
+            self.assertEqual(len(approved), 1)
+            self.assertEqual(approved[0].approval_id, approval_id)
+            self.assertEqual(approved[0].status, "approved")
+
 
 if __name__ == "__main__":
     unittest.main()

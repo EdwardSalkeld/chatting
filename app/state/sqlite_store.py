@@ -8,7 +8,14 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import AuditEvent, DeadLetterRecord, ReplyChannel, RunRecord, TaskEnvelope
+from app.models import (
+    AuditEvent,
+    DeadLetterRecord,
+    PendingApprovalRecord,
+    ReplyChannel,
+    RunRecord,
+    TaskEnvelope,
+)
 
 
 class SQLiteStateStore:
@@ -70,6 +77,21 @@ class SQLiteStateStore:
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     replayed_run_id TEXT,
+                    schema_version TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_approvals (
+                    approval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    envelope_id TEXT NOT NULL,
+                    config_path TEXT NOT NULL,
+                    config_value_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
                     schema_version TEXT NOT NULL
                 )
                 """
@@ -345,6 +367,102 @@ class SQLiteStateStore:
                 WHERE dead_letter_id = ?
                 """,
                 ("replayed", replayed_run_id, dead_letter_id),
+            )
+            connection.commit()
+
+    def append_pending_approval(
+        self,
+        *,
+        run_id: str,
+        envelope_id: str,
+        config_path: str,
+        config_value: object,
+    ) -> int:
+        if not run_id:
+            raise ValueError("run_id is required")
+        if not envelope_id:
+            raise ValueError("envelope_id is required")
+        if not config_path:
+            raise ValueError("config_path is required")
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO pending_approvals (
+                    run_id,
+                    envelope_id,
+                    config_path,
+                    config_value_json,
+                    status,
+                    created_at,
+                    resolved_at,
+                    schema_version
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    envelope_id,
+                    config_path,
+                    json.dumps(config_value, sort_keys=True),
+                    "pending",
+                    created_at,
+                    None,
+                    "1.0",
+                ),
+            )
+            connection.commit()
+            return int(cursor.lastrowid)
+
+    def list_pending_approvals(self, *, status: str | None = None) -> list[PendingApprovalRecord]:
+        with closing(self._connect()) as connection:
+            if status is None:
+                rows = connection.execute(
+                    "SELECT * FROM pending_approvals ORDER BY approval_id ASC"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM pending_approvals
+                    WHERE status = ?
+                    ORDER BY approval_id ASC
+                    """,
+                    (status,),
+                ).fetchall()
+
+        return [
+            PendingApprovalRecord(
+                approval_id=row["approval_id"],
+                run_id=row["run_id"],
+                envelope_id=row["envelope_id"],
+                config_path=row["config_path"],
+                config_value=json.loads(row["config_value_json"]),
+                status=row["status"],
+                created_at=_parse_rfc3339_utc(row["created_at"]),
+                resolved_at=(
+                    _parse_rfc3339_utc(row["resolved_at"])
+                    if row["resolved_at"] is not None
+                    else None
+                ),
+                schema_version=row["schema_version"],
+            )
+            for row in rows
+        ]
+
+    def resolve_pending_approval(self, approval_id: int, status: str) -> None:
+        if approval_id <= 0:
+            raise ValueError("approval_id must be positive")
+        if status not in {"approved", "rejected"}:
+            raise ValueError("status must be approved or rejected")
+        resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE pending_approvals
+                SET status = ?, resolved_at = ?
+                WHERE approval_id = ?
+                """,
+                (status, resolved_at, approval_id),
             )
             connection.commit()
 
