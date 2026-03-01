@@ -8,6 +8,7 @@ import os
 import shlex
 import tempfile
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -520,6 +521,27 @@ def _parse_args() -> argparse.Namespace:
         help="Rollback one config version ID and record a new rollback version.",
     )
     parser.add_argument(
+        "--list-metrics",
+        action="store_true",
+        help="Output computed run metrics as JSON and exit.",
+    )
+    parser.add_argument(
+        "--serve-metrics",
+        action="store_true",
+        help="Serve /metrics JSON and /dashboard HTML from persisted run data.",
+    )
+    parser.add_argument(
+        "--metrics-host",
+        default="127.0.0.1",
+        help="Host interface for --serve-metrics.",
+    )
+    parser.add_argument(
+        "--metrics-port",
+        type=_positive_int,
+        default=8080,
+        help="Port for --serve-metrics.",
+    )
+    parser.add_argument(
         "--result-status",
         help="Optional run status filter used with --list-runs.",
     )
@@ -669,13 +691,15 @@ def main() -> int:
             bool(args.reject_pending_approval),
             args.list_config_versions,
             args.rollback_config_version is not None,
+            args.list_metrics,
+            args.serve_metrics,
         ]
     )
     if list_mode_count > 1:
         raise ValueError(
             "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
             "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/"
-            "--list-config-versions/--rollback-config-version "
+            "--list-config-versions/--rollback-config-version/--list-metrics/--serve-metrics "
             "cannot be combined"
         )
 
@@ -689,12 +713,14 @@ def main() -> int:
         or args.reject_pending_approval
         or args.list_config_versions
         or args.rollback_config_version is not None
+        or args.list_metrics
+        or args.serve_metrics
     ):
         if args.run_live:
             raise ValueError(
                 "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
                 "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/"
-                "--list-config-versions/--rollback-config-version "
+                "--list-config-versions/--rollback-config-version/--list-metrics/--serve-metrics "
                 "cannot be combined with --run-live"
             )
         result_status = args.result_status
@@ -735,6 +761,11 @@ def main() -> int:
             payload = [entry.to_dict() for entry in versions]
         elif args.rollback_config_version is not None:
             payload = _rollback_config_version(db_path, version_id=args.rollback_config_version)
+        elif args.list_metrics:
+            payload = _build_metrics_payload(db_path)
+        elif args.serve_metrics:
+            _serve_metrics(db_path, host=args.metrics_host, port=args.metrics_port)
+            payload = {"status": "metrics_server_stopped"}
         else:
             replayed = _replay_dead_letters(
                 db_path,
@@ -1406,6 +1437,81 @@ def _rollback_config_version(db_path: str, *, version_id: int) -> list[dict[str,
             "rollback_version_id": rollback_version_id,
         }
     ]
+
+
+def _build_metrics_payload(db_path: str) -> dict[str, object]:
+    runs = SQLiteStateStore(db_path).list_runs()
+    by_status: dict[str, int] = {}
+    for run in runs:
+        by_status[run.result_status] = by_status.get(run.result_status, 0) + 1
+    total_runs = len(runs)
+    total_latency_ms = sum(run.latency_ms for run in runs)
+    average_latency_ms = (total_latency_ms / total_runs) if total_runs > 0 else 0.0
+    return {
+        "total_runs": total_runs,
+        "average_latency_ms": average_latency_ms,
+        "by_status": by_status,
+    }
+
+
+def _serve_metrics(db_path: str, *, host: str, port: int) -> None:
+    class _MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/metrics":
+                payload = _build_metrics_payload(db_path)
+                encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
+            if self.path == "/dashboard":
+                metrics = _build_metrics_payload(db_path)
+                html = _render_metrics_dashboard(metrics)
+                encoded = html.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
+
+    server = HTTPServer((host, port), _MetricsHandler)
+    print(f"metrics_server_started host={host} port={port}")
+    server.serve_forever()
+
+
+def _render_metrics_dashboard(metrics: dict[str, object]) -> str:
+    total_runs = metrics.get("total_runs", 0)
+    average_latency_ms = metrics.get("average_latency_ms", 0.0)
+    by_status = metrics.get("by_status", {})
+    by_status_json = json.dumps(by_status, sort_keys=True)
+    return f"""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Chatting Metrics Dashboard</title>
+    <style>
+      body {{ font-family: monospace; margin: 24px; background: #f7f7f7; color: #111; }}
+      .card {{ background: #fff; border: 1px solid #ccc; padding: 16px; margin-bottom: 12px; }}
+      pre {{ background: #111; color: #0f0; padding: 12px; overflow: auto; }}
+    </style>
+  </head>
+  <body>
+    <h1>Chatting Metrics Dashboard</h1>
+    <div class="card"><strong>Total runs:</strong> {total_runs}</div>
+    <div class="card"><strong>Average latency (ms):</strong> {average_latency_ms}</div>
+    <div class="card"><strong>Status counts</strong><pre>{by_status_json}</pre></div>
+  </body>
+</html>
+""".strip()
 
 
 def _replay_dead_letters(

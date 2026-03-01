@@ -449,7 +449,7 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/--list-config-versions/--rollback-config-version cannot be combined",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/--list-config-versions/--rollback-config-version/--list-metrics/--serve-metrics cannot be combined",
                 ):
                     main()
 
@@ -468,7 +468,7 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/--list-config-versions/--rollback-config-version cannot be combined with --run-live",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/--list-config-versions/--rollback-config-version/--list-metrics/--serve-metrics cannot be combined with --run-live",
                 ):
                     main()
 
@@ -644,6 +644,33 @@ class MainCliTests(unittest.TestCase):
             self.assertEqual(len(rollback_payload), 1)
             self.assertEqual(rollback_payload[0]["rolled_back_version_id"], versions[0]["version_id"])
             self.assertIn("rollback_version_id", rollback_payload[0])
+
+    def test_main_list_metrics_outputs_computed_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(db_path)
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-metrics",
+                    ],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output_buffer.getvalue().strip())
+        self.assertEqual(payload["total_runs"], 4)
+        self.assertIn("success", payload["by_status"])
+        self.assertIn("blocked_action", payload["by_status"])
+        self.assertIn("duplicate_skipped", payload["by_status"])
 
     def test_main_rejects_whitespace_only_result_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

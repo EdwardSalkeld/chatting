@@ -62,7 +62,7 @@ Progress notes:
 - [x] Audit-trail query mode for persisted SQLite audit events (`app.main --list-audit-events`)
 - [x] Dead-letter queue state and replay utility
 - [x] Human approval workflow for sensitive actions
-- Metrics endpoint and dashboard starter
+- [x] Metrics endpoint and dashboard starter
 - [x] Config versioning + rollback command
 
 ## P2 (Nice to Have)
@@ -90,3 +90,4 @@ Planning notes:
 - 2026-03-01: Added SQLite-backed dead-letter queue state (`dead_letters` table) and CLI replay/query utility in `app.main` (`--list-dead-letters`, `--replay-dead-letters`) with regression coverage in `tests.test_main` and `tests.test_sqlite_store`.
 - 2026-03-01: Added sensitive config human-approval workflow state and operator commands: pending-review config updates are persisted to SQLite (`pending_approvals`), queryable via `--list-pending-approvals`, and resolvable via `--approve-pending-approval` / `--reject-pending-approval`.
 - 2026-03-01: Added config versioning + rollback runtime utilities backed by SQLite (`config_versions` + `current_config`) with CLI query/rollback commands (`--list-config-versions`, `--rollback-config-version`) and approval-integration so approved pending updates create version entries automatically.
+- 2026-03-01: Added operability metrics surfaces in `app.main`: JSON metrics query mode (`--list-metrics`) plus lightweight HTTP endpoint (`--serve-metrics`, `/metrics`) and starter dashboard (`/dashboard`) computed from persisted run records.

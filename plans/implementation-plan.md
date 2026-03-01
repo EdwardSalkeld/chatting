@@ -131,6 +131,7 @@ Progress notes:
 - 2026-03-01: Added read-only audit-event querying in `app.main` (`--list-audit-events` with optional `--result-status` and `--limit`) so operators can inspect persisted audit trails without executing bootstrap/live processing.
 - 2026-03-01: Added dead-letter queue persistence + replay tooling: `app.main` now stores dead-letter envelopes in SQLite and exposes read-only dead-letter query (`--list-dead-letters`) plus replay execution (`--replay-dead-letters`) modes.
 - 2026-03-01: Added config versioning/rollback primitives in SQLite plus operator commands (`--list-config-versions`, `--rollback-config-version`); approved pending config updates now materialize as versioned changes.
+- 2026-03-01: Added metrics reporting surfaces backed by run history (`--list-metrics`, plus `--serve-metrics` HTTP endpoints for `/metrics` JSON and `/dashboard` starter UI).
 
 ## Phase 5: Connector Expansion (Optional)
 Duration: 3-5 days

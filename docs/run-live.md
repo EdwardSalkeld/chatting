@@ -51,3 +51,5 @@ python3 -m app.main --run-live --config configs/live-runtime.example.json
 - Set `"telegram_enabled": true` to turn on Telegram long polling + outbound Telegram replies.
 - CLI flags override config file values.
 - Add one or more `--context-ref` flags to append extra context refs beyond config.
+- Run `python3 -m app.main --db-path /tmp/chatting-live.db --list-metrics` to output run metrics JSON.
+- Run `python3 -m app.main --db-path /tmp/chatting-live.db --serve-metrics --metrics-port 8080` to expose `/metrics` and `/dashboard`.
