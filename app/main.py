@@ -31,7 +31,7 @@ from app.connectors import (
     TelegramConnector,
 )
 from app.executor import CodexExecutor, Executor, StubExecutor
-from app.models import AuditEvent, RunRecord, TaskEnvelope
+from app.models import AuditEvent, DeadLetterRecord, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
@@ -204,8 +204,11 @@ def _process_envelope(
     policy: AllowlistPolicyEngine,
     applier: NoOpApplier | IntegratedApplier,
     max_attempts: int,
+    ignore_dedupe: bool = False,
+    run_id_suffix: str | None = None,
+    emit_logs: bool = True,
 ) -> RunRecord | None:
-    if store.seen(envelope.source, envelope.dedupe_key):
+    if not ignore_dedupe and store.seen(envelope.source, envelope.dedupe_key):
         run_id = f"run:{envelope.id}:duplicate:{time.time_ns()}"
         trace_id = f"trace:{run_id}"
         created_at = datetime.now(timezone.utc)
@@ -239,20 +242,28 @@ def _process_envelope(
                 created_at=record.created_at,
             )
         )
-        print(
-            f"skip duplicate trace_id={trace_id} run_id={run_id} source={envelope.source} "
-            f"dedupe_key={envelope.dedupe_key}"
-        )
-        print(
-            f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
-            f"source={record.source} workflow={record.workflow} "
-            f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
-            f"result_status={record.result_status}"
-        )
+        if emit_logs:
+            print(
+                f"skip duplicate trace_id={trace_id} run_id={run_id} source={envelope.source} "
+                f"dedupe_key={envelope.dedupe_key}"
+            )
+            print(
+                f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
+                f"source={record.source} workflow={record.workflow} "
+                f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
+                f"result_status={record.result_status}"
+            )
         return record
 
-    store.mark_seen(envelope.source, envelope.dedupe_key)
-    trace_id = f"trace:{envelope.id}"
+    if not ignore_dedupe:
+        store.mark_seen(envelope.source, envelope.dedupe_key)
+
+    base_run_id = f"run:{envelope.id}"
+    if run_id_suffix is not None:
+        base_run_id = f"{base_run_id}:{run_id_suffix}"
+
+    trace_reference = envelope.id if run_id_suffix is None else base_run_id
+    trace_id = f"trace:{trace_reference}"
 
     started = time.perf_counter()
     task = router.route(envelope)
@@ -305,21 +316,23 @@ def _process_envelope(
         except Exception as exc:  # noqa: BLE001 - convert failures into retry/DLQ state
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt < max_attempts:
-                print(
-                    f"retry_scheduled trace_id={trace_id} run_id=run:{envelope.id} attempt={attempt} "
-                    f"next_attempt={attempt + 1} max_attempts={max_attempts} error={last_error}"
-                )
+                if emit_logs:
+                    print(
+                        f"retry_scheduled trace_id={trace_id} run_id={base_run_id} attempt={attempt} "
+                        f"next_attempt={attempt + 1} max_attempts={max_attempts} error={last_error}"
+                    )
             else:
                 reason_codes = ["retry_exhausted"]
-                print(
-                    f"dead_letter trace_id={trace_id} run_id=run:{envelope.id} attempts={attempt} "
-                    f"max_attempts={max_attempts} error={last_error}"
-                )
+                if emit_logs:
+                    print(
+                        f"dead_letter trace_id={trace_id} run_id={base_run_id} attempts={attempt} "
+                        f"max_attempts={max_attempts} error={last_error}"
+                    )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     record = RunRecord(
-        run_id=f"run:{envelope.id}",
+        run_id=base_run_id,
         envelope_id=envelope.id,
         source=envelope.source,
         workflow=task.workflow,
@@ -365,12 +378,26 @@ def _process_envelope(
             created_at=record.created_at,
         )
     )
-    print(
-        f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
-        f"source={record.source} workflow={record.workflow} "
-        f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
-        f"result_status={record.result_status}"
-    )
+    if result_status == "dead_letter":
+        dead_letter_id = store.append_dead_letter(
+            run_id=record.run_id,
+            envelope=envelope,
+            reason_codes=reason_codes,
+            last_error=last_error,
+            attempt_count=attempt_count,
+        )
+        if emit_logs:
+            print(
+                f"dead_letter_recorded dead_letter_id={dead_letter_id} "
+                f"run_id={record.run_id} envelope_id={record.envelope_id}"
+            )
+    if emit_logs:
+        print(
+            f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
+            f"source={record.source} workflow={record.workflow} "
+            f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
+            f"result_status={record.result_status}"
+        )
     return record
 
 
@@ -445,6 +472,16 @@ def _parse_args() -> argparse.Namespace:
         "--list-audit-events",
         action="store_true",
         help="List persisted audit events as JSON and exit.",
+    )
+    parser.add_argument(
+        "--list-dead-letters",
+        action="store_true",
+        help="List pending/replayed dead-letter entries as JSON and exit.",
+    )
+    parser.add_argument(
+        "--replay-dead-letters",
+        action="store_true",
+        help="Replay pending dead-letter envelopes through the worker pipeline.",
     )
     parser.add_argument(
         "--result-status",
@@ -585,13 +622,25 @@ def main() -> int:
         default_value=2,
         setting_name="max_attempts",
     )
-    if args.list_runs and args.list_audit_events:
-        raise ValueError("--list-runs cannot be combined with --list-audit-events")
+    list_mode_count = sum(
+        [
+            args.list_runs,
+            args.list_audit_events,
+            args.list_dead_letters,
+            args.replay_dead_letters,
+        ]
+    )
+    if list_mode_count > 1:
+        raise ValueError(
+            "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters "
+            "cannot be combined"
+        )
 
-    if args.list_runs or args.list_audit_events:
+    if args.list_runs or args.list_audit_events or args.list_dead_letters or args.replay_dead_letters:
         if args.run_live:
             raise ValueError(
-                "--list-runs/--list-audit-events cannot be combined with --run-live"
+                "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters "
+                "cannot be combined with --run-live"
             )
         result_status = args.result_status
         if result_status is not None:
@@ -601,13 +650,24 @@ def main() -> int:
         if args.list_runs:
             runs = _query_runs(db_path, limit=args.limit, result_status=result_status)
             payload = [run.to_dict() for run in runs]
-        else:
+        elif args.list_audit_events:
             audit_events = _query_audit_events(
                 db_path,
                 limit=args.limit,
                 result_status=result_status,
             )
             payload = [event.to_dict() for event in audit_events]
+        elif args.list_dead_letters:
+            dead_letters = _query_dead_letters(db_path, limit=args.limit, status=result_status)
+            payload = [entry.to_dict() for entry in dead_letters]
+        else:
+            replayed = _replay_dead_letters(
+                db_path,
+                limit=args.limit,
+                max_attempts=max_attempts,
+                executor=_build_codex_executor(args, config),
+            )
+            payload = [record.to_dict() for record in replayed]
         print(json.dumps(payload, sort_keys=True))
         return 0
 
@@ -1189,6 +1249,55 @@ def _query_audit_events(
     if limit is not None:
         audit_events = audit_events[-limit:]
     return audit_events
+
+
+def _query_dead_letters(
+    db_path: str,
+    *,
+    limit: int | None,
+    status: str | None,
+) -> list[DeadLetterRecord]:
+    store = SQLiteStateStore(db_path)
+    dead_letters = store.list_dead_letters(status=status)
+    if limit is not None:
+        dead_letters = dead_letters[-limit:]
+    return dead_letters
+
+
+def _replay_dead_letters(
+    db_path: str,
+    *,
+    limit: int | None,
+    max_attempts: int,
+    executor: Executor,
+) -> list[RunRecord]:
+    store: StateStore = SQLiteStateStore(db_path)
+    router = RuleBasedRouter()
+    policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
+    applier = NoOpApplier()
+    dead_letters = store.list_dead_letters(status="pending")
+    if limit is not None:
+        dead_letters = dead_letters[:limit]
+
+    replayed: list[RunRecord] = []
+    for dead_letter in dead_letters:
+        run = _process_envelope(
+            store=store,
+            envelope=dead_letter.envelope,
+            router=router,
+            executor_impl=executor,
+            policy=policy,
+            applier=applier,
+            max_attempts=max_attempts,
+            ignore_dedupe=True,
+            run_id_suffix=f"replay:{dead_letter.dead_letter_id}:{time.time_ns()}",
+            emit_logs=False,
+        )
+        if run is None:
+            continue
+        store.mark_dead_letter_replayed(dead_letter.dead_letter_id, run.run_id)
+        replayed.append(run)
+    return replayed
 
 
 if __name__ == "__main__":

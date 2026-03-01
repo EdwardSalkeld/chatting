@@ -509,3 +509,52 @@ class AuditEvent:
             "detail": self.detail,
             "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+
+
+@dataclass(frozen=True)
+class DeadLetterRecord:
+    """Persisted dead-letter queue record for replay operations."""
+
+    dead_letter_id: int
+    run_id: str
+    envelope: TaskEnvelope
+    reason_codes: list[str]
+    last_error: str | None
+    attempt_count: int
+    status: str
+    created_at: datetime
+    replayed_run_id: str | None = None
+    schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _validate_schema_version(self.schema_version)
+        if self.dead_letter_id <= 0:
+            raise ValueError("dead_letter_id must be positive")
+        _validate_required_string(self.run_id, field_name="run_id")
+        if not isinstance(self.envelope, TaskEnvelope):
+            raise ValueError("envelope must be TaskEnvelope")
+        _validate_string_list(self.reason_codes, field_name="reason_codes")
+        if self.last_error is not None:
+            _validate_required_string(self.last_error, field_name="last_error")
+        if self.attempt_count <= 0:
+            raise ValueError("attempt_count must be positive")
+        if self.status not in {"pending", "replayed"}:
+            raise ValueError("status must be pending or replayed")
+        if self.replayed_run_id is not None:
+            _validate_required_string(self.replayed_run_id, field_name="replayed_run_id")
+        if self.created_at.tzinfo is None:
+            raise ValueError("created_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "dead_letter_id": self.dead_letter_id,
+            "run_id": self.run_id,
+            "envelope": self.envelope.to_dict(),
+            "reason_codes": self.reason_codes,
+            "last_error": self.last_error,
+            "attempt_count": self.attempt_count,
+            "status": self.status,
+            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "replayed_run_id": self.replayed_run_id,
+        }

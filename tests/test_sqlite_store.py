@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import AuditEvent, RunRecord
+from app.models import AuditEvent, ReplyChannel, RunRecord, TaskEnvelope
 from app.state.sqlite_store import SQLiteStateStore
 
 
@@ -90,6 +90,42 @@ class SQLiteStateStoreTests(unittest.TestCase):
             store.append_audit_event(event)
 
             self.assertEqual(store.list_audit_events(), [event])
+
+    def test_append_dead_letter_persists_and_marks_replayed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+            envelope = TaskEnvelope(
+                id="email:dead-1",
+                source="email",
+                received_at=datetime(2026, 2, 27, 16, 10, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="Please retry",
+                attachments=[],
+                context_refs=["repo:/home/edward/chatting"],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:dead-1",
+            )
+
+            dead_letter_id = store.append_dead_letter(
+                run_id="run:email:dead-1",
+                envelope=envelope,
+                reason_codes=["retry_exhausted"],
+                last_error="RuntimeError: boom",
+                attempt_count=2,
+            )
+            pending = store.list_dead_letters(status="pending")
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].dead_letter_id, dead_letter_id)
+            self.assertEqual(pending[0].envelope.id, envelope.id)
+            self.assertEqual(pending[0].status, "pending")
+
+            store.mark_dead_letter_replayed(dead_letter_id, "run:email:dead-1:replay:1")
+            replayed = store.list_dead_letters(status="replayed")
+            self.assertEqual(len(replayed), 1)
+            self.assertEqual(replayed[0].dead_letter_id, dead_letter_id)
+            self.assertEqual(replayed[0].replayed_run_id, "run:email:dead-1:replay:1")
 
 
 if __name__ == "__main__":

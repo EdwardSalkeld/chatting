@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.models import AuditEvent, RunRecord
+from app.models import AuditEvent, DeadLetterRecord, RunRecord, TaskEnvelope
 
 
 @runtime_checkable
@@ -28,6 +28,23 @@ class StateStore(Protocol):
 
     def list_audit_events(self) -> list[AuditEvent]:
         """Return persisted audit events in storage order."""
+
+    def append_dead_letter(
+        self,
+        *,
+        run_id: str,
+        envelope: TaskEnvelope,
+        reason_codes: list[str],
+        last_error: str | None,
+        attempt_count: int,
+    ) -> int:
+        """Persist one dead-letter entry and return its record ID."""
+
+    def list_dead_letters(self, *, status: str | None = None) -> list[DeadLetterRecord]:
+        """Return dead-letter entries in storage order."""
+
+    def mark_dead_letter_replayed(self, dead_letter_id: int, replayed_run_id: str) -> None:
+        """Mark a dead-letter entry as replayed."""
 
 
 __all__ = ["StateStore"]

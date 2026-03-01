@@ -434,7 +434,8 @@ class MainCliTests(unittest.TestCase):
                 ],
             ):
                 with self.assertRaisesRegex(
-                    ValueError, "--list-runs cannot be combined with --list-audit-events"
+                    ValueError,
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters cannot be combined",
                 ):
                     main()
 
@@ -453,9 +454,77 @@ class MainCliTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "--list-runs/--list-audit-events cannot be combined with --run-live",
+                    "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters cannot be combined with --run-live",
                 ):
                     main()
+
+    def test_main_list_dead_letters_outputs_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(
+                db_path,
+                envelopes=[_single_email_envelope()],
+                executor=AlwaysFailExecutor(),
+                max_attempts=2,
+            )
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-dead-letters",
+                        "--result-status",
+                        "pending",
+                    ],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        dead_letters = json.loads(output_buffer.getvalue().strip())
+        self.assertEqual(len(dead_letters), 1)
+        self.assertEqual(dead_letters[0]["status"], "pending")
+        self.assertEqual(dead_letters[0]["reason_codes"], ["retry_exhausted"])
+
+    def test_main_replay_dead_letters_processes_pending_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(
+                db_path,
+                envelopes=[_single_email_envelope()],
+                executor=AlwaysFailExecutor(),
+                max_attempts=2,
+            )
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--replay-dead-letters",
+                        "--use-stub-executor",
+                    ],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            replayed_runs = json.loads(output_buffer.getvalue().strip())
+            self.assertEqual(len(replayed_runs), 1)
+            self.assertEqual(replayed_runs[0]["result_status"], "success")
+            self.assertIn(":replay:", replayed_runs[0]["run_id"])
+            dead_letters = SQLiteStateStore(db_path).list_dead_letters(status="replayed")
+            self.assertEqual(len(dead_letters), 1)
+            self.assertEqual(dead_letters[0].status, "replayed")
 
     def test_main_rejects_whitespace_only_result_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
