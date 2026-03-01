@@ -194,12 +194,15 @@ def _process_envelope(
     execution_action_count = 0
     execution_config_update_count = 0
     execution_error_count = 0
+    execution_payload: dict[str, object] | None = None
     execution_action_types: list[str] = []
     requires_human_review = False
     applied_action_count = 0
     skipped_action_count = 0
     dispatched_message_count = 0
     apply_reason_codes: list[str] = []
+    policy_decision_payload: dict[str, object] | None = None
+    apply_result_payload: dict[str, object] | None = None
     attempt_count = 0
     last_error: str | None = None
 
@@ -211,10 +214,13 @@ def _process_envelope(
             execution_action_count = len(execution_result.actions)
             execution_config_update_count = len(execution_result.config_updates)
             execution_error_count = len(execution_result.errors)
+            execution_payload = execution_result.to_dict()
             execution_action_types = [action.type for action in execution_result.actions]
             requires_human_review = execution_result.requires_human_review
             decision = policy.evaluate(execution_result)
+            policy_decision_payload = decision.to_dict()
             apply_result = applier.apply(decision)
+            apply_result_payload = apply_result.to_dict()
             reason_codes = decision.reason_codes
             approved_action_count = len(decision.approved_actions)
             blocked_action_count = len(decision.blocked_actions)
@@ -274,6 +280,9 @@ def _process_envelope(
                     "action_types": execution_action_types,
                     "requires_human_review": requires_human_review,
                 },
+                "execution_result": execution_payload,
+                "policy_decision": policy_decision_payload,
+                "apply_result": apply_result_payload,
                 "applied_action_count": applied_action_count,
                 "skipped_action_count": skipped_action_count,
                 "dispatched_message_count": dispatched_message_count,

@@ -92,12 +92,46 @@ class MainBootstrapFlowTests(unittest.TestCase):
                     "requires_human_review": False,
                 },
             )
+            self.assertEqual(
+                first_success_event.detail["execution_result"],
+                {
+                    "schema_version": "1.0",
+                    "messages": [
+                        {
+                            "channel": "log",
+                            "target": "daily-summary",
+                            "body": "Handled workflow scheduled_automation",
+                        }
+                    ],
+                    "actions": [],
+                    "config_updates": [],
+                    "requires_human_review": False,
+                    "errors": [],
+                },
+            )
+            self.assertEqual(first_success_event.detail["policy_decision"]["approved_actions"], [])
+            self.assertEqual(first_success_event.detail["policy_decision"]["blocked_actions"], [])
+            self.assertEqual(first_success_event.detail["apply_result"]["applied_actions"], [])
+            self.assertEqual(first_success_event.detail["apply_result"]["skipped_actions"], [])
+            self.assertEqual(len(first_success_event.detail["apply_result"]["dispatched_messages"]), 1)
 
             blocked_event = next(event for event in audit_events if event.run_id == "run:email:blocked-1")
             self.assertEqual(blocked_event.detail["applied_action_count"], 0)
             self.assertEqual(blocked_event.detail["skipped_action_count"], 0)
             self.assertEqual(blocked_event.detail["dispatched_message_count"], 1)
             self.assertEqual(blocked_event.detail["apply_reason_codes"], ["policy_blocked_actions_present"])
+            self.assertEqual(
+                blocked_event.detail["execution_result"]["actions"],
+                [{"type": "run_shell", "path": "echo blocked"}],
+            )
+            self.assertEqual(
+                blocked_event.detail["policy_decision"]["blocked_actions"],
+                [{"type": "run_shell", "path": "echo blocked"}],
+            )
+            self.assertEqual(
+                blocked_event.detail["apply_result"]["dispatched_messages"][0]["target"],
+                "bob@example.com",
+            )
 
             observed_lines = [
                 line
@@ -155,6 +189,9 @@ class MainBootstrapFlowTests(unittest.TestCase):
                     "requires_human_review": False,
                 },
             )
+            self.assertEqual(target_event.detail["execution_result"]["schema_version"], "1.0")
+            self.assertEqual(target_event.detail["policy_decision"]["schema_version"], "1.0")
+            self.assertEqual(target_event.detail["apply_result"]["schema_version"], "1.0")
             self.assertIsNotNone(target_event.detail["last_error"])
 
     def test_run_bootstrap_marks_dead_letter_when_retries_exhausted(self) -> None:
@@ -199,6 +236,9 @@ class MainBootstrapFlowTests(unittest.TestCase):
                     "requires_human_review": False,
                 },
             )
+            self.assertIsNone(audit_events[0].detail["execution_result"])
+            self.assertIsNone(audit_events[0].detail["policy_decision"])
+            self.assertIsNone(audit_events[0].detail["apply_result"])
             self.assertIn("RuntimeError", audit_events[0].detail["last_error"])
 
 
