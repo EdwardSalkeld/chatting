@@ -56,6 +56,17 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "use_stub_executor",
     }
 )
+ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
+    {
+        "content",
+        "context_refs",
+        "interval_seconds",
+        "job_name",
+        "policy_profile",
+        "start_at",
+    }
+)
+REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "interval_seconds", "job_name"})
 
 
 def _is_int_like(value: object) -> bool:
@@ -757,15 +768,65 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
     for index, raw_job in enumerate(payload):
         if not isinstance(raw_job, dict):
             raise ValueError(f"schedule job at index {index} must be an object")
+        unknown_keys = sorted(set(raw_job.keys()) - ALLOWED_SCHEDULE_JOB_KEYS)
+        if unknown_keys:
+            keys = ", ".join(unknown_keys)
+            raise ValueError(
+                f"schedule job at index {index} contains unknown keys: {keys}"
+            )
+
+        missing_keys = sorted(REQUIRED_SCHEDULE_JOB_KEYS - set(raw_job.keys()))
+        if missing_keys:
+            keys = ", ".join(missing_keys)
+            raise ValueError(
+                f"schedule job at index {index} is missing required keys: {keys}"
+            )
+
+        job_name = raw_job["job_name"]
+        if not isinstance(job_name, str) or not job_name.strip():
+            raise ValueError(f"schedule job at index {index} job_name must be a non-empty string")
+
+        content = raw_job["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"schedule job at index {index} content must be a non-empty string")
+
+        interval_seconds = raw_job["interval_seconds"]
+        if not _is_int_like(interval_seconds):
+            raise ValueError(
+                f"schedule job at index {index} interval_seconds must be a positive integer"
+            )
+        if interval_seconds <= 0:
+            raise ValueError(
+                f"schedule job at index {index} interval_seconds must be a positive integer"
+            )
+
+        raw_context_refs = raw_job.get("context_refs", [])
+        if not isinstance(raw_context_refs, list):
+            raise ValueError(
+                f"schedule job at index {index} context_refs must be a list of non-empty strings"
+            )
+        if not all(isinstance(item, str) and item.strip() for item in raw_context_refs):
+            raise ValueError(
+                f"schedule job at index {index} context_refs must be a list of non-empty strings"
+            )
+
+        policy_profile = raw_job.get("policy_profile", "default")
+        if not isinstance(policy_profile, str) or not policy_profile.strip():
+            raise ValueError(
+                f"schedule job at index {index} policy_profile must be a non-empty string"
+            )
+
         raw_start_at = raw_job.get("start_at")
+        if raw_start_at is not None and not isinstance(raw_start_at, str):
+            raise ValueError(f"schedule job at index {index} start_at must be an RFC3339 string")
         start_at = _parse_optional_rfc3339(raw_start_at) if raw_start_at is not None else None
         jobs.append(
             IntervalScheduleJob(
-                job_name=str(raw_job["job_name"]),
-                content=str(raw_job["content"]),
-                interval_seconds=int(raw_job["interval_seconds"]),
-                context_refs=list(raw_job.get("context_refs", [])),
-                policy_profile=str(raw_job.get("policy_profile", "default")),
+                job_name=job_name.strip(),
+                content=content.strip(),
+                interval_seconds=interval_seconds,
+                context_refs=list(raw_context_refs),
+                policy_profile=policy_profile.strip(),
                 start_at=start_at,
             )
         )

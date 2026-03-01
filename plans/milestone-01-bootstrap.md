@@ -51,6 +51,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Runtime config supports environment-provided config path (`CHATTING_CONFIG_PATH`) with CLI `--config` precedence
 - [x] Runtime JSON config rejects unknown keys to fail fast on typo/misnamed settings
 - [x] Runtime numeric config fields reject boolean values to prevent implicit JSON bool-to-number coercion
+- [x] Live schedule JSON jobs enforce strict key/type validation before connector startup
 - [x] Model typed-collection fields enforce runtime item/object contracts across execution/policy/apply payload models
 - [x] Bootstrap/live observability emits per-run `trace_id` in logs and audit-event detail
 - [x] Run audit events persist full structured executor/policy/applier payload snapshots for post-run forensics
@@ -100,3 +101,4 @@ Notes:
 - 2026-03-01: Post-milestone P0 audit completeness: duplicate events that are skipped by idempotency now produce explicit `duplicate_skipped` run/audit records (with trace/reason metadata) instead of only emitting a console log line.
 - 2026-03-01: Post-milestone operability: added `app.main --list-runs` query mode (with optional `--result-status`/`--limit`) to inspect stored run records without triggering connector/executor work.
 - 2026-03-01: Post-milestone operability: added `app.main --list-audit-events` query mode (with optional `--result-status`/`--limit`) to inspect stored audit records without triggering connector/executor work.
+- 2026-03-01: Post-milestone config hardening: tightened `app.main` schedule-file parsing so live cron jobs reject unknown/missing keys, invalid string/list fields, bool/non-positive intervals, and non-string `start_at` inputs before interval connector construction.

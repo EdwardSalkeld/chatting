@@ -615,6 +615,104 @@ class MainCliTests(unittest.TestCase):
                 ):
                     main()
 
+    def test_main_rejects_schedule_job_unknown_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_file = Path(tmpdir) / "schedule.json"
+            schedule_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "ping",
+                            "interval_seconds": 60,
+                            "unexpected": True,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--schedule-file",
+                    str(schedule_file),
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "schedule job at index 0 contains unknown keys: unexpected",
+                ):
+                    main()
+
+    def test_main_rejects_schedule_job_boolean_interval_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_file = Path(tmpdir) / "schedule.json"
+            schedule_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "ping",
+                            "interval_seconds": True,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--schedule-file",
+                    str(schedule_file),
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "schedule job at index 0 interval_seconds must be a positive integer",
+                ):
+                    main()
+
+    def test_main_rejects_schedule_job_blank_context_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_file = Path(tmpdir) / "schedule.json"
+            schedule_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "ping",
+                            "interval_seconds": 60,
+                            "context_refs": ["   "],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--schedule-file",
+                    str(schedule_file),
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "schedule job at index 0 context_refs must be a list of non-empty strings",
+                ):
+                    main()
+
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
