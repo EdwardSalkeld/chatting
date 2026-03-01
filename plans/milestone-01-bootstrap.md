@@ -55,6 +55,7 @@ Create a runnable Python skeleton that proves end-to-end control flow with fake 
 - [x] Bootstrap/live observability emits per-run `trace_id` in logs and audit-event detail
 - [x] Run audit events persist full structured executor/policy/applier payload snapshots for post-run forensics
 - [x] Duplicate-dedupe skips persist explicit `duplicate_skipped` run and audit records
+- [x] CLI supports read-only run-log querying from SQLite (`--list-runs` with optional status/limit filters)
 
 Notes:
 - 2026-02-27: Added `app.connectors` package with `Connector` protocol plus `FakeCronConnector` and `FakeEmailConnector` that emit canonical `TaskEnvelope` records.
@@ -96,3 +97,4 @@ Notes:
 - 2026-02-28: Post-milestone P0/Phase-0 config hardening: runtime numeric config parsing now rejects JSON booleans for integer/float settings so values like `true` cannot silently pass as `1`.
 - 2026-03-01: Post-milestone P0 audit depth: `app.main` now stores full `execution_result`, `policy_decision`, and `apply_result` payload snapshots in audit-event detail (in addition to summary counters), with bootstrap coverage in `tests.test_main`.
 - 2026-03-01: Post-milestone P0 audit completeness: duplicate events that are skipped by idempotency now produce explicit `duplicate_skipped` run/audit records (with trace/reason metadata) instead of only emitting a console log line.
+- 2026-03-01: Post-milestone operability: added `app.main --list-runs` query mode (with optional `--result-status`/`--limit`) to inspect stored run records without triggering connector/executor work.

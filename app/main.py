@@ -408,6 +408,20 @@ def _parse_args() -> argparse.Namespace:
         help="Path to SQLite state database. Uses a temp file when omitted.",
     )
     parser.add_argument(
+        "--list-runs",
+        action="store_true",
+        help="List persisted run records as JSON and exit.",
+    )
+    parser.add_argument(
+        "--result-status",
+        help="Optional run status filter used with --list-runs.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        help="Optional max number of run records returned by --list-runs.",
+    )
+    parser.add_argument(
         "--max-attempts",
         type=_positive_int,
         help="Maximum executor attempts per task before marking dead-letter.",
@@ -507,6 +521,17 @@ def main() -> int:
         default_value=2,
         setting_name="max_attempts",
     )
+    if args.list_runs:
+        if args.run_live:
+            raise ValueError("--list-runs cannot be combined with --run-live")
+        result_status = args.result_status
+        if result_status is not None:
+            if not result_status.strip():
+                raise ValueError("result_status must not be empty")
+            result_status = result_status.strip()
+        runs = _query_runs(db_path, limit=args.limit, result_status=result_status)
+        print(json.dumps([run.to_dict() for run in runs], sort_keys=True))
+        return 0
 
     if args.run_live:
         imap_host = _resolve_optional_str(
@@ -889,6 +914,21 @@ def _resolve_context_refs(cli_values: list[str], config: dict[str, object]) -> l
     if any(not value.strip() for value in merged_values):
         raise ValueError("context_ref/context_refs entries must not be empty")
     return merged_values
+
+
+def _query_runs(
+    db_path: str,
+    *,
+    limit: int | None,
+    result_status: str | None,
+) -> list[RunRecord]:
+    store = SQLiteStateStore(db_path)
+    runs = store.list_runs()
+    if result_status is not None:
+        runs = [run for run in runs if run.result_status == result_status]
+    if limit is not None:
+        runs = runs[-limit:]
+    return runs
 
 
 if __name__ == "__main__":

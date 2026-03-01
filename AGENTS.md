@@ -35,8 +35,10 @@
 - Run runtime config env-loading checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_reads_config_path_from_environment tests.test_main.MainCliTests.test_main_cli_config_overrides_environment_config_path tests.test_main.MainCliTests.test_main_rejects_whitespace_only_environment_config_path`
 - Run runtime config unknown-key checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_unknown_config_keys tests.test_main.MainCliTests.test_main_rejects_unknown_keys_from_environment_config_path`
 - Run runtime config numeric-type checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_boolean_max_attempts_from_config tests.test_main.MainCliTests.test_main_rejects_boolean_poll_interval_from_config`
+- Run run-history query CLI checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_list_runs_outputs_json_and_skips_bootstrap tests.test_main.MainCliTests.test_main_list_runs_supports_result_status_filter tests.test_main.MainCliTests.test_main_rejects_whitespace_only_result_status`
 - Run idempotency contract checks: `python3 -m unittest tests.test_sqlite_store tests.test_main`
 - Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
 - Run bootstrap app with custom retry limit: `python3 -m app.main --db-path /tmp/chatting-state.db --max-attempts 4`
+- List stored runs from SQLite: `python3 -m app.main --db-path /tmp/chatting-state.db --list-runs --limit 20`
 - Run bootstrap app with env-provided config path: `CHATTING_CONFIG_PATH=configs/live-runtime.example.json python3 -m app.main`
 - If `rg` is unavailable locally (confirmed in this environment), use `find . -type f` for file discovery and `grep -n` for content search.

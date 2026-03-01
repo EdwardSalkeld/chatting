@@ -304,6 +304,76 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         run_bootstrap_mock.assert_called_once_with(db_path, max_attempts=4)
 
+    @patch("app.main.run_bootstrap")
+    def test_main_list_runs_outputs_json_and_skips_bootstrap(self, run_bootstrap_mock) -> None:
+        run_bootstrap_mock.return_value = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(db_path)
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    ["app.main", "--db-path", db_path, "--list-runs", "--limit", "2"],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        run_bootstrap_mock.assert_not_called()
+        listed_runs = json.loads(output_buffer.getvalue().strip())
+        self.assertEqual(len(listed_runs), 2)
+        self.assertEqual(
+            [record["result_status"] for record in listed_runs],
+            ["blocked_action", "duplicate_skipped"],
+        )
+
+    def test_main_list_runs_supports_result_status_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            run_bootstrap(db_path)
+
+            output_buffer = StringIO()
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--db-path",
+                        db_path,
+                        "--list-runs",
+                        "--result-status",
+                        "duplicate_skipped",
+                    ],
+                ),
+                redirect_stdout(output_buffer),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        listed_runs = json.loads(output_buffer.getvalue().strip())
+        self.assertEqual(len(listed_runs), 1)
+        self.assertEqual(listed_runs[0]["result_status"], "duplicate_skipped")
+
+    def test_main_rejects_whitespace_only_result_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--db-path",
+                    db_path,
+                    "--list-runs",
+                    "--result-status",
+                    "   ",
+                ],
+            ):
+                with self.assertRaisesRegex(ValueError, "result_status must not be empty"):
+                    main()
+
     def test_main_rejects_non_positive_max_attempts(self) -> None:
         with patch("sys.argv", ["app.main", "--max-attempts", "0"]):
             with self.assertRaises(SystemExit) as context:
