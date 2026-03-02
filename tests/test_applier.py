@@ -1,5 +1,6 @@
 import unittest
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -54,10 +55,10 @@ class NoOpApplierTests(unittest.TestCase):
 
 @dataclass
 class _RecordingEmailSender:
-    sent: list[tuple[str, str]]
+    sent: list[tuple[str, str, str | None]]
 
-    def send(self, target: str, body: str) -> None:
-        self.sent.append((target, body))
+    def send(self, target: str, body: str, *, subject: str | None = None) -> None:
+        self.sent.append((target, body, subject))
 
 
 class IntegratedApplierTests(unittest.TestCase):
@@ -94,13 +95,48 @@ class IntegratedApplierTests(unittest.TestCase):
             self.assertEqual(result.skipped_actions, [])
             self.assertEqual(
                 sender.sent,
-                [("alice@example.com", "Done.")],
+                [("alice@example.com", "Done.", None)],
             )
             self.assertEqual(
                 [message.channel for message in result.dispatched_messages],
                 ["email", "log"],
             )
             self.assertEqual(result.reason_codes, [])
+
+    def test_apply_email_reply_keeps_subject_and_quotes_original(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingEmailSender(sent=[])
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="email",
+                        target="alice@example.com",
+                        body="Here is the answer.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+            envelope = _email_envelope(
+                subject="Quarterly update",
+                body="Can you summarize the key points?",
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(
+                decision,
+                envelope=envelope,
+            )
+
+            self.assertEqual(result.reason_codes, [])
+            self.assertEqual(len(sender.sent), 1)
+            target, body, subject = sender.sent[0]
+            self.assertEqual(target, "alice@example.com")
+            self.assertEqual(subject, "Re: Quarterly update")
+            self.assertIn("Here is the answer.", body)
+            self.assertIn("Original message:", body)
+            self.assertIn("> Can you summarize the key points?", body)
 
     def test_apply_dispatches_telegram_message_with_sender(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -272,6 +308,23 @@ class _RecordingTelegramSender:
 
     def send(self, target: str, body: str) -> None:
         self.sent.append((target, body))
+
+
+def _email_envelope(*, subject: str, body: str):
+    from app.models import ReplyChannel, TaskEnvelope
+
+    return TaskEnvelope(
+        id="email:test",
+        source="email",
+        received_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+        actor="alice@example.com",
+        content=f"Subject: {subject}\n\n{body}",
+        attachments=[],
+        context_refs=["repo:/home/edward/chatting"],
+        policy_profile="default",
+        reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+        dedupe_key="email:test",
+    )
 
 
 if __name__ == "__main__":

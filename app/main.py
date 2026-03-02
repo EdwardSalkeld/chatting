@@ -347,7 +347,7 @@ def _process_envelope(
                     config_path=update.path,
                     config_value=update.value,
                 )
-            apply_result = applier.apply(decision)
+            apply_result = applier.apply(decision, envelope=envelope)
             apply_result_payload = apply_result.to_dict()
             reason_codes = decision.reason_codes
             approved_action_count = len(decision.approved_actions)

@@ -11,13 +11,13 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Callable, Protocol
 
-from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision
+from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision, TaskEnvelope
 
 
 class EmailSender(Protocol):
     """Dispatch outbound email messages."""
 
-    def send(self, target: str, body: str) -> None:
+    def send(self, target: str, body: str, *, subject: str | None = None) -> None:
         """Send one outbound email message."""
 
 
@@ -51,7 +51,7 @@ class SmtpEmailSender:
         if not self.from_address:
             raise ValueError("from_address is required")
 
-    def send(self, target: str, body: str) -> None:
+    def send(self, target: str, body: str, *, subject: str | None = None) -> None:
         if not target:
             raise ValueError("target is required")
         if not body.strip():
@@ -60,7 +60,7 @@ class SmtpEmailSender:
         message = EmailMessage()
         message["From"] = self.from_address
         message["To"] = target
-        message["Subject"] = self.subject
+        message["Subject"] = (subject or self.subject).strip() or self.subject
         message.set_content(body)
 
         client_factory = self.smtp_client_factory or self._default_smtp_client_factory()
@@ -131,7 +131,7 @@ class IntegratedApplier:
     email_sender: EmailSender | None = None
     telegram_sender: TelegramSender | None = None
 
-    def apply(self, decision: PolicyDecision) -> ApplyResult:
+    def apply(self, decision: PolicyDecision, envelope: TaskEnvelope | None = None) -> ApplyResult:
         applied_actions: list[ActionProposal] = []
         skipped_actions: list[ActionProposal] = []
         dispatched_messages: list[OutboundMessage] = []
@@ -167,7 +167,12 @@ class IntegratedApplier:
                     reason_codes.append("email_dispatch_not_configured")
                     continue
                 try:
-                    self.email_sender.send(message.target, message.body)
+                    reply_subject, reply_body = _format_email_reply(message, envelope)
+                    self.email_sender.send(
+                        message.target,
+                        reply_body,
+                        subject=reply_subject,
+                    )
                     dispatched_messages.append(message)
                 except Exception:  # noqa: BLE001
                     reason_codes.append("email_dispatch_failed")
@@ -214,6 +219,45 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
         seen.add(value)
         deduped.append(value)
     return deduped
+
+
+def _format_email_reply(
+    message: OutboundMessage,
+    envelope: TaskEnvelope | None,
+) -> tuple[str | None, str]:
+    if envelope is None or envelope.source != "email":
+        return None, message.body
+
+    original_subject, original_body = _parse_email_envelope_content(envelope.content)
+    reply_subject = _to_reply_subject(original_subject)
+    if not original_body:
+        return reply_subject, message.body
+
+    quoted_original = "\n".join(f"> {line}" for line in original_body.splitlines())
+    if not quoted_original:
+        return reply_subject, message.body
+
+    reply_body = (
+        f"{message.body.rstrip()}\n\n"
+        "Original message:\n"
+        f"{quoted_original}\n"
+    )
+    return reply_subject, reply_body
+
+
+def _parse_email_envelope_content(content: str) -> tuple[str, str]:
+    if not content.startswith("Subject: "):
+        return "(no subject)", content.strip()
+
+    subject, _, body = content.partition("\n\n")
+    subject_value = subject.removeprefix("Subject: ").strip() or "(no subject)"
+    return subject_value, body.strip()
+
+
+def _to_reply_subject(subject: str) -> str:
+    if subject.lower().startswith("re:"):
+        return subject
+    return f"Re: {subject}"
 
 
 def _default_http_post_json(

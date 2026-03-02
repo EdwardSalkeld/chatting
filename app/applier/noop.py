@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models import ApplyResult, PolicyDecision
+from app.models import ApplyResult, PolicyDecision, TaskEnvelope
 
 
 @dataclass(frozen=True)
 class NoOpApplier:
     """Baseline applier that reports intended effects without side effects."""
 
-    def apply(self, decision: PolicyDecision) -> ApplyResult:
+    def apply(self, decision: PolicyDecision, envelope: TaskEnvelope | None = None) -> ApplyResult:
         reason_codes: list[str] = []
 
         if decision.approved_actions:
