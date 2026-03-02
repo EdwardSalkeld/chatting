@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "channel": {"type": "string", "minLength": 1},
+          "target": {"type": "string", "minLength": 1},
+          "body": {"type": "string", "minLength": 1}
+        },
+        "required": ["channel", "target", "body"],
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string", "minLength": 1},
+          "path": {"type": ["string", "null"]},
+          "content": {"type": ["string", "null"]}
+        },
+        "required": ["type", "path", "content"],
+        "additionalProperties": false
+      }
+    },
+    "config_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "value": {"type": "string"}
+        },
+        "required": ["path", "value"],
+        "additionalProperties": false
+      }
+    },
+    "requires_human_review": {"type": "boolean"},
+    "errors": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "required": [
+    "schema_version",
+    "messages",
+    "actions",
+    "config_updates",
+    "requires_human_review",
+    "errors"
+  ],
+  "additionalProperties": false
+}

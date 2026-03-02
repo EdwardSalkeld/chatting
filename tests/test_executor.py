@@ -53,6 +53,29 @@ class ParseExecutionResultTests(unittest.TestCase):
         self.assertEqual(result.to_dict()["actions"][0]["type"], "write_file")
         self.assertEqual(result.to_dict()["config_updates"][0]["path"], "routing.default_timeout")
 
+    def test_parse_execution_result_recovers_last_json_object_from_mixed_output(self) -> None:
+        valid_payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [
+                    {
+                        "channel": "email",
+                        "target": "alice@example.com",
+                        "body": "Done.",
+                    }
+                ],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+        mixed_output = "starting codex\n" + valid_payload + "\ncompleted\n"
+
+        result = parse_execution_result(mixed_output)
+
+        self.assertEqual(result.to_dict()["messages"][0]["channel"], "email")
+
     def test_parse_execution_result_rejects_unknown_top_level_keys(self) -> None:
         payload = json.dumps(
             {

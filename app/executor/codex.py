@@ -24,6 +24,14 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "requires_human_review",
     "errors",
 }
+_REQUIRED_TOP_LEVEL_KEYS = {
+    "schema_version",
+    "messages",
+    "actions",
+    "config_updates",
+    "requires_human_review",
+    "errors",
+}
 _ALLOWED_MESSAGE_KEYS = {"channel", "target", "body"}
 _ALLOWED_ACTION_KEYS = {"type", "path", "content"}
 _ALLOWED_CONFIG_UPDATE_KEYS = {"path", "value"}
@@ -64,10 +72,7 @@ class CodexExecutor:
 
 def parse_execution_result(raw_output: str) -> ExecutionResult:
     """Parse strict JSON output into ExecutionResult."""
-    try:
-        payload = json.loads(raw_output)
-    except json.JSONDecodeError as error:
-        raise ValueError(f"invalid_json:{error.msg}") from error
+    payload = _load_execution_payload(raw_output)
 
     if not isinstance(payload, dict):
         raise ValueError("top_level_object_required")
@@ -78,15 +83,7 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
             "unknown_top_level_keys:" + ",".join(sorted(unknown_keys))
         )
 
-    required_keys = {
-        "schema_version",
-        "messages",
-        "actions",
-        "config_updates",
-        "requires_human_review",
-        "errors",
-    }
-    missing = required_keys - set(payload)
+    missing = _REQUIRED_TOP_LEVEL_KEYS - set(payload)
     if missing:
         raise ValueError("missing_top_level_keys:" + ",".join(sorted(missing)))
 
@@ -120,6 +117,39 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
         errors=errors,
         schema_version=schema_version,
     )
+
+
+def _load_execution_payload(raw_output: str) -> Any:
+    try:
+        return json.loads(raw_output)
+    except json.JSONDecodeError as error:
+        recovered = _recover_last_json_object(raw_output)
+        if recovered is None:
+            raise ValueError(f"invalid_json:{error.msg}") from error
+        return recovered
+
+
+def _recover_last_json_object(raw_output: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    index = 0
+    last_object: dict[str, Any] | None = None
+    last_execution_like: dict[str, Any] | None = None
+
+    while index < len(raw_output):
+        try:
+            parsed, end_index = decoder.raw_decode(raw_output, index)
+        except json.JSONDecodeError:
+            index += 1
+            continue
+
+        if isinstance(parsed, dict):
+            last_object = parsed
+            if _REQUIRED_TOP_LEVEL_KEYS.issubset(set(parsed)):
+                last_execution_like = parsed
+
+        index = end_index
+
+    return last_execution_like or last_object
 
 
 def _task_payload(task: RoutedTask) -> dict[str, Any]:
