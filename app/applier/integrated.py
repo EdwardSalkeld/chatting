@@ -225,20 +225,22 @@ def _format_email_reply(
     message: OutboundMessage,
     envelope: TaskEnvelope | None,
 ) -> tuple[str | None, str]:
+    cleaned_body = _strip_leading_subject_line(message.body)
+
     if envelope is None or envelope.source != "email":
-        return None, message.body
+        return None, cleaned_body
 
     original_subject, original_body = _parse_email_envelope_content(envelope.content)
     reply_subject = _to_reply_subject(original_subject)
     if not original_body:
-        return reply_subject, message.body
+        return reply_subject, cleaned_body
 
     quoted_original = "\n".join(f"> {line}" for line in original_body.splitlines())
     if not quoted_original:
-        return reply_subject, message.body
+        return reply_subject, cleaned_body
 
     reply_body = (
-        f"{message.body.rstrip()}\n\n"
+        f"{cleaned_body.rstrip()}\n\n"
         "Original message:\n"
         f"{quoted_original}\n"
     )
@@ -258,6 +260,19 @@ def _to_reply_subject(subject: str) -> str:
     if subject.lower().startswith("re:"):
         return subject
     return f"Re: {subject}"
+
+
+def _strip_leading_subject_line(body: str) -> str:
+    stripped = body.lstrip()
+    if not stripped.lower().startswith("subject:"):
+        return body
+
+    first_line, _, remainder = stripped.partition("\n")
+    subject_candidate = first_line.removeprefix("Subject:").strip()
+    if not subject_candidate:
+        return body
+
+    return remainder.lstrip() or body
 
 
 def _default_http_post_json(

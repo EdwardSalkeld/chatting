@@ -138,6 +138,37 @@ class IntegratedApplierTests(unittest.TestCase):
             self.assertIn("Original message:", body)
             self.assertIn("> Can you summarize the key points?", body)
 
+    def test_apply_email_reply_strips_subject_line_from_body(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingEmailSender(sent=[])
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="email",
+                        target="alice@example.com",
+                        body="Subject: Re: Ice-cream\n\nGreat choice. Let's go classic.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+            envelope = _email_envelope(
+                subject="Ice-cream",
+                body="Yes please, let's focus on classic",
+            )
+
+            IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(
+                decision,
+                envelope=envelope,
+            )
+
+            _, body, subject = sender.sent[0]
+            self.assertEqual(subject, "Re: Ice-cream")
+            self.assertFalse(body.lstrip().startswith("Subject:"))
+            self.assertIn("Great choice. Let's go classic.", body)
+
     def test_apply_dispatches_telegram_message_with_sender(self) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _RecordingTelegramSender(sent=[])
