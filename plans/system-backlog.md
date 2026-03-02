@@ -64,11 +64,15 @@ Progress notes:
 - [x] Human approval workflow for sensitive actions
 - [x] Metrics endpoint and dashboard starter
 - [x] Config versioning + rollback command
+- [ ] Service installation path (`systemd` unit, runtime user, restart policy, log routing)
+- [ ] Runtime config strategy for services (move env-only settings into managed config file and/or `EnvironmentFile`)
 
 ## P2 (Nice to Have)
 - [x] Telegram connector + outbound dispatch path
 - [x] Slack connector
 - [x] Webhook connector
+- [ ] Producer/worker split design using an SQS-like broker (separate enqueue/result-delivery process and task-runner process)
+- [ ] Request/response queue contract design (at least task queue + result queue, ack/retry/DLQ semantics)
 
 ## Non-Goals
 - Distributed queue backends (Redis/SQS)
@@ -96,3 +100,4 @@ Planning notes:
 - 2026-03-01: Added operability metrics surfaces in `app.main`: JSON metrics query mode (`--list-metrics`) plus lightweight HTTP endpoint (`--serve-metrics`, `/metrics`) and starter dashboard (`/dashboard`) computed from persisted run records.
 - 2026-03-01: Added new canonical connector modules for Slack and webhook sources (`app.connectors.SlackConnector`, `app.connectors.WebhookConnector`) with protocol conformance and unit test coverage.
 - 2026-03-01: Confirmed project scope as private single-user operation; removed distributed scaling roadmap items from active backlog and documentation.
+- 2026-03-01: Added forward-looking operability planning items for service deployment (`systemd` installation + config management strategy) and a broker-backed producer/worker split design (`task` + `result` queues) as deferred architecture work.

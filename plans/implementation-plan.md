@@ -156,6 +156,24 @@ Progress notes:
 - 2026-03-01: Completed Telegram integration baseline (inbound connector + outbound dispatch + live runtime/config wiring + smoke-run docs) via `app.connectors.TelegramConnector`, `TelegramMessageSender`, `app.main` Telegram config branch, and regression coverage in `tests.test_connectors`, `tests.test_applier`, and `tests.test_main`.
 - 2026-03-01: Added Phase 5 connector expansion foundations for Slack and webhook sources (`SlackConnector`, `WebhookConnector`) with canonical `TaskEnvelope` normalization and connector protocol conformance tests.
 
+## Phase 6: Service + Process Split Planning (Deferred)
+Duration: 2-4 days (design only)
+
+Deliverables:
+- `systemd` deployment plan: unit template, runtime user/group, restart strategy, logging strategy, and operational runbook
+- Runtime config migration plan for service mode: prefer managed config file; define when `EnvironmentFile` is still appropriate
+- Producer/worker split architecture proposal for an SQS-like broker integration
+- Queue contract for asynchronous request/response flow (at minimum `task` queue and `result` queue), including ack/retry/dead-letter expectations
+
+Acceptance criteria:
+- A local operator can install and run the service via documented `systemd` commands without ad hoc shell setup
+- Service-mode configuration can be supplied without relying on interactive shell environment variables
+- Broker split proposal defines process boundaries, message envelopes, idempotency keys, and failure-handling rules
+- Proposal includes migration path from current in-process queue to broker-backed queues without breaking existing audit/run-history contracts
+
+Progress notes:
+- 2026-03-01: Phase added as deferred planning scope only; implementation intentionally not started.
+
 ## Cross-Cutting Test Plan
 - Unit tests: models, router, policy, parser
 - Integration tests: connector -> queue -> executor -> applier
