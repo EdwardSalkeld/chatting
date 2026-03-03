@@ -351,8 +351,41 @@ class TelegramMessageSenderTests(unittest.TestCase):
             call_url,
             "https://api.telegram.org/bottoken/sendMessage",
         )
-        self.assertEqual(call_payload, {"chat_id": "12345", "text": "hello"})
+        self.assertEqual(
+            call_payload,
+            {"chat_id": "12345", "text": "hello", "parse_mode": "Markdown"},
+        )
         self.assertEqual(call_timeout, 10.0)
+
+    def test_send_retries_without_parse_mode_when_telegram_rejects_entities(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            if len(seen_calls) == 1:
+                return {"ok": False, "description": "Bad Request: can't parse entities"}
+            return {"ok": True, "result": {"message_id": 2}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send("12345", "hello")
+
+        self.assertEqual(len(seen_calls), 2)
+        self.assertEqual(
+            seen_calls[0][1],
+            {"chat_id": "12345", "text": "hello", "parse_mode": "Markdown"},
+        )
+        self.assertEqual(
+            seen_calls[1][1],
+            {"chat_id": "12345", "text": "hello"},
+        )
 
     def test_send_raises_when_response_not_ok(self) -> None:
         sender = TelegramMessageSender(

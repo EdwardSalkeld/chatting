@@ -95,6 +95,7 @@ class TelegramMessageSender:
 
     bot_token: str
     api_base_url: str = "https://api.telegram.org"
+    parse_mode: str | None = "Markdown"
     timeout_seconds: float = 10.0
     http_post_json: Callable[[str, dict[str, object], float], dict[str, object]] | None = None
 
@@ -103,6 +104,8 @@ class TelegramMessageSender:
             raise ValueError("bot_token is required")
         if not self.api_base_url:
             raise ValueError("api_base_url is required")
+        if self.parse_mode is not None and self.parse_mode not in {"Markdown", "MarkdownV2", "HTML"}:
+            raise ValueError("parse_mode must be one of Markdown, MarkdownV2, HTML, or None")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -114,13 +117,21 @@ class TelegramMessageSender:
 
         client = self.http_post_json or _default_http_post_json
         url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/sendMessage"
-        response = client(
-            url,
-            {"chat_id": target, "text": body},
-            self.timeout_seconds,
-        )
-        if response.get("ok") is not True:
-            raise RuntimeError("telegram_send_failed")
+        payload: dict[str, object] = {"chat_id": target, "text": body}
+        if self.parse_mode is not None:
+            payload["parse_mode"] = self.parse_mode
+        response = client(url, payload, self.timeout_seconds)
+        if response.get("ok") is True:
+            return
+
+        # Gracefully degrade to plain text when Telegram rejects formatting entities.
+        if self.parse_mode is not None and _is_telegram_parse_mode_error(response):
+            plain_text_payload = {"chat_id": target, "text": body}
+            fallback_response = client(url, plain_text_payload, self.timeout_seconds)
+            if fallback_response.get("ok") is True:
+                return
+
+        raise RuntimeError("telegram_send_failed")
 
 
 @dataclass(frozen=True)
@@ -346,6 +357,14 @@ def _default_http_post_json(
     if not isinstance(parsed, dict):
         raise RuntimeError("telegram_invalid_response_shape")
     return parsed
+
+
+def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
+    description = response.get("description")
+    if not isinstance(description, str):
+        return False
+    normalized = description.lower()
+    return "parse entities" in normalized
 
 
 __all__ = [
