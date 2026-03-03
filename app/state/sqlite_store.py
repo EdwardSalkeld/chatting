@@ -121,6 +121,19 @@ class SQLiteStateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_turns (
+                    turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    run_id TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             connection.commit()
 
     def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
@@ -684,6 +697,71 @@ class SQLiteStateStore:
             )
             connection.commit()
             return int(cursor.lastrowid)
+
+    def append_conversation_turn(
+        self,
+        *,
+        channel: str,
+        target: str,
+        role: str,
+        content: str,
+        run_id: str | None = None,
+    ) -> None:
+        if not channel:
+            raise ValueError("channel is required")
+        if not target:
+            raise ValueError("target is required")
+        if role not in {"user", "assistant"}:
+            raise ValueError("role must be user or assistant")
+        if not content.strip():
+            raise ValueError("content is required")
+        if run_id is not None and not run_id:
+            raise ValueError("run_id must not be empty")
+
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO conversation_turns (
+                    channel,
+                    target,
+                    role,
+                    content,
+                    run_id,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (channel, target, role, content, run_id, created_at),
+            )
+            connection.commit()
+
+    def list_recent_conversation_turns(
+        self,
+        *,
+        channel: str,
+        target: str,
+        limit: int,
+    ) -> list[tuple[str, str]]:
+        if not channel:
+            raise ValueError("channel is required")
+        if not target:
+            raise ValueError("target is required")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT role, content
+                FROM conversation_turns
+                WHERE channel = ? AND target = ?
+                ORDER BY turn_id DESC
+                LIMIT ?
+                """,
+                (channel, target, limit),
+            ).fetchall()
+        return [(row["role"], row["content"]) for row in reversed(rows)]
 
 
 def _parse_rfc3339_utc(value: str) -> datetime:

@@ -88,5 +88,25 @@ class StateStore(Protocol):
     def rollback_config_version(self, version_id: int) -> int:
         """Rollback one config version and return the new rollback version ID."""
 
+    def append_conversation_turn(
+        self,
+        *,
+        channel: str,
+        target: str,
+        role: str,
+        content: str,
+        run_id: str | None = None,
+    ) -> None:
+        """Persist one conversation turn for channel/target memory."""
+
+    def list_recent_conversation_turns(
+        self,
+        *,
+        channel: str,
+        target: str,
+        limit: int,
+    ) -> list[tuple[str, str]]:
+        """Return recent conversation turns as (role, content), oldest first."""
+
 
 __all__ = ["StateStore"]

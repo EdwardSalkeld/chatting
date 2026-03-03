@@ -173,6 +173,46 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(versions[1].version_id, rollback_version_id)
             self.assertEqual(versions[1].source, "rollback")
 
+    def test_conversation_turns_roundtrip_scoped_by_channel_and_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+
+            store.append_conversation_turn(
+                channel="telegram",
+                target="chat-1",
+                role="user",
+                content="What country is Paris in?",
+                run_id="run:telegram:1",
+            )
+            store.append_conversation_turn(
+                channel="telegram",
+                target="chat-1",
+                role="assistant",
+                content="Paris is in France.",
+                run_id="run:telegram:1",
+            )
+            store.append_conversation_turn(
+                channel="telegram",
+                target="chat-2",
+                role="user",
+                content="Should not appear in chat-1 history.",
+                run_id="run:telegram:2",
+            )
+
+            turns = store.list_recent_conversation_turns(
+                channel="telegram",
+                target="chat-1",
+                limit=8,
+            )
+            self.assertEqual(
+                turns,
+                [
+                    ("user", "What country is Paris in?"),
+                    ("assistant", "Paris is in France."),
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

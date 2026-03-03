@@ -84,6 +84,7 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
     }
 )
 REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "interval_seconds", "job_name"})
+TELEGRAM_MEMORY_TURN_LIMIT = 20
 
 
 def _is_int_like(value: object) -> bool:
@@ -304,8 +305,24 @@ def _process_envelope(
     trace_reference = envelope.id if run_id_suffix is None else base_run_id
     trace_id = f"trace:{trace_reference}"
 
+    task_envelope = envelope
+    store_telegram_memory = _should_store_telegram_memory(envelope)
+    if store_telegram_memory:
+        task_envelope = _enrich_telegram_envelope_with_memory(
+            store=store,
+            envelope=envelope,
+            turn_limit=TELEGRAM_MEMORY_TURN_LIMIT,
+        )
+        store.append_conversation_turn(
+            channel="telegram",
+            target=envelope.reply_channel.target,
+            role="user",
+            content=envelope.content,
+            run_id=base_run_id,
+        )
+
     started = time.perf_counter()
-    task = router.route(envelope)
+    task = router.route(task_envelope)
     reason_codes: list[str] = []
     result_status = "dead_letter"
     approved_action_count = 0
@@ -349,6 +366,19 @@ def _process_envelope(
                 )
             apply_result = applier.apply(decision, envelope=envelope)
             apply_result_payload = apply_result.to_dict()
+            if store_telegram_memory:
+                for message in apply_result.dispatched_messages:
+                    if message.channel != "telegram":
+                        continue
+                    if message.target != envelope.reply_channel.target:
+                        continue
+                    store.append_conversation_turn(
+                        channel="telegram",
+                        target=message.target,
+                        role="assistant",
+                        content=message.body,
+                        run_id=base_run_id,
+                    )
             reason_codes = decision.reason_codes
             approved_action_count = len(decision.approved_actions)
             blocked_action_count = len(decision.blocked_actions)
@@ -497,6 +527,49 @@ def _result_status(reason_codes: list[str]) -> str:
     if "executor_reported_errors" in reason_codes:
         return "execution_error"
     return "success"
+
+
+def _should_store_telegram_memory(envelope: TaskEnvelope) -> bool:
+    return envelope.reply_channel.type == "telegram"
+
+
+def _enrich_telegram_envelope_with_memory(
+    *,
+    store: StateStore,
+    envelope: TaskEnvelope,
+    turn_limit: int,
+) -> TaskEnvelope:
+    turns = store.list_recent_conversation_turns(
+        channel="telegram",
+        target=envelope.reply_channel.target,
+        limit=turn_limit,
+    )
+    if not turns:
+        return envelope
+
+    lines = ["Recent conversation context (oldest first):"]
+    for role, content in turns:
+        lines.append(f"{role}: {content}")
+    lines.extend(
+        [
+            "",
+            "Current user message:",
+            envelope.content,
+        ]
+    )
+    return TaskEnvelope(
+        id=envelope.id,
+        source=envelope.source,
+        received_at=envelope.received_at,
+        actor=envelope.actor,
+        content="\n".join(lines),
+        attachments=envelope.attachments,
+        context_refs=envelope.context_refs,
+        policy_profile=envelope.policy_profile,
+        reply_channel=envelope.reply_channel,
+        dedupe_key=envelope.dedupe_key,
+        schema_version=envelope.schema_version,
+    )
 
 
 def _parse_args() -> argparse.Namespace:

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.executor import StubExecutor
-from app.models import ConfigUpdate, ExecutionResult, RoutedTask, TaskEnvelope
+from app.models import ConfigUpdate, ExecutionResult, OutboundMessage, ReplyChannel, RoutedTask, TaskEnvelope
 from app.main import main, run_bootstrap, run_live
 from app.connectors import EmailMessage, FakeEmailConnector, TelegramConnector
 from app.applier import TelegramMessageSender
@@ -53,6 +53,37 @@ class PendingReviewExecutor:
             messages=[],
             actions=[],
             config_updates=[ConfigUpdate(path="secrets.api_key", value="new-secret")],
+            requires_human_review=False,
+            errors=[],
+        )
+
+
+@dataclass
+class RecordingTelegramExecutor:
+    """Executor that captures incoming task content and emits Telegram replies."""
+
+    seen_contents: list[str] = field(default_factory=list)
+
+    def execute(self, task: RoutedTask):
+        self.seen_contents.append(task.content or "")
+        if task.reply_channel is None:
+            return ExecutionResult(
+                messages=[],
+                actions=[],
+                config_updates=[],
+                requires_human_review=False,
+                errors=[],
+            )
+        return ExecutionResult(
+            messages=[
+                OutboundMessage(
+                    channel=task.reply_channel.type,
+                    target=task.reply_channel.target,
+                    body=f"ack: {task.envelope_id}",
+                )
+            ],
+            actions=[],
+            config_updates=[],
             requires_human_review=False,
             errors=[],
         )
@@ -283,6 +314,14 @@ class OneShotConnector:
         return list(self.envelopes)
 
 
+@dataclass
+class RecordingTelegramSender:
+    sent: list[tuple[str, str]] = field(default_factory=list)
+
+    def send(self, target: str, body: str) -> None:
+        self.sent.append((target, body))
+
+
 class MainLiveFlowTests(unittest.TestCase):
     def test_run_live_processes_connector_envelopes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -335,6 +374,40 @@ class MainLiveFlowTests(unittest.TestCase):
 
             self.assertEqual(len(runs), 2)
             self.assertEqual({run.envelope_id for run in runs}, {"email:dlq-1", "email:dlq-2"})
+
+    def test_run_live_includes_recent_telegram_conversation_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            executor = RecordingTelegramExecutor()
+            telegram_sender = RecordingTelegramSender()
+            envelopes = [
+                _telegram_envelope(event_id="telegram:1", content="What country is Paris in?"),
+                _telegram_envelope(event_id="telegram:2", content="What continent is that in?"),
+            ]
+
+            runs = run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=envelopes)],
+                executor=executor,
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                telegram_sender=telegram_sender,
+            )
+
+            self.assertEqual(len(runs), 2)
+            self.assertEqual(
+                telegram_sender.sent,
+                [("8605042448", "ack: telegram:1"), ("8605042448", "ack: telegram:2")],
+            )
+            self.assertEqual(len(executor.seen_contents), 2)
+            self.assertEqual(executor.seen_contents[0], "What country is Paris in?")
+            self.assertIn("Recent conversation context (oldest first):", executor.seen_contents[1])
+            self.assertIn("user: What country is Paris in?", executor.seen_contents[1])
+            self.assertIn("assistant: ack: telegram:1", executor.seen_contents[1])
+            self.assertIn("Current user message:", executor.seen_contents[1])
+            self.assertIn("What continent is that in?", executor.seen_contents[1])
 
 
 class MainCliTests(unittest.TestCase):
@@ -1236,6 +1309,21 @@ def _single_email_envelope() -> TaskEnvelope:
             )
         ]
     ).poll()[0]
+
+
+def _telegram_envelope(*, event_id: str, content: str) -> TaskEnvelope:
+    return TaskEnvelope(
+        id=event_id,
+        source="im",
+        received_at=datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc),
+        actor="8605042448:edsalkeld",
+        content=content,
+        attachments=[],
+        context_refs=["repo:/home/edward/chatting"],
+        policy_profile="default",
+        reply_channel=ReplyChannel(type="telegram", target="8605042448"),
+        dedupe_key=event_id,
+    )
 
 
 if __name__ == "__main__":
