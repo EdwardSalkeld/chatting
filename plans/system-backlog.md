@@ -64,8 +64,8 @@ Progress notes:
 - [x] Human approval workflow for sensitive actions
 - [x] Metrics endpoint and dashboard starter
 - [x] Config versioning + rollback command
-- [ ] Service installation path (`systemd` unit, runtime user, restart policy, log routing)
-- [ ] Runtime config strategy for services (move env-only settings into managed config file and/or `EnvironmentFile`)
+- [x] Service installation path (`systemd` unit, runtime user, restart policy, log routing)
+- [x] Runtime config strategy for services (move env-only settings into managed config file and/or `EnvironmentFile`)
 
 ## P2 (Nice to Have)
 - [x] Telegram connector + outbound dispatch path
@@ -101,3 +101,4 @@ Planning notes:
 - 2026-03-01: Added new canonical connector modules for Slack and webhook sources (`app.connectors.SlackConnector`, `app.connectors.WebhookConnector`) with protocol conformance and unit test coverage.
 - 2026-03-01: Confirmed project scope as private single-user operation; removed distributed scaling roadmap items from active backlog and documentation.
 - 2026-03-01: Added forward-looking operability planning items for service deployment (`systemd` installation + config management strategy) and a broker-backed producer/worker split design (`task` + `result` queues) as deferred architecture work.
+- 2026-03-03: Added concrete service deployment artifacts for live mode: `deploy/systemd/chatting-live.service` (runtime user, restart policy, log routing to journald) and managed service env template `configs/chatting-live.env.example`; documented install/enable/log/restart runbook in `docs/run-live.md`.

@@ -173,6 +173,7 @@ Acceptance criteria:
 
 Progress notes:
 - 2026-03-01: Phase added as deferred planning scope only; implementation intentionally not started.
+- 2026-03-03: Added initial `systemd` deployment implementation for live mode with `deploy/systemd/chatting-live.service` (runtime user/group, restart policy, journald log routing) and managed `EnvironmentFile` template (`configs/chatting-live.env.example`), plus operator runbook steps in `docs/run-live.md`.
 
 ## Cross-Cutting Test Plan
 - Unit tests: models, router, policy, parser

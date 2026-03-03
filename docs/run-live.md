@@ -58,3 +58,38 @@ python3 -m app.main --run-live --config configs/live-runtime.example.json
 - Add one or more `--context-ref` flags to append extra context refs beyond config.
 - Run `python3 -m app.main --db-path /tmp/chatting-live.db --list-metrics` to output run metrics JSON.
 - Run `python3 -m app.main --db-path /tmp/chatting-live.db --serve-metrics --metrics-port 8080` to expose `/metrics` and `/dashboard`.
+
+## 6) Run as a `systemd` service
+
+Use the bundled unit template [chatting-live.service](/home/edward/chatting/deploy/systemd/chatting-live.service)
+and environment template [chatting-live.env.example](/home/edward/chatting/configs/chatting-live.env.example).
+
+1. Create the runtime environment file (no `export` prefixes):
+
+```bash
+cp /home/edward/chatting/configs/chatting-live.env.example /home/edward/chatting/configs/chatting-live.env
+chmod 600 /home/edward/chatting/configs/chatting-live.env
+```
+
+2. Edit `/home/edward/chatting/configs/chatting-live.env` and set real secret values.
+
+3. Install and start the service:
+
+```bash
+sudo cp /home/edward/chatting/deploy/systemd/chatting-live.service /etc/systemd/system/chatting-live.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now chatting-live.service
+```
+
+4. Check service status and logs:
+
+```bash
+systemctl status chatting-live.service --no-pager
+journalctl -u chatting-live.service -f
+```
+
+5. Restart after config/code updates:
+
+```bash
+sudo systemctl restart chatting-live.service
+```
