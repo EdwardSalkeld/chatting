@@ -16,6 +16,8 @@ from app.models import (
     ConfigUpdateDecision,
     OutboundMessage,
     PolicyDecision,
+    ReplyChannel,
+    TaskEnvelope,
 )
 
 
@@ -254,6 +256,51 @@ class IntegratedApplierTests(unittest.TestCase):
 
             self.assertEqual(result.dispatched_messages, [])
             self.assertEqual(result.reason_codes, ["telegram_dispatch_not_configured"])
+
+    def test_apply_maps_final_channel_to_envelope_reply_channel_for_telegram(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingTelegramSender(sent=[])
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="final",
+                        target="user",
+                        body="Answer from model.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+            envelope = TaskEnvelope(
+                id="telegram:test",
+                source="im",
+                received_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+                actor="8605042448:edsalkeld",
+                content="Question",
+                attachments=[],
+                context_refs=["repo:/home/edward/chatting"],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="telegram", target="8605042448"),
+                dedupe_key="telegram:test",
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                decision,
+                envelope=envelope,
+            )
+
+            self.assertEqual(sender.sent, [("8605042448", "Answer from model.")])
+            self.assertEqual(
+                [message.channel for message in result.dispatched_messages],
+                ["telegram"],
+            )
+            self.assertEqual(
+                [message.target for message in result.dispatched_messages],
+                ["8605042448"],
+            )
+            self.assertEqual(result.reason_codes, [])
 
 
 class SmtpEmailSenderTests(unittest.TestCase):

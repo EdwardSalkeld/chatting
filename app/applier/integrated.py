@@ -158,35 +158,70 @@ class IntegratedApplier:
                 reason_codes.append(str(error))
 
         for message in decision.approved_messages:
-            if message.channel == "log":
-                print(f"log_dispatch target={message.target} body={message.body}")
-                dispatched_messages.append(message)
+            dispatch_channel, dispatch_target = _resolve_dispatch_channel_and_target(
+                message=message,
+                envelope=envelope,
+            )
+            normalized_message = OutboundMessage(
+                channel=dispatch_channel,
+                target=dispatch_target,
+                body=message.body,
+            )
+
+            if dispatch_channel == "log":
+                print(f"log_dispatch target={dispatch_target} body={message.body}")
+                dispatched_messages.append(normalized_message)
                 continue
-            if message.channel == "email":
+            if dispatch_channel == "email":
                 if self.email_sender is None:
+                    print(
+                        "drop_dispatch "
+                        f"reason=email_dispatch_not_configured "
+                        f"channel={dispatch_channel} target={dispatch_target}"
+                    )
                     reason_codes.append("email_dispatch_not_configured")
                     continue
                 try:
                     reply_subject, reply_body = _format_email_reply(message, envelope)
                     self.email_sender.send(
-                        message.target,
+                        dispatch_target,
                         reply_body,
                         subject=reply_subject,
                     )
-                    dispatched_messages.append(message)
+                    dispatched_messages.append(normalized_message)
                 except Exception:  # noqa: BLE001
+                    print(
+                        "drop_dispatch "
+                        f"reason=email_dispatch_failed "
+                        f"channel={dispatch_channel} target={dispatch_target}"
+                    )
                     reason_codes.append("email_dispatch_failed")
                 continue
-            if message.channel == "telegram":
+            if dispatch_channel == "telegram":
                 if self.telegram_sender is None:
+                    print(
+                        "drop_dispatch "
+                        f"reason=telegram_dispatch_not_configured "
+                        f"channel={dispatch_channel} target={dispatch_target}"
+                    )
                     reason_codes.append("telegram_dispatch_not_configured")
                     continue
                 try:
-                    self.telegram_sender.send(message.target, message.body)
-                    dispatched_messages.append(message)
+                    self.telegram_sender.send(dispatch_target, message.body)
+                    dispatched_messages.append(normalized_message)
                 except Exception:  # noqa: BLE001
+                    print(
+                        "drop_dispatch "
+                        f"reason=telegram_dispatch_failed "
+                        f"channel={dispatch_channel} target={dispatch_target}"
+                    )
                     reason_codes.append("telegram_dispatch_failed")
                 continue
+            print(
+                "drop_dispatch "
+                f"reason=unsupported_message_channel "
+                f"channel={dispatch_channel} target={dispatch_target}"
+            )
             reason_codes.append("unsupported_message_channel")
 
         if decision.blocked_actions:
@@ -273,6 +308,18 @@ def _strip_leading_subject_line(body: str) -> str:
         return body
 
     return remainder.lstrip() or body
+
+
+def _resolve_dispatch_channel_and_target(
+    *,
+    message: OutboundMessage,
+    envelope: TaskEnvelope | None,
+) -> tuple[str, str]:
+    if message.channel != "final":
+        return message.channel, message.target
+    if envelope is None:
+        return message.channel, message.target
+    return envelope.reply_channel.type, envelope.reply_channel.target
 
 
 def _default_http_post_json(
