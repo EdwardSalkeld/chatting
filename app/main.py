@@ -80,6 +80,8 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
         "interval_seconds",
         "job_name",
         "policy_profile",
+        "reply_channel_target",
+        "reply_channel_type",
         "start_at",
     }
 )
@@ -1229,6 +1231,26 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
         if raw_start_at is not None and not isinstance(raw_start_at, str):
             raise ValueError(f"schedule job at index {index} start_at must be an RFC3339 string")
         start_at = _parse_optional_rfc3339(raw_start_at) if raw_start_at is not None else None
+
+        reply_channel_type = raw_job.get("reply_channel_type")
+        if reply_channel_type is not None and (
+            not isinstance(reply_channel_type, str) or not reply_channel_type.strip()
+        ):
+            raise ValueError(
+                f"schedule job at index {index} reply_channel_type must be a non-empty string"
+            )
+        reply_channel_target = raw_job.get("reply_channel_target")
+        if reply_channel_target is not None and (
+            not isinstance(reply_channel_target, str) or not reply_channel_target.strip()
+        ):
+            raise ValueError(
+                f"schedule job at index {index} reply_channel_target must be a non-empty string"
+            )
+        if (reply_channel_type is None) != (reply_channel_target is None):
+            raise ValueError(
+                f"schedule job at index {index} reply_channel_type and "
+                "reply_channel_target must be provided together"
+            )
         jobs.append(
             IntervalScheduleJob(
                 job_name=job_name.strip(),
@@ -1237,6 +1259,12 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 context_refs=list(raw_context_refs),
                 policy_profile=policy_profile.strip(),
                 start_at=start_at,
+                reply_channel_type=reply_channel_type.strip()
+                if isinstance(reply_channel_type, str)
+                else None,
+                reply_channel_target=reply_channel_target.strip()
+                if isinstance(reply_channel_target, str)
+                else None,
             )
         )
     return jobs

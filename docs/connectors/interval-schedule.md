@@ -16,13 +16,18 @@ Each job supports:
 - `context_refs` (optional list of non-empty strings)
 - `policy_profile` (optional, default `default`)
 - `start_at` (optional RFC3339 datetime)
+- `reply_channel_type` (optional non-empty string, requires `reply_channel_target`)
+- `reply_channel_target` (optional non-empty string, requires `reply_channel_type`)
 
 ## Output mapping
 
 - `source`: `cron`
 - `id` / `dedupe_key`: `cron:<job_name>:<scheduled_iso>`
-- `reply_channel`: `log:<job_name>`
+- `reply_channel`:
+  - default: `log:<job_name>`
+  - override: `<reply_channel_type>:<reply_channel_target>` when both override fields are set
 
 ## Notes
 
 - Startup validation is strict: unknown keys, missing keys, invalid types, blank fields, and invalid `start_at` values are rejected.
+- `reply_channel_type` and `reply_channel_target` must be provided together.

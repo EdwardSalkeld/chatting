@@ -20,6 +20,11 @@ export CHATTING_TELEGRAM_BOT_TOKEN='your-telegram-bot-token'
 Use [configs/live-schedule.example.json](/home/edward/chatting/configs/live-schedule.example.json) as a template.
 Use [configs/live-runtime.example.json](/home/edward/chatting/configs/live-runtime.example.json) as the main runtime config template.
 
+To have scheduled jobs send responses to Telegram (instead of logs), set both:
+- `reply_channel_type` (for example `telegram`)
+- `reply_channel_target` (for example your Telegram chat ID)
+on each schedule job that should route to Telegram.
+
 ## 3) Smoke run (short command, no Codex dependency)
 
 Runs one loop with the stub executor while still using real scheduler/IMAP/SMTP connectors.

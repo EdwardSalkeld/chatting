@@ -1035,6 +1035,72 @@ class MainCliTests(unittest.TestCase):
                 ):
                     main()
 
+    def test_main_rejects_schedule_job_with_only_reply_channel_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_file = Path(tmpdir) / "schedule.json"
+            schedule_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "ping",
+                            "interval_seconds": 60,
+                            "reply_channel_type": "telegram",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--schedule-file",
+                    str(schedule_file),
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "schedule job at index 0 reply_channel_type and reply_channel_target must be provided together",
+                ):
+                    main()
+
+    def test_main_rejects_schedule_job_with_only_reply_channel_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_file = Path(tmpdir) / "schedule.json"
+            schedule_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "ping",
+                            "interval_seconds": 60,
+                            "reply_channel_target": "8605042448",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "sys.argv",
+                [
+                    "app.main",
+                    "--run-live",
+                    "--schedule-file",
+                    str(schedule_file),
+                    "--max-loops",
+                    "1",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "schedule job at index 0 reply_channel_type and reply_channel_target must be provided together",
+                ):
+                    main()
+
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")

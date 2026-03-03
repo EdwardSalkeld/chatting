@@ -19,6 +19,8 @@ class IntervalScheduleJob:
     context_refs: list[str]
     policy_profile: str = "default"
     start_at: datetime | None = None
+    reply_channel_type: str | None = None
+    reply_channel_target: str | None = None
 
     def __post_init__(self) -> None:
         if not self.job_name:
@@ -29,6 +31,14 @@ class IntervalScheduleJob:
             raise ValueError("interval_seconds must be positive")
         if self.start_at is not None and self.start_at.tzinfo is None:
             raise ValueError("start_at must be timezone-aware")
+        if self.reply_channel_type is not None and not self.reply_channel_type.strip():
+            raise ValueError("reply_channel_type must be non-empty when provided")
+        if self.reply_channel_target is not None and not self.reply_channel_target.strip():
+            raise ValueError("reply_channel_target must be non-empty when provided")
+        if (self.reply_channel_type is None) != (self.reply_channel_target is None):
+            raise ValueError(
+                "reply_channel_type and reply_channel_target must be provided together"
+            )
 
 
 class IntervalScheduleConnector:
@@ -61,6 +71,7 @@ class IntervalScheduleConnector:
                 continue
 
             event_id = f"cron:{job.job_name}:{next_run_at.isoformat()}"
+            reply_channel = _job_reply_channel(job)
             envelopes.append(
                 TaskEnvelope(
                     id=event_id,
@@ -71,7 +82,7 @@ class IntervalScheduleConnector:
                     attachments=[],
                     context_refs=job.context_refs,
                     policy_profile=job.policy_profile,
-                    reply_channel=ReplyChannel(type="log", target=job.job_name),
+                    reply_channel=reply_channel,
                     dedupe_key=event_id,
                 )
             )
@@ -96,6 +107,15 @@ def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _job_reply_channel(job: IntervalScheduleJob) -> ReplyChannel:
+    if job.reply_channel_type is None or job.reply_channel_target is None:
+        return ReplyChannel(type="log", target=job.job_name)
+    return ReplyChannel(
+        type=job.reply_channel_type.strip(),
+        target=job.reply_channel_target.strip(),
+    )
 
 
 __all__ = ["IntervalScheduleJob", "IntervalScheduleConnector"]

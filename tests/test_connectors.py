@@ -147,6 +147,29 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
                 context_refs=[],
             )
 
+    def test_poll_allows_custom_reply_channel_for_scheduled_job(self) -> None:
+        clock = _MutableClock(datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc))
+        connector = IntervalScheduleConnector(
+            jobs=[
+                IntervalScheduleJob(
+                    job_name="morning-weather",
+                    content="Check weather in Leeds",
+                    interval_seconds=60,
+                    start_at=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+                    context_refs=["repo:/home/edward/chatting"],
+                    reply_channel_type="telegram",
+                    reply_channel_target="8605042448",
+                )
+            ],
+            now_provider=clock.now,
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(envelopes[0].reply_channel.type, "telegram")
+        self.assertEqual(envelopes[0].reply_channel.target, "8605042448")
+
 
 class ImapEmailConnectorTests(unittest.TestCase):
     def test_poll_normalizes_imap_messages_to_envelopes(self) -> None:
