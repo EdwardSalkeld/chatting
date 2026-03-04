@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import smtplib
 import json
+import logging
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision, TaskEnvelope
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EmailSender(Protocol):
@@ -180,15 +183,15 @@ class IntegratedApplier:
             )
 
             if dispatch_channel == "log":
-                print(f"log_dispatch target={dispatch_target} body={message.body}")
+                LOGGER.info("log_dispatch target=%s body=%s", dispatch_target, message.body)
                 dispatched_messages.append(normalized_message)
                 continue
             if dispatch_channel == "email":
                 if self.email_sender is None:
-                    print(
-                        "drop_dispatch "
-                        f"reason=email_dispatch_not_configured "
-                        f"channel={dispatch_channel} target={dispatch_target}"
+                    LOGGER.warning(
+                        "drop_dispatch reason=email_dispatch_not_configured channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
                     )
                     reason_codes.append("email_dispatch_not_configured")
                     continue
@@ -201,19 +204,19 @@ class IntegratedApplier:
                     )
                     dispatched_messages.append(normalized_message)
                 except Exception:  # noqa: BLE001
-                    print(
-                        "drop_dispatch "
-                        f"reason=email_dispatch_failed "
-                        f"channel={dispatch_channel} target={dispatch_target}"
+                    LOGGER.exception(
+                        "drop_dispatch reason=email_dispatch_failed channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
                     )
                     reason_codes.append("email_dispatch_failed")
                 continue
             if dispatch_channel == "telegram":
                 if self.telegram_sender is None:
-                    print(
-                        "drop_dispatch "
-                        f"reason=telegram_dispatch_not_configured "
-                        f"channel={dispatch_channel} target={dispatch_target}"
+                    LOGGER.warning(
+                        "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
                     )
                     reason_codes.append("telegram_dispatch_not_configured")
                     continue
@@ -221,17 +224,17 @@ class IntegratedApplier:
                     self.telegram_sender.send(dispatch_target, message.body)
                     dispatched_messages.append(normalized_message)
                 except Exception:  # noqa: BLE001
-                    print(
-                        "drop_dispatch "
-                        f"reason=telegram_dispatch_failed "
-                        f"channel={dispatch_channel} target={dispatch_target}"
+                    LOGGER.exception(
+                        "drop_dispatch reason=telegram_dispatch_failed channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
                     )
                     reason_codes.append("telegram_dispatch_failed")
                 continue
-            print(
-                "drop_dispatch "
-                f"reason=unsupported_message_channel "
-                f"channel={dispatch_channel} target={dispatch_target}"
+            LOGGER.warning(
+                "drop_dispatch reason=unsupported_message_channel channel=%s target=%s",
+                dispatch_channel,
+                dispatch_target,
             )
             reason_codes.append("unsupported_message_channel")
 
