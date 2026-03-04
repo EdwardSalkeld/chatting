@@ -94,7 +94,7 @@ class MainBootstrapFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
 
-            with self.assertLogs("app.main", level="INFO") as log_capture:
+            with self.assertLogs("app.main", level="INFO") as logs:
                 runs = run_bootstrap(db_path)
 
             self.assertEqual([run.source for run in runs], ["cron", "email", "email", "email"])
@@ -192,7 +192,11 @@ class MainBootstrapFlowTests(unittest.TestCase):
             self.assertEqual(duplicate_event.detail["attempt_count"], 0)
             self.assertEqual(duplicate_event.detail["last_error"], None)
 
-            observed_lines = [line for line in log_capture.output if "run_observed " in line]
+            observed_lines = [
+                line
+                for line in logs.output
+                if "run_observed " in line
+            ]
             self.assertEqual(len(observed_lines), 4)
             for line in observed_lines:
                 self.assertIn("trace_id=", line)
@@ -207,7 +211,7 @@ class MainBootstrapFlowTests(unittest.TestCase):
     def test_run_bootstrap_retries_transient_executor_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
-            with self.assertLogs("app.main", level="INFO") as log_capture:
+            with self.assertLogs("app.main", level="WARNING") as logs:
                 runs = run_bootstrap(
                     db_path,
                     executor=FlakyExecutor(fail_task_id="task:email:ok-1"),
@@ -218,10 +222,13 @@ class MainBootstrapFlowTests(unittest.TestCase):
                 [run.result_status for run in runs],
                 ["success", "success", "blocked_action", "duplicate_skipped"],
             )
-            self.assertIn(
-                "retry_scheduled trace_id=trace:email:ok-1 run_id=run:email:ok-1 attempt=1 next_attempt=2 max_attempts=2",
-                "\n".join(log_capture.output),
-            )
+            retry_lines = [line for line in logs.output if "retry_scheduled " in line]
+            self.assertEqual(len(retry_lines), 1)
+            self.assertIn("trace_id=trace:email:ok-1", retry_lines[0])
+            self.assertIn("run_id=run:email:ok-1", retry_lines[0])
+            self.assertIn("attempt=1", retry_lines[0])
+            self.assertIn("next_attempt=2", retry_lines[0])
+            self.assertIn("max_attempts=2", retry_lines[0])
 
             audit_events = SQLiteStateStore(db_path).list_audit_events()
             target_event = next(event for event in audit_events if event.run_id == "run:email:ok-1")
@@ -253,7 +260,7 @@ class MainBootstrapFlowTests(unittest.TestCase):
             db_path = str(Path(tmpdir) / "state.db")
             envelope = _single_email_envelope()
 
-            with self.assertLogs("app.main", level="INFO") as log_capture:
+            with self.assertLogs("app.main", level="ERROR") as logs:
                 runs = run_bootstrap(
                     db_path,
                     envelopes=[envelope],
@@ -263,10 +270,12 @@ class MainBootstrapFlowTests(unittest.TestCase):
 
             self.assertEqual(len(runs), 1)
             self.assertEqual(runs[0].result_status, "dead_letter")
-            self.assertIn(
-                "dead_letter trace_id=trace:email:dlq-1 run_id=run:email:dlq-1 attempts=2 max_attempts=2",
-                "\n".join(log_capture.output),
-            )
+            dead_letter_lines = [line for line in logs.output if "dead_letter " in line]
+            self.assertEqual(len(dead_letter_lines), 1)
+            self.assertIn("trace_id=trace:email:dlq-1", dead_letter_lines[0])
+            self.assertIn("run_id=run:email:dlq-1", dead_letter_lines[0])
+            self.assertIn("attempts=2", dead_letter_lines[0])
+            self.assertIn("max_attempts=2", dead_letter_lines[0])
 
             audit_events = SQLiteStateStore(db_path).list_audit_events()
             self.assertEqual(len(audit_events), 1)

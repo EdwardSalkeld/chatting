@@ -90,16 +90,15 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
 REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "interval_seconds", "job_name"})
 TELEGRAM_MEMORY_TURN_LIMIT = 20
 LOGGER = logging.getLogger(__name__)
-LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
 def _configure_logging() -> None:
+    if logging.getLogger().handlers:
+        return
     logging.basicConfig(
         level=logging.INFO,
-        format=LOG_FORMAT,
-        datefmt=LOG_DATE_FORMAT,
-        force=True,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
 
 

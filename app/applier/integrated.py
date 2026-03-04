@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import smtplib
 import json
 import logging
+import smtplib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
