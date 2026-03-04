@@ -26,7 +26,7 @@ class RuleBasedRouterTests(unittest.TestCase):
         self.assertEqual(task.envelope_id, envelope.id)
         self.assertEqual(task.workflow, "respond_and_optionally_edit")
         self.assertEqual(task.priority, "normal")
-        self.assertEqual(task.execution_constraints.timeout_seconds, 180)
+        self.assertEqual(task.execution_constraints.timeout_seconds, 1800)
         self.assertEqual(task.execution_constraints.max_tokens, 12000)
         self.assertEqual(task.policy_profile, "default")
         self.assertEqual(task.source, "email")

@@ -11,7 +11,7 @@ from app.models import ExecutionConstraints, RoutedTask, TaskEnvelope
 class RuleBasedRouter:
     """Map canonical envelopes to routed tasks using simple source rules."""
 
-    default_timeout_seconds: int = 180
+    default_timeout_seconds: int = 1800
     default_max_tokens: int = 12000
     cron_timeout_seconds: int = 120
     cron_max_tokens: int = 8000
