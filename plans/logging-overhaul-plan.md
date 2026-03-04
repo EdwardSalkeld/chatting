@@ -14,9 +14,9 @@ Replace runtime `print(...)` usage with structured `logging` calls, with timesta
 - [x] Preserve JSON CLI outputs via `stdout` for machine-readable commands.
 - [x] Update tests that asserted stdout logs to assert logging output instead.
 - [x] Run targeted tests (`tests.test_main.MainBootstrapFlowTests`, `tests.test_applier`).
-- [ ] Commit changes.
-- [ ] Push branch.
-- [ ] Open PR.
+- [x] Commit changes.
+- [x] Push branch.
+- [x] Open PR.
 
 ## Resume Notes
 - If interrupted, continue from the first unchecked item in the checklist.
