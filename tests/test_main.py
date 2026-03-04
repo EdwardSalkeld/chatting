@@ -410,6 +410,126 @@ class MainLiveFlowTests(unittest.TestCase):
             self.assertIn("What continent is that in?", executor.seen_contents[1])
 
 
+    def test_run_live_sends_error_notification_on_dead_letter(self) -> None:
+        """Error notification email is sent when executor error exhausts retries."""
+
+        @dataclass
+        class _RecordingEmailSender:
+            sent: list[tuple[str, str, str | None]] = field(default_factory=list)
+
+            def send(self, target: str, body: str, *, subject: str | None = None) -> None:
+                self.sent.append((target, body, subject))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            sender = _RecordingEmailSender()
+            envelope = FakeEmailConnector(
+                messages=[
+                    EmailMessage(
+                        provider_message_id="err-1",
+                        from_address="user@example.com",
+                        subject="Fail",
+                        body="trigger error",
+                        received_at=datetime(2026, 2, 27, 20, 0, tzinfo=timezone.utc),
+                        context_refs=["repo:/home/edward/chatting"],
+                    )
+                ]
+            ).poll()[0]
+
+            run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=[envelope])],
+                executor=AlwaysFailExecutor(),
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                email_sender=sender,
+                error_notify_email="admin@example.com",
+            )
+
+        self.assertEqual(len(sender.sent), 1)
+        notify_target, notify_body, notify_subject = sender.sent[0]
+        self.assertEqual(notify_target, "admin@example.com")
+        self.assertIn("run:email:err-1", notify_body)
+        self.assertIn("RuntimeError", notify_body)
+        self.assertIn("Executor error", notify_subject)
+
+    def test_run_live_skips_error_notification_when_no_email_sender(self) -> None:
+        """No error is raised and no notification is attempted when email_sender is None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            envelope = FakeEmailConnector(
+                messages=[
+                    EmailMessage(
+                        provider_message_id="err-2",
+                        from_address="user@example.com",
+                        subject="Fail",
+                        body="trigger error",
+                        received_at=datetime(2026, 2, 27, 20, 0, tzinfo=timezone.utc),
+                        context_refs=["repo:/home/edward/chatting"],
+                    )
+                ]
+            ).poll()[0]
+
+            runs = run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=[envelope])],
+                executor=AlwaysFailExecutor(),
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                email_sender=None,
+                error_notify_email="admin@example.com",
+            )
+
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].result_status, "dead_letter")
+
+    def test_run_live_skips_error_notification_when_no_notify_address(self) -> None:
+        """No notification email is sent when error_notify_email is not configured."""
+
+        @dataclass
+        class _RecordingEmailSender:
+            sent: list[tuple[str, str, str | None]] = field(default_factory=list)
+
+            def send(self, target: str, body: str, *, subject: str | None = None) -> None:
+                self.sent.append((target, body, subject))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            sender = _RecordingEmailSender()
+            envelope = FakeEmailConnector(
+                messages=[
+                    EmailMessage(
+                        provider_message_id="err-3",
+                        from_address="user@example.com",
+                        subject="Fail",
+                        body="trigger error",
+                        received_at=datetime(2026, 2, 27, 20, 0, tzinfo=timezone.utc),
+                        context_refs=["repo:/home/edward/chatting"],
+                    )
+                ]
+            ).poll()[0]
+
+            runs = run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=[envelope])],
+                executor=AlwaysFailExecutor(),
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                email_sender=sender,
+                error_notify_email=None,
+            )
+
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].result_status, "dead_letter")
+        self.assertEqual(sender.sent, [])
+
+
 class MainCliTests(unittest.TestCase):
     @patch("app.main.run_bootstrap")
     def test_main_passes_configured_max_attempts(self, run_bootstrap_mock) -> None:
@@ -1279,6 +1399,7 @@ class MainCliTests(unittest.TestCase):
             email_sender=None,
             telegram_sender=None,
             worker_count=1,
+            error_notify_email=None,
         )
 
     @patch("app.main._build_codex_executor")
