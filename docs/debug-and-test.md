@@ -6,6 +6,10 @@
 ```bash
 python3 -m unittest discover -s tests
 ```
+- CI-equivalent command (same as GitHub Actions workflow):
+```bash
+python3 -m unittest discover -s tests
+```
 - Main flow tests:
 ```bash
 python3 -m unittest tests.test_main
@@ -91,3 +95,9 @@ Use these with DB queries to correlate outcomes.
 2. Query runs + audit + dead letters.
 3. Replay dead letters with stub executor.
 4. Confirm replay result via `--list-runs` and dead-letter status via `--list-dead-letters`.
+
+## CI notes
+
+- Workflow file: `.github/workflows/ci.yml`
+- Triggers: push to `main`, and pull requests targeting `main`
+- Python version: `3.11`
