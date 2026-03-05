@@ -1104,20 +1104,23 @@ class MainCliTests(unittest.TestCase):
     def test_main_run_live_with_imap_requires_smtp_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
-            with patch(
-                "sys.argv",
-                [
-                    "app.main",
-                    "--run-live",
-                    "--db-path",
-                    db_path,
-                    "--imap-host",
-                    "imap.example.com",
-                    "--imap-username",
-                    "bot@example.com",
-                    "--max-loops",
-                    "1",
-                ],
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch(
+                    "sys.argv",
+                    [
+                        "app.main",
+                        "--run-live",
+                        "--db-path",
+                        db_path,
+                        "--imap-host",
+                        "imap.example.com",
+                        "--imap-username",
+                        "bot@example.com",
+                        "--max-loops",
+                        "1",
+                    ],
+                ),
             ):
                 with self.assertRaisesRegex(
                     ValueError, "--smtp-host is required when --imap-host is set"
@@ -1331,7 +1334,10 @@ class MainCliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]):
+            with (
+                patch.dict("os.environ", {"CHATTING_TELEGRAM_BOT_TOKEN": ""}, clear=False),
+                patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]),
+            ):
                 with self.assertRaisesRegex(
                     ValueError,
                     "missing Telegram bot token env var: CHATTING_TELEGRAM_BOT_TOKEN",
