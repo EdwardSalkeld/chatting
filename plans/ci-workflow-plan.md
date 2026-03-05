@@ -14,8 +14,8 @@ Add a GitHub Actions CI workflow that runs the project test suite on pull reques
 - [x] Add `.github/workflows/ci.yml` for Python unit tests.
 - [x] Run local validation of the same test command used in CI.
 - [x] Update docs with CI usage/expectations.
-- [ ] Push branch updates in small commits.
-- [ ] Open/refresh PR and post current status.
+- [x] Push branch updates in small commits.
+- [x] Open/refresh PR and post current status.
 
 ## Progress Log
 - 2026-03-04: Created `feat/ci-workflow` from `origin/main`.
@@ -23,7 +23,9 @@ Add a GitHub Actions CI workflow that runs the project test suite on pull reques
 - 2026-03-05: Added `.github/workflows/ci.yml` with push/PR to `main` triggers and unittest discovery execution on Python 3.11.
 - 2026-03-05: Fixed env-sensitive Telegram CLI test to be deterministic when `CHATTING_TELEGRAM_BOT_TOKEN` is set locally.
 - 2026-03-05: Added CI notes to `docs/debug-and-test.md` and linked workflow in `docs/README.md`.
+- 2026-03-05: Fixed CLI IMAP validation test isolation so local `CHATTING_CONFIG_PATH` does not cause real network attempts.
+- 2026-03-05: Opened PR `#9` (`https://github.com/brokensbone/chatting/pull/9`) from `feat/ci-workflow` to `main`.
 
 ## Resume Notes
-- Next action: run local validation command once more and push docs/test plan updates as separate small commits.
-- Keep commits small: deterministic test fix, docs/plan refresh, then push.
+- Next action: monitor CI checks on PR #9 and address reviewer feedback.
+- Keep follow-ups in small commits to preserve resumability.
