@@ -21,6 +21,7 @@ Add a GitHub Actions CI workflow that runs the project test suite on pull reques
 - 2026-03-04: Created `feat/ci-workflow` from `origin/main`.
 - 2026-03-04: Added initial plan/checklist for resumable execution.
 - 2026-03-05: Added `.github/workflows/ci.yml` with push/PR to `main` triggers and unittest discovery execution on Python 3.11.
+- 2026-03-05: Updated CI workflow baseline from Python 3.11 to 3.13.
 - 2026-03-05: Fixed env-sensitive Telegram CLI test to be deterministic when `CHATTING_TELEGRAM_BOT_TOKEN` is set locally.
 - 2026-03-05: Added CI notes to `docs/debug-and-test.md` and linked workflow in `docs/README.md`.
 - 2026-03-05: Fixed CLI IMAP validation test isolation so local `CHATTING_CONFIG_PATH` does not cause real network attempts.

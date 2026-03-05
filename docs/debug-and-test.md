@@ -100,4 +100,4 @@ Use these with DB queries to correlate outcomes.
 
 - Workflow file: `.github/workflows/ci.yml`
 - Triggers: push to `main`, and pull requests targeting `main`
-- Python version: `3.11`
+- Python version: `3.13`
