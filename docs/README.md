@@ -6,6 +6,10 @@
 - [Run Live Mode](/home/edward/chatting/docs/run-live.md)
 - [Debug And Test Guide](/home/edward/chatting/docs/debug-and-test.md)
 
+## CI
+
+- [GitHub Actions CI Workflow](/home/edward/chatting/.github/workflows/ci.yml)
+
 ## Connectors
 
 - [Connector Docs Index](/home/edward/chatting/docs/connectors/README.md)
