@@ -75,3 +75,4 @@ python3 -m app.main --run-live --config /tmp/chatting-live.json
 
 - `--config` values are used first; explicit CLI flags override config.
 - This project intentionally targets single-user reliability and auditability, not distributed scale.
+- For split-process operation with BBMB (`message-handler` + `worker`), see [Run Split Mode (BBMB)](/home/edward/chatting/docs/run-split-bbmb.md).

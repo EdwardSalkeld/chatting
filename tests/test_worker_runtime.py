@@ -48,6 +48,13 @@ class WriteFileExecutor:
         )
 
 
+@dataclass(frozen=True)
+class AlwaysFailExecutor:
+    def execute(self, task):
+        del task
+        raise RuntimeError("executor down")
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(
@@ -102,6 +109,22 @@ class WorkerRuntimeTests(unittest.TestCase):
                 "approved_actions_not_forwarded_to_egress",
                 audit_event.detail["reason_codes"],
             )
+
+    def test_process_task_message_retries_and_dead_letters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=AlwaysFailExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=2,
+            )
+
+            self.assertEqual(result.run_record.result_status, "dead_letter")
+            self.assertEqual(result.dead_lettered, True)
+            self.assertEqual(store.list_dead_letters()[0].reason_codes, ["retry_exhausted"])
 
 
 if __name__ == "__main__":

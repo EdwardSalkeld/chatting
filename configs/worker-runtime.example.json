@@ -1,0 +1,10 @@
+{
+  "db_path": "/tmp/chatting-worker.db",
+  "bbmb_address": "127.0.0.1:9876",
+  "max_attempts": 2,
+  "poll_timeout_seconds": 20,
+  "sleep_seconds": 1.0,
+  "max_loops": 1,
+  "codex_command": "codex exec --json",
+  "use_stub_executor": true
+}

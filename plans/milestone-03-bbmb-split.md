@@ -29,8 +29,8 @@ Split `chatting` into two runtime roles connected via BBMB queues so integration
 - [x] Implement worker consume/process/publish/ack loop from `chatting.tasks.v1` to `chatting.egress.v1`.
 - [x] Ensure worker strips/blocks egress-ineligible action types (`write_file` forwarding disabled).
 - [x] Persist worker run/audit/dead-letter state.
-- [ ] Add tests for multi-response egress publishing and retry semantics.
-- [ ] Commit.
+- [x] Add tests for multi-response egress publishing and retry semantics.
+- [x] Commit.
 
 ### Phase 3: Message Handler Split
 - [x] Add `app/main_message_handler.py` entrypoint.
@@ -39,13 +39,13 @@ Split `chatting` into two runtime roles connected via BBMB queues so integration
 - [x] Implement egress consume/validate/dispatch/ack loop from `chatting.egress.v1`.
 - [x] Enforce channel/target allowlist + task existence checks.
 - [x] Add tests for strict unknown-task drop and allowlist behavior.
-- [ ] Commit.
+- [x] Commit.
 
 ### Phase 4: Config + Docs + Ops
-- [ ] Add `configs/message-handler-runtime.example.json`.
-- [ ] Add `configs/worker-runtime.example.json`.
-- [ ] Add/update systemd units for message-handler and worker.
-- [ ] Update run docs with cross-machine topology and BBMB address settings.
+- [x] Add `configs/message-handler-runtime.example.json`.
+- [x] Add `configs/worker-runtime.example.json`.
+- [x] Add/update systemd units for message-handler and worker.
+- [x] Update run docs with cross-machine topology and BBMB address settings.
 - [ ] Commit.
 
 ### Phase 5: Compatibility + Cleanup
