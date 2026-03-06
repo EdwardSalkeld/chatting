@@ -134,6 +134,16 @@ class SQLiteStateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dispatched_events (
+                    run_id TEXT NOT NULL,
+                    event_index INTEGER NOT NULL,
+                    dispatched_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, event_index)
+                )
+                """
+            )
             connection.commit()
 
     def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
@@ -762,6 +772,37 @@ class SQLiteStateStore:
                 (channel, target, limit),
             ).fetchall()
         return [(row["role"], row["content"]) for row in reversed(rows)]
+
+    def mark_dispatched_event(self, *, run_id: str, event_index: int) -> None:
+        if not run_id:
+            raise ValueError("run_id is required")
+        if event_index < 0:
+            raise ValueError("event_index must be non-negative")
+        dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO dispatched_events (run_id, event_index, dispatched_at)
+                VALUES (?, ?, ?)
+                """,
+                (run_id, event_index, dispatched_at),
+            )
+            connection.commit()
+
+    def list_dispatched_event_indices(self, *, run_id: str) -> list[int]:
+        if not run_id:
+            raise ValueError("run_id is required")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT event_index
+                FROM dispatched_events
+                WHERE run_id = ?
+                ORDER BY event_index ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        return [int(row["event_index"]) for row in rows]
 
 
 def _parse_rfc3339_utc(value: str) -> datetime:

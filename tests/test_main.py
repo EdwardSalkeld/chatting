@@ -90,6 +90,24 @@ class RecordingTelegramExecutor:
         )
 
 
+@dataclass(frozen=True)
+class MultiUpdateTelegramExecutor:
+    """Executor that emits three ordered updates for one Telegram task."""
+
+    def execute(self, task: RoutedTask):
+        return ExecutionResult(
+            messages=[
+                OutboundMessage(channel="final", target="user", body="👀"),
+                OutboundMessage(channel="final", target="user", body="working on a pr"),
+                OutboundMessage(channel="final", target="user", body="done: https://example.com/pr/1"),
+            ],
+            actions=[],
+            config_updates=[],
+            requires_human_review=False,
+            errors=[],
+        )
+
+
 class MainBootstrapFlowTests(unittest.TestCase):
     def test_run_bootstrap_processes_unique_events_and_records_blocked_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -325,6 +343,18 @@ class RecordingTelegramSender:
         self.sent.append((target, body))
 
 
+@dataclass
+class FailSecondTelegramSendOnce:
+    sent: list[tuple[str, str]] = field(default_factory=list)
+    _failed: bool = False
+
+    def send(self, target: str, body: str) -> None:
+        if body == "working on a pr" and not self._failed:
+            self._failed = True
+            raise RuntimeError("simulated transient telegram failure")
+        self.sent.append((target, body))
+
+
 @dataclass(frozen=True)
 class FailingPolicyEngine:
     error_message: str = "policy evaluation failure"
@@ -420,6 +450,43 @@ class MainLiveFlowTests(unittest.TestCase):
             self.assertIn("Current user message:", executor.seen_contents[1])
             self.assertIn("What continent is that in?", executor.seen_contents[1])
 
+    def test_run_live_retries_multi_update_telegram_without_duplicate_prior_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            envelope = _telegram_envelope(event_id="telegram:multi-1", content="Do a thing")
+            sender = FailSecondTelegramSendOnce()
+
+            runs = run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=[envelope])],
+                executor=MultiUpdateTelegramExecutor(),
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                telegram_sender=sender,
+            )
+
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0].result_status, "success")
+            self.assertEqual(
+                sender.sent,
+                [
+                    ("8605042448", "👀"),
+                    ("8605042448", "working on a pr"),
+                    ("8605042448", "done: https://example.com/pr/1"),
+                ],
+            )
+
+            audit_events = SQLiteStateStore(db_path).list_audit_events()
+            self.assertEqual(len(audit_events), 1)
+            self.assertEqual(audit_events[0].detail["attempt_count"], 2)
+            self.assertEqual(audit_events[0].detail["dispatched_message_count"], 3)
+
+            dispatched_indices = SQLiteStateStore(db_path).list_dispatched_event_indices(
+                run_id="run:telegram:multi-1"
+            )
+            self.assertEqual(dispatched_indices, [0, 1, 2])
 
     def test_run_live_sends_error_notification_on_dead_letter(self) -> None:
         """Error notification email is sent when executor error exhausts retries."""

@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 from app.applier import (
     IntegratedApplier,
+    MessageDispatchError,
     NoOpApplier,
     SmtpEmailSender,
     TelegramMessageSender,
@@ -302,6 +303,29 @@ class IntegratedApplierTests(unittest.TestCase):
             )
             self.assertEqual(result.reason_codes, [])
 
+    def test_apply_raises_dispatch_error_with_partial_progress_on_telegram_failure(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _FailingTelegramSender()
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(channel="telegram", target="12345", body="👀"),
+                    OutboundMessage(channel="telegram", target="12345", body="working"),
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            with self.assertRaises(MessageDispatchError) as context:
+                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(context.exception.reason_code, "telegram_dispatch_failed")
+            self.assertEqual(
+                context.exception.dispatched_messages,
+                [OutboundMessage(channel="telegram", target="12345", body="👀")],
+            )
+
 
 class SmtpEmailSenderTests(unittest.TestCase):
     def test_send_uses_smtp_client(self) -> None:
@@ -419,6 +443,16 @@ class _RecordingTelegramSender:
 
     def send(self, target: str, body: str) -> None:
         self.sent.append((target, body))
+
+
+class _FailingTelegramSender:
+    def __init__(self) -> None:
+        self._count = 0
+
+    def send(self, target: str, body: str) -> None:
+        self._count += 1
+        if self._count == 2:
+            raise RuntimeError("simulated dispatch failure")
 
 
 def _email_envelope(*, subject: str, body: str):

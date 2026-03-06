@@ -108,5 +108,11 @@ class StateStore(Protocol):
     ) -> list[tuple[str, str]]:
         """Return recent conversation turns as (role, content), oldest first."""
 
+    def mark_dispatched_event(self, *, run_id: str, event_index: int) -> None:
+        """Persist one dispatched outbound event checkpoint for idempotent retry."""
+
+    def list_dispatched_event_indices(self, *, run_id: str) -> list[int]:
+        """Return dispatched event indexes for one run in ascending order."""
+
 
 __all__ = ["StateStore"]

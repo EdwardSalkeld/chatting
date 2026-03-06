@@ -18,6 +18,7 @@ from typing import Mapping, Sequence
 
 from app.applier import (
     IntegratedApplier,
+    MessageDispatchError,
     NoOpApplier,
     SmtpEmailSender,
     TelegramMessageSender,
@@ -35,7 +36,7 @@ from app.connectors import (
     TelegramConnector,
 )
 from app.executor import CodexExecutor, Executor, StubExecutor
-from app.models import AuditEvent, DeadLetterRecord, RunRecord, TaskEnvelope
+from app.models import AuditEvent, DeadLetterRecord, OutboundMessage, PolicyDecision, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.queue import InMemoryQueueBackend, QueueBackend
@@ -399,8 +400,36 @@ def _process_envelope(
                     config_path=update.path,
                     config_value=update.value,
                 )
+            dispatched_event_indices = store.list_dispatched_event_indices(run_id=base_run_id)
+            pending_message_start_index = _first_undelivered_event_index(dispatched_event_indices)
+            pending_messages = decision.approved_messages[pending_message_start_index:]
+            apply_decision = PolicyDecision(
+                approved_actions=decision.approved_actions,
+                blocked_actions=decision.blocked_actions,
+                approved_messages=pending_messages,
+                config_updates=decision.config_updates,
+                reason_codes=decision.reason_codes,
+                schema_version=decision.schema_version,
+            )
             error_stage = "applier"
-            apply_result = applier.apply(decision, envelope=envelope)
+            try:
+                apply_result = applier.apply(apply_decision, envelope=envelope)
+            except MessageDispatchError as dispatch_error:
+                for event_index in _resolve_dispatched_event_indices(
+                    original_messages=pending_messages,
+                    dispatched_messages=dispatch_error.dispatched_messages,
+                    envelope=envelope,
+                    start_index=pending_message_start_index,
+                ):
+                    store.mark_dispatched_event(run_id=base_run_id, event_index=event_index)
+                raise
+            for event_index in _resolve_dispatched_event_indices(
+                original_messages=pending_messages,
+                dispatched_messages=apply_result.dispatched_messages,
+                envelope=envelope,
+                start_index=pending_message_start_index,
+            ):
+                store.mark_dispatched_event(run_id=base_run_id, event_index=event_index)
             apply_result_payload = apply_result.to_dict()
             if store_telegram_memory:
                 for message in apply_result.dispatched_messages:
@@ -421,7 +450,9 @@ def _process_envelope(
             approved_message_count = len(decision.approved_messages)
             applied_action_count = len(apply_result.applied_actions)
             skipped_action_count = len(apply_result.skipped_actions)
-            dispatched_message_count = len(apply_result.dispatched_messages)
+            dispatched_message_count = len(
+                store.list_dispatched_event_indices(run_id=base_run_id)
+            )
             apply_reason_codes = apply_result.reason_codes
             result_status = _result_status(reason_codes)
             break
@@ -610,6 +641,63 @@ def _result_status(reason_codes: list[str]) -> str:
     if "executor_reported_errors" in reason_codes:
         return "execution_error"
     return "success"
+
+
+def _first_undelivered_event_index(dispatched_event_indices: list[int]) -> int:
+    expected_index = 0
+    for index in dispatched_event_indices:
+        if index != expected_index:
+            break
+        expected_index += 1
+    return expected_index
+
+
+def _resolve_dispatched_event_indices(
+    *,
+    original_messages: list[OutboundMessage],
+    dispatched_messages: list[OutboundMessage],
+    envelope: TaskEnvelope,
+    start_index: int,
+) -> list[int]:
+    if not original_messages or not dispatched_messages:
+        return []
+
+    matched_indices: list[int] = []
+    dispatched_cursor = 0
+    for offset, message in enumerate(original_messages):
+        if dispatched_cursor >= len(dispatched_messages):
+            break
+        normalized_message = _normalize_outbound_message_for_dispatch(
+            message=message,
+            envelope=envelope,
+        )
+        if not _outbound_messages_match(normalized_message, dispatched_messages[dispatched_cursor]):
+            continue
+        matched_indices.append(start_index + offset)
+        dispatched_cursor += 1
+    return matched_indices
+
+
+def _normalize_outbound_message_for_dispatch(
+    *,
+    message: OutboundMessage,
+    envelope: TaskEnvelope,
+) -> OutboundMessage:
+    if message.channel != "final":
+        return message
+    return OutboundMessage(
+        channel=envelope.reply_channel.type,
+        target=envelope.reply_channel.target,
+        body=message.body,
+    )
+
+
+def _outbound_messages_match(expected: OutboundMessage, actual: OutboundMessage) -> bool:
+    return (
+        expected.channel == actual.channel
+        and expected.target == actual.target
+        and expected.body == actual.body
+    )
 
 
 def _should_store_telegram_memory(envelope: TaskEnvelope) -> bool:
