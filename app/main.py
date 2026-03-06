@@ -68,6 +68,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "smtp_starttls",
         "smtp_username",
         "telegram_allowed_chat_ids",
+        "telegram_allowed_channel_ids",
         "telegram_api_base_url",
         "telegram_bot_token_env",
         "telegram_context_refs",
@@ -933,6 +934,12 @@ def _parse_args() -> argparse.Namespace:
         help="Optional inbound Telegram chat allowlist entry (repeatable).",
     )
     parser.add_argument(
+        "--telegram-allowed-channel-id",
+        action="append",
+        default=[],
+        help="Optional inbound Telegram channel allowlist entry (repeatable).",
+    )
+    parser.add_argument(
         "--telegram-context-ref",
         action="append",
         default=[],
@@ -1226,6 +1233,7 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
                     setting_name="telegram_poll_timeout_seconds",
                 ),
                 allowed_chat_ids=_resolve_telegram_allowed_chat_ids(args, config),
+                allowed_channel_ids=_resolve_telegram_allowed_channel_ids(args, config),
                 context_refs=telegram_context_refs,
             )
         )
@@ -1653,6 +1661,29 @@ def _resolve_telegram_context_refs(
     merged_values = [*config_values, *args.telegram_context_ref]
     if any(not value.strip() for value in merged_values):
         raise ValueError("telegram_context_ref(s) entries must not be empty")
+    return merged_values
+
+
+def _resolve_telegram_allowed_channel_ids(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str] | None:
+    raw_config_values = config.get("telegram_allowed_channel_ids")
+    config_values: list[str]
+    if raw_config_values is None:
+        config_values = []
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config telegram_allowed_channel_ids must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config telegram_allowed_channel_ids must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.telegram_allowed_channel_id]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("telegram_allowed_channel_id(s) entries must not be empty")
+    if not merged_values:
+        return None
     return merged_values
 
 

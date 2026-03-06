@@ -488,6 +488,47 @@ class MainLiveFlowTests(unittest.TestCase):
             )
             self.assertEqual(dispatched_indices, [0, 1, 2])
 
+    def test_run_live_keeps_telegram_context_scoped_by_channel_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            executor = RecordingTelegramExecutor()
+            telegram_sender = RecordingTelegramSender()
+            envelopes = [
+                _telegram_envelope(
+                    event_id="telegram:channel-1",
+                    content="Channel one message",
+                    target="-100111",
+                ),
+                _telegram_envelope(
+                    event_id="telegram:channel-2",
+                    content="Channel two message",
+                    target="-100222",
+                ),
+            ]
+
+            run_live(
+                db_path,
+                connectors=[OneShotConnector(envelopes=envelopes)],
+                executor=executor,
+                max_loops=1,
+                max_attempts=2,
+                poll_interval_seconds=0.1,
+                base_dir=tmpdir,
+                telegram_sender=telegram_sender,
+            )
+
+            self.assertEqual(
+                telegram_sender.sent,
+                [("-100111", "ack: telegram:channel-1"), ("-100222", "ack: telegram:channel-2")],
+            )
+            self.assertEqual(len(executor.seen_contents), 2)
+            self.assertEqual(executor.seen_contents[0], "Channel one message")
+            self.assertEqual(executor.seen_contents[1], "Channel two message")
+            self.assertNotIn(
+                "Recent conversation context (oldest first):",
+                executor.seen_contents[1],
+            )
+
     def test_run_live_sends_error_notification_on_dead_letter(self) -> None:
         """Error notification email is sent when executor error exhausts retries."""
 
@@ -1555,6 +1596,7 @@ class MainCliTests(unittest.TestCase):
         connectors_arg = run_live_mock.call_args.kwargs["connectors"]
         self.assertEqual(len(connectors_arg), 1)
         self.assertIsInstance(connectors_arg[0], TelegramConnector)
+        self.assertEqual(connectors_arg[0]._allowed_channel_ids, set())
         self.assertIsInstance(
             run_live_mock.call_args.kwargs["telegram_sender"],
             TelegramMessageSender,
@@ -1605,6 +1647,63 @@ class MainCliTests(unittest.TestCase):
                 ):
                     main()
 
+    def test_main_run_live_rejects_blank_telegram_allowed_channel_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "telegram_enabled": True,
+                        "telegram_allowed_channel_ids": ["   "],
+                        "max_loops": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_TELEGRAM_BOT_TOKEN": "token"}, clear=False),
+                patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "telegram_allowed_channel_id\\(s\\) entries must not be empty",
+                ):
+                    main()
+
+    @patch("app.main._build_codex_executor")
+    @patch("app.main.run_live")
+    def test_main_run_live_wires_telegram_allowed_channel_ids_from_config(
+        self,
+        run_live_mock,
+        executor_mock,
+    ) -> None:
+        run_live_mock.return_value = []
+        executor_mock.return_value = StubExecutor()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "live-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "db_path": str(Path(tmpdir) / "state.db"),
+                        "telegram_enabled": True,
+                        "telegram_allowed_channel_ids": ["-100111", "-100222"],
+                        "max_loops": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"CHATTING_TELEGRAM_BOT_TOKEN": "token"}, clear=False),
+                patch("sys.argv", ["app.main", "--run-live", "--config", str(config_path)]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        connectors = run_live_mock.call_args.kwargs["connectors"]
+        self.assertEqual(len(connectors), 1)
+        self.assertIsInstance(connectors[0], TelegramConnector)
+        self.assertEqual(connectors[0]._allowed_channel_ids, {"-100111", "-100222"})
+
 
 def _single_email_envelope() -> TaskEnvelope:
     return FakeEmailConnector(
@@ -1621,7 +1720,7 @@ def _single_email_envelope() -> TaskEnvelope:
     ).poll()[0]
 
 
-def _telegram_envelope(*, event_id: str, content: str) -> TaskEnvelope:
+def _telegram_envelope(*, event_id: str, content: str, target: str = "8605042448") -> TaskEnvelope:
     return TaskEnvelope(
         id=event_id,
         source="im",
@@ -1631,7 +1730,7 @@ def _telegram_envelope(*, event_id: str, content: str) -> TaskEnvelope:
         attachments=[],
         context_refs=["repo:/home/edward/chatting"],
         policy_profile="default",
-        reply_channel=ReplyChannel(type="telegram", target="8605042448"),
+        reply_channel=ReplyChannel(type="telegram", target=target),
         dedupe_key=event_id,
     )
 
