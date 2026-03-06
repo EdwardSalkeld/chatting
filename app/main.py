@@ -59,6 +59,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "max_loops",
         "poll_interval_seconds",
         "schedule_file",
+        "error_notify_email",
         "smtp_from",
         "smtp_host",
         "smtp_password_env",
@@ -171,6 +172,7 @@ def run_live(
     telegram_sender: TelegramSender | None = None,
     queue_backend: QueueBackend | None = None,
     worker_count: int = 1,
+    error_notify_email: str | None = None,
 ) -> list[RunRecord]:
     """Run a long-lived polling loop for scheduled and email integrations."""
     if max_attempts <= 0:
@@ -218,6 +220,8 @@ def run_live(
                     policy=policy,
                     applier=applier,
                     max_attempts=max_attempts,
+                    email_sender=email_sender,
+                    error_notify_email=error_notify_email,
                 )
                 if record is not None:
                     processed_count += 1
@@ -233,6 +237,8 @@ def run_live(
                         policy=policy,
                         applier=applier,
                         max_attempts=max_attempts,
+                        email_sender=email_sender,
+                        error_notify_email=error_notify_email,
                     )
                     for envelope_item in pending_envelopes
                 ]
@@ -262,6 +268,8 @@ def _process_envelope(
     ignore_dedupe: bool = False,
     run_id_suffix: str | None = None,
     emit_logs: bool = True,
+    email_sender: SmtpEmailSender | None = None,
+    error_notify_email: str | None = None,
 ) -> RunRecord | None:
     if not ignore_dedupe and store.seen(envelope.source, envelope.dedupe_key):
         run_id = f"run:{envelope.id}:duplicate:{time.time_ns()}"
@@ -367,9 +375,11 @@ def _process_envelope(
     apply_result_payload: dict[str, object] | None = None
     attempt_count = 0
     last_error: str | None = None
+    last_error_stage: str | None = None
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
+        error_stage = "executor"
         try:
             execution_result = executor_impl.execute(task)
             execution_message_count = len(execution_result.messages)
@@ -379,6 +389,7 @@ def _process_envelope(
             execution_payload = execution_result.to_dict()
             execution_action_types = [action.type for action in execution_result.actions]
             requires_human_review = execution_result.requires_human_review
+            error_stage = "policy"
             decision = policy.evaluate(execution_result)
             policy_decision_payload = decision.to_dict()
             for update in decision.config_updates.pending_review:
@@ -388,6 +399,7 @@ def _process_envelope(
                     config_path=update.path,
                     config_value=update.value,
                 )
+            error_stage = "applier"
             apply_result = applier.apply(decision, envelope=envelope)
             apply_result_payload = apply_result.to_dict()
             if store_telegram_memory:
@@ -415,6 +427,7 @@ def _process_envelope(
             break
         except Exception as exc:  # noqa: BLE001 - convert failures into retry/DLQ state
             last_error = f"{type(exc).__name__}: {exc}"
+            last_error_stage = error_stage
             if attempt < max_attempts:
                 if emit_logs:
                     LOGGER.warning(
@@ -484,6 +497,7 @@ def _process_envelope(
                 "attempt_count": attempt_count,
                 "max_attempts": max_attempts,
                 "last_error": last_error,
+                "last_error_stage": last_error_stage,
             },
             created_at=record.created_at,
         )
@@ -503,6 +517,33 @@ def _process_envelope(
                 record.run_id,
                 record.envelope_id,
             )
+        if (
+            last_error_stage == "executor"
+            and email_sender is not None
+            and error_notify_email
+        ):
+            try:
+                subject = f"Executor error: {record.run_id}"
+                body = (
+                    f"An executor error occurred and the task was placed in the dead-letter queue.\n\n"
+                    f"run_id: {record.run_id}\n"
+                    f"envelope_id: {record.envelope_id}\n"
+                    f"source: {record.source}\n"
+                    f"attempts: {attempt_count}\n"
+                    f"error: {last_error}\n"
+                )
+                email_sender.send(error_notify_email, body, subject=subject)
+                if emit_logs:
+                    print(
+                        f"error_notification_sent run_id={record.run_id} "
+                        f"notify_email={error_notify_email}"
+                    )
+            except Exception as notify_exc:  # noqa: BLE001 - swallow notification failures
+                if emit_logs:
+                    print(
+                        f"error_notification_failed run_id={record.run_id} "
+                        f"notify_email={error_notify_email} error={notify_exc}"
+                    )
     if emit_logs:
         LOGGER.info(
             "run_observed trace_id=%s run_id=%s envelope_id=%s source=%s workflow=%s "
@@ -776,6 +817,10 @@ def _parse_args() -> argparse.Namespace:
         help="Use STARTTLS (plain SMTP + TLS upgrade) instead of implicit SSL.",
     )
     parser.add_argument(
+        "--error-notify-email",
+        help="Email address to notify when an executor error causes a task to be dead-lettered.",
+    )
+    parser.add_argument(
         "--telegram-enabled",
         action="store_true",
         help="Enable Telegram long-polling connector + outbound dispatch in live mode.",
@@ -985,6 +1030,11 @@ def main() -> int:
                 config_value=config.get("worker_count"),
                 default_value=1,
                 setting_name="worker_count",
+            ),
+            error_notify_email=_resolve_optional_str(
+                cli_value=args.error_notify_email,
+                config_value=config.get("error_notify_email"),
+                setting_name="error_notify_email",
             ),
         )
         return 0
