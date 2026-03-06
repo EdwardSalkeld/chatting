@@ -1,0 +1,266 @@
+"""Worker entrypoint: consume task queue, execute, publish egress events."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import shlex
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Mapping
+
+from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, TASK_QUEUE_NAME, TaskQueueMessage
+from app.executor import CodexExecutor, Executor, StubExecutor
+from app.policy import AllowlistPolicyEngine
+from app.router import RuleBasedRouter
+from app.state import SQLiteStateStore
+from app.worker_runtime import process_task_message
+
+WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
+LOGGER = logging.getLogger(__name__)
+ALLOWED_WORKER_CONFIG_KEYS = frozenset(
+    {
+        "bbmb_address",
+        "codex_command",
+        "db_path",
+        "max_attempts",
+        "max_loops",
+        "poll_timeout_seconds",
+        "sleep_seconds",
+        "use_stub_executor",
+    }
+)
+
+
+def _configure_logging() -> None:
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the chatting worker process.")
+    parser.add_argument("--config", help="Path to JSON config file.")
+    parser.add_argument("--db-path", help="Path to worker SQLite state DB.")
+    parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
+    parser.add_argument("--max-attempts", type=_positive_int, help="Maximum execution attempts per task.")
+    parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke tests.")
+    parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Queue pickup timeout seconds.")
+    parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
+    parser.add_argument("--codex-command", help="Command used for Codex executor.")
+    parser.add_argument(
+        "--use-stub-executor",
+        action="store_true",
+        help="Use deterministic stub executor.",
+    )
+    return parser.parse_args()
+
+
+def _load_config(config_path: str | None, environ: Mapping[str, str] | None = None) -> dict[str, object]:
+    env = os.environ if environ is None else environ
+    path = config_path
+    if path is None:
+        raw_env_path = env.get(WORKER_CONFIG_PATH_ENV_VAR)
+        if raw_env_path is not None:
+            if not raw_env_path.strip():
+                raise ValueError(f"{WORKER_CONFIG_PATH_ENV_VAR} must not be empty")
+            path = raw_env_path
+
+    if not path:
+        return {}
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("config file must contain a JSON object")
+    unknown_keys = sorted(set(payload.keys()) - ALLOWED_WORKER_CONFIG_KEYS)
+    if unknown_keys:
+        raise ValueError("config contains unknown keys: " + ", ".join(unknown_keys))
+    return payload
+
+
+def _resolve_str(cli_value: str | None, config_value: object, *, default_value: str, setting_name: str) -> str:
+    if cli_value is not None:
+        if not cli_value.strip():
+            raise ValueError(f"{setting_name} must not be empty")
+        return cli_value
+    if config_value is None:
+        return default_value
+    if not isinstance(config_value, str) or not config_value.strip():
+        raise ValueError(f"config {setting_name} must be a non-empty string")
+    return config_value
+
+
+def _resolve_positive_int(cli_value: int | None, config_value: object, *, default_value: int, setting_name: str) -> int:
+    if cli_value is not None:
+        return cli_value
+    if config_value is None:
+        return default_value
+    if not isinstance(config_value, int) or isinstance(config_value, bool) or config_value <= 0:
+        raise ValueError(f"config {setting_name} must be a positive integer")
+    return config_value
+
+
+def _resolve_positive_float(
+    cli_value: float | None,
+    config_value: object,
+    *,
+    default_value: float,
+    setting_name: str,
+) -> float:
+    if cli_value is not None:
+        return cli_value
+    candidate = default_value if config_value is None else config_value
+    if isinstance(candidate, bool) or not isinstance(candidate, (int, float)):
+        raise ValueError(f"config {setting_name} must be numeric")
+    parsed = float(candidate)
+    if parsed <= 0:
+        raise ValueError(f"config {setting_name} must be positive")
+    return parsed
+
+
+def _resolve_bool(cli_value: bool, config_value: object, *, default_value: bool, setting_name: str) -> bool:
+    if cli_value:
+        return True
+    if config_value is None:
+        return default_value
+    if not isinstance(config_value, bool):
+        raise ValueError(f"config {setting_name} must be a boolean")
+    return config_value
+
+
+def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
+    use_stub_executor = _resolve_bool(
+        args.use_stub_executor,
+        config.get("use_stub_executor"),
+        default_value=False,
+        setting_name="use_stub_executor",
+    )
+    if use_stub_executor:
+        return StubExecutor()
+
+    command = _resolve_str(
+        args.codex_command,
+        config.get("codex_command"),
+        default_value="codex exec --json",
+        setting_name="codex_command",
+    )
+    split_command = tuple(shlex.split(command))
+    if not split_command:
+        raise ValueError("codex_command must not be empty")
+    return CodexExecutor(command=split_command)
+
+
+def main() -> int:
+    _configure_logging()
+    args = _parse_args()
+    config = _load_config(args.config, os.environ)
+
+    db_path = _resolve_str(
+        args.db_path,
+        config.get("db_path"),
+        default_value=str(Path(tempfile.gettempdir()) / "chatting-worker-state.db"),
+        setting_name="db_path",
+    )
+    bbmb_address = _resolve_str(
+        args.bbmb_address,
+        config.get("bbmb_address"),
+        default_value="127.0.0.1:9876",
+        setting_name="bbmb_address",
+    )
+    max_attempts = _resolve_positive_int(
+        args.max_attempts,
+        config.get("max_attempts"),
+        default_value=2,
+        setting_name="max_attempts",
+    )
+    max_loops = _resolve_positive_int(
+        args.max_loops,
+        config.get("max_loops"),
+        default_value=0,
+        setting_name="max_loops",
+    )
+    poll_timeout_seconds = _resolve_positive_int(
+        args.poll_timeout_seconds,
+        config.get("poll_timeout_seconds"),
+        default_value=20,
+        setting_name="poll_timeout_seconds",
+    )
+    sleep_seconds = _resolve_positive_float(
+        args.sleep_seconds,
+        config.get("sleep_seconds"),
+        default_value=1.0,
+        setting_name="sleep_seconds",
+    )
+
+    store = SQLiteStateStore(db_path)
+    broker = BBMBQueueAdapter(address=bbmb_address)
+    broker.ensure_queue(TASK_QUEUE_NAME)
+    broker.ensure_queue(EGRESS_QUEUE_NAME)
+
+    router = RuleBasedRouter()
+    policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
+    executor = _build_executor(args, config)
+
+    loop_count = 0
+    while True:
+        loop_count += 1
+        picked = broker.pickup_json(TASK_QUEUE_NAME, timeout_seconds=poll_timeout_seconds)
+        if picked is None:
+            LOGGER.info("worker_loop_empty loop=%s", loop_count)
+            if max_loops and loop_count >= max_loops:
+                break
+            time.sleep(sleep_seconds)
+            continue
+
+        try:
+            task_message = TaskQueueMessage.from_dict(picked.payload)
+            result = process_task_message(
+                store=store,
+                task_message=task_message,
+                router=router,
+                executor_impl=executor,
+                policy=policy,
+                max_attempts=max_attempts,
+            )
+            for egress_message in result.egress_messages:
+                broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
+            broker.ack(TASK_QUEUE_NAME, picked.guid)
+            LOGGER.info(
+                "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
+                result.run_record.run_id,
+                task_message.task_id,
+                len(result.egress_messages),
+                result.run_record.result_status,
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("worker_processing_failed guid=%s", picked.guid)
+
+        if max_loops and loop_count >= max_loops:
+            break
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

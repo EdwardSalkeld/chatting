@@ -22,23 +22,23 @@ Split `chatting` into two runtime roles connected via BBMB queues so integration
 - [x] Add serialization/deserialization helpers with schema checks.
 - [x] Add BBMB queue adapter wrapper around `bbmb_client`.
 - [x] Add tests for contract parsing and BBMB adapter behavior.
-- [ ] Commit.
+- [x] Commit.
 
 ### Phase 2: Worker Split
-- [ ] Add `app/main_worker.py` entrypoint.
-- [ ] Implement worker consume/process/publish/ack loop from `chatting.tasks.v1` to `chatting.egress.v1`.
-- [ ] Ensure worker strips/blocks egress-ineligible action types (`write_file` forwarding disabled).
-- [ ] Persist worker run/audit/dead-letter state.
+- [x] Add `app/main_worker.py` entrypoint.
+- [x] Implement worker consume/process/publish/ack loop from `chatting.tasks.v1` to `chatting.egress.v1`.
+- [x] Ensure worker strips/blocks egress-ineligible action types (`write_file` forwarding disabled).
+- [x] Persist worker run/audit/dead-letter state.
 - [ ] Add tests for multi-response egress publishing and retry semantics.
 - [ ] Commit.
 
 ### Phase 3: Message Handler Split
-- [ ] Add `app/main_message_handler.py` entrypoint.
-- [ ] Implement ingress polling and publish to `chatting.tasks.v1`.
-- [ ] Persist task ledger for strict egress validation.
-- [ ] Implement egress consume/validate/dispatch/ack loop from `chatting.egress.v1`.
-- [ ] Enforce channel/target allowlist + task existence checks.
-- [ ] Add tests for strict unknown-task drop and allowlist behavior.
+- [x] Add `app/main_message_handler.py` entrypoint.
+- [x] Implement ingress polling and publish to `chatting.tasks.v1`.
+- [x] Persist task ledger for strict egress validation.
+- [x] Implement egress consume/validate/dispatch/ack loop from `chatting.egress.v1`.
+- [x] Enforce channel/target allowlist + task existence checks.
+- [x] Add tests for strict unknown-task drop and allowlist behavior.
 - [ ] Commit.
 
 ### Phase 4: Config + Docs + Ops
