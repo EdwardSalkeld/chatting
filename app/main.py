@@ -353,9 +353,11 @@ def _process_envelope(
     apply_result_payload: dict[str, object] | None = None
     attempt_count = 0
     last_error: str | None = None
+    last_error_stage: str | None = None
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
+        error_stage = "executor"
         try:
             execution_result = executor_impl.execute(task)
             execution_message_count = len(execution_result.messages)
@@ -365,6 +367,7 @@ def _process_envelope(
             execution_payload = execution_result.to_dict()
             execution_action_types = [action.type for action in execution_result.actions]
             requires_human_review = execution_result.requires_human_review
+            error_stage = "policy"
             decision = policy.evaluate(execution_result)
             policy_decision_payload = decision.to_dict()
             for update in decision.config_updates.pending_review:
@@ -374,6 +377,7 @@ def _process_envelope(
                     config_path=update.path,
                     config_value=update.value,
                 )
+            error_stage = "applier"
             apply_result = applier.apply(decision, envelope=envelope)
             apply_result_payload = apply_result.to_dict()
             if store_telegram_memory:
@@ -401,6 +405,7 @@ def _process_envelope(
             break
         except Exception as exc:  # noqa: BLE001 - convert failures into retry/DLQ state
             last_error = f"{type(exc).__name__}: {exc}"
+            last_error_stage = error_stage
             if attempt < max_attempts:
                 if emit_logs:
                     print(
@@ -460,6 +465,7 @@ def _process_envelope(
                 "attempt_count": attempt_count,
                 "max_attempts": max_attempts,
                 "last_error": last_error,
+                "last_error_stage": last_error_stage,
             },
             created_at=record.created_at,
         )
@@ -477,7 +483,11 @@ def _process_envelope(
                 f"dead_letter_recorded dead_letter_id={dead_letter_id} "
                 f"run_id={record.run_id} envelope_id={record.envelope_id}"
             )
-        if email_sender is not None and error_notify_email:
+        if (
+            last_error_stage == "executor"
+            and email_sender is not None
+            and error_notify_email
+        ):
             try:
                 subject = f"Executor error: {record.run_id}"
                 body = (

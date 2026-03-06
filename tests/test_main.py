@@ -10,9 +10,10 @@ from unittest.mock import patch
 
 from app.executor import StubExecutor
 from app.models import ConfigUpdate, ExecutionResult, OutboundMessage, ReplyChannel, RoutedTask, TaskEnvelope
-from app.main import main, run_bootstrap, run_live
+from app.main import _process_envelope, main, run_bootstrap, run_live
 from app.connectors import EmailMessage, FakeEmailConnector, TelegramConnector
-from app.applier import TelegramMessageSender
+from app.applier import NoOpApplier, TelegramMessageSender
+from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore
 
 
@@ -322,6 +323,14 @@ class RecordingTelegramSender:
         self.sent.append((target, body))
 
 
+@dataclass(frozen=True)
+class FailingPolicyEngine:
+    error_message: str = "policy evaluation failure"
+
+    def evaluate(self, result: ExecutionResult):
+        raise RuntimeError(self.error_message)
+
+
 class MainLiveFlowTests(unittest.TestCase):
     def test_run_live_processes_connector_envelopes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -448,6 +457,9 @@ class MainLiveFlowTests(unittest.TestCase):
                 error_notify_email="admin@example.com",
             )
 
+            audit_events = SQLiteStateStore(db_path).list_audit_events()
+            self.assertEqual(audit_events[0].detail["last_error_stage"], "executor")
+
         self.assertEqual(len(sender.sent), 1)
         notify_target, notify_body, notify_subject = sender.sent[0]
         self.assertEqual(notify_target, "admin@example.com")
@@ -528,6 +540,42 @@ class MainLiveFlowTests(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].result_status, "dead_letter")
         self.assertEqual(sender.sent, [])
+
+    def test_process_envelope_skips_error_notification_for_non_executor_failure(self) -> None:
+        """Notification is suppressed when retries exhaust due to non-executor failures."""
+
+        @dataclass
+        class _RecordingEmailSender:
+            sent: list[tuple[str, str, str | None]] = field(default_factory=list)
+
+            def send(self, target: str, body: str, *, subject: str | None = None) -> None:
+                self.sent.append((target, body, subject))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            sender = _RecordingEmailSender()
+            envelope = _single_email_envelope()
+
+            record = _process_envelope(
+                store=SQLiteStateStore(db_path),
+                envelope=envelope,
+                router=RuleBasedRouter(),
+                executor_impl=StubExecutor(),
+                policy=FailingPolicyEngine(),
+                applier=NoOpApplier(),
+                max_attempts=1,
+                emit_logs=False,
+                email_sender=sender,
+                error_notify_email="admin@example.com",
+            )
+
+            self.assertIsNotNone(record)
+            self.assertEqual(record.result_status, "dead_letter")
+
+            audit_events = SQLiteStateStore(db_path).list_audit_events()
+            self.assertEqual(len(audit_events), 1)
+            self.assertEqual(audit_events[0].detail["last_error_stage"], "policy")
+            self.assertEqual(sender.sent, [])
 
 
 class MainCliTests(unittest.TestCase):
