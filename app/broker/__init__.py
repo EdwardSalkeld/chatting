@@ -2,7 +2,6 @@
 
 from app.broker.bbmb_client import (
     BBMBQueueAdapter,
-    BrokerConnectionError,
     BrokerOperationError,
     PickedMessage,
 )
@@ -11,7 +10,6 @@ from app.broker.messages import EgressQueueMessage, TaskQueueMessage
 
 __all__ = [
     "BBMBQueueAdapter",
-    "BrokerConnectionError",
     "BrokerOperationError",
     "PickedMessage",
     "EGRESS_QUEUE_NAME",

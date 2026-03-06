@@ -7,10 +7,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 
-class BrokerConnectionError(RuntimeError):
-    """Raised when BBMB client import or connection fails."""
-
-
 class BrokerOperationError(RuntimeError):
     """Raised when BBMB broker operations fail."""
 
@@ -93,18 +89,12 @@ class BBMBQueueAdapter:
 
 
 def _default_client_factory(address: str) -> _BBMBClientProtocol:
-    try:
-        from bbmb_client import Client
-    except ImportError as error:
-        raise BrokerConnectionError(
-            "Unable to import bbmb_client. Install bbmb/python-client in the runtime environment."
-        ) from error
+    from app.broker.local_bbmb_client import Client
     return Client(address=address)
 
 
 __all__ = [
     "BBMBQueueAdapter",
-    "BrokerConnectionError",
     "BrokerOperationError",
     "PickedMessage",
 ]
