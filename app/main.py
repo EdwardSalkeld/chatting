@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import logging
 import os
 import shlex
+import sys
 import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -87,6 +89,17 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
 )
 REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "interval_seconds", "job_name"})
 TELEGRAM_MEMORY_TURN_LIMIT = 20
+LOGGER = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
 
 
 def _is_int_like(value: object) -> bool:
@@ -141,7 +154,7 @@ def run_bootstrap(
         )
 
     runs = store.list_runs()
-    print(f"completed runs={len(runs)} db_path={db_path}")
+    LOGGER.info("completed runs=%s db_path=%s", len(runs), db_path)
     return runs
 
 
@@ -228,7 +241,7 @@ def run_live(
                     if record is not None:
                         processed_count += 1
 
-        print(f"live_loop_completed loop={loop_count} processed={processed_count}")
+        LOGGER.info("live_loop_completed loop=%s processed=%s", loop_count, processed_count)
 
         if max_loops is not None and loop_count >= max_loops:
             break
@@ -285,15 +298,24 @@ def _process_envelope(
             )
         )
         if emit_logs:
-            print(
-                f"skip duplicate trace_id={trace_id} run_id={run_id} source={envelope.source} "
-                f"dedupe_key={envelope.dedupe_key}"
+            LOGGER.info(
+                "skip duplicate trace_id=%s run_id=%s source=%s dedupe_key=%s",
+                trace_id,
+                run_id,
+                envelope.source,
+                envelope.dedupe_key,
             )
-            print(
-                f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
-                f"source={record.source} workflow={record.workflow} "
-                f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
-                f"result_status={record.result_status}"
+            LOGGER.info(
+                "run_observed trace_id=%s run_id=%s envelope_id=%s source=%s workflow=%s "
+                "policy_profile=%s latency_ms=%s result_status=%s",
+                trace_id,
+                record.run_id,
+                record.envelope_id,
+                record.source,
+                record.workflow,
+                record.policy_profile,
+                record.latency_ms,
+                record.result_status,
             )
         return record
 
@@ -395,16 +417,26 @@ def _process_envelope(
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt < max_attempts:
                 if emit_logs:
-                    print(
-                        f"retry_scheduled trace_id={trace_id} run_id={base_run_id} attempt={attempt} "
-                        f"next_attempt={attempt + 1} max_attempts={max_attempts} error={last_error}"
+                    LOGGER.warning(
+                        "retry_scheduled trace_id=%s run_id=%s attempt=%s next_attempt=%s "
+                        "max_attempts=%s error=%s",
+                        trace_id,
+                        base_run_id,
+                        attempt,
+                        attempt + 1,
+                        max_attempts,
+                        last_error,
                     )
             else:
                 reason_codes = ["retry_exhausted"]
                 if emit_logs:
-                    print(
-                        f"dead_letter trace_id={trace_id} run_id={base_run_id} attempts={attempt} "
-                        f"max_attempts={max_attempts} error={last_error}"
+                    LOGGER.error(
+                        "dead_letter trace_id=%s run_id=%s attempts=%s max_attempts=%s error=%s",
+                        trace_id,
+                        base_run_id,
+                        attempt,
+                        max_attempts,
+                        last_error,
                     )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -465,16 +497,24 @@ def _process_envelope(
             attempt_count=attempt_count,
         )
         if emit_logs:
-            print(
-                f"dead_letter_recorded dead_letter_id={dead_letter_id} "
-                f"run_id={record.run_id} envelope_id={record.envelope_id}"
+            LOGGER.error(
+                "dead_letter_recorded dead_letter_id=%s run_id=%s envelope_id=%s",
+                dead_letter_id,
+                record.run_id,
+                record.envelope_id,
             )
     if emit_logs:
-        print(
-            f"run_observed trace_id={trace_id} run_id={record.run_id} envelope_id={record.envelope_id} "
-            f"source={record.source} workflow={record.workflow} "
-            f"policy_profile={record.policy_profile} latency_ms={record.latency_ms} "
-            f"result_status={record.result_status}"
+        LOGGER.info(
+            "run_observed trace_id=%s run_id=%s envelope_id=%s source=%s workflow=%s "
+            "policy_profile=%s latency_ms=%s result_status=%s",
+            trace_id,
+            record.run_id,
+            record.envelope_id,
+            record.source,
+            record.workflow,
+            record.policy_profile,
+            record.latency_ms,
+            record.result_status,
         )
     return record
 
@@ -784,6 +824,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    _configure_logging()
     args = _parse_args()
     config = _load_runtime_config(args.config, os.environ)
     db_path = _resolve_str(
@@ -892,7 +933,7 @@ def main() -> int:
                 executor=_build_codex_executor(args, config),
             )
             payload = [record.to_dict() for record in replayed]
-        print(json.dumps(payload, sort_keys=True))
+        sys.stdout.write(f"{json.dumps(payload, sort_keys=True)}\n")
         return 0
 
     if args.run_live:
@@ -1633,7 +1674,7 @@ def _serve_metrics(db_path: str, *, host: str, port: int) -> None:
             return
 
     server = HTTPServer((host, port), _MetricsHandler)
-    print(f"metrics_server_started host={host} port={port}")
+    LOGGER.info("metrics_server_started host=%s port=%s", host, port)
     server.serve_forever()
 
 
