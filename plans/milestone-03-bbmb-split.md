@@ -46,7 +46,7 @@ Split `chatting` into two runtime roles connected via BBMB queues so integration
 - [x] Add `configs/worker-runtime.example.json`.
 - [x] Add/update systemd units for message-handler and worker.
 - [x] Update run docs with cross-machine topology and BBMB address settings.
-- [ ] Commit.
+- [x] Commit.
 
 ### Phase 5: Compatibility + Cleanup
 - [ ] Keep `app/main.py` as compatibility shim or mark deprecated.
