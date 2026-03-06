@@ -23,6 +23,7 @@
   "telegram_api_base_url": "https://api.telegram.org",
   "telegram_poll_timeout_seconds": 20,
   "telegram_allowed_chat_ids": ["123456789"],
+  "telegram_allowed_channel_ids": ["-1001234567890"],
   "telegram_context_refs": ["repo:/home/edward/chatting"],
   "codex_command": "codex exec --json",
   "use_stub_executor": true,

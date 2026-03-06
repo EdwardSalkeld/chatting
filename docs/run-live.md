@@ -22,8 +22,10 @@ Use [configs/live-runtime.example.json](/home/edward/chatting/configs/live-runti
 
 To have scheduled jobs send responses to Telegram (instead of logs), set both:
 - `reply_channel_type` (for example `telegram`)
-- `reply_channel_target` (for example your Telegram chat ID)
+- `reply_channel_target` (for example your Telegram chat/channel ID)
 on each schedule job that should route to Telegram.
+
+For Telegram channels, add each channel ID to `telegram_allowed_channel_ids` in runtime config.
 
 ## 3) Smoke run (short command, no Codex dependency)
 
@@ -59,6 +61,8 @@ python3 -m app.main --run-live --config configs/live-runtime.example.json
 
 - `--smtp-host` is required when `--imap-host` is set, so inbound email can be answered.
 - Set `"telegram_enabled": true` to turn on Telegram long polling + outbound Telegram replies.
+- `telegram_allowed_chat_ids` gates inbound DM/group messages.
+- `telegram_allowed_channel_ids` gates inbound Telegram channel posts (explicit opt-in).
 - CLI flags override config file values.
 - Add one or more `--context-ref` flags to append extra context refs beyond config.
 - Run `python3 -m app.main --db-path /tmp/chatting-live.db --list-metrics` to output run metrics JSON.

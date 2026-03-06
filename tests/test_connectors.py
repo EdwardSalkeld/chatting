@@ -317,6 +317,16 @@ class TelegramConnectorTests(unittest.TestCase):
                             "chat": {"id": 12345},
                         },
                     },
+                    {
+                        "update_id": 2004,
+                        "channel_post": {
+                            "message_id": 4,
+                            "date": 1772272803,
+                            "text": "channel post should be ignored by default",
+                            "chat": {"id": -100123, "type": "channel"},
+                            "sender_chat": {"id": -100123, "title": "release-feed"},
+                        },
+                    },
                 ],
             ),
         )
@@ -325,6 +335,47 @@ class TelegramConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].id, "telegram:2001")
+
+    def test_poll_accepts_channel_post_when_channel_id_is_explicitly_allowed(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            allowed_channel_ids=["-100123"],
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 3001,
+                        "channel_post": {
+                            "message_id": 1,
+                            "date": 1772272800,
+                            "text": "deploy completed",
+                            "chat": {"id": -100123, "type": "channel"},
+                            "sender_chat": {"id": -100123, "title": "release-feed"},
+                        },
+                    },
+                    {
+                        "update_id": 3002,
+                        "channel_post": {
+                            "message_id": 2,
+                            "date": 1772272801,
+                            "text": "should be blocked",
+                            "chat": {"id": -100999, "type": "channel"},
+                            "sender_chat": {"id": -100999, "title": "other"},
+                        },
+                    },
+                ],
+            ),
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        envelope = envelopes[0]
+        self.assertEqual(envelope.id, "telegram:3001")
+        self.assertEqual(envelope.reply_channel.type, "telegram")
+        self.assertEqual(envelope.reply_channel.target, "-100123")
+        self.assertEqual(envelope.actor, "-100123:release-feed")
+        self.assertEqual(envelope.content, "deploy completed")
 
     def test_poll_raises_when_telegram_returns_not_ok(self) -> None:
         connector = TelegramConnector(
