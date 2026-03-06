@@ -31,4 +31,5 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - Unsupported update types are skipped.
 - Empty text messages are skipped.
 - `channel_post` updates are ignored unless the channel ID is present in `telegram_allowed_channel_ids`.
+- Ignored `channel_post` updates log `update_id`, `channel_id`, and an explicit reason so new channel IDs can be copied from logs.
 - Offset is advanced as `highest_update_id + 1` each poll.

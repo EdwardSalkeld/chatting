@@ -377,6 +377,38 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(envelope.actor, "-100123:release-feed")
         self.assertEqual(envelope.content, "deploy completed")
 
+    def test_poll_logs_ignored_channel_post_ids(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            allowed_channel_ids=["-100123"],
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 3101,
+                        "channel_post": {
+                            "message_id": 1,
+                            "date": 1772272800,
+                            "text": "blocked",
+                            "chat": {"id": -100999, "type": "channel"},
+                        },
+                    }
+                ],
+            ),
+        )
+
+        with self.assertLogs("app.connectors.telegram_connector", level="INFO") as logs:
+            envelopes = connector.poll()
+
+        self.assertEqual(envelopes, [])
+        self.assertTrue(
+            any(
+                "ignoring telegram channel_post update_id=3101 channel_id=-100999 reason=channel_not_allowlisted"
+                in line
+                for line in logs.output
+            )
+        )
+
     def test_poll_raises_when_telegram_returns_not_ok(self) -> None:
         connector = TelegramConnector(
             bot_token="token",

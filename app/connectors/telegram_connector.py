@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -11,6 +12,8 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from app.models import ReplyChannel, TaskEnvelope
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,19 @@ class TelegramConnector:
             return None
         if chat.get("type") != "channel":
             return None
-        if not self._allowed_channel_ids or chat_id_value not in self._allowed_channel_ids:
+        if not self._allowed_channel_ids:
+            LOGGER.info(
+                "ignoring telegram channel_post update_id=%s channel_id=%s reason=no_allowed_channels_configured",
+                update_id,
+                chat_id_value,
+            )
+            return None
+        if chat_id_value not in self._allowed_channel_ids:
+            LOGGER.info(
+                "ignoring telegram channel_post update_id=%s channel_id=%s reason=channel_not_allowlisted",
+                update_id,
+                chat_id_value,
+            )
             return None
         return self._build_envelope(
             update_id=update_id,
