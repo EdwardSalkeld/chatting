@@ -41,6 +41,10 @@ cp configs/worker-runtime.example.json /tmp/worker.json
 python3 -m app.main_worker --config /tmp/worker.json
 ```
 
+If the service/user shell working directory is not where you want Codex to run, set
+`codex_working_dir` in worker config (or pass `--codex-working-dir`) to control only
+the Codex subprocess cwd without changing the worker service `WorkingDirectory`.
+
 Optional env-based config path:
 
 ```bash

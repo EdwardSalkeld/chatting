@@ -537,6 +537,30 @@ class CodexExecutorTests(unittest.TestCase):
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.kwargs["timeout"], task.execution_constraints.timeout_seconds)
 
+    @patch("app.executor.codex.subprocess.run")
+    def test_execute_passes_configured_working_directory(self, run_mock) -> None:
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=["codex", "exec", "--json"],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "messages": [],
+                    "actions": [],
+                    "config_updates": [],
+                    "requires_human_review": False,
+                    "errors": [],
+                }
+            ),
+            stderr="",
+        )
+        executor = CodexExecutor(command=("codex", "exec", "--json"), cwd="/opt/chatting")
+
+        executor.execute(_task())
+
+        run_mock.assert_called_once()
+        self.assertEqual(run_mock.call_args.kwargs["cwd"], "/opt/chatting")
+
 
 if __name__ == "__main__":
     unittest.main()
