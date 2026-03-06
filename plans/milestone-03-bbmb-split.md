@@ -18,10 +18,10 @@ Split `chatting` into two runtime roles connected via BBMB queues so integration
 ## Phase Checklist
 
 ### Phase 1: Contracts + Transport
-- [ ] Add queue payload contracts for task and egress messages.
-- [ ] Add serialization/deserialization helpers with schema checks.
-- [ ] Add BBMB queue adapter wrapper around `bbmb_client`.
-- [ ] Add tests for contract parsing and BBMB adapter behavior.
+- [x] Add queue payload contracts for task and egress messages.
+- [x] Add serialization/deserialization helpers with schema checks.
+- [x] Add BBMB queue adapter wrapper around `bbmb_client`.
+- [x] Add tests for contract parsing and BBMB adapter behavior.
 - [ ] Commit.
 
 ### Phase 2: Worker Split
