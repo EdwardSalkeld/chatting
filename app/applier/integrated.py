@@ -32,6 +32,17 @@ class TelegramSender(Protocol):
 
 
 @dataclass(frozen=True)
+class MessageDispatchError(RuntimeError):
+    """Raised when message dispatch fails after one or more successful sends."""
+
+    reason_code: str
+    dispatched_messages: list[OutboundMessage]
+
+    def __str__(self) -> str:
+        return self.reason_code
+
+
+@dataclass(frozen=True)
 class SmtpEmailSender:
     """SMTP email sender used by the integrated applier."""
 
@@ -209,7 +220,10 @@ class IntegratedApplier:
                         dispatch_channel,
                         dispatch_target,
                     )
-                    reason_codes.append("email_dispatch_failed")
+                    raise MessageDispatchError(
+                        reason_code="email_dispatch_failed",
+                        dispatched_messages=list(dispatched_messages),
+                    ) from None
                 continue
             if dispatch_channel == "telegram":
                 if self.telegram_sender is None:
@@ -229,7 +243,10 @@ class IntegratedApplier:
                         dispatch_channel,
                         dispatch_target,
                     )
-                    reason_codes.append("telegram_dispatch_failed")
+                    raise MessageDispatchError(
+                        reason_code="telegram_dispatch_failed",
+                        dispatched_messages=list(dispatched_messages),
+                    ) from None
                 continue
             LOGGER.warning(
                 "drop_dispatch reason=unsupported_message_channel channel=%s target=%s",
@@ -373,6 +390,7 @@ def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
 __all__ = [
     "EmailSender",
     "IntegratedApplier",
+    "MessageDispatchError",
     "SmtpEmailSender",
     "TelegramMessageSender",
     "TelegramSender",

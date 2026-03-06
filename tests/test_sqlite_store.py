@@ -213,6 +213,24 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 ],
             )
 
+    def test_dispatched_event_checkpoint_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+
+            store.mark_dispatched_event(run_id="run:telegram:1", event_index=1)
+            store.mark_dispatched_event(run_id="run:telegram:1", event_index=0)
+            store.mark_dispatched_event(run_id="run:telegram:1", event_index=1)
+
+            self.assertEqual(
+                store.list_dispatched_event_indices(run_id="run:telegram:1"),
+                [0, 1],
+            )
+            self.assertEqual(
+                store.list_dispatched_event_indices(run_id="run:telegram:other"),
+                [],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
