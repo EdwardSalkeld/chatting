@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Mapping
 
-from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, TASK_QUEUE_NAME, TaskQueueMessage
+from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
 from app.executor import CodexExecutor, Executor, StubExecutor
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
@@ -243,10 +243,14 @@ def main() -> int:
     router = RuleBasedRouter()
     policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
     executor = _build_executor(args, config)
+    replay_done = False
 
     loop_count = 0
     while True:
         loop_count += 1
+        if not replay_done:
+            _replay_egress_outbox(store=store, broker=broker)
+            replay_done = True
         picked = broker.pickup_json(TASK_QUEUE_NAME, timeout_seconds=poll_timeout_seconds)
         if picked is None:
             LOGGER.info("worker_loop_empty loop=%s", loop_count)
@@ -266,7 +270,11 @@ def main() -> int:
                 max_attempts=max_attempts,
             )
             for egress_message in result.egress_messages:
-                broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
+                _publish_egress_with_outbox(
+                    store=store,
+                    broker=broker,
+                    egress_message=egress_message,
+                )
             broker.ack(TASK_QUEUE_NAME, picked.guid)
             LOGGER.info(
                 "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
@@ -282,6 +290,35 @@ def main() -> int:
             break
 
     return 0
+
+
+def _publish_egress_with_outbox(
+    *,
+    store: SQLiteStateStore,
+    broker: BBMBQueueAdapter,
+    egress_message: EgressQueueMessage,
+) -> None:
+    store.queue_egress_outbox_event(egress_message)
+    broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
+    if egress_message.event_id is None:
+        return
+    store.mark_egress_outbox_event_published(event_id=egress_message.event_id)
+
+
+def _replay_egress_outbox(
+    *,
+    store: SQLiteStateStore,
+    broker: BBMBQueueAdapter,
+) -> None:
+    replayable = store.list_replayable_egress_outbox_events()
+    if not replayable:
+        return
+    for message in replayable:
+        broker.publish_json(EGRESS_QUEUE_NAME, message.to_dict())
+        if message.event_id is None:
+            continue
+        store.mark_egress_outbox_event_published(event_id=message.event_id)
+    LOGGER.info("worker_egress_outbox_replayed count=%s", len(replayable))
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import AuditEvent, ReplyChannel, RunRecord, TaskEnvelope
+from app.broker import EgressQueueMessage
+from app.models import AuditEvent, OutboundMessage, ReplyChannel, RunRecord, TaskEnvelope
 from app.state.sqlite_store import SQLiteStateStore
 
 
@@ -248,6 +249,34 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertFalse(
                 store.has_dispatched_event_id(task_id="task:telegram:1", event_id="evt:2")
             )
+
+    def test_egress_outbox_roundtrip_and_replay_listing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+            message = EgressQueueMessage(
+                task_id="task:email:1",
+                envelope_id="email:1",
+                trace_id="trace:email:1",
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:0",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
+            )
+
+            store.queue_egress_outbox_event(message)
+            replayable = store.list_replayable_egress_outbox_events()
+            self.assertEqual(len(replayable), 1)
+            self.assertEqual(replayable[0].event_id, "evt:task:email:1:0")
+
+            store.mark_egress_outbox_event_published(event_id="evt:task:email:1:0")
+            replayable = store.list_replayable_egress_outbox_events()
+            self.assertEqual(len(replayable), 1)
+            self.assertEqual(replayable[0].event_id, "evt:task:email:1:0")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from app.models import ActionProposal, ExecutionResult, OutboundMessage, RoutedTask
 
@@ -11,7 +12,12 @@ from app.models import ActionProposal, ExecutionResult, OutboundMessage, RoutedT
 class StubExecutor:
     """Return deterministic outputs without invoking external tools."""
 
-    def execute(self, task: RoutedTask) -> ExecutionResult:
+    def execute(
+        self,
+        task: RoutedTask,
+        reply_send: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ExecutionResult:
+        del reply_send
         channel = "log"
         target = task.envelope_id
         if task.reply_channel is not None:

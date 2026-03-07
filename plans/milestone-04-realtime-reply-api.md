@@ -3,7 +3,26 @@
 ## Scope
 Define the contract and execution model for user-visible in-run replies while preserving a distinct final message at run completion for split-mode (`app.main_worker` + `app.main_message_handler`).
 
-This is a planning/design milestone only.
+## Implementation Status (as of 2026-03-07)
+- Milestone 4 implementation is **functionally complete for split-mode runtime flows**.
+- Worker now supports in-run `reply_send` side-channel emission with `chatting.egress.v2` incremental/final sequencing.
+- Worker now persists and replays egress outbox entries (`pending_publish` / `published_unacked`) on startup.
+- Message handler now enforces ordered dispatch by `sequence` with staging/buffering in the task-ledger DB.
+- Policy engine now includes incremental-send controls (`allow_incremental_reply_send`, cap, per-window limit).
+
+### Completed
+- [x] `egress.v2` models + parsing in `app/broker/messages.py` (with v1 compatibility).
+- [x] `event_id` checkpoint storage APIs and SQLite table in `app/state`.
+- [x] Message-handler `event_id` dedupe path in `app/main_message_handler.py`.
+- [x] Message-handler ordered dispatch by `sequence` for incremental/final events with staged buffering.
+- [x] Worker outbox persistence/replay and startup replay hook in `app/main_worker.py`.
+- [x] Executor side-channel plumbing for `reply_send` at the worker/executor boundary.
+- [x] Policy controls for incremental reply gating (`allow_incremental_reply_send`, caps, rate limits).
+- [x] Regression tests for v2 parsing, sequence-order dispatch, incremental policy gating, and outbox replay listing.
+
+### Remaining
+- [ ] Full metrics/telemetry rollup for lifecycle latency and dedupe rates beyond audit/detail fields.
+- [ ] End-to-end crash-injection integration test for worker crash between outbox write and publish.
 
 ## Current Baseline (2026-03-07)
 - Worker emits egress only after executor + policy complete (`process_task_message`).
@@ -152,11 +171,10 @@ Metrics:
 5. Gradually enable for all eligible workflows.
 
 ## Follow-Up Implementation Tasks (PR-Sized)
-- Add `egress.v2` models and parsing in `app/broker/messages.py`.
-- Add event-id checkpoint storage APIs in `app/state` and migrations in `SQLiteStateStore`.
-- Add worker outbox persistence/replay in `app/worker_runtime.py`.
-- Add executor side-channel plumbing for `reply_send` in worker runtime/executor wrapper boundary.
-- Add message-handler ordered dispatch + `event_id` dedupe in `app/main_message_handler.py`.
-- Add policy profile controls for incremental send gating.
-- Add audit/metrics instrumentation and regression tests.
-
+- [x] Add `egress.v2` models and parsing in `app/broker/messages.py`.
+- [x] Add event-id checkpoint storage APIs in `app/state` and migrations in `SQLiteStateStore`.
+- [x] Add worker outbox persistence/replay in `app/main_worker.py` + `app/state/sqlite_store.py`.
+- [x] Add executor side-channel plumbing for `reply_send` in worker runtime/executor wrapper boundary.
+- [x] Add message-handler ordered dispatch + `event_id` dedupe in `app/main_message_handler.py`.
+- [x] Add policy profile controls for incremental send gating.
+- [ ] Add full metrics instrumentation and crash-injection integration tests.

@@ -55,6 +55,22 @@ class AlwaysFailExecutor:
         raise RuntimeError("executor down")
 
 
+@dataclass(frozen=True)
+class IncrementalReplyExecutor:
+    def execute(self, task, reply_send=None):
+        del task
+        if reply_send is not None:
+            reply_send({"body": "working on it"})
+            reply_send({"body": "still working"})
+        return ExecutionResult(
+            messages=[OutboundMessage(channel="final", target="ignored", body="done")],
+            actions=[],
+            config_updates=[],
+            requires_human_review=False,
+            errors=[],
+        )
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(
@@ -125,6 +141,50 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.run_record.result_status, "dead_letter")
             self.assertEqual(result.dead_lettered, True)
             self.assertEqual(store.list_dead_letters()[0].reason_codes, ["retry_exhausted"])
+
+    def test_process_task_message_emits_incremental_and_final_v2_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            policy = AllowlistPolicyEngine(
+                allowed_action_types=frozenset({"write_file"}),
+                allow_incremental_reply_send=True,
+            )
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=IncrementalReplyExecutor(),
+                policy=policy,
+                max_attempts=2,
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(len(result.egress_messages), 3)
+            self.assertEqual(result.egress_messages[0].event_kind, "incremental")
+            self.assertEqual(result.egress_messages[1].event_kind, "incremental")
+            self.assertEqual(result.egress_messages[2].event_kind, "final")
+            self.assertEqual([item.sequence for item in result.egress_messages], [0, 1, 2])
+            self.assertEqual(
+                [item.message_type for item in result.egress_messages],
+                ["chatting.egress.v2", "chatting.egress.v2", "chatting.egress.v2"],
+            )
+
+    def test_process_task_message_blocks_incremental_reply_send_when_policy_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=IncrementalReplyExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=2,
+            )
+
+            self.assertEqual(len(result.egress_messages), 1)
+            self.assertEqual(result.egress_messages[0].event_kind, "final")
+            audit_event = store.list_audit_events()[0]
+            self.assertIn("incremental_reply_send_not_allowed", audit_event.detail["reason_codes"])
 
 
 if __name__ == "__main__":

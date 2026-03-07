@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from app.models import (
     ActionProposal,
@@ -44,7 +44,12 @@ class CodexExecutor:
     command: tuple[str, ...] = ("codex", "exec", "--json")
     cwd: str | None = None
 
-    def execute(self, task: RoutedTask) -> ExecutionResult:
+    def execute(
+        self,
+        task: RoutedTask,
+        reply_send: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ExecutionResult:
+        del reply_send
         payload = json.dumps(_task_payload(task))
         try:
             completed = subprocess.run(
