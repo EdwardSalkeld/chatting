@@ -22,7 +22,7 @@ All hosts must have network reachability to the BBMB TCP endpoint.
 
 ```bash
 cp configs/message-handler-runtime.example.json /tmp/message-handler.json
-# edit bbmb_address, connector settings, and optional poll_wait_seconds (BBMB long-poll wait)
+# edit bbmb_address and connector settings
 python3 -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
@@ -37,7 +37,7 @@ python3 -m app.main_message_handler
 
 ```bash
 cp configs/worker-runtime.example.json /tmp/worker.json
-# edit bbmb_address, executor settings, and optional poll_wait_seconds (BBMB long-poll wait)
+# edit bbmb_address and executor settings
 python3 -m app.main_worker --config /tmp/worker.json
 ```
 

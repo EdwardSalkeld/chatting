@@ -31,11 +31,11 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
-        "poll_wait_seconds",
         "sleep_seconds",
         "use_stub_executor",
     }
 )
+BBMB_PICKUP_WAIT_SECONDS = 10
 
 
 def _configure_logging() -> None:
@@ -62,13 +62,6 @@ def _positive_float(value: str) -> float:
     return parsed
 
 
-def _non_negative_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
-    return parsed
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the chatting worker process.")
     parser.add_argument("--config", help="Path to JSON config file.")
@@ -77,11 +70,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-attempts", type=_positive_int, help="Maximum execution attempts per task.")
     parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke tests.")
     parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Queue pickup timeout seconds.")
-    parser.add_argument(
-        "--poll-wait-seconds",
-        type=_non_negative_int,
-        help="Optional BBMB long-poll wait duration (0 disables long-poll wait).",
-    )
     parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
     parser.add_argument("--codex-command", help="Command used for Codex executor.")
     parser.add_argument(
@@ -148,22 +136,6 @@ def _resolve_positive_int(cli_value: int | None, config_value: object, *, defaul
         return default_value
     if not isinstance(config_value, int) or isinstance(config_value, bool) or config_value <= 0:
         raise ValueError(f"config {setting_name} must be a positive integer")
-    return config_value
-
-
-def _resolve_non_negative_int(
-    cli_value: int | None,
-    config_value: object,
-    *,
-    default_value: int,
-    setting_name: str,
-) -> int:
-    if cli_value is not None:
-        return cli_value
-    if config_value is None:
-        return default_value
-    if not isinstance(config_value, int) or isinstance(config_value, bool) or config_value < 0:
-        raise ValueError(f"config {setting_name} must be a non-negative integer")
     return config_value
 
 
@@ -257,12 +229,6 @@ def main() -> int:
         default_value=20,
         setting_name="poll_timeout_seconds",
     )
-    poll_wait_seconds = _resolve_non_negative_int(
-        args.poll_wait_seconds,
-        config.get("poll_wait_seconds"),
-        default_value=0,
-        setting_name="poll_wait_seconds",
-    )
     sleep_seconds = _resolve_positive_float(
         args.sleep_seconds,
         config.get("sleep_seconds"),
@@ -289,7 +255,7 @@ def main() -> int:
         picked = broker.pickup_json(
             TASK_QUEUE_NAME,
             timeout_seconds=poll_timeout_seconds,
-            wait_seconds=poll_wait_seconds,
+            wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
         )
         if picked is None:
             LOGGER.info("worker_loop_empty loop=%s", loop_count)
