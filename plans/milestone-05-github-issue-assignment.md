@@ -15,7 +15,7 @@ without requiring an internet-facing webhook endpoint.
 
 ## Delivered Slice A (implemented)
 
-- Added `app.main_github_ingress` long-running polling process.
+- Integrated GitHub assignment polling into `app.main_message_handler` loop.
 - Added runtime helpers in `app.github_ingress_runtime`:
   - GraphQL query + parsing.
   - Assignment event normalization.
@@ -24,12 +24,10 @@ without requiring an internet-facing webhook endpoint.
 - Added tests:
   - `tests/test_github_ingress_runtime.py`
   - `tests/test_main_github_ingress.py`
-- Added runtime/deploy docs and templates:
-  - `configs/github-ingress-runtime.example.json`
-  - `configs/chatting-github-ingress.env.example`
-  - `deploy/systemd/chatting-github-ingress.service`
+- Added runtime/docs updates:
+  - `configs/message-handler-runtime.example.json`
   - `docs/connectors/github-issue-assignments.md`
-  - Updated `docs/run-split-bbmb.md`
+  - `docs/run-split-bbmb.md`
 
 ## Follow-up Slices
 

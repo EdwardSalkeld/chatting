@@ -2,14 +2,15 @@
 
 `chatting` can ingest GitHub issue assignments without exposing any webhook endpoint.
 
-The process entrypoint is:
+GitHub polling now runs inside the existing message-handler loop:
 
 ```bash
-python3 -m app.main_github_ingress --config /path/to/github-ingress-runtime.json
+python3 -m app.main_message_handler --config /path/to/message-handler-runtime.json
 ```
 
-The process polls `gh api graphql` for `AssignedEvent` timeline items, filters by assignee login,
-and publishes normalized `TaskQueueMessage` payloads to `chatting.tasks.v1`.
+When `github_repositories` is configured, message-handler polls `gh api graphql` for `AssignedEvent`
+timeline items, filters by assignee login, and publishes normalized `TaskQueueMessage` payloads to
+`chatting.tasks.v1`.
 
 ## Required config
 

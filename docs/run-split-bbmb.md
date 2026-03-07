@@ -1,9 +1,11 @@
 # Running Split Mode With BBMB
 
-This mode runs `chatting` as two processes:
+This mode runs `chatting` as a 3-part application:
 - `message-handler` on `UserOne` (connectors + outbound dispatch)
 - `worker` on `UserTwo` (routing + executor + policy)
-- `github-ingress` on `UserOne`/`UserTwo` (GitHub assignment polling -> task queue)
+- `bbmb-server` in the middle (message bus)
+
+GitHub assignment polling is part of `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
@@ -15,7 +17,6 @@ Queues are hardcoded:
 
 - Host A (`UserOne`): `python3 -m app.main_message_handler`
 - Host B (`UserTwo`): `python3 -m app.main_worker`
-- Host A or B: `python3 -m app.main_github_ingress`
 - Host C (or A/B): `bbmb-server` on `:9876`
 
 All hosts must have network reachability to the BBMB TCP endpoint.
@@ -61,34 +62,24 @@ python3 -m app.main_worker
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
-## 4) Configure GitHub ingress polling
+## 4) Configure GitHub assignment polling (in message-handler)
 
 ```bash
-cp configs/github-ingress-runtime.example.json /tmp/github-ingress.json
-# edit github_repositories, github_assignee_login, and reply channel settings
-python3 -m app.main_github_ingress --config /tmp/github-ingress.json
+# edit message-handler config: github_repositories, github_assignee_login, and reply channel settings
+python3 -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
-Optional env-based config path:
-
-```bash
-export CHATTING_GITHUB_INGRESS_CONFIG_PATH=/tmp/github-ingress.json
-python3 -m app.main_github_ingress
-```
-
-`gh` CLI must already be authenticated on the host running this process.
+`gh` CLI must already be authenticated on the message-handler host.
 
 ## 5) Run as `systemd` services
 
 Use:
 - `deploy/systemd/chatting-message-handler.service`
 - `deploy/systemd/chatting-worker.service`
-- `deploy/systemd/chatting-github-ingress.service`
 
 Env templates:
 - `configs/chatting-message-handler.env.example`
 - `configs/chatting-worker.env.example`
-- `configs/chatting-github-ingress.env.example`
 
 Install pattern mirrors existing live service setup:
 

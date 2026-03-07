@@ -25,5 +25,13 @@
   "telegram_allowed_chat_ids": ["123456789"],
   "telegram_allowed_channel_ids": ["-1001234567890"],
   "telegram_context_refs": ["repo:/home/edward/chatting"],
-  "context_ref": ["repo:/home/edward/chatting"]
+  "context_ref": ["repo:/home/edward/chatting"],
+  "github_repositories": ["brokensbone/chatting"],
+  "github_assignee_login": "BillyAcachofa",
+  "github_reply_channel_type": "telegram",
+  "github_reply_channel_target": "8605042448",
+  "github_context_refs": ["repo:/home/edward/chatting", "repo:/home/edward/bbmb"],
+  "github_policy_profile": "default",
+  "github_max_issues": 25,
+  "github_max_timeline_events": 10
 }
