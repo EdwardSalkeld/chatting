@@ -26,6 +26,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     {
         "bbmb_address",
         "codex_command",
+        "codex_working_dir",
         "db_path",
         "max_attempts",
         "max_loops",
@@ -71,6 +72,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
     parser.add_argument("--codex-command", help="Command used for Codex executor.")
     parser.add_argument(
+        "--codex-working-dir",
+        help="Working directory used only for launching Codex subprocesses.",
+    )
+    parser.add_argument(
         "--use-stub-executor",
         action="store_true",
         help="Use deterministic stub executor.",
@@ -106,6 +111,18 @@ def _resolve_str(cli_value: str | None, config_value: object, *, default_value: 
         return cli_value
     if config_value is None:
         return default_value
+    if not isinstance(config_value, str) or not config_value.strip():
+        raise ValueError(f"config {setting_name} must be a non-empty string")
+    return config_value
+
+
+def _resolve_optional_str(cli_value: str | None, config_value: object, *, setting_name: str) -> str | None:
+    if cli_value is not None:
+        if not cli_value.strip():
+            raise ValueError(f"{setting_name} must not be empty")
+        return cli_value
+    if config_value is None:
+        return None
     if not isinstance(config_value, str) or not config_value.strip():
         raise ValueError(f"config {setting_name} must be a non-empty string")
     return config_value
@@ -168,7 +185,12 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
     split_command = tuple(shlex.split(command))
     if not split_command:
         raise ValueError("codex_command must not be empty")
-    return CodexExecutor(command=split_command)
+    codex_working_dir = _resolve_optional_str(
+        args.codex_working_dir,
+        config.get("codex_working_dir"),
+        setting_name="codex_working_dir",
+    )
+    return CodexExecutor(command=split_command, cwd=codex_working_dir)
 
 
 def main() -> int:

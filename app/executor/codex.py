@@ -42,6 +42,7 @@ class CodexExecutor:
     """Run Codex as a subprocess and parse strict JSON output."""
 
     command: tuple[str, ...] = ("codex", "exec", "--json")
+    cwd: str | None = None
 
     def execute(self, task: RoutedTask) -> ExecutionResult:
         payload = json.dumps(_task_payload(task))
@@ -53,6 +54,7 @@ class CodexExecutor:
                 text=True,
                 timeout=task.execution_constraints.timeout_seconds,
                 check=False,
+                cwd=self.cwd,
             )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")
