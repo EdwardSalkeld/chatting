@@ -910,6 +910,21 @@ class SQLiteStateStore:
             )
             connection.commit()
 
+    def mark_egress_outbox_event_acked(self, *, event_id: str) -> None:
+        if not event_id:
+            raise ValueError("event_id is required")
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE egress_outbox
+                SET publish_state = ?, updated_at = ?
+                WHERE event_id = ?
+                """,
+                ("acked", now, event_id),
+            )
+            connection.commit()
+
     def list_replayable_egress_outbox_events(self) -> list[EgressQueueMessage]:
         with closing(self._connect()) as connection:
             rows = connection.execute(

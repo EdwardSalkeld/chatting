@@ -278,6 +278,10 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(len(replayable), 1)
             self.assertEqual(replayable[0].event_id, "evt:task:email:1:0")
 
+            store.mark_egress_outbox_event_acked(event_id="evt:task:email:1:0")
+            replayable = store.list_replayable_egress_outbox_events()
+            self.assertEqual(replayable, [])
+
 
 if __name__ == "__main__":
     unittest.main()

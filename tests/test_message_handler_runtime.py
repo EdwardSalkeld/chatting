@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.main_message_handler import _handle_egress_message, _prepare_ingress_envelope
+from app.main_message_handler import EgressTelemetryRollup, _handle_egress_message, _prepare_ingress_envelope
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.message_handler_runtime import TaskLedgerStore
 from app.models import ApplyResult, OutboundMessage, ReplyChannel, TaskEnvelope
@@ -208,6 +208,46 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(acked, ["guid-4", "guid-5"])
             self.assertEqual(applier.apply_calls, 1)
 
+    def test_handle_egress_message_marks_outbox_event_acked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_task_message()
+            ledger.record_task(task_message)
+            applier = _RecordingApplier()
+            acked: list[str] = []
+
+            queued = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:outbox",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
+            )
+            store.queue_egress_outbox_event(queued)
+            store.mark_egress_outbox_event_published(event_id="evt:task:email:1:outbox")
+
+            _handle_egress_message(
+                picked_guid="guid-outbox-1",
+                picked_payload=queued.to_dict(),
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-outbox-1"])
+            self.assertEqual(applier.apply_calls, 1)
+            self.assertEqual(store.list_replayable_egress_outbox_events(), [])
+
 
     def test_handle_egress_message_buffers_until_expected_sequence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -369,6 +409,30 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(applier.apply_calls, 1)
             turns = store.list_recent_conversation_turns(channel="telegram", target="12345", limit=5)
             self.assertEqual(turns, [("assistant", "reply-1")])
+
+    def test_egress_telemetry_rollup_reports_dedupe_rate_and_latency(self) -> None:
+        telemetry = EgressTelemetryRollup()
+        telemetry.record_received()
+        telemetry.record_received()
+        telemetry.record_dispatched(event_kind="incremental", latency_ms=120)
+        telemetry.record_dispatched(event_kind="final", latency_ms=80)
+        telemetry.record_deduped()
+        telemetry.record_dropped(reason="unknown_task")
+        telemetry.record_dropped(reason="disallowed_channel")
+        snapshot = telemetry.snapshot()
+
+        self.assertEqual(snapshot["received_total"], 2)
+        self.assertEqual(snapshot["dispatched_total"], 2)
+        self.assertEqual(snapshot["incremental_dispatched_total"], 1)
+        self.assertEqual(snapshot["final_dispatched_total"], 1)
+        self.assertEqual(snapshot["deduped_total"], 1)
+        self.assertEqual(snapshot["dedupe_hit_rate_pct"], 33.33)
+        self.assertEqual(snapshot["dispatch_latency_ms_avg"], 100.0)
+        self.assertEqual(snapshot["dispatch_latency_ms_max"], 120)
+        self.assertEqual(snapshot["dropped_total"], 2)
+        self.assertEqual(snapshot["dropped_unknown_task_total"], 1)
+        self.assertEqual(snapshot["dropped_disallowed_channel_total"], 1)
+        self.assertEqual(snapshot["dropped_missing_event_id_total"], 0)
 
 
 if __name__ == "__main__":
