@@ -27,7 +27,9 @@ from app.github_ingress_runtime import (
     GitHubAssignmentCheckpointStore,
     checkpoint_scope_key,
     default_graphql_runner,
+    expand_repository_patterns,
     fetch_assignment_events_for_repository,
+    fetch_authenticated_viewer_login,
     parse_repo_slug,
     publish_assignment_events,
     select_events_after_checkpoint,
@@ -374,7 +376,14 @@ def _resolve_github_repositories(args: argparse.Namespace, config: dict[str, obj
     deduped: list[str] = []
     seen: set[str] = set()
     for repository in repositories:
-        owner, name = parse_repo_slug(repository)
+        if not repository.strip():
+            raise ValueError("github_repositories entries must not be empty")
+        parts = repository.strip().split("/", maxsplit=1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError("github_repositories entries must be owner/repo or owner/*")
+        owner, name = parts
+        if name != "*" and "*" in name:
+            raise ValueError("github_repositories entries must be owner/repo or owner/*")
         normalized = f"{owner}/{name}"
         if normalized in seen:
             continue
@@ -404,13 +413,26 @@ def _resolve_github_ingress_settings(
     if not repositories:
         return None
 
+    assignee_login = _resolve_str(
+        args.github_assignee_login,
+        config.get("github_assignee_login"),
+        default_value="",
+        setting_name="github_assignee_login",
+    ).strip()
+    if not assignee_login:
+        try:
+            assignee_login = fetch_authenticated_viewer_login(
+                graphql_runner=default_graphql_runner,
+            )
+        except Exception as error:  # noqa: BLE001
+            raise ValueError(
+                "github_assignee_login is required when github_repositories is configured "
+                "unless it can be derived from authenticated gh user"
+            ) from error
+
     return GitHubIngressSettings(
         repositories=repositories,
-        assignee_login=_resolve_required_str(
-            args.github_assignee_login,
-            config.get("github_assignee_login"),
-            setting_name="github_assignee_login",
-        ),
+        assignee_login=assignee_login,
         reply_channel_type=_resolve_required_str(
             args.github_reply_channel_type,
             config.get("github_reply_channel_type"),
@@ -457,7 +479,11 @@ def _poll_github_assignment_ingress(
     checkpoint = checkpoint_store.get_checkpoint(scope_key)
     events = []
     scanned_event_count = 0
-    for repository in settings.repositories:
+    repositories_to_scan = expand_repository_patterns(
+        repository_patterns=settings.repositories,
+        graphql_runner=default_graphql_runner,
+    )
+    for repository in repositories_to_scan:
         owner, name = parse_repo_slug(repository)
         try:
             repository_events = fetch_assignment_events_for_repository(

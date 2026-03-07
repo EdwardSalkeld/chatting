@@ -14,8 +14,12 @@ timeline items, filters by assignee login, and publishes normalized `TaskQueueMe
 
 ## Required config
 
-- `github_repositories`: list of `owner/repo` strings to scan.
+- `github_repositories`: list of `owner/repo` and/or `owner/*` selectors to scan.
+
+## Optional config
+
 - `github_assignee_login`: only assignments to this GitHub login are emitted.
+  If omitted, message-handler uses the authenticated `gh` user login (`viewer.login`).
 - `github_reply_channel_type`: reply channel type for generated tasks (for example `telegram`).
 - `github_reply_channel_target`: reply channel target for generated tasks.
 
