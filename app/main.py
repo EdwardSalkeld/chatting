@@ -91,7 +91,7 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
     }
 )
 REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "interval_seconds", "job_name"})
-TELEGRAM_MEMORY_TURN_LIMIT = 20
+TELEGRAM_MEMORY_TURN_LIMIT = 30
 LOGGER = logging.getLogger(__name__)
 
 
