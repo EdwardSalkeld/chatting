@@ -1,0 +1,28 @@
+# GitHub Issue Assignment Polling
+
+`chatting` can ingest GitHub issue assignments without exposing any webhook endpoint.
+
+The process entrypoint is:
+
+```bash
+python3 -m app.main_github_ingress --config /path/to/github-ingress-runtime.json
+```
+
+The process polls `gh api graphql` for `AssignedEvent` timeline items, filters by assignee login,
+and publishes normalized `TaskQueueMessage` payloads to `chatting.tasks.v1`.
+
+## Required config
+
+- `github_repositories`: list of `owner/repo` strings to scan.
+- `github_assignee_login`: only assignments to this GitHub login are emitted.
+- `github_reply_channel_type`: reply channel type for generated tasks (for example `telegram`).
+- `github_reply_channel_target`: reply channel target for generated tasks.
+
+## Idempotency and checkpointing
+
+- Event dedupe key: `github:{repo_id}:{issue_id}:{assigned_event_id}`.
+- Processed keys are persisted via SQLite idempotency table.
+- Poll progress checkpoint (`created_at` + `event_id`) is persisted in SQLite table
+  `github_assignment_checkpoints`.
+
+This keeps retries/restarts safe while avoiding replaying historical assignment events each loop.
