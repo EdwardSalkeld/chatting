@@ -174,6 +174,7 @@ Acceptance criteria:
 Progress notes:
 - 2026-03-01: Phase added as deferred planning scope only; implementation intentionally not started.
 - 2026-03-03: Added initial `systemd` deployment implementation for live mode with `deploy/systemd/chatting-live.service` (runtime user/group, restart policy, journald log routing) and managed `EnvironmentFile` template (`configs/chatting-live.env.example`), plus operator runbook steps in `docs/run-live.md`.
+- 2026-03-07: Added `plans/milestone-04-realtime-reply-api.md` design plan for in-run `reply_send` with deferred final-message semantics in split mode, including event-id idempotency, outbox recovery model, rollout constraints, and implementation-slice backlog.
 
 ## Cross-Cutting Test Plan
 - Unit tests: models, router, policy, parser
