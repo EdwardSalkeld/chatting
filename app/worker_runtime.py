@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, Callable
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.executor import Executor
@@ -42,6 +43,7 @@ def process_task_message(
     started = time.perf_counter()
 
     reason_codes: list[str] = []
+    incremental_reason_codes: list[str] = []
     result_status = "dead_letter"
     attempt_count = 0
     last_error: str | None = None
@@ -49,12 +51,90 @@ def process_task_message(
     execution_payload: dict[str, object] | None = None
     policy_payload: dict[str, object] | None = None
     egress_messages: list[EgressQueueMessage] = []
+    incremental_requested_count = 0
+    incremental_messages: list[EgressQueueMessage] = []
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
+        next_sequence = 0
+        attempt_incremental_reason_codes: list[str] = []
+        attempt_incremental_messages: list[EgressQueueMessage] = []
+        attempt_incremental_send_timestamps: list[float] = []
+        attempt_incremental_requested_count = 0
+
+        def reply_send(payload: dict[str, Any] | None = None, /, **kwargs: object) -> None:
+            nonlocal next_sequence, attempt_incremental_requested_count
+            attempt_incremental_requested_count += 1
+            merged_payload: dict[str, object] = {}
+            if payload is not None:
+                if not isinstance(payload, dict):
+                    raise ValueError("reply_send payload must be an object")
+                merged_payload.update(payload)
+            merged_payload.update(kwargs)
+
+            body = merged_payload.get("body")
+            if not isinstance(body, str) or not body.strip():
+                raise ValueError("reply_send body is required")
+
+            now_monotonic = time.monotonic()
+            allowed, deny_reason = policy.can_send_incremental_reply(
+                [*attempt_incremental_send_timestamps, now_monotonic]
+            )
+            if not allowed:
+                attempt_incremental_reason_codes.append(deny_reason or "incremental_reply_send_denied")
+                return
+
+            channel = merged_payload.get("channel")
+            if channel is None:
+                channel = task_message.envelope.reply_channel.type
+            if not isinstance(channel, str) or not channel.strip():
+                raise ValueError("reply_send channel must be a non-empty string")
+
+            target = merged_payload.get("target")
+            if target is None:
+                target = task_message.envelope.reply_channel.target
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError("reply_send target must be a non-empty string")
+
+            dedupe_key_value = merged_payload.get("dedupe_key")
+            dedupe_key: str | None
+            if dedupe_key_value is None:
+                dedupe_key = None
+            elif isinstance(dedupe_key_value, str) and dedupe_key_value.strip():
+                dedupe_key = dedupe_key_value.strip()
+            else:
+                raise ValueError("reply_send dedupe_key must be a non-empty string")
+
+            attempt_incremental_send_timestamps.append(now_monotonic)
+            attempt_incremental_messages.append(
+                EgressQueueMessage(
+                    task_id=task_message.task_id,
+                    envelope_id=task_message.envelope.id,
+                    trace_id=task_message.trace_id,
+                    event_index=next_sequence,
+                    event_count=1,
+                    message=OutboundMessage(channel=channel, target=target, body=body),
+                    emitted_at=datetime.now(timezone.utc),
+                    event_id=_event_id_for_sequence(
+                        task_id=task_message.task_id,
+                        sequence=next_sequence,
+                        event_kind="incremental",
+                        dedupe_key=dedupe_key,
+                    ),
+                    sequence=next_sequence,
+                    event_kind="incremental",
+                    message_type="chatting.egress.v2",
+                )
+            )
+            next_sequence += 1
+
         error_stage = "executor"
         try:
-            execution_result = executor_impl.execute(task)
+            execution_result = _execute_with_optional_reply_send(
+                executor_impl=executor_impl,
+                task=task,
+                reply_send=reply_send,
+            )
             execution_payload = execution_result.to_dict()
 
             error_stage = "policy"
@@ -62,16 +142,21 @@ def process_task_message(
             policy_payload = decision.to_dict()
 
             dropped_action_count = len(decision.approved_actions)
-            reason_codes = list(decision.reason_codes)
+            incremental_reason_codes = attempt_incremental_reason_codes
+            incremental_messages = attempt_incremental_messages
+            incremental_requested_count = attempt_incremental_requested_count
+            reason_codes = [*decision.reason_codes, *incremental_reason_codes]
             if dropped_action_count > 0:
                 reason_codes.append("approved_actions_not_forwarded_to_egress")
             reason_codes = _dedupe(reason_codes)
             result_status = _result_status(reason_codes)
 
-            egress_messages = _build_egress_messages(
+            final_egress_messages = _build_egress_messages(
                 task_message=task_message,
                 decision=decision,
+                starting_sequence=next_sequence,
             )
+            egress_messages = [*incremental_messages, *final_egress_messages]
             break
         except Exception as exc:  # noqa: BLE001
             last_error = f"{type(exc).__name__}: {exc}"
@@ -110,6 +195,8 @@ def process_task_message(
                 "last_error_stage": last_error_stage,
                 "execution_result": execution_payload,
                 "policy_decision": policy_payload,
+                "incremental_reply_send_requested_count": incremental_requested_count,
+                "incremental_reply_send_published_count": len(incremental_messages),
                 "egress_message_count": len(egress_messages),
             },
             created_at=run_record.created_at,
@@ -138,6 +225,7 @@ def _build_egress_messages(
     *,
     task_message: TaskQueueMessage,
     decision: PolicyDecision,
+    starting_sequence: int,
 ) -> list[EgressQueueMessage]:
     normalized_messages = [
         _normalize_message_for_egress(message=message, task_message=task_message)
@@ -149,10 +237,19 @@ def _build_egress_messages(
             task_id=task_message.task_id,
             envelope_id=task_message.envelope.id,
             trace_id=task_message.trace_id,
-            event_index=index,
+            event_index=starting_sequence + index,
             event_count=len(normalized_messages),
             message=message,
             emitted_at=datetime.now(timezone.utc),
+            event_id=_event_id_for_sequence(
+                task_id=task_message.task_id,
+                sequence=starting_sequence + index,
+                event_kind="final",
+                dedupe_key=None,
+            ),
+            sequence=starting_sequence + index,
+            event_kind="final",
+            message_type="chatting.egress.v2",
         )
         for index, message in enumerate(normalized_messages)
     ]
@@ -188,6 +285,32 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         deduped.append(value)
     return deduped
+
+
+def _execute_with_optional_reply_send(
+    *,
+    executor_impl: Executor,
+    task,
+    reply_send: Callable[..., None],
+):
+    try:
+        return executor_impl.execute(task, reply_send=reply_send)
+    except TypeError as error:
+        if "reply_send" not in str(error):
+            raise
+        return executor_impl.execute(task)
+
+
+def _event_id_for_sequence(
+    *,
+    task_id: str,
+    sequence: int,
+    event_kind: str,
+    dedupe_key: str | None,
+) -> str:
+    if dedupe_key is None:
+        return f"evt:{task_id}:{sequence}:{event_kind}"
+    return f"evt:{task_id}:{sequence}:{event_kind}:{dedupe_key}"
 
 
 __all__ = [

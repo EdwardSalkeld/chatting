@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from app.models import ExecutionResult, RoutedTask
 
@@ -11,7 +11,11 @@ from app.models import ExecutionResult, RoutedTask
 class Executor(Protocol):
     """Execute a routed task and return structured results."""
 
-    def execute(self, task: RoutedTask) -> ExecutionResult:
+    def execute(
+        self,
+        task: RoutedTask,
+        reply_send: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ExecutionResult:
         """Run task logic and emit execution outputs for policy evaluation."""
 
 

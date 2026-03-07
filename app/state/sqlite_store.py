@@ -8,6 +8,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.broker import EgressQueueMessage
 from app.models import (
     AuditEvent,
     ConfigVersionRecord,
@@ -151,6 +152,20 @@ class SQLiteStateStore:
                     event_id TEXT NOT NULL,
                     dispatched_at TEXT NOT NULL,
                     PRIMARY KEY (task_id, event_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS egress_outbox (
+                    event_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    event_kind TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    publish_state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
                 """
             )
@@ -845,6 +860,67 @@ class SQLiteStateStore:
                 (task_id, event_id),
             ).fetchone()
         return row is not None
+
+    def queue_egress_outbox_event(self, message: EgressQueueMessage) -> None:
+        if message.event_id is None:
+            raise ValueError("event_id is required")
+        if message.sequence is None:
+            raise ValueError("sequence is required")
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO egress_outbox (
+                    event_id,
+                    task_id,
+                    sequence,
+                    event_kind,
+                    payload_json,
+                    publish_state,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message.event_id,
+                    message.task_id,
+                    message.sequence,
+                    message.event_kind,
+                    json.dumps(message.to_dict(), sort_keys=True),
+                    "pending_publish",
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+
+    def mark_egress_outbox_event_published(self, *, event_id: str) -> None:
+        if not event_id:
+            raise ValueError("event_id is required")
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE egress_outbox
+                SET publish_state = ?, updated_at = ?
+                WHERE event_id = ?
+                """,
+                ("published_unacked", now, event_id),
+            )
+            connection.commit()
+
+    def list_replayable_egress_outbox_events(self) -> list[EgressQueueMessage]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_json
+                FROM egress_outbox
+                WHERE publish_state IN ('pending_publish', 'published_unacked')
+                ORDER BY task_id ASC, sequence ASC, created_at ASC
+                """
+            ).fetchall()
+        return [EgressQueueMessage.from_dict(json.loads(row["payload_json"])) for row in rows]
 
 
 def _parse_rfc3339_utc(value: str) -> datetime:

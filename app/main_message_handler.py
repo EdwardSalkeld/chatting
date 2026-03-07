@@ -318,19 +318,59 @@ def _handle_egress_message(
         ack_callback(picked_guid)
         return
 
-    decision = _build_policy_decision_for_message(egress_message)
-    apply_result = applier.apply(
-        decision,
-        envelope=ledger_record.task_message.envelope,
+    ledger.stage_egress_event(egress_message)
+    ack_callback(picked_guid)
+    _flush_task_egress_in_sequence(
+        task_id=egress_message.task_id,
+        ledger=ledger,
+        store=store,
+        applier=applier,
     )
-    if apply_result.dispatched_messages:
+
+
+def _flush_task_egress_in_sequence(
+    *,
+    task_id: str,
+    ledger: TaskLedgerStore,
+    store: SQLiteStateStore,
+    applier: IntegratedApplier,
+) -> None:
+    ledger_record = ledger.get_task(task_id)
+    if ledger_record is None:
+        return
+
+    while True:
+        expected_sequence = ledger.expected_sequence(task_id)
+        staged = ledger.get_staged_event_by_sequence(task_id=task_id, sequence=expected_sequence)
+        if staged is None:
+            return
+
+        egress_message = staged.egress_message
+        if store.has_dispatched_event_id(task_id=task_id, event_id=staged.event_id):
+            ledger.mark_staged_event_dispatched(
+                task_id=task_id,
+                event_id=staged.event_id,
+                sequence=staged.sequence,
+            )
+            continue
+
+        decision = _build_policy_decision_for_message(egress_message)
+        apply_result = applier.apply(
+            decision,
+            envelope=ledger_record.task_message.envelope,
+        )
         store.mark_dispatched_event_id(
-            task_id=egress_message.task_id,
-            event_id=egress_message.event_id,
+            task_id=task_id,
+            event_id=staged.event_id,
         )
         store.mark_dispatched_event(
-            run_id=egress_message.task_id,
+            run_id=task_id,
             event_index=egress_message.event_index,
+        )
+        ledger.mark_staged_event_dispatched(
+            task_id=task_id,
+            event_id=staged.event_id,
+            sequence=staged.sequence,
         )
         if _should_store_telegram_memory(ledger_record.task_message.envelope):
             for message in apply_result.dispatched_messages:
@@ -343,17 +383,16 @@ def _handle_egress_message(
                     target=message.target,
                     role="assistant",
                     content=message.body,
-                    run_id=egress_message.task_id,
+                    run_id=task_id,
                 )
-    ack_callback(picked_guid)
-    LOGGER.info(
-        "egress_dispatched task_id=%s event_id=%s sequence=%s event_kind=%s channel=%s",
-        egress_message.task_id,
-        egress_message.event_id,
-        egress_message.sequence,
-        egress_message.event_kind,
-        egress_message.message.channel,
-    )
+        LOGGER.info(
+            "egress_dispatched task_id=%s event_id=%s sequence=%s event_kind=%s channel=%s",
+            egress_message.task_id,
+            egress_message.event_id,
+            egress_message.sequence,
+            egress_message.event_kind,
+            egress_message.message.channel,
+        )
 
 
 def main() -> int:

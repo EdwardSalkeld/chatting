@@ -181,7 +181,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 message=OutboundMessage(channel="email", target="alice@example.com", body="reply"),
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:1",
-                sequence=1,
+                sequence=0,
                 event_kind="incremental",
                 message_type="chatting.egress.v2",
             ).to_dict()
@@ -207,6 +207,83 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
 
             self.assertEqual(acked, ["guid-4", "guid-5"])
             self.assertEqual(applier.apply_calls, 1)
+
+
+    def test_handle_egress_message_buffers_until_expected_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_task_message()
+            ledger.record_task(task_message)
+            acked: list[str] = []
+            applied_bodies: list[str] = []
+
+            @dataclass
+            class _OrderAwareApplier:
+                def apply(self, decision, envelope=None):
+                    del envelope
+                    applied_bodies.append(decision.approved_messages[0].body)
+                    return ApplyResult(
+                        applied_actions=[],
+                        skipped_actions=[],
+                        dispatched_messages=decision.approved_messages,
+                        reason_codes=[],
+                    )
+
+            applier = _OrderAwareApplier()
+            out_of_order_payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=1,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="second"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:1",
+                sequence=1,
+                event_kind="incremental",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+            first_payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="first"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:0",
+                sequence=0,
+                event_kind="incremental",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-7",
+                picked_payload=out_of_order_payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+            self.assertEqual(acked, ["guid-7"])
+            self.assertEqual(applied_bodies, [])
+
+            _handle_egress_message(
+                picked_guid="guid-8",
+                picked_payload=first_payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-7", "guid-8"])
+            self.assertEqual(applied_bodies, ["first", "second"])
+            self.assertEqual(store.list_dispatched_event_indices(run_id=task_message.task_id), [0, 1])
 
     def test_prepare_ingress_envelope_enriches_telegram_with_last_30_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
