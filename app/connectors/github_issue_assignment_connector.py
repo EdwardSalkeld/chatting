@@ -28,8 +28,6 @@ class GitHubIssueAssignmentConnector:
 
     repository_patterns: list[str]
     assignee_login: str
-    reply_channel_type: str
-    reply_channel_target: str
     context_refs: list[str]
     checkpoint_store: GitHubAssignmentCheckpointStore
     policy_profile: str = "default"
@@ -42,10 +40,6 @@ class GitHubIssueAssignmentConnector:
             raise ValueError("repository_patterns are required")
         if not self.assignee_login:
             raise ValueError("assignee_login is required")
-        if not self.reply_channel_type:
-            raise ValueError("reply_channel_type is required")
-        if not self.reply_channel_target:
-            raise ValueError("reply_channel_target is required")
         if self.max_issues <= 0:
             raise ValueError("max_issues must be positive")
         if self.max_timeline_events <= 0:
@@ -123,8 +117,6 @@ class GitHubIssueAssignmentConnector:
 
         return [
             event.to_task_envelope(
-                reply_channel_type=self.reply_channel_type,
-                reply_channel_target=self.reply_channel_target,
                 context_refs=self.context_refs,
                 policy_profile=self.policy_profile,
             )

@@ -149,8 +149,6 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
                 events=[event],
                 store=store,
                 broker=broker,  # type: ignore[arg-type]
-                reply_channel_type="telegram",
-                reply_channel_target="8605042448",
                 context_refs=["repo:/home/edward/chatting"],
                 policy_profile="default",
             )
@@ -158,8 +156,6 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
                 events=[event],
                 store=store,
                 broker=broker,  # type: ignore[arg-type]
-                reply_channel_type="telegram",
-                reply_channel_target="8605042448",
                 context_refs=["repo:/home/edward/chatting"],
                 policy_profile="default",
             )
@@ -170,6 +166,13 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
             queue_name, payload = broker.published[0]
             self.assertEqual(queue_name, "chatting.tasks.v1")
             self.assertEqual(payload["task_id"], "task:github-assignment:brokensbone/chatting:12:AE_1")
+            self.assertEqual(
+                payload["envelope"]["reply_channel"],
+                {
+                    "type": "github",
+                    "target": "https://github.com/brokensbone/chatting/issues/12",
+                },
+            )
 
     def test_checkpoint_store_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from app.applier import (
+    GitHubIssueCommentSender,
     IntegratedApplier,
     MessageDispatchError,
     NoOpApplier,
@@ -258,6 +259,90 @@ class IntegratedApplierTests(unittest.TestCase):
             self.assertEqual(result.dispatched_messages, [])
             self.assertEqual(result.reason_codes, ["telegram_dispatch_not_configured"])
 
+    def test_apply_marks_github_dispatch_unconfigured(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="github",
+                        target="https://github.com/brokensbone/chatting/issues/12",
+                        body="Done.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir).apply(decision)
+
+            self.assertEqual(result.dispatched_messages, [])
+            self.assertEqual(result.reason_codes, ["github_dispatch_not_configured"])
+
+    def test_apply_dispatches_github_comment_with_sender(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingGitHubSender(sent=[])
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="github",
+                        target="https://github.com/brokensbone/chatting/issues/12",
+                        body="Done via GitHub.",
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, github_sender=sender).apply(decision)
+
+            self.assertEqual(
+                sender.sent,
+                [("https://github.com/brokensbone/chatting/issues/12", "Done via GitHub.")],
+            )
+            self.assertEqual([message.channel for message in result.dispatched_messages], ["github"])
+            self.assertEqual(result.reason_codes, [])
+
+    def test_apply_raises_dispatch_error_with_partial_progress_on_github_failure(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _FailingGitHubSender()
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="github",
+                        target="https://github.com/brokensbone/chatting/issues/12",
+                        body="one",
+                    ),
+                    OutboundMessage(
+                        channel="github",
+                        target="https://github.com/brokensbone/chatting/issues/12",
+                        body="two",
+                    ),
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            with self.assertRaises(MessageDispatchError) as context:
+                IntegratedApplier(base_dir=tmpdir, github_sender=sender).apply(decision)
+
+            self.assertEqual(context.exception.reason_code, "github_dispatch_failed")
+            self.assertEqual(
+                context.exception.dispatched_messages,
+                [
+                    OutboundMessage(
+                        channel="github",
+                        target="https://github.com/brokensbone/chatting/issues/12",
+                        body="one",
+                    )
+                ],
+            )
+
     def test_apply_maps_final_channel_to_envelope_reply_channel_for_telegram(self) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _RecordingTelegramSender(sent=[])
@@ -421,6 +506,57 @@ class TelegramMessageSenderTests(unittest.TestCase):
             sender.send("12345", "hello")
 
 
+class GitHubIssueCommentSenderTests(unittest.TestCase):
+    def test_send_uses_gh_cli_for_issue_url_target(self) -> None:
+        seen_commands: list[list[str]] = []
+
+        class _Result:
+            returncode = 0
+
+        def runner(command: list[str]) -> object:
+            seen_commands.append(command)
+            return _Result()
+
+        sender = GitHubIssueCommentSender(command_runner=runner)
+        sender.send("https://github.com/brokensbone/chatting/issues/12", "hello")
+
+        self.assertEqual(
+            seen_commands,
+            [["gh", "issue", "comment", "12", "--repo", "brokensbone/chatting", "--body", "hello"]],
+        )
+
+    def test_send_uses_gh_cli_for_slug_target(self) -> None:
+        seen_commands: list[list[str]] = []
+
+        class _Result:
+            returncode = 0
+
+        def runner(command: list[str]) -> object:
+            seen_commands.append(command)
+            return _Result()
+
+        sender = GitHubIssueCommentSender(command_runner=runner)
+        sender.send("brokensbone/chatting#13", "hello")
+
+        self.assertEqual(
+            seen_commands,
+            [["gh", "issue", "comment", "13", "--repo", "brokensbone/chatting", "--body", "hello"]],
+        )
+
+    def test_send_raises_for_invalid_target(self) -> None:
+        sender = GitHubIssueCommentSender(command_runner=lambda _command: object())
+        with self.assertRaisesRegex(ValueError, "github_issue_target_invalid"):
+            sender.send("not-a-github-target", "hello")
+
+    def test_send_raises_when_gh_cli_fails(self) -> None:
+        class _Result:
+            returncode = 1
+
+        sender = GitHubIssueCommentSender(command_runner=lambda _command: _Result())
+        with self.assertRaisesRegex(RuntimeError, "github_issue_comment_failed"):
+            sender.send("brokensbone/chatting#13", "hello")
+
+
 class _FakeSmtpClient:
     def __init__(self) -> None:
         self.login_args: tuple[str, str] | None = None
@@ -446,6 +582,24 @@ class _RecordingTelegramSender:
 
 
 class _FailingTelegramSender:
+    def __init__(self) -> None:
+        self._count = 0
+
+    def send(self, target: str, body: str) -> None:
+        self._count += 1
+        if self._count == 2:
+            raise RuntimeError("simulated dispatch failure")
+
+
+@dataclass
+class _RecordingGitHubSender:
+    sent: list[tuple[str, str]]
+
+    def send(self, target: str, body: str) -> None:
+        self.sent.append((target, body))
+
+
+class _FailingGitHubSender:
     def __init__(self) -> None:
         self._count = 0
 

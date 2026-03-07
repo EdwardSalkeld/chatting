@@ -68,8 +68,6 @@ class InterfaceContractTests(unittest.TestCase):
                 GitHubIssueAssignmentConnector(
                     repository_patterns=["brokensbone/chatting"],
                     assignee_login="BillyAcachofa",
-                    reply_channel_type="log",
-                    reply_channel_target="ops",
                     context_refs=[],
                     checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
                     graphql_runner=lambda _query, _variables: {"data": {"repository": None}},

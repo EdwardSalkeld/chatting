@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -16,7 +17,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Callable, Mapping
 
-from app.applier import IntegratedApplier
+from app.applier import GitHubIssueCommentSender, IntegratedApplier
 from app.broker import (
     BBMBQueueAdapter,
     EGRESS_QUEUE_NAME,
@@ -79,8 +80,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "telegram_context_refs",
         "github_repositories",
         "github_assignee_login",
-        "github_reply_channel_type",
-        "github_reply_channel_target",
         "github_context_refs",
         "github_policy_profile",
         "github_max_issues",
@@ -97,8 +96,6 @@ DEFAULT_METRICS_PORT = 9464
 class GitHubIngressSettings:
     repositories: list[str]
     assignee_login: str
-    reply_channel_type: str
-    reply_channel_target: str
     context_refs: list[str]
     policy_profile: str
     max_issues: int
@@ -742,16 +739,6 @@ def _resolve_github_ingress_settings(
     return GitHubIngressSettings(
         repositories=repositories,
         assignee_login=assignee_login,
-        reply_channel_type=_resolve_required_str(
-            args.github_reply_channel_type,
-            config.get("github_reply_channel_type"),
-            setting_name="github_reply_channel_type",
-        ),
-        reply_channel_target=_resolve_required_str(
-            args.github_reply_channel_target,
-            config.get("github_reply_channel_target"),
-            setting_name="github_reply_channel_target",
-        ),
         context_refs=_resolve_github_context_refs(args, config),
         policy_profile=_resolve_str(
             args.github_policy_profile,
@@ -853,8 +840,6 @@ def _build_live_connectors_fail_open(
             (
                 "github_repository",
                 "github_assignee_login",
-                "github_reply_channel_type",
-                "github_reply_channel_target",
                 "github_context_ref",
                 "github_policy_profile",
                 "github_max_issues",
@@ -863,8 +848,6 @@ def _build_live_connectors_fail_open(
             (
                 "github_repositories",
                 "github_assignee_login",
-                "github_reply_channel_type",
-                "github_reply_channel_target",
                 "github_context_refs",
                 "github_policy_profile",
                 "github_max_issues",
@@ -893,8 +876,6 @@ def _build_live_connectors_fail_open(
             "context_ref": [],
             "github_repository": [],
             "github_assignee_login": None,
-            "github_reply_channel_type": None,
-            "github_reply_channel_target": None,
             "github_context_ref": [],
             "github_policy_profile": None,
             "github_max_issues": None,
@@ -924,8 +905,6 @@ def _build_live_connectors_fail_open(
                     GitHubIssueAssignmentConnector(
                         repository_patterns=settings.repositories,
                         assignee_login=settings.assignee_login,
-                        reply_channel_type=settings.reply_channel_type,
-                        reply_channel_target=settings.reply_channel_target,
                         context_refs=settings.context_refs,
                         policy_profile=settings.policy_profile,
                         max_issues=settings.max_issues,
@@ -955,6 +934,12 @@ def _build_policy_decision_for_message(egress_message: EgressQueueMessage) -> Po
         config_updates=ConfigUpdateDecision(),
         reason_codes=[],
     )
+
+
+def _build_github_sender() -> GitHubIssueCommentSender | None:
+    if shutil.which("gh") is None:
+        return None
+    return GitHubIssueCommentSender()
 
 
 def _is_terminal_drop_message(egress_message: EgressQueueMessage) -> bool:
@@ -1361,6 +1346,7 @@ def main() -> int:
         base_dir=".",
         email_sender=_build_email_sender(args, config),
         telegram_sender=_build_telegram_sender(args, config),
+        github_sender=_build_github_sender(),
     )
     metrics = MessageHandlerMetrics()
     metrics_server = _start_metrics_server(

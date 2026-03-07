@@ -77,11 +77,10 @@ python3 -m app.main_worker
 ```bash
 # edit message-handler config: github_repositories (owner/repo or owner/*)
 # optional: github_assignee_login (defaults to authenticated gh user)
-# required for assignment-generated tasks: github_reply_channel_type and github_reply_channel_target
 python3 -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
-`gh` CLI must already be authenticated on the message-handler host.
+`gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
 
 ## 5) Run as `systemd` services
 

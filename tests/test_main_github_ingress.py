@@ -106,10 +106,6 @@ class MainGitHubIngressTests(unittest.TestCase):
                         "brokensbone/chatting",
                         "--github-assignee-login",
                         "BillyAcachofa",
-                        "--github-reply-channel-type",
-                        "telegram",
-                        "--github-reply-channel-target",
-                        "8605042448",
                         "--max-loops",
                         "2",
                         "--poll-interval-seconds",
@@ -131,8 +127,8 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(
                 published[0][1]["envelope"]["reply_channel"],
                 {
-                    "type": "telegram",
-                    "target": "8605042448",
+                    "type": "github",
+                    "target": "https://github.com/brokensbone/chatting/issues/12",
                 },
             )
 
@@ -187,10 +183,6 @@ class MainGitHubIngressTests(unittest.TestCase):
                         "127.0.0.1:9876",
                         "--github-repository",
                         "brokensbone/*",
-                        "--github-reply-channel-type",
-                        "telegram",
-                        "--github-reply-channel-target",
-                        "8605042448",
                         "--max-loops",
                         "1",
                         "--poll-interval-seconds",
@@ -219,6 +211,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                 patch(
                     "app.main_message_handler._start_metrics_server",
                     return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "app.main_message_handler.fetch_authenticated_viewer_login",
+                    side_effect=RuntimeError("no gh login"),
                 ),
                 patch(
                     "app.main_message_handler.LOGGER.error",
