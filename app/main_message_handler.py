@@ -343,13 +343,18 @@ def _handle_egress_message(
     ack_callback: Callable[[str], None],
     telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
+    def _ack_and_mark_outbox(event_id: str | None = None) -> None:
+        ack_callback(picked_guid)
+        if event_id:
+            store.mark_egress_outbox_event_acked(event_id=event_id)
+
     if telemetry is not None:
         telemetry.record_received()
     try:
         egress_message = EgressQueueMessage.from_dict(picked_payload)
     except Exception:
         LOGGER.exception("egress_payload_invalid guid=%s", picked_guid)
-        ack_callback(picked_guid)
+        _ack_and_mark_outbox()
         return
 
     ledger_record = ledger.get_task(egress_message.task_id)
@@ -362,7 +367,7 @@ def _handle_egress_message(
             egress_message.envelope_id,
             picked_guid,
         )
-        ack_callback(picked_guid)
+        _ack_and_mark_outbox(egress_message.event_id)
         return
 
     if egress_message.message.channel not in allowed_egress_channels:
@@ -374,7 +379,7 @@ def _handle_egress_message(
             egress_message.message.channel,
             picked_guid,
         )
-        ack_callback(picked_guid)
+        _ack_and_mark_outbox(egress_message.event_id)
         return
 
     if egress_message.event_id is None:
@@ -385,7 +390,7 @@ def _handle_egress_message(
             egress_message.task_id,
             picked_guid,
         )
-        ack_callback(picked_guid)
+        _ack_and_mark_outbox()
         return
 
     if store.has_dispatched_event_id(task_id=egress_message.task_id, event_id=egress_message.event_id):
@@ -397,11 +402,11 @@ def _handle_egress_message(
             egress_message.event_id,
             picked_guid,
         )
-        ack_callback(picked_guid)
+        _ack_and_mark_outbox(egress_message.event_id)
         return
 
     ledger.stage_egress_event(egress_message)
-    ack_callback(picked_guid)
+    _ack_and_mark_outbox(egress_message.event_id)
     _flush_task_egress_in_sequence(
         task_id=egress_message.task_id,
         ledger=ledger,
