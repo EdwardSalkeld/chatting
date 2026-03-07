@@ -208,11 +208,11 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(acked, ["guid-4", "guid-5"])
             self.assertEqual(applier.apply_calls, 1)
 
-    def test_prepare_ingress_envelope_enriches_telegram_with_last_20_turns(self) -> None:
+    def test_prepare_ingress_envelope_enriches_telegram_with_last_30_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")
             store = SQLiteStateStore(db_path)
-            for index in range(25):
+            for index in range(35):
                 store.append_conversation_turn(
                     channel="telegram",
                     target="12345",
