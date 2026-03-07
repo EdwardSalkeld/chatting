@@ -9,7 +9,8 @@ from typing import Any
 from app.models import AttachmentRef, OutboundMessage, ReplyChannel, SCHEMA_VERSION, TaskEnvelope
 
 _TASK_MESSAGE_TYPE = "chatting.task.v1"
-_EGRESS_MESSAGE_TYPE = "chatting.egress.v1"
+_EGRESS_MESSAGE_TYPE_V1 = "chatting.egress.v1"
+_EGRESS_MESSAGE_TYPE_V2 = "chatting.egress.v2"
 
 
 def _require_non_empty_string(value: object, *, field_name: str) -> str:
@@ -45,6 +46,16 @@ def _parse_event_index(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError("event_index must be a non-negative integer")
     return value
+
+
+def _parse_sequence(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("sequence must be a non-negative integer")
+    return value
+
+
+def _event_id_for_v1(*, task_id: str, event_index: int) -> str:
+    return f"v1:{task_id}:{event_index}"
 
 
 @dataclass(frozen=True)
@@ -180,33 +191,69 @@ class EgressQueueMessage:
     event_count: int
     message: OutboundMessage
     emitted_at: datetime
+    event_id: str | None = None
+    sequence: int | None = None
+    event_kind: str = "final"
     schema_version: str = SCHEMA_VERSION
-    message_type: str = _EGRESS_MESSAGE_TYPE
+    message_type: str = _EGRESS_MESSAGE_TYPE_V1
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"unsupported_schema_version:{self.schema_version}")
-        if self.message_type != _EGRESS_MESSAGE_TYPE:
-            raise ValueError("message_type must be chatting.egress.v1")
+        if self.message_type not in {_EGRESS_MESSAGE_TYPE_V1, _EGRESS_MESSAGE_TYPE_V2}:
+            raise ValueError("message_type must be chatting.egress.v1 or chatting.egress.v2")
         _require_non_empty_string(self.task_id, field_name="task_id")
         _require_non_empty_string(self.envelope_id, field_name="envelope_id")
         _require_non_empty_string(self.trace_id, field_name="trace_id")
-        _require_positive_int(self.event_index + 1, field_name="event_index")
-        _require_positive_int(self.event_count, field_name="event_count")
-        if self.event_index >= self.event_count:
-            raise ValueError("event_index must be less than event_count")
         if self.emitted_at.tzinfo is None:
             raise ValueError("emitted_at must be timezone-aware")
+        if self.message_type == _EGRESS_MESSAGE_TYPE_V1:
+            _require_positive_int(self.event_index + 1, field_name="event_index")
+            _require_positive_int(self.event_count, field_name="event_count")
+            if self.event_index >= self.event_count:
+                raise ValueError("event_index must be less than event_count")
+            if self.event_id is None:
+                object.__setattr__(
+                    self,
+                    "event_id",
+                    _event_id_for_v1(task_id=self.task_id, event_index=self.event_index),
+                )
+            if self.sequence is None:
+                object.__setattr__(self, "sequence", self.event_index)
+            if self.event_kind not in {"final", "incremental"}:
+                raise ValueError("event_kind must be final or incremental")
+            return
+
+        _require_non_empty_string(self.event_id, field_name="event_id")
+        if self.sequence is None:
+            raise ValueError("sequence is required")
+        _parse_sequence(self.sequence)
+        if self.event_kind not in {"final", "incremental"}:
+            raise ValueError("event_kind must be final or incremental")
+        object.__setattr__(self, "event_index", self.sequence)
 
     def to_dict(self) -> dict[str, Any]:
+        if self.message_type == _EGRESS_MESSAGE_TYPE_V1:
+            return {
+                "schema_version": self.schema_version,
+                "message_type": self.message_type,
+                "task_id": self.task_id,
+                "envelope_id": self.envelope_id,
+                "trace_id": self.trace_id,
+                "event_index": self.event_index,
+                "event_count": self.event_count,
+                "emitted_at": _serialize_utc_datetime(self.emitted_at),
+                "message": self.message.to_dict(),
+            }
         return {
             "schema_version": self.schema_version,
             "message_type": self.message_type,
             "task_id": self.task_id,
             "envelope_id": self.envelope_id,
             "trace_id": self.trace_id,
-            "event_index": self.event_index,
-            "event_count": self.event_count,
+            "event_id": self.event_id,
+            "sequence": self.sequence,
+            "event_kind": self.event_kind,
             "emitted_at": _serialize_utc_datetime(self.emitted_at),
             "message": self.message.to_dict(),
         }
@@ -216,30 +263,46 @@ class EgressQueueMessage:
         if not isinstance(payload, dict):
             raise ValueError("egress_message_payload_must_be_object")
         message_type = _require_non_empty_string(payload.get("message_type"), field_name="message_type")
-        if message_type != _EGRESS_MESSAGE_TYPE:
+        if message_type not in {_EGRESS_MESSAGE_TYPE_V1, _EGRESS_MESSAGE_TYPE_V2}:
             raise ValueError("egress_message_type_invalid")
 
         message_payload = payload.get("message")
         if not isinstance(message_payload, dict):
             raise ValueError("message must be an object")
 
-        event_index = _parse_event_index(payload.get("event_index"))
+        event_index = 0
+        event_count = 1
+        event_id: str | None = None
+        sequence: int | None = None
+        event_kind = "final"
+        if message_type == _EGRESS_MESSAGE_TYPE_V1:
+            event_index = _parse_event_index(payload.get("event_index"))
+            event_count = _require_positive_int(payload.get("event_count"), field_name="event_count")
+        else:
+            event_id = _require_non_empty_string(payload.get("event_id"), field_name="event_id")
+            sequence = _parse_sequence(payload.get("sequence"))
+            event_kind = _require_non_empty_string(payload.get("event_kind"), field_name="event_kind")
+
         return cls(
             task_id=_require_non_empty_string(payload.get("task_id"), field_name="task_id"),
             envelope_id=_require_non_empty_string(payload.get("envelope_id"), field_name="envelope_id"),
             trace_id=_require_non_empty_string(payload.get("trace_id"), field_name="trace_id"),
             event_index=event_index,
-            event_count=_require_positive_int(payload.get("event_count"), field_name="event_count"),
+            event_count=event_count,
             message=OutboundMessage(
                 channel=_require_non_empty_string(message_payload.get("channel"), field_name="message.channel"),
                 target=_require_non_empty_string(message_payload.get("target"), field_name="message.target"),
                 body=_require_non_empty_string(message_payload.get("body"), field_name="message.body"),
             ),
             emitted_at=_parse_utc_datetime(payload.get("emitted_at"), field_name="emitted_at"),
+            event_id=event_id,
+            sequence=sequence,
+            event_kind=event_kind,
             schema_version=_require_non_empty_string(
                 payload.get("schema_version", SCHEMA_VERSION),
                 field_name="schema_version",
             ),
+            message_type=message_type,
         )
 
 

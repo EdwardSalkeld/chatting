@@ -20,9 +20,16 @@ from app.broker import (
     TASK_QUEUE_NAME,
     TaskQueueMessage,
 )
-from app.main import _build_email_sender, _build_live_connectors, _build_telegram_sender
+from app.main import (
+    TELEGRAM_MEMORY_TURN_LIMIT,
+    _build_email_sender,
+    _build_live_connectors,
+    _build_telegram_sender,
+    _enrich_telegram_envelope_with_memory,
+    _should_store_telegram_memory,
+)
 from app.message_handler_runtime import TaskLedgerStore
-from app.models import ConfigUpdateDecision, PolicyDecision
+from app.models import ConfigUpdateDecision, PolicyDecision, TaskEnvelope
 from app.state import SQLiteStateStore
 
 MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR = "CHATTING_MESSAGE_HANDLER_CONFIG_PATH"
@@ -230,6 +237,30 @@ def _build_policy_decision_for_message(egress_message: EgressQueueMessage) -> Po
     )
 
 
+def _prepare_ingress_envelope(
+    *,
+    store: SQLiteStateStore,
+    envelope: TaskEnvelope,
+    run_id: str,
+) -> TaskEnvelope:
+    if not _should_store_telegram_memory(envelope):
+        return envelope
+
+    enriched_envelope = _enrich_telegram_envelope_with_memory(
+        store=store,
+        envelope=envelope,
+        turn_limit=TELEGRAM_MEMORY_TURN_LIMIT,
+    )
+    store.append_conversation_turn(
+        channel="telegram",
+        target=envelope.reply_channel.target,
+        role="user",
+        content=envelope.content,
+        run_id=run_id,
+    )
+    return enriched_envelope
+
+
 def _handle_egress_message(
     *,
     picked_guid: str,
@@ -268,12 +299,20 @@ def _handle_egress_message(
         ack_callback(picked_guid)
         return
 
-    dispatched_indices = set(store.list_dispatched_event_indices(run_id=egress_message.task_id))
-    if egress_message.event_index in dispatched_indices:
-        LOGGER.info(
-            "egress_skip_already_dispatched task_id=%s event_index=%s guid=%s",
+    if egress_message.event_id is None:
+        LOGGER.error(
+            "egress_drop_missing_event_id task_id=%s guid=%s",
             egress_message.task_id,
-            egress_message.event_index,
+            picked_guid,
+        )
+        ack_callback(picked_guid)
+        return
+
+    if store.has_dispatched_event_id(task_id=egress_message.task_id, event_id=egress_message.event_id):
+        LOGGER.info(
+            "egress_skip_already_dispatched task_id=%s event_id=%s guid=%s",
+            egress_message.task_id,
+            egress_message.event_id,
             picked_guid,
         )
         ack_callback(picked_guid)
@@ -285,15 +324,34 @@ def _handle_egress_message(
         envelope=ledger_record.task_message.envelope,
     )
     if apply_result.dispatched_messages:
+        store.mark_dispatched_event_id(
+            task_id=egress_message.task_id,
+            event_id=egress_message.event_id,
+        )
         store.mark_dispatched_event(
             run_id=egress_message.task_id,
             event_index=egress_message.event_index,
         )
+        if _should_store_telegram_memory(ledger_record.task_message.envelope):
+            for message in apply_result.dispatched_messages:
+                if message.channel != "telegram":
+                    continue
+                if message.target != ledger_record.task_message.envelope.reply_channel.target:
+                    continue
+                store.append_conversation_turn(
+                    channel="telegram",
+                    target=message.target,
+                    role="assistant",
+                    content=message.body,
+                    run_id=egress_message.task_id,
+                )
     ack_callback(picked_guid)
     LOGGER.info(
-        "egress_dispatched task_id=%s event_index=%s channel=%s",
+        "egress_dispatched task_id=%s event_id=%s sequence=%s event_kind=%s channel=%s",
         egress_message.task_id,
-        egress_message.event_index,
+        egress_message.event_id,
+        egress_message.sequence,
+        egress_message.event_kind,
         egress_message.message.channel,
     )
 
@@ -357,8 +415,14 @@ def main() -> int:
             for envelope in connector.poll():
                 if store.seen(envelope.source, envelope.dedupe_key):
                     continue
+                task_id = f"task:{envelope.id}"
+                task_envelope = _prepare_ingress_envelope(
+                    store=store,
+                    envelope=envelope,
+                    run_id=task_id,
+                )
                 task_message = TaskQueueMessage.from_envelope(
-                    envelope,
+                    task_envelope,
                     trace_id=f"trace:{envelope.id}",
                 )
                 broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())

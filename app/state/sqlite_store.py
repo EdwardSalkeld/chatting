@@ -144,6 +144,16 @@ class SQLiteStateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dispatched_event_ids (
+                    task_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    dispatched_at TEXT NOT NULL,
+                    PRIMARY KEY (task_id, event_id)
+                )
+                """
+            )
             connection.commit()
 
     def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
@@ -803,6 +813,38 @@ class SQLiteStateStore:
                 (run_id,),
             ).fetchall()
         return [int(row["event_index"]) for row in rows]
+
+    def mark_dispatched_event_id(self, *, task_id: str, event_id: str) -> None:
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not event_id:
+            raise ValueError("event_id is required")
+        dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO dispatched_event_ids (task_id, event_id, dispatched_at)
+                VALUES (?, ?, ?)
+                """,
+                (task_id, event_id, dispatched_at),
+            )
+            connection.commit()
+
+    def has_dispatched_event_id(self, *, task_id: str, event_id: str) -> bool:
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not event_id:
+            raise ValueError("event_id is required")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM dispatched_event_ids
+                WHERE task_id = ? AND event_id = ?
+                """,
+                (task_id, event_id),
+            ).fetchone()
+        return row is not None
 
 
 def _parse_rfc3339_utc(value: str) -> datetime:

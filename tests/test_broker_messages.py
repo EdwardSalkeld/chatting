@@ -50,7 +50,33 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.task_id, message.task_id)
         self.assertEqual(parsed.event_index, 0)
         self.assertEqual(parsed.event_count, 2)
+        self.assertEqual(parsed.event_id, "v1:task:email:1:0")
+        self.assertEqual(parsed.sequence, 0)
+        self.assertEqual(parsed.event_kind, "final")
         self.assertEqual(parsed.message.target, "alice@example.com")
+
+    def test_egress_v2_message_round_trip(self) -> None:
+        message = EgressQueueMessage(
+            task_id="task:email:2",
+            envelope_id="email:2",
+            trace_id="trace:email:2",
+            event_index=0,
+            event_count=1,
+            message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+            emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+            event_id="evt:task:email:2:1",
+            sequence=1,
+            event_kind="incremental",
+            message_type="chatting.egress.v2",
+        )
+
+        parsed = EgressQueueMessage.from_dict(message.to_dict())
+
+        self.assertEqual(parsed.task_id, message.task_id)
+        self.assertEqual(parsed.event_id, "evt:task:email:2:1")
+        self.assertEqual(parsed.sequence, 1)
+        self.assertEqual(parsed.event_kind, "incremental")
+        self.assertEqual(parsed.event_index, 1)
 
     def test_egress_message_rejects_event_index_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
@@ -62,6 +88,21 @@ class EgressQueueMessageTests(unittest.TestCase):
                 event_count=2,
                 message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+            )
+
+    def test_egress_v2_message_requires_event_id(self) -> None:
+        with self.assertRaises(ValueError):
+            EgressQueueMessage(
+                task_id="task:email:2",
+                envelope_id="email:2",
+                trace_id="trace:email:2",
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
             )
 
 

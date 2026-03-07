@@ -114,5 +114,11 @@ class StateStore(Protocol):
     def list_dispatched_event_indices(self, *, run_id: str) -> list[int]:
         """Return dispatched event indexes for one run in ascending order."""
 
+    def mark_dispatched_event_id(self, *, task_id: str, event_id: str) -> None:
+        """Persist one dispatched outbound event ID checkpoint for idempotent retry."""
+
+    def has_dispatched_event_id(self, *, task_id: str, event_id: str) -> bool:
+        """Return whether one outbound event ID was already dispatched."""
+
 
 __all__ = ["StateStore"]
