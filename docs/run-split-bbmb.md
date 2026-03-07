@@ -1,8 +1,11 @@
 # Running Split Mode With BBMB
 
-This mode runs `chatting` as two processes:
+This mode runs `chatting` as a 3-part application:
 - `message-handler` on `UserOne` (connectors + outbound dispatch)
 - `worker` on `UserTwo` (routing + executor + policy)
+- `bbmb-server` in the middle (message bus)
+
+GitHub assignment polling is part of `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
@@ -59,7 +62,16 @@ python3 -m app.main_worker
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
-## 4) Run as `systemd` services
+## 4) Configure GitHub assignment polling (in message-handler)
+
+```bash
+# edit message-handler config: github_repositories, github_assignee_login, and reply channel settings
+python3 -m app.main_message_handler --config /tmp/message-handler.json
+```
+
+`gh` CLI must already be authenticated on the message-handler host.
+
+## 5) Run as `systemd` services
 
 Use:
 - `deploy/systemd/chatting-message-handler.service`

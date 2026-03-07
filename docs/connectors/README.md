@@ -9,3 +9,4 @@ Implemented connector docs:
 - [Telegram](/home/edward/chatting/docs/connectors/telegram.md)
 - [Slack](/home/edward/chatting/docs/connectors/slack.md)
 - [Webhook](/home/edward/chatting/docs/connectors/webhook.md)
+- [GitHub Issue Assignments](/home/edward/chatting/docs/connectors/github-issue-assignments.md)
