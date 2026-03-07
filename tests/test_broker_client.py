@@ -34,8 +34,13 @@ class _FakeBBMBClient:
         self.queues[queue_name].append(_FakePickupResult(guid=guid, content=content))
         return guid
 
-    def pickup_message(self, queue_name: str, timeout_seconds: int = 30):
-        del timeout_seconds
+    def pickup_message(
+        self,
+        queue_name: str,
+        timeout_seconds: int = 30,
+        wait_seconds: int = 0,
+    ):
+        del timeout_seconds, wait_seconds
         queue = self.queues.setdefault(queue_name, [])
         if not queue:
             raise QueueEmptyError("empty")
@@ -87,6 +92,37 @@ class BBMBQueueAdapterTests(unittest.TestCase):
 
         with self.assertRaises(BrokerOperationError):
             adapter.pickup_json("chatting.tasks.v1")
+
+    def test_pickup_forwards_wait_seconds(self) -> None:
+        recorded: dict[str, int] = {}
+
+        class _RecordingPickupClient(_FakeBBMBClient):
+            def pickup_message(
+                self,
+                queue_name: str,
+                timeout_seconds: int = 30,
+                wait_seconds: int = 0,
+            ):
+                recorded["timeout_seconds"] = timeout_seconds
+                recorded["wait_seconds"] = wait_seconds
+                return super().pickup_message(
+                    queue_name,
+                    timeout_seconds=timeout_seconds,
+                    wait_seconds=wait_seconds,
+                )
+
+        shared_client = _RecordingPickupClient("ignored")
+        shared_client.ensure_queue("chatting.tasks.v1")
+        shared_client.queues["chatting.tasks.v1"].append(
+            _FakePickupResult(guid="guid-1", content=json.dumps({"ok": True}))
+        )
+        adapter = BBMBQueueAdapter(
+            address="localhost:9876",
+            client_factory=lambda _address: shared_client,
+        )
+
+        adapter.pickup_json("chatting.tasks.v1", timeout_seconds=7, wait_seconds=3)
+        self.assertEqual(recorded, {"timeout_seconds": 7, "wait_seconds": 3})
 
 
 if __name__ == "__main__":
