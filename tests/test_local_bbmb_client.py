@@ -93,6 +93,22 @@ class LocalBBMBClientTests(unittest.TestCase):
             with self.assertRaises(QueueEmptyError):
                 client.pickup_message("chatting.tasks.v1", timeout_seconds=1)
 
+    def test_pickup_payload_includes_wait_seconds_when_configured(self) -> None:
+        pickup_empty_response = _frame(0x03, struct.pack("B", 0x01))
+        fake_socket = _FakeSocket(responses=[pickup_empty_response])
+        client = Client(
+            address="127.0.0.1:9876",
+            socket_factory=lambda: fake_socket,
+        )
+
+        with client:
+            with self.assertRaises(QueueEmptyError):
+                client.pickup_message("chatting.tasks.v1", timeout_seconds=5, wait_seconds=4)
+
+        expected_payload = _encode_string("chatting.tasks.v1") + struct.pack(">I", 5) + struct.pack(">I", 4)
+        expected_frame = _frame(0x03, expected_payload)
+        self.assertEqual(fake_socket.sent, [expected_frame])
+
     def test_operations_require_connection(self) -> None:
         client = Client(address="127.0.0.1:9876", socket_factory=lambda: _FakeSocket([]))
         with self.assertRaises(BBMBError):

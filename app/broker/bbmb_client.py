@@ -28,7 +28,12 @@ class _BBMBClientProtocol(Protocol):
 
     def add_message(self, queue_name: str, content: str) -> str: ...
 
-    def pickup_message(self, queue_name: str, timeout_seconds: int = 30) -> Any: ...
+    def pickup_message(
+        self,
+        queue_name: str,
+        timeout_seconds: int = 30,
+        wait_seconds: int = 0,
+    ) -> Any: ...
 
     def delete_message(self, queue_name: str, guid: str) -> None: ...
 
@@ -63,10 +68,20 @@ class BBMBQueueAdapter:
         except Exception as error:  # noqa: BLE001
             raise BrokerOperationError(f"publish_failed:{queue_name}:{error}") from error
 
-    def pickup_json(self, queue_name: str, *, timeout_seconds: int = 30) -> PickedMessage | None:
+    def pickup_json(
+        self,
+        queue_name: str,
+        *,
+        timeout_seconds: int = 30,
+        wait_seconds: int = 0,
+    ) -> PickedMessage | None:
         try:
             with self._client_factory(self._address) as client:
-                result = client.pickup_message(queue_name, timeout_seconds=timeout_seconds)
+                result = client.pickup_message(
+                    queue_name,
+                    timeout_seconds=timeout_seconds,
+                    wait_seconds=wait_seconds,
+                )
         except Exception as error:  # noqa: BLE001
             if error.__class__.__name__ == "QueueEmptyError":
                 return None

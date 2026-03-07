@@ -9,6 +9,8 @@ import os
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -66,6 +68,75 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "telegram_context_refs",
     }
 )
+BBMB_EGRESS_PICKUP_WAIT_SECONDS = 5
+
+
+@dataclass
+class EgressTelemetryRollup:
+    """In-memory telemetry rollup for split-mode egress lifecycle signals."""
+
+    received_total: int = 0
+    dispatched_total: int = 0
+    deduped_total: int = 0
+    dropped_total: int = 0
+    dropped_unknown_task_total: int = 0
+    dropped_disallowed_channel_total: int = 0
+    dropped_missing_event_id_total: int = 0
+    dispatch_latency_ms_total: int = 0
+    dispatch_latency_ms_count: int = 0
+    dispatch_latency_ms_max: int = 0
+    incremental_dispatched_total: int = 0
+    final_dispatched_total: int = 0
+
+    def record_received(self) -> None:
+        self.received_total += 1
+
+    def record_deduped(self) -> None:
+        self.deduped_total += 1
+
+    def record_dropped(self, *, reason: str) -> None:
+        self.dropped_total += 1
+        if reason == "unknown_task":
+            self.dropped_unknown_task_total += 1
+        elif reason == "disallowed_channel":
+            self.dropped_disallowed_channel_total += 1
+        elif reason == "missing_event_id":
+            self.dropped_missing_event_id_total += 1
+
+    def record_dispatched(self, *, event_kind: str, latency_ms: int) -> None:
+        self.dispatched_total += 1
+        if event_kind == "incremental":
+            self.incremental_dispatched_total += 1
+        else:
+            self.final_dispatched_total += 1
+        self.dispatch_latency_ms_total += latency_ms
+        self.dispatch_latency_ms_count += 1
+        self.dispatch_latency_ms_max = max(self.dispatch_latency_ms_max, latency_ms)
+
+    def snapshot(self) -> dict[str, float | int]:
+        dedupe_base = self.dispatched_total + self.deduped_total
+        dedupe_hit_rate_pct = (
+            round((self.deduped_total / dedupe_base) * 100.0, 2) if dedupe_base else 0.0
+        )
+        avg_dispatch_latency_ms = (
+            round(self.dispatch_latency_ms_total / self.dispatch_latency_ms_count, 2)
+            if self.dispatch_latency_ms_count
+            else 0.0
+        )
+        return {
+            "received_total": self.received_total,
+            "dispatched_total": self.dispatched_total,
+            "deduped_total": self.deduped_total,
+            "dedupe_hit_rate_pct": dedupe_hit_rate_pct,
+            "dropped_total": self.dropped_total,
+            "dropped_unknown_task_total": self.dropped_unknown_task_total,
+            "dropped_disallowed_channel_total": self.dropped_disallowed_channel_total,
+            "dropped_missing_event_id_total": self.dropped_missing_event_id_total,
+            "incremental_dispatched_total": self.incremental_dispatched_total,
+            "final_dispatched_total": self.final_dispatched_total,
+            "dispatch_latency_ms_avg": avg_dispatch_latency_ms,
+            "dispatch_latency_ms_max": self.dispatch_latency_ms_max,
+        }
 
 
 def _configure_logging() -> None:
@@ -270,7 +341,10 @@ def _handle_egress_message(
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
     ack_callback: Callable[[str], None],
+    telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
+    if telemetry is not None:
+        telemetry.record_received()
     try:
         egress_message = EgressQueueMessage.from_dict(picked_payload)
     except Exception:
@@ -280,6 +354,8 @@ def _handle_egress_message(
 
     ledger_record = ledger.get_task(egress_message.task_id)
     if ledger_record is None or ledger_record.envelope_id != egress_message.envelope_id:
+        if telemetry is not None:
+            telemetry.record_dropped(reason="unknown_task")
         LOGGER.error(
             "egress_drop_unknown_task task_id=%s envelope_id=%s guid=%s",
             egress_message.task_id,
@@ -290,6 +366,8 @@ def _handle_egress_message(
         return
 
     if egress_message.message.channel not in allowed_egress_channels:
+        if telemetry is not None:
+            telemetry.record_dropped(reason="disallowed_channel")
         LOGGER.error(
             "egress_drop_disallowed_channel task_id=%s channel=%s guid=%s",
             egress_message.task_id,
@@ -300,6 +378,8 @@ def _handle_egress_message(
         return
 
     if egress_message.event_id is None:
+        if telemetry is not None:
+            telemetry.record_dropped(reason="missing_event_id")
         LOGGER.error(
             "egress_drop_missing_event_id task_id=%s guid=%s",
             egress_message.task_id,
@@ -309,6 +389,8 @@ def _handle_egress_message(
         return
 
     if store.has_dispatched_event_id(task_id=egress_message.task_id, event_id=egress_message.event_id):
+        if telemetry is not None:
+            telemetry.record_deduped()
         LOGGER.info(
             "egress_skip_already_dispatched task_id=%s event_id=%s guid=%s",
             egress_message.task_id,
@@ -325,6 +407,7 @@ def _handle_egress_message(
         ledger=ledger,
         store=store,
         applier=applier,
+        telemetry=telemetry,
     )
 
 
@@ -334,6 +417,7 @@ def _flush_task_egress_in_sequence(
     ledger: TaskLedgerStore,
     store: SQLiteStateStore,
     applier: IntegratedApplier,
+    telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
     ledger_record = ledger.get_task(task_id)
     if ledger_record is None:
@@ -347,6 +431,8 @@ def _flush_task_egress_in_sequence(
 
         egress_message = staged.egress_message
         if store.has_dispatched_event_id(task_id=task_id, event_id=staged.event_id):
+            if telemetry is not None:
+                telemetry.record_deduped()
             ledger.mark_staged_event_dispatched(
                 task_id=task_id,
                 event_id=staged.event_id,
@@ -372,6 +458,14 @@ def _flush_task_egress_in_sequence(
             event_id=staged.event_id,
             sequence=staged.sequence,
         )
+        dispatch_latency_ms = int(
+            (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
+        )
+        if telemetry is not None:
+            telemetry.record_dispatched(
+                event_kind=egress_message.event_kind,
+                latency_ms=max(dispatch_latency_ms, 0),
+            )
         if _should_store_telegram_memory(ledger_record.task_message.envelope):
             for message in apply_result.dispatched_messages:
                 if message.channel != "telegram":
@@ -446,6 +540,7 @@ def main() -> int:
     )
 
     loop_count = 0
+    telemetry = EgressTelemetryRollup()
     while True:
         loop_count += 1
 
@@ -469,7 +564,11 @@ def main() -> int:
                 store.mark_seen(envelope.source, envelope.dedupe_key)
                 ingress_published += 1
 
-        egress_picked = broker.pickup_json(EGRESS_QUEUE_NAME, timeout_seconds=poll_timeout_seconds)
+        egress_picked = broker.pickup_json(
+            EGRESS_QUEUE_NAME,
+            timeout_seconds=poll_timeout_seconds,
+            wait_seconds=BBMB_EGRESS_PICKUP_WAIT_SECONDS,
+        )
         if egress_picked is not None:
             _handle_egress_message(
                 picked_guid=egress_picked.guid,
@@ -479,12 +578,29 @@ def main() -> int:
                 allowed_egress_channels=allowed_egress_channels,
                 applier=applier,
                 ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
+                telemetry=telemetry,
             )
 
+        telemetry_snapshot = telemetry.snapshot()
         LOGGER.info(
-            "message_handler_loop_completed loop=%s ingress_published=%s",
+            (
+                "message_handler_loop_completed loop=%s ingress_published=%s "
+                "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
+                "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
+                "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
+                "egress_incremental_dispatched_total=%s egress_final_dispatched_total=%s"
+            ),
             loop_count,
             ingress_published,
+            telemetry_snapshot["received_total"],
+            telemetry_snapshot["dispatched_total"],
+            telemetry_snapshot["deduped_total"],
+            telemetry_snapshot["dedupe_hit_rate_pct"],
+            telemetry_snapshot["dropped_total"],
+            telemetry_snapshot["dispatch_latency_ms_avg"],
+            telemetry_snapshot["dispatch_latency_ms_max"],
+            telemetry_snapshot["incremental_dispatched_total"],
+            telemetry_snapshot["final_dispatched_total"],
         )
 
         if max_loops and loop_count >= max_loops:

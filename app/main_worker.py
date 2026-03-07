@@ -35,6 +35,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "use_stub_executor",
     }
 )
+BBMB_PICKUP_WAIT_SECONDS = 10
 
 
 def _configure_logging() -> None:
@@ -251,7 +252,11 @@ def main() -> int:
         if not replay_done:
             _replay_egress_outbox(store=store, broker=broker)
             replay_done = True
-        picked = broker.pickup_json(TASK_QUEUE_NAME, timeout_seconds=poll_timeout_seconds)
+        picked = broker.pickup_json(
+            TASK_QUEUE_NAME,
+            timeout_seconds=poll_timeout_seconds,
+            wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
+        )
         if picked is None:
             LOGGER.info("worker_loop_empty loop=%s", loop_count)
             if max_loops and loop_count >= max_loops:

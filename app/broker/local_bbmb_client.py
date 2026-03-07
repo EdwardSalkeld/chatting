@@ -124,9 +124,16 @@ class Client:
             raise ServerError("server internal error")
         raise BBMBError(f"add_message_failed_status:{status}")
 
-    def pickup_message(self, queue_name: str, timeout_seconds: int = 30) -> Message:
+    def pickup_message(
+        self,
+        queue_name: str,
+        timeout_seconds: int = 30,
+        wait_seconds: int = 0,
+    ) -> Message:
         payload = _write_string(queue_name)
         payload += struct.pack(">I", timeout_seconds)
+        if wait_seconds > 0:
+            payload += struct.pack(">I", wait_seconds)
 
         self._write_frame(_CommandType.PICKUP_MESSAGE, payload)
         _, response_payload = self._read_frame()
