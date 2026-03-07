@@ -60,6 +60,49 @@ query (
 }
 """
 
+VIEWER_LOGIN_QUERY = """
+query {
+  viewer {
+    login
+  }
+}
+"""
+
+OWNER_REPOSITORIES_QUERY = """
+query (
+  $owner: String!
+  $after: String
+) {
+  organization(login: $owner) {
+    repositories(first: 100, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      nodes {
+        nameWithOwner
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+  user(login: $owner) {
+    repositories(
+      first: 100
+      after: $after
+      ownerAffiliations: OWNER
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      nodes {
+        nameWithOwner
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"""
+
 
 @dataclass(frozen=True)
 class AssignmentCheckpoint:
@@ -245,16 +288,101 @@ def default_graphql_runner(query: str, variables: Mapping[str, object]) -> dict[
         command.extend(["-f", f"{key}={value}"])
 
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip() or completed.stdout.strip()
+
+    parsed: dict[str, object] | None = None
+    stdout = completed.stdout.strip()
+    if stdout:
+        try:
+            candidate = json.loads(stdout)
+        except json.JSONDecodeError:
+            candidate = None
+        if isinstance(candidate, dict):
+            parsed = candidate
+
+    if completed.returncode != 0 and parsed is None:
+        stderr = completed.stderr.strip() or stdout
         raise RuntimeError(f"github_graphql_failed:{stderr}")
-    try:
-        parsed = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError("github_graphql_invalid_json") from error
-    if not isinstance(parsed, dict):
-        raise RuntimeError("github_graphql_invalid_shape")
+    if parsed is None:
+        raise RuntimeError("github_graphql_invalid_json")
     return parsed
+
+
+def fetch_authenticated_viewer_login(
+    *,
+    graphql_runner: Callable[[str, Mapping[str, object]], dict[str, object]],
+) -> str:
+    """Fetch authenticated `gh` viewer login."""
+    payload = graphql_runner(VIEWER_LOGIN_QUERY, {})
+    if payload.get("errors"):
+        raise RuntimeError(f"github_graphql_errors:{payload['errors']}")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("github_graphql_missing_data")
+    viewer = data.get("viewer")
+    if not isinstance(viewer, dict):
+        raise RuntimeError("github_graphql_invalid_viewer")
+    return _require_non_empty_string(viewer.get("login"), field_name="viewer.login")
+
+
+def list_owner_repositories(
+    *,
+    owner: str,
+    graphql_runner: Callable[[str, Mapping[str, object]], dict[str, object]],
+) -> list[str]:
+    """List repositories for owner login from GitHub GraphQL."""
+    if not isinstance(owner, str) or not owner.strip():
+        raise ValueError("owner must be a non-empty string")
+
+    repositories: list[str] = []
+    after: str | None = None
+    while True:
+        variables: dict[str, object] = {"owner": owner}
+        if after is not None:
+            variables["after"] = after
+        payload = graphql_runner(OWNER_REPOSITORIES_QUERY, variables)
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("github_graphql_missing_data")
+
+        owner_node = data.get("organization")
+        if not isinstance(owner_node, dict):
+            owner_node = data.get("user")
+        if owner_node is None:
+            if payload.get("errors"):
+                raise RuntimeError(f"github_graphql_errors:{payload['errors']}")
+            return []
+        if not isinstance(owner_node, dict):
+            raise RuntimeError("github_graphql_invalid_owner")
+
+        repositories_conn = owner_node.get("repositories")
+        if not isinstance(repositories_conn, dict):
+            raise RuntimeError("github_graphql_invalid_owner_repositories")
+        nodes = repositories_conn.get("nodes")
+        if not isinstance(nodes, list):
+            raise RuntimeError("github_graphql_invalid_owner_repository_nodes")
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            repo_slug = node.get("nameWithOwner")
+            if isinstance(repo_slug, str) and repo_slug.strip():
+                repositories.append(repo_slug.strip())
+
+        page_info = repositories_conn.get("pageInfo")
+        if not isinstance(page_info, dict):
+            raise RuntimeError("github_graphql_invalid_owner_repositories_page_info")
+        has_next_page = page_info.get("hasNextPage")
+        if not isinstance(has_next_page, bool):
+            raise RuntimeError("github_graphql_invalid_owner_repositories_has_next_page")
+        if not has_next_page:
+            break
+        end_cursor = page_info.get("endCursor")
+        if not isinstance(end_cursor, str) or not end_cursor.strip():
+            raise RuntimeError("github_graphql_invalid_owner_repositories_end_cursor")
+        after = end_cursor
+
+    return repositories
 
 
 def fetch_assignment_events_for_repository(
@@ -379,6 +507,41 @@ def checkpoint_scope_key(*, repositories: list[str], assignee_login: str) -> str
     return f"{assignee_login.casefold()}:{','.join(normalized_repos)}"
 
 
+def expand_repository_patterns(
+    *,
+    repository_patterns: list[str],
+    graphql_runner: Callable[[str, Mapping[str, object]], dict[str, object]],
+) -> list[str]:
+    """Expand `owner/*` patterns to concrete `owner/repo` repository slugs."""
+    if not repository_patterns:
+        raise ValueError("repository_patterns are required")
+
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for pattern in repository_patterns:
+        owner, repo = _parse_repository_pattern(pattern)
+        if repo == "*":
+            owner_repositories = list_owner_repositories(
+                owner=owner,
+                graphql_runner=graphql_runner,
+            )
+            for repository in owner_repositories:
+                normalized_owner, normalized_name = parse_repo_slug(repository)
+                normalized = f"{normalized_owner}/{normalized_name}"
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                expanded.append(normalized)
+            continue
+
+        normalized = f"{owner}/{repo}"
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        expanded.append(normalized)
+    return expanded
+
+
 def select_events_after_checkpoint(
     events: list[GitHubIssueAssignmentEvent],
     *,
@@ -444,6 +607,18 @@ def parse_repo_slug(value: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def _parse_repository_pattern(value: str) -> tuple[str, str]:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("repository selector must be non-empty")
+    parts = value.strip().split("/", maxsplit=1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError("repository selector must be owner/repo or owner/*")
+    owner, repo = parts
+    if repo != "*" and "*" in repo:
+        raise ValueError("repository selector must be owner/repo or owner/*")
+    return owner, repo
+
+
 def _parse_labels(raw_labels: object) -> list[str]:
     if not isinstance(raw_labels, dict):
         return []
@@ -494,12 +669,17 @@ def _serialize_utc_datetime(value: datetime) -> str:
 
 __all__ = [
     "ASSIGNED_EVENTS_QUERY",
+    "OWNER_REPOSITORIES_QUERY",
     "AssignmentCheckpoint",
     "GitHubAssignmentCheckpointStore",
     "GitHubIssueAssignmentEvent",
+    "VIEWER_LOGIN_QUERY",
     "checkpoint_scope_key",
     "default_graphql_runner",
+    "expand_repository_patterns",
     "fetch_assignment_events_for_repository",
+    "fetch_authenticated_viewer_login",
+    "list_owner_repositories",
     "parse_repo_slug",
     "publish_assignment_events",
     "select_events_after_checkpoint",

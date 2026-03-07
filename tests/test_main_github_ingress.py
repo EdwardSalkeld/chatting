@@ -67,6 +67,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                     "app.main_message_handler.fetch_assignment_events_for_repository",
                     side_effect=[[event], [event]],
                 ),
+                patch(
+                    "app.main_message_handler.expand_repository_patterns",
+                    return_value=["brokensbone/chatting"],
+                ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
                 patch(
                     "sys.argv",
@@ -101,7 +105,78 @@ class MainGitHubIngressTests(unittest.TestCase):
                 broker.published[0][1]["task_id"],
                 "task:github-assignment:brokensbone/chatting:12:AE_1",
             )
+            self.assertEqual(
+                broker.published[0][1]["envelope"]["reply_channel"],
+                {
+                    "type": "telegram",
+                    "target": "8605042448",
+                },
+            )
 
+    def test_main_message_handler_resolves_assignee_from_authenticated_gh_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+            event = GitHubIssueAssignmentEvent(
+                event_id="AE_1",
+                event_created_at=datetime(2026, 3, 7, 10, 47, 35, tzinfo=timezone.utc),
+                repository_id="R_1",
+                repository_name_with_owner="brokensbone/chatting",
+                issue_id="I_1",
+                issue_number=12,
+                issue_title="Plan milestone 5",
+                issue_body="Body",
+                issue_url="https://github.com/brokensbone/chatting/issues/12",
+                assignee_login="BillyAcachofa",
+                actor_login="edward",
+                labels=["enhancement"],
+            )
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler.fetch_authenticated_viewer_login",
+                    return_value="BillyAcachofa",
+                ),
+                patch(
+                    "app.main_message_handler.expand_repository_patterns",
+                    return_value=["brokensbone/chatting"],
+                ),
+                patch(
+                    "app.main_message_handler.fetch_assignment_events_for_repository",
+                    return_value=[event],
+                ),
+                patch("app.main_message_handler._build_live_connectors", return_value=[]),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--github-repository",
+                        "brokensbone/*",
+                        "--github-reply-channel-type",
+                        "telegram",
+                        "--github-reply-channel-target",
+                        "8605042448",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(len(broker.published), 1)
+            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
 
 if __name__ == "__main__":
     unittest.main()

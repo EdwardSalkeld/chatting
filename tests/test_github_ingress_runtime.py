@@ -3,13 +3,19 @@ import unittest
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
 from app.github_ingress_runtime import (
     AssignmentCheckpoint,
     GitHubAssignmentCheckpointStore,
     GitHubIssueAssignmentEvent,
     checkpoint_scope_key,
+    default_graphql_runner,
+    expand_repository_patterns,
     fetch_assignment_events_for_repository,
+    fetch_authenticated_viewer_login,
+    list_owner_repositories,
     parse_repo_slug,
     publish_assignment_events,
     select_events_after_checkpoint,
@@ -192,6 +198,105 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
     def test_parse_repo_slug_requires_owner_repo(self) -> None:
         with self.assertRaisesRegex(ValueError, "owner/repo"):
             parse_repo_slug("brokensbone")
+
+    def test_fetch_authenticated_viewer_login_parses_login(self) -> None:
+        login = fetch_authenticated_viewer_login(
+            graphql_runner=lambda _query, _variables: {
+                "data": {
+                    "viewer": {
+                        "login": "BillyAcachofa",
+                    }
+                }
+            }
+        )
+        self.assertEqual(login, "BillyAcachofa")
+
+    def test_expand_repository_patterns_supports_owner_wildcard(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def _graphql_runner(_query: str, variables: dict[str, object]) -> dict[str, object]:
+            calls.append(dict(variables))
+            if variables.get("after") is None:
+                return {
+                    "data": {
+                        "organization": {
+                            "repositories": {
+                                "nodes": [{"nameWithOwner": "brokensbone/chatting"}],
+                                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                            }
+                        },
+                        "user": None,
+                    }
+                }
+            return {
+                "data": {
+                    "organization": {
+                        "repositories": {
+                            "nodes": [{"nameWithOwner": "brokensbone/bbmb"}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    },
+                    "user": None,
+                }
+            }
+
+        repositories = expand_repository_patterns(
+            repository_patterns=["brokensbone/*", "brokensbone/chatting"],
+            graphql_runner=_graphql_runner,
+        )
+
+        self.assertEqual(repositories, ["brokensbone/chatting", "brokensbone/bbmb"])
+        self.assertEqual(
+            calls,
+            [
+                {"owner": "brokensbone"},
+                {"owner": "brokensbone", "after": "cursor-1"},
+            ],
+        )
+
+    def test_expand_repository_patterns_rejects_partial_wildcard(self) -> None:
+        with self.assertRaisesRegex(ValueError, "owner/repo or owner/\\*"):
+            expand_repository_patterns(
+                repository_patterns=["brokensbone/chat*"],
+                graphql_runner=lambda _query, _variables: {"data": {}},
+            )
+
+    def test_list_owner_repositories_handles_partial_not_found_error(self) -> None:
+        repositories = list_owner_repositories(
+            owner="brokensbone",
+            graphql_runner=lambda _query, _variables: {
+                "data": {
+                    "organization": None,
+                    "user": {
+                        "repositories": {
+                            "nodes": [{"nameWithOwner": "brokensbone/chatting"}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    },
+                },
+                "errors": [
+                    {
+                        "type": "NOT_FOUND",
+                        "path": ["organization"],
+                        "message": "Could not resolve to an Organization",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(repositories, ["brokensbone/chatting"])
+
+    def test_default_graphql_runner_parses_json_when_gh_exits_non_zero(self) -> None:
+        with patch(
+            "subprocess.run",
+            return_value=CompletedProcess(
+                args=["gh", "api", "graphql"],
+                returncode=1,
+                stdout='{"data":{"viewer":{"login":"BillyAcachofa"}},"errors":[{"path":["organization"]}]}',
+                stderr="gh: Could not resolve to an Organization",
+            ),
+        ):
+            payload = default_graphql_runner("query { viewer { login } }", {})
+        self.assertIn("data", payload)
 
 
 if __name__ == "__main__":

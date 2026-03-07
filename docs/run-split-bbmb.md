@@ -65,7 +65,9 @@ python3 -m app.main_worker
 ## 4) Configure GitHub assignment polling (in message-handler)
 
 ```bash
-# edit message-handler config: github_repositories, github_assignee_login, and reply channel settings
+# edit message-handler config: github_repositories (owner/repo or owner/*)
+# optional: github_assignee_login (defaults to authenticated gh user)
+# required for assignment-generated tasks: github_reply_channel_type and github_reply_channel_target
 python3 -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
