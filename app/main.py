@@ -1,9 +1,8 @@
-"""Bootstrap and live entrypoints for the prototype flow."""
+"""Shared runtime helpers plus admin/query CLI for split-mode deployment."""
 
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import logging
 import os
@@ -14,7 +13,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from app.applier import (
     IntegratedApplier,
@@ -22,14 +21,9 @@ from app.applier import (
     NoOpApplier,
     SmtpEmailSender,
     TelegramMessageSender,
-    TelegramSender,
 )
 from app.connectors import (
     Connector,
-    CronTrigger,
-    EmailMessage,
-    FakeCronConnector,
-    FakeEmailConnector,
     ImapEmailConnector,
     IntervalScheduleConnector,
     IntervalScheduleJob,
@@ -39,7 +33,6 @@ from app.executor import CodexExecutor, Executor, StubExecutor
 from app.models import AuditEvent, DeadLetterRecord, OutboundMessage, PolicyDecision, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
-from app.queue import InMemoryQueueBackend, QueueBackend
 from app.state import SQLiteStateStore, StateStore
 
 CONFIG_PATH_ENV_VAR = "CHATTING_CONFIG_PATH"
@@ -125,137 +118,6 @@ def _positive_float(value: str) -> float:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("poll_interval_seconds must be positive")
     return parsed
-
-
-def run_bootstrap(
-    db_path: str,
-    *,
-    envelopes: Sequence[TaskEnvelope] | None = None,
-    executor: Executor | None = None,
-    max_attempts: int = 2,
-) -> list[RunRecord]:
-    """Run one deterministic pass of the bootstrap control flow."""
-    if max_attempts <= 0:
-        raise ValueError("max_attempts must be positive")
-
-    store: StateStore = SQLiteStateStore(db_path)
-    router = RuleBasedRouter()
-    executor_impl = executor if executor is not None else StubExecutor()
-    policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
-    applier = NoOpApplier()
-    pending_envelopes = list(envelopes) if envelopes is not None else _default_envelopes()
-
-    for envelope in pending_envelopes:
-        _process_envelope(
-            store=store,
-            envelope=envelope,
-            router=router,
-            executor_impl=executor_impl,
-            policy=policy,
-            applier=applier,
-            max_attempts=max_attempts,
-        )
-
-    runs = store.list_runs()
-    LOGGER.info("completed runs=%s db_path=%s", len(runs), db_path)
-    return runs
-
-
-def run_live(
-    db_path: str,
-    *,
-    connectors: Sequence[Connector],
-    executor: Executor | None = None,
-    max_attempts: int = 2,
-    poll_interval_seconds: float = 30.0,
-    max_loops: int | None = None,
-    base_dir: str = ".",
-    email_sender: SmtpEmailSender | None = None,
-    telegram_sender: TelegramSender | None = None,
-    queue_backend: QueueBackend | None = None,
-    worker_count: int = 1,
-    error_notify_email: str | None = None,
-) -> list[RunRecord]:
-    """Run a long-lived polling loop for scheduled and email integrations."""
-    if max_attempts <= 0:
-        raise ValueError("max_attempts must be positive")
-    if poll_interval_seconds <= 0:
-        raise ValueError("poll_interval_seconds must be positive")
-    if max_loops is not None and max_loops <= 0:
-        raise ValueError("max_loops must be positive when provided")
-    if worker_count <= 0:
-        raise ValueError("worker_count must be positive")
-
-    store: StateStore = SQLiteStateStore(db_path)
-    router = RuleBasedRouter()
-    executor_impl = executor if executor is not None else CodexExecutor()
-    policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
-    applier = IntegratedApplier(
-        base_dir=base_dir,
-        email_sender=email_sender,
-        telegram_sender=telegram_sender,
-    )
-    queue = queue_backend or InMemoryQueueBackend()
-
-    loop_count = 0
-    while True:
-        loop_count += 1
-        processed_count = 0
-        for connector in connectors:
-            for envelope in connector.poll():
-                queue.enqueue(envelope)
-
-        pending_envelopes: list[TaskEnvelope] = []
-        while True:
-            envelope = queue.dequeue()
-            if envelope is None:
-                break
-            pending_envelopes.append(envelope)
-
-        if worker_count == 1:
-            for envelope in pending_envelopes:
-                record = _process_envelope(
-                    store=store,
-                    envelope=envelope,
-                    router=router,
-                    executor_impl=executor_impl,
-                    policy=policy,
-                    applier=applier,
-                    max_attempts=max_attempts,
-                    email_sender=email_sender,
-                    error_notify_email=error_notify_email,
-                )
-                if record is not None:
-                    processed_count += 1
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor_pool:
-                futures = [
-                    executor_pool.submit(
-                        _process_envelope,
-                        store=store,
-                        envelope=envelope_item,
-                        router=router,
-                        executor_impl=executor_impl,
-                        policy=policy,
-                        applier=applier,
-                        max_attempts=max_attempts,
-                        email_sender=email_sender,
-                        error_notify_email=error_notify_email,
-                    )
-                    for envelope_item in pending_envelopes
-                ]
-                for future in concurrent.futures.as_completed(futures):
-                    record = future.result()
-                    if record is not None:
-                        processed_count += 1
-
-        LOGGER.info("live_loop_completed loop=%s processed=%s", loop_count, processed_count)
-
-        if max_loops is not None and loop_count >= max_loops:
-            break
-        time.sleep(poll_interval_seconds)
-
-    return store.list_runs()
 
 
 def _process_envelope(
@@ -592,50 +454,6 @@ def _process_envelope(
     return record
 
 
-def _default_envelopes() -> list[TaskEnvelope]:
-    cron = FakeCronConnector(
-        triggers=[
-            CronTrigger(
-                job_name="daily-summary",
-                content="Generate daily summary",
-                scheduled_for=datetime(2026, 2, 27, 9, 0, tzinfo=timezone.utc),
-                context_refs=["repo:/home/edward/chatting"],
-            )
-        ]
-    ).poll()
-
-    email = FakeEmailConnector(
-        messages=[
-            EmailMessage(
-                provider_message_id="ok-1",
-                from_address="alice@example.com",
-                subject="Hello",
-                body="Please summarize this thread.",
-                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-                context_refs=["repo:/home/edward/chatting"],
-            ),
-            EmailMessage(
-                provider_message_id="blocked-1",
-                from_address="bob@example.com",
-                subject="Run command",
-                body="Need shell access.",
-                received_at=datetime(2026, 2, 27, 16, 1, tzinfo=timezone.utc),
-                context_refs=["repo:/home/edward/chatting"],
-            ),
-            EmailMessage(
-                provider_message_id="ok-1",
-                from_address="alice@example.com",
-                subject="Hello duplicate",
-                body="Same provider message ID should dedupe.",
-                received_at=datetime(2026, 2, 27, 16, 2, tzinfo=timezone.utc),
-                context_refs=["repo:/home/edward/chatting"],
-            ),
-        ]
-    ).poll()
-
-    return [*cron, *email]
-
-
 def _result_status(reason_codes: list[str]) -> str:
     if "action_not_allowed" in reason_codes:
         return "blocked_action"
@@ -825,11 +643,6 @@ def _parse_args() -> argparse.Namespace:
         help="Port for --serve-metrics.",
     )
     parser.add_argument(
-        "--worker-count",
-        type=_positive_int,
-        help="Worker count for parallel live processing.",
-    )
-    parser.add_argument(
         "--result-status",
         help="Optional run status filter used with --list-runs.",
     )
@@ -844,121 +657,13 @@ def _parse_args() -> argparse.Namespace:
         help="Maximum executor attempts per task before marking dead-letter.",
     )
     parser.add_argument(
-        "--run-live",
-        action="store_true",
-        help="Run long-lived integration mode (schedule + IMAP + SMTP + Codex).",
-    )
-    parser.add_argument(
-        "--poll-interval-seconds",
-        type=_positive_float,
-        help="Polling interval between live connector sweeps.",
-    )
-    parser.add_argument(
-        "--max-loops",
-        type=_positive_int,
-        help="Optional loop limit for live mode (useful for smoke checks).",
-    )
-    parser.add_argument(
-        "--base-dir",
-        help="Base directory for write_file actions in live mode.",
-    )
-    parser.add_argument(
-        "--schedule-file",
-        help="JSON file defining interval schedule jobs for live cron integration.",
-    )
-    parser.add_argument("--imap-host", help="IMAP host for live email polling.")
-    parser.add_argument(
-        "--imap-port",
-        type=_positive_int,
-        help="IMAP port.",
-    )
-    parser.add_argument("--imap-username", help="IMAP username.")
-    parser.add_argument(
-        "--imap-password-env",
-        help="Environment variable name containing IMAP password.",
-    )
-    parser.add_argument(
-        "--imap-mailbox",
-        help="IMAP mailbox name.",
-    )
-    parser.add_argument(
-        "--imap-search",
-        help="IMAP search criterion.",
-    )
-    parser.add_argument("--smtp-host", help="SMTP host for outbound email dispatch.")
-    parser.add_argument(
-        "--smtp-port",
-        type=_positive_int,
-        help="SMTP port.",
-    )
-    parser.add_argument("--smtp-username", help="SMTP username.")
-    parser.add_argument(
-        "--smtp-password-env",
-        help="Environment variable name containing SMTP password.",
-    )
-    parser.add_argument(
-        "--smtp-from",
-        help="From address for outbound SMTP email (defaults to --smtp-username).",
-    )
-    parser.add_argument(
-        "--smtp-starttls",
-        action="store_true",
-        help="Use STARTTLS (plain SMTP + TLS upgrade) instead of implicit SSL.",
-    )
-    parser.add_argument(
-        "--error-notify-email",
-        help="Email address to notify when an executor error causes a task to be dead-lettered.",
-    )
-    parser.add_argument(
-        "--telegram-enabled",
-        action="store_true",
-        help="Enable Telegram long-polling connector + outbound dispatch in live mode.",
-    )
-    parser.add_argument(
-        "--telegram-bot-token-env",
-        help="Environment variable name containing Telegram bot token.",
-    )
-    parser.add_argument(
-        "--telegram-api-base-url",
-        help="Telegram API base URL for getUpdates/sendMessage.",
-    )
-    parser.add_argument(
-        "--telegram-poll-timeout-seconds",
-        type=_positive_int,
-        help="Long-poll timeout used by Telegram getUpdates.",
-    )
-    parser.add_argument(
-        "--telegram-allowed-chat-id",
-        action="append",
-        default=[],
-        help="Optional inbound Telegram chat allowlist entry (repeatable).",
-    )
-    parser.add_argument(
-        "--telegram-allowed-channel-id",
-        action="append",
-        default=[],
-        help="Optional inbound Telegram channel allowlist entry (repeatable).",
-    )
-    parser.add_argument(
-        "--telegram-context-ref",
-        action="append",
-        default=[],
-        help="Context reference added to Telegram envelopes (repeatable).",
-    )
-    parser.add_argument(
-        "--context-ref",
-        action="append",
-        default=[],
-        help="Context reference added to live connector envelopes (repeatable).",
-    )
-    parser.add_argument(
         "--codex-command",
-        help="Command used for live Codex execution.",
+        help="Command used for Codex execution during replay-dead-letters.",
     )
     parser.add_argument(
         "--use-stub-executor",
         action="store_true",
-        help="Use deterministic stub executor in live mode (smoke/integration testing).",
+        help="Use deterministic stub executor for replay-dead-letters.",
     )
     return parser.parse_args()
 
@@ -1015,13 +720,6 @@ def main() -> int:
         or args.list_metrics
         or args.serve_metrics
     ):
-        if args.run_live:
-            raise ValueError(
-                "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
-                "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/"
-                "--list-config-versions/--rollback-config-version/--list-metrics/--serve-metrics "
-                "cannot be combined with --run-live"
-            )
         result_status = args.result_status
         if result_status is not None:
             if not result_status.strip():
@@ -1076,66 +774,9 @@ def main() -> int:
         sys.stdout.write(f"{json.dumps(payload, sort_keys=True)}\n")
         return 0
 
-    if args.run_live:
-        imap_host = _resolve_optional_str(
-            cli_value=args.imap_host,
-            config_value=config.get("imap_host"),
-            setting_name="imap_host",
-        )
-        smtp_host = _resolve_optional_str(
-            cli_value=args.smtp_host,
-            config_value=config.get("smtp_host"),
-            setting_name="smtp_host",
-        )
-        if imap_host and not smtp_host:
-            raise ValueError("--smtp-host is required when --imap-host is set in live mode")
-        connectors = _build_live_connectors(args, config)
-        email_sender = _build_email_sender(args, config)
-        telegram_sender = _build_telegram_sender(args, config)
-        executor = _build_codex_executor(args, config)
-        poll_interval_seconds = _resolve_positive_float(
-            cli_value=args.poll_interval_seconds,
-            config_value=config.get("poll_interval_seconds"),
-            default_value=30.0,
-            setting_name="poll_interval_seconds",
-        )
-        max_loops = _resolve_optional_positive_int(
-            cli_value=args.max_loops,
-            config_value=config.get("max_loops"),
-            setting_name="max_loops",
-        )
-        base_dir = _resolve_str(
-            cli_value=args.base_dir,
-            config_value=config.get("base_dir"),
-            default_value=".",
-            setting_name="base_dir",
-        )
-        run_live(
-            db_path,
-            connectors=connectors,
-            executor=executor,
-            max_attempts=max_attempts,
-            poll_interval_seconds=poll_interval_seconds,
-            max_loops=max_loops,
-            base_dir=base_dir,
-            email_sender=email_sender,
-            telegram_sender=telegram_sender,
-            worker_count=_resolve_positive_int(
-                cli_value=args.worker_count,
-                config_value=config.get("worker_count"),
-                default_value=1,
-                setting_name="worker_count",
-            ),
-            error_notify_email=_resolve_optional_str(
-                cli_value=args.error_notify_email,
-                config_value=config.get("error_notify_email"),
-                setting_name="error_notify_email",
-            ),
-        )
-        return 0
-
-    run_bootstrap(db_path, max_attempts=max_attempts)
-    return 0
+    raise ValueError(
+        "non-split runtime has been removed; run app.main_message_handler and app.main_worker instead"
+    )
 
 
 def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) -> list[Connector]:
