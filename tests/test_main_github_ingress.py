@@ -178,5 +178,52 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(len(broker.published), 1)
             self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
 
+    def test_main_message_handler_survives_wildcard_expansion_failure(self) -> None:
+        """Verify that a GitHub API failure during wildcard expansion does not crash the loop."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler.fetch_authenticated_viewer_login",
+                    return_value="BillyAcachofa",
+                ),
+                patch(
+                    "app.main_message_handler.expand_repository_patterns",
+                    side_effect=RuntimeError("github_graphql_failed:authentication failed"),
+                ),
+                patch("app.main_message_handler._build_live_connectors", return_value=[]),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--github-repository",
+                        "brokensbone/*",
+                        "--github-reply-channel-type",
+                        "telegram",
+                        "--github-reply-channel-target",
+                        "8605042448",
+                        "--max-loops",
+                        "2",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(broker.published), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

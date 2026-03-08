@@ -477,12 +477,20 @@ def _poll_github_assignment_ingress(
         assignee_login=settings.assignee_login,
     )
     checkpoint = checkpoint_store.get_checkpoint(scope_key)
+    checkpoint_id = checkpoint.event_id if checkpoint else "none"
     events = []
     scanned_event_count = 0
-    repositories_to_scan = expand_repository_patterns(
-        repository_patterns=settings.repositories,
-        graphql_runner=default_graphql_runner,
-    )
+    try:
+        repositories_to_scan = expand_repository_patterns(
+            repository_patterns=settings.repositories,
+            graphql_runner=default_graphql_runner,
+        )
+    except Exception:  # noqa: BLE001
+        LOGGER.exception(
+            "github_repository_expansion_failed repository_patterns=%s",
+            settings.repositories,
+        )
+        return 0, 0, 0, checkpoint_id
     for repository in repositories_to_scan:
         owner, name = parse_repo_slug(repository)
         try:
@@ -514,7 +522,6 @@ def _poll_github_assignment_ingress(
         context_refs=settings.context_refs,
         policy_profile=settings.policy_profile,
     )
-    checkpoint_id = checkpoint.event_id if checkpoint else "none"
     if new_events:
         latest = new_events[-1]
         checkpoint_store.set_checkpoint(
