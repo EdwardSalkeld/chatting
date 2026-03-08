@@ -1,47 +1,24 @@
 # Local Run Notes
 
-- Run unit tests: `python -m unittest`
-- Run all tests via discovery: `python3 -m unittest discover -s tests`
-- Run a specific test module: `python3 -m unittest tests.test_sqlite_store`
-- Run connector tests: `python3 -m unittest tests.test_connectors`
-- Run router tests: `python3 -m unittest tests.test_router`
-- Run policy tests: `python3 -m unittest tests.test_policy`
-- Run bootstrap flow tests: `python3 -m unittest tests.test_main`
-- Run executor tests: `python3 -m unittest tests.test_executor`
-- Run executor parser-only checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests`
-- Run targeted nested required-field parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_message_missing_required_field tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_action_missing_required_field tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_config_update_missing_required_path`
-- Run targeted write-file contract parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_missing_path tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_missing_content tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_with_empty_path tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_with_empty_content`
-- Run targeted non-write-file action-shape parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_non_write_file_action_with_path tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_non_write_file_action_with_content`
-- Run targeted whitespace-required parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_message_body_with_only_whitespace tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_action_type_with_only_whitespace tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_config_update_path_with_only_whitespace tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_with_whitespace_path tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_write_file_action_with_whitespace_content`
-- Run targeted config-update contract checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_config_update_missing_required_value tests.test_models.ConfigUpdateTests.test_config_update_rejects_whitespace_only_path`
-- Run targeted error-string parser checks: `python3 -m unittest tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_error_item_with_empty_string tests.test_executor.ParseExecutionResultTests.test_parse_execution_result_rejects_error_item_with_only_whitespace`
-- Run model string-list contract checks: `python3 -m unittest tests.test_models.StringListContractValidationTests`
-- Run model typed-collection contract checks: `python3 -m unittest tests.test_models.TypedCollectionContractValidationTests tests.test_executor.ParseExecutionResultTests`
-- Run model required-string hardening checks (plus parser compatibility): `python3 -m unittest tests.test_models.RequiredStringContractValidationTests tests.test_executor.ParseExecutionResultTests tests.test_executor`
-- Run TaskEnvelope attachment/context-ref contract checks: `python3 -m unittest tests.test_models.RequiredStringContractValidationTests.test_attachment_ref_rejects_blank_fields tests.test_models.RequiredStringContractValidationTests.test_task_envelope_rejects_invalid_context_refs_items tests.test_models.RequiredStringContractValidationTests.test_task_envelope_rejects_invalid_attachment_items`
-- For executor schema-contract changes, run parser-only checks first, then full executor tests: `python3 -m unittest tests.test_executor.ParseExecutionResultTests && python3 -m unittest tests.test_executor`
-- For schema-version contract hardening across models + executor parser, run: `python3 -m unittest tests.test_models tests.test_executor.ParseExecutionResultTests`
-- Run state contract tests: `python3 -m unittest tests.test_state_contract`
-- Run full interface contract tests: `python3 -m unittest tests.test_interface_contracts tests.test_state_contract`
-- Run audit logging checks: `python3 -m unittest tests.test_models tests.test_sqlite_store tests.test_main`
-- Run bootstrap observability log checks: `python3 -m unittest tests.test_main`
-- Run bootstrap trace-id observability checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
-- Run bootstrap apply-audit detail checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
-- Run bootstrap execution-summary audit checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
-- Run bootstrap full audit-payload snapshot checks (`execution_result`/`policy_decision`/`apply_result`): `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
-- Run bootstrap retry/DLQ checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_marks_dead_letter_when_retries_exhausted`
-- Run bootstrap duplicate-skip run/audit checks: `python3 -m unittest tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_processes_unique_events_and_records_blocked_action tests.test_main.MainBootstrapFlowTests.test_run_bootstrap_retries_transient_executor_error`
-- Run runtime config string-validation checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_whitespace_only_cli_db_path tests.test_main.MainCliTests.test_main_rejects_whitespace_only_config_db_path tests.test_main.MainCliTests.test_main_run_live_rejects_blank_context_refs_from_config`
-- Run runtime config env-loading checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_reads_config_path_from_environment tests.test_main.MainCliTests.test_main_cli_config_overrides_environment_config_path tests.test_main.MainCliTests.test_main_rejects_whitespace_only_environment_config_path`
-- Run runtime config unknown-key checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_unknown_config_keys tests.test_main.MainCliTests.test_main_rejects_unknown_keys_from_environment_config_path`
-- Run runtime config numeric-type checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_boolean_max_attempts_from_config tests.test_main.MainCliTests.test_main_rejects_boolean_poll_interval_from_config`
-- Run live schedule config contract checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_rejects_schedule_job_unknown_keys tests.test_main.MainCliTests.test_main_rejects_schedule_job_boolean_interval_seconds tests.test_main.MainCliTests.test_main_rejects_schedule_job_blank_context_ref`
-- Run run-history query CLI checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_list_runs_outputs_json_and_skips_bootstrap tests.test_main.MainCliTests.test_main_list_runs_supports_result_status_filter tests.test_main.MainCliTests.test_main_rejects_whitespace_only_result_status`
-- Run audit-history query CLI checks: `python3 -m unittest tests.test_main.MainCliTests.test_main_list_audit_events_outputs_json_and_skips_bootstrap tests.test_main.MainCliTests.test_main_list_audit_events_supports_result_status_filter tests.test_main.MainCliTests.test_main_rejects_combined_list_query_modes tests.test_main.MainCliTests.test_main_rejects_list_audit_events_with_run_live`
-- Run idempotency contract checks: `python3 -m unittest tests.test_sqlite_store tests.test_main`
-- Run bootstrap app locally: `python3 -m app.main --db-path /tmp/chatting-state.db`
-- Run bootstrap app with custom retry limit: `python3 -m app.main --db-path /tmp/chatting-state.db --max-attempts 4`
-- List stored runs from SQLite: `python3 -m app.main --db-path /tmp/chatting-state.db --list-runs --limit 20`
-- List stored audit events from SQLite: `python3 -m app.main --db-path /tmp/chatting-state.db --list-audit-events --limit 20`
-- Run bootstrap app with env-provided config path: `CHATTING_CONFIG_PATH=configs/live-runtime.example.json python3 -m app.main`
-- If `rg` is unavailable locally (confirmed in this environment), use `find . -type f` for file discovery and `grep -n` for content search.
+- Run all tests: `python3 -m unittest discover -s tests`
+- Run message-handler tests: `python3 -m unittest tests.test_message_handler_runtime tests.test_main_github_ingress`
+- Run worker tests: `python3 -m unittest tests.test_worker_runtime`
+- Run GitHub ingress runtime tests: `python3 -m unittest tests.test_github_ingress_runtime`
+- Run app-main admin/query CLI tests: `python3 -m unittest tests.test_main`
+
+## Runtime Entry Points
+
+- Split mode only:
+  - `python3 -m app.main_message_handler --config <message-handler.json>`
+  - `python3 -m app.main_worker --config <worker.json>`
+- `app.main` is query/admin only (`--list-*`, dead-letter replay, approvals, rollback, metrics).
+
+## Query Examples
+
+- List runs: `python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-runs --limit 20`
+- List audit events: `python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20`
+- List metrics: `python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-metrics`
+
+## Tooling Note
+
+- If `rg` is unavailable locally, use `find . -type f` for file discovery and `grep -n` for content search.

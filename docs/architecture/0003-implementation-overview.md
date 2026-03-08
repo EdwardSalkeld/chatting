@@ -17,15 +17,11 @@ The deployment model is private, single-user, single-machine.
 5. Applier executes approved actions/messages.
 6. `SQLiteStateStore` persists idempotency, run history, audit, dead letters, approvals, and config versions.
 
-## Main entrypoint
+## Entrypoints
 
-`app.main` provides:
-
-- bootstrap mode (`python3 -m app.main`)
-- live mode (`--run-live`)
-- read/query modes (`--list-*`)
-- operational commands (dead-letter replay, approval resolution, config rollback)
-- metrics output (`--list-metrics`) and HTTP serving (`--serve-metrics`)
+- `app.main_message_handler`: ingress + egress dispatch in split mode
+- `app.main_worker`: task execution in split mode
+- `app.main`: read/query + admin commands only (`--list-*`, replay dead letters, approvals, rollback, metrics)
 
 ## Persistence tables (SQLite)
 

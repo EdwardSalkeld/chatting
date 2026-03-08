@@ -3,7 +3,6 @@
 ## Getting started
 
 - [Quick Start](/home/edward/chatting/docs/quick-start.md)
-- [Run Live Mode](/home/edward/chatting/docs/run-live.md)
 - [Run Split Mode (BBMB)](/home/edward/chatting/docs/run-split-bbmb.md)
 - [Debug And Test Guide](/home/edward/chatting/docs/debug-and-test.md)
 
