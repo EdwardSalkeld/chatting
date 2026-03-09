@@ -119,6 +119,7 @@ class EgressTelemetryRollup:
     deduped_total: int = 0
     dropped_total: int = 0
     dropped_unknown_task_total: int = 0
+    dropped_completed_task_total: int = 0
     dropped_disallowed_channel_total: int = 0
     dropped_missing_event_id_total: int = 0
     dispatch_latency_ms_total: int = 0
@@ -137,6 +138,8 @@ class EgressTelemetryRollup:
         self.dropped_total += 1
         if reason == "unknown_task":
             self.dropped_unknown_task_total += 1
+        elif reason == "completed_task":
+            self.dropped_completed_task_total += 1
         elif reason == "disallowed_channel":
             self.dropped_disallowed_channel_total += 1
         elif reason == "missing_event_id":
@@ -169,6 +172,7 @@ class EgressTelemetryRollup:
             "dedupe_hit_rate_pct": dedupe_hit_rate_pct,
             "dropped_total": self.dropped_total,
             "dropped_unknown_task_total": self.dropped_unknown_task_total,
+            "dropped_completed_task_total": self.dropped_completed_task_total,
             "dropped_disallowed_channel_total": self.dropped_disallowed_channel_total,
             "dropped_missing_event_id_total": self.dropped_missing_event_id_total,
             "incremental_dispatched_total": self.incremental_dispatched_total,
@@ -376,6 +380,12 @@ def _render_prometheus_metrics(snapshot: Mapping[str, float | int]) -> str:
             "counter",
             "Egress messages dropped because the task ledger entry was missing.",
             "dropped_unknown_task_total",
+        ),
+        (
+            "chatting_message_handler_egress_dropped_completed_task_total",
+            "counter",
+            "Egress messages dropped because the task was already completed.",
+            "dropped_completed_task_total",
         ),
         (
             "chatting_message_handler_egress_dropped_disallowed_channel_total",
@@ -946,6 +956,14 @@ def _build_policy_decision_for_message(egress_message: EgressQueueMessage) -> Po
     )
 
 
+def _is_terminal_drop_message(egress_message: EgressQueueMessage) -> bool:
+    return (
+        egress_message.event_kind == "final"
+        and egress_message.message.channel == "drop"
+        and egress_message.message.target == "task"
+    )
+
+
 def _prepare_ingress_envelope(
     *,
     store: SQLiteStateStore,
@@ -996,6 +1014,21 @@ def _handle_egress_message(
         _ack_and_mark_outbox()
         return
 
+    if ledger.is_task_completed(
+        task_id=egress_message.task_id,
+        envelope_id=egress_message.envelope_id,
+    ):
+        if telemetry is not None:
+            telemetry.record_dropped(reason="completed_task")
+        LOGGER.error(
+            "egress_drop_completed_task task_id=%s envelope_id=%s guid=%s",
+            egress_message.task_id,
+            egress_message.envelope_id,
+            picked_guid,
+        )
+        _ack_and_mark_outbox(egress_message.event_id)
+        return
+
     ledger_record = ledger.get_task(egress_message.task_id)
     if ledger_record is None or ledger_record.envelope_id != egress_message.envelope_id:
         if telemetry is not None:
@@ -1015,7 +1048,12 @@ def _handle_egress_message(
         and egress_message.message.channel == "log"
         and egress_message.message.target == INTERNAL_HEARTBEAT_TARGET
     )
-    if egress_message.message.channel not in allowed_egress_channels and not heartbeat_log_message:
+    terminal_drop_message = _is_terminal_drop_message(egress_message)
+    if (
+        egress_message.message.channel not in allowed_egress_channels
+        and not heartbeat_log_message
+        and not terminal_drop_message
+    ):
         if telemetry is not None:
             telemetry.record_dropped(reason="disallowed_channel")
         LOGGER.error(
@@ -1152,6 +1190,13 @@ def _flush_task_egress_in_sequence(
             egress_message.event_kind,
             egress_message.message.channel,
         )
+        if egress_message.event_kind == "final":
+            ledger.mark_task_completed(
+                task_id=task_id,
+                envelope_id=egress_message.envelope_id,
+                trace_id=egress_message.trace_id,
+            )
+            return
 
 
 def main() -> int:

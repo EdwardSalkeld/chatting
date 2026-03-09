@@ -59,12 +59,15 @@ Examples:
 ### 2. Worker consumes the task
 
 `worker` picks one payload from `chatting.tasks.v1`, parses `chatting.task.v1`, routes it, executes
-it, runs policy, persists run and audit records, and builds zero or more egress messages.
+it, runs policy, persists run and audit records, and always builds at least one terminal
+`event_kind="final"` egress message.
 
 Current worker behavior:
 - normal replies are emitted as `chatting.egress.v2`
 - incremental replies use `event_kind="incremental"` and increasing `sequence`
 - final replies use `event_kind="final"`
+- if execution/policy yields no final reply content, the worker emits a terminal
+  `channel="drop", target="task"` final message as a completion marker
 - heartbeat tasks skip the normal executor path and emit a single log pong
 
 Before publishing each egress message, the worker writes it to the SQLite egress outbox. That lets
@@ -79,10 +82,13 @@ outbox/BBMB path.
 - validates `message_type == "chatting.egress.v2"`
 - validates that the task exists in the ingress ledger
 - drops unknown-task egress
-- drops disallowed egress channels, except for the internal heartbeat log pong
+- drops egress for tasks that are already completed
+- drops disallowed egress channels, except for the internal heartbeat log pong and terminal
+  `drop/task` completion markers
 - stages the message by `event_id` and `sequence`
 - dispatches staged events in order
 - records dispatched event ids so duplicate egress is ignored safely
+- marks the task complete after dispatching a final event, then rejects future egress for that task
 
 This is the strict boundary in split mode: the worker can suggest output, but only the
 message-handler can dispatch it to external systems.

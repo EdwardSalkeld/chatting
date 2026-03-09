@@ -68,6 +68,8 @@ python3 -m app.main_worker
 - `message-handler` owns integration secrets (`IMAP`, `SMTP`, `Telegram`).
 - `worker` does not read integration secrets and does not dispatch directly.
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
+- Worker always emits a terminal final egress event; when there is no user-visible reply it emits a
+  `drop/task` completion marker so `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
 ## 4) Configure GitHub assignment polling (in message-handler)

@@ -111,6 +111,48 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(acked, ["guid-1"])
             self.assertEqual(applier.apply_calls, 0)
 
+    def test_handle_egress_message_drops_completed_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_task_message()
+            ledger.record_task(task_message)
+            ledger.mark_task_completed(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+            )
+            applier = _RecordingApplier()
+            acked: list[str] = []
+
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:0",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-completed",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-completed"])
+            self.assertEqual(applier.apply_calls, 0)
+
     def test_handle_egress_message_drops_disallowed_channel(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")
@@ -189,6 +231,60 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 store.has_dispatched_event_id(
                     task_id=task_message.task_id,
                     event_id="evt:task:email:1:0",
+                )
+            )
+            self.assertIsNone(ledger.get_task(task_message.task_id))
+            self.assertTrue(
+                ledger.is_task_completed(
+                    task_id=task_message.task_id,
+                    envelope_id=task_message.envelope.id,
+                )
+            )
+
+    def test_handle_egress_message_accepts_terminal_drop_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_task_message()
+            ledger.record_task(task_message)
+            applier = _RecordingApplier()
+            acked: list[str] = []
+
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(
+                    channel="drop",
+                    target="task",
+                    body="Worker completed without final reply; marking task complete.",
+                ),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:0:final:drop",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-drop-terminal",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-drop-terminal"])
+            self.assertEqual(applier.apply_calls, 1)
+            self.assertTrue(
+                ledger.is_task_completed(
+                    task_id=task_message.task_id,
+                    envelope_id=task_message.envelope.id,
                 )
             )
 
@@ -526,6 +622,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         self.assertEqual(snapshot["dispatch_latency_ms_max"], 120)
         self.assertEqual(snapshot["dropped_total"], 2)
         self.assertEqual(snapshot["dropped_unknown_task_total"], 1)
+        self.assertEqual(snapshot["dropped_completed_task_total"], 0)
         self.assertEqual(snapshot["dropped_disallowed_channel_total"], 1)
         self.assertEqual(snapshot["dropped_missing_event_id_total"], 0)
 
@@ -546,6 +643,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             "dedupe_hit_rate_pct": 50.0,
             "dropped_total": 1,
             "dropped_unknown_task_total": 1,
+            "dropped_completed_task_total": 0,
             "dropped_disallowed_channel_total": 0,
             "dropped_missing_event_id_total": 0,
             "incremental_dispatched_total": 1,
@@ -593,6 +691,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 "dedupe_hit_rate_pct": 14.29,
                 "dropped_total": 2,
                 "dropped_unknown_task_total": 1,
+                "dropped_completed_task_total": 0,
                 "dropped_disallowed_channel_total": 1,
                 "dropped_missing_event_id_total": 0,
                 "incremental_dispatched_total": 4,

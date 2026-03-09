@@ -73,6 +73,19 @@ class IncrementalReplyExecutor:
         )
 
 
+@dataclass(frozen=True)
+class NoMessageExecutor:
+    def execute(self, task):
+        del task
+        return ExecutionResult(
+            messages=[],
+            actions=[],
+            config_updates=[],
+            requires_human_review=False,
+            errors=[],
+        )
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(
@@ -221,6 +234,26 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(audit_event.workflow, "internal_heartbeat")
             self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
             self.assertEqual(audit_event.detail["heartbeat"]["kind"], "heartbeat_pong")
+
+    def test_process_task_message_emits_terminal_drop_when_no_final_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=NoMessageExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=2,
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(len(result.egress_messages), 1)
+            terminal = result.egress_messages[0]
+            self.assertEqual(terminal.event_kind, "final")
+            self.assertEqual(terminal.message.channel, "drop")
+            self.assertEqual(terminal.message.target, "task")
+            self.assertEqual(terminal.sequence, 0)
 
 
 if __name__ == "__main__":

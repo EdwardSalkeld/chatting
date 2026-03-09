@@ -197,6 +197,10 @@ class IntegratedApplier:
                 LOGGER.info("log_dispatch target=%s body=%s", dispatch_target, message.body)
                 dispatched_messages.append(normalized_message)
                 continue
+            if dispatch_channel == "drop":
+                LOGGER.info("drop_marker target=%s body=%s", dispatch_target, message.body)
+                dispatched_messages.append(normalized_message)
+                continue
             if dispatch_channel == "email":
                 if self.email_sender is None:
                     LOGGER.warning(
