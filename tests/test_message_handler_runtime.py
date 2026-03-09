@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.main_message_handler import EgressTelemetryRollup, _handle_egress_message, _prepare_ingress_envelope
+from app.main_message_handler import (
+    EgressTelemetryRollup,
+    MessageHandlerMetrics,
+    _handle_egress_message,
+    _prepare_ingress_envelope,
+    _render_prometheus_metrics,
+)
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.message_handler_runtime import TaskLedgerStore
 from app.models import ApplyResult, OutboundMessage, ReplyChannel, TaskEnvelope
@@ -433,6 +439,97 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         self.assertEqual(snapshot["dropped_unknown_task_total"], 1)
         self.assertEqual(snapshot["dropped_disallowed_channel_total"], 1)
         self.assertEqual(snapshot["dropped_missing_event_id_total"], 0)
+
+    def test_message_handler_metrics_snapshot_rolls_up_loop_stats(self) -> None:
+        current_monotonic = 100.0
+
+        def _monotonic() -> float:
+            return current_monotonic
+
+        metrics = MessageHandlerMetrics(
+            started_at=datetime(2026, 3, 6, 12, 0, tzinfo=timezone.utc),
+            monotonic_fn=_monotonic,
+        )
+        telemetry_snapshot = {
+            "received_total": 2,
+            "dispatched_total": 1,
+            "deduped_total": 1,
+            "dedupe_hit_rate_pct": 50.0,
+            "dropped_total": 1,
+            "dropped_unknown_task_total": 1,
+            "dropped_disallowed_channel_total": 0,
+            "dropped_missing_event_id_total": 0,
+            "incremental_dispatched_total": 1,
+            "final_dispatched_total": 0,
+            "dispatch_latency_ms_avg": 120.5,
+            "dispatch_latency_ms_max": 121,
+        }
+
+        current_monotonic = 160.0
+        metrics.record_loop(
+            ingress_published=3,
+            github_scanned_events=5,
+            github_new_events=2,
+            github_published=1,
+            telemetry_snapshot=telemetry_snapshot,
+            completed_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+        )
+        snapshot = metrics.snapshot()
+
+        self.assertEqual(snapshot["uptime_seconds"], 60.0)
+        self.assertEqual(snapshot["process_start_time_seconds"], 1772798400.0)
+        self.assertEqual(snapshot["loops_total"], 1)
+        self.assertEqual(snapshot["ingress_published_total"], 3)
+        self.assertEqual(snapshot["github_scanned_events_total"], 5)
+        self.assertEqual(snapshot["github_new_events_total"], 2)
+        self.assertEqual(snapshot["github_published_total"], 1)
+        self.assertEqual(snapshot["last_loop_completed_timestamp_seconds"], 1772798460.0)
+        self.assertEqual(snapshot["received_total"], 2)
+        self.assertEqual(snapshot["dispatch_latency_ms_avg"], 120.5)
+
+    def test_render_prometheus_metrics_formats_expected_samples(self) -> None:
+        rendered = _render_prometheus_metrics(
+            {
+                "uptime_seconds": 60.0,
+                "process_start_time_seconds": 1772798400.0,
+                "loops_total": 2,
+                "ingress_published_total": 4,
+                "github_scanned_events_total": 5,
+                "github_new_events_total": 3,
+                "github_published_total": 1,
+                "last_loop_completed_timestamp_seconds": 1772798460.0,
+                "received_total": 7,
+                "dispatched_total": 6,
+                "deduped_total": 1,
+                "dedupe_hit_rate_pct": 14.29,
+                "dropped_total": 2,
+                "dropped_unknown_task_total": 1,
+                "dropped_disallowed_channel_total": 1,
+                "dropped_missing_event_id_total": 0,
+                "incremental_dispatched_total": 4,
+                "final_dispatched_total": 2,
+                "dispatch_latency_ms_avg": 99.5,
+                "dispatch_latency_ms_max": 140,
+            }
+        )
+
+        self.assertIn("# TYPE chatting_message_handler_loops_total counter", rendered)
+        self.assertIn("chatting_message_handler_uptime_seconds 60.000000", rendered)
+        self.assertIn(
+            "chatting_message_handler_process_start_time_seconds 1772798400.000000",
+            rendered,
+        )
+        self.assertIn("chatting_message_handler_loops_total 2", rendered)
+        self.assertIn("chatting_message_handler_github_published_total 1", rendered)
+        self.assertIn("chatting_message_handler_egress_received_total 7", rendered)
+        self.assertIn(
+            "chatting_message_handler_egress_dedupe_hit_rate_pct 14.290000",
+            rendered,
+        )
+        self.assertIn(
+            "chatting_message_handler_egress_dispatch_latency_ms_avg 99.500000",
+            rendered,
+        )
 
 
 if __name__ == "__main__":

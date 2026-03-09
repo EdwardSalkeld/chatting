@@ -11,7 +11,9 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from threading import Lock, Thread
 from typing import Callable, Mapping
 
 from app.applier import IntegratedApplier
@@ -55,6 +57,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "max_loops",
         "poll_interval_seconds",
         "poll_timeout_seconds",
+        "metrics_host",
+        "metrics_port",
         "allowed_egress_channels",
         "schedule_file",
         "imap_host",
@@ -89,6 +93,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
     }
 )
 BBMB_EGRESS_PICKUP_WAIT_SECONDS = 5
+DEFAULT_METRICS_HOST = "127.0.0.1"
+DEFAULT_METRICS_PORT = 9464
 
 
 @dataclass(frozen=True)
@@ -177,6 +183,256 @@ class EgressTelemetryRollup:
         }
 
 
+@dataclass(frozen=True)
+class MessageHandlerMetricsServer:
+    server: HTTPServer
+    thread: Thread
+
+    def shutdown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1.0)
+
+
+class MessageHandlerMetrics:
+    """Thread-safe rollup for in-process message-handler Prometheus metrics."""
+
+    def __init__(
+        self,
+        *,
+        started_at: datetime | None = None,
+        monotonic_fn: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._lock = Lock()
+        self._monotonic_fn = monotonic_fn
+        self._started_at = started_at or datetime.now(timezone.utc)
+        self._started_monotonic = monotonic_fn()
+        self._loops_total = 0
+        self._ingress_published_total = 0
+        self._github_scanned_events_total = 0
+        self._github_new_events_total = 0
+        self._github_published_total = 0
+        self._last_loop_completed_at: datetime | None = None
+        self._egress_snapshot: dict[str, float | int] = EgressTelemetryRollup().snapshot()
+
+    def record_loop(
+        self,
+        *,
+        ingress_published: int,
+        github_scanned_events: int,
+        github_new_events: int,
+        github_published: int,
+        telemetry_snapshot: dict[str, float | int],
+        completed_at: datetime | None = None,
+    ) -> None:
+        loop_completed_at = completed_at or datetime.now(timezone.utc)
+        with self._lock:
+            self._loops_total += 1
+            self._ingress_published_total += ingress_published
+            self._github_scanned_events_total += github_scanned_events
+            self._github_new_events_total += github_new_events
+            self._github_published_total += github_published
+            self._last_loop_completed_at = loop_completed_at.astimezone(timezone.utc)
+            self._egress_snapshot = dict(telemetry_snapshot)
+
+    def snapshot(self) -> dict[str, float | int]:
+        with self._lock:
+            uptime_seconds = max(self._monotonic_fn() - self._started_monotonic, 0.0)
+            last_loop_timestamp = (
+                self._last_loop_completed_at.timestamp()
+                if self._last_loop_completed_at is not None
+                else 0.0
+            )
+            snapshot = {
+                "uptime_seconds": round(uptime_seconds, 6),
+                "process_start_time_seconds": round(self._started_at.timestamp(), 6),
+                "loops_total": self._loops_total,
+                "ingress_published_total": self._ingress_published_total,
+                "github_scanned_events_total": self._github_scanned_events_total,
+                "github_new_events_total": self._github_new_events_total,
+                "github_published_total": self._github_published_total,
+                "last_loop_completed_timestamp_seconds": round(last_loop_timestamp, 6),
+            }
+            snapshot.update(self._egress_snapshot)
+            return snapshot
+
+
+def _format_prometheus_value(value: float | int) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return f"{float(value):.6f}"
+
+
+def _render_prometheus_metrics(snapshot: Mapping[str, float | int]) -> str:
+    definitions = (
+        (
+            "chatting_message_handler_uptime_seconds",
+            "gauge",
+            "Seconds since the message handler process started.",
+            "uptime_seconds",
+        ),
+        (
+            "chatting_message_handler_process_start_time_seconds",
+            "gauge",
+            "Unix timestamp when the message handler process started.",
+            "process_start_time_seconds",
+        ),
+        (
+            "chatting_message_handler_loops_total",
+            "counter",
+            "Completed message handler loops.",
+            "loops_total",
+        ),
+        (
+            "chatting_message_handler_ingress_published_total",
+            "counter",
+            "Tasks published to the worker ingress queue.",
+            "ingress_published_total",
+        ),
+        (
+            "chatting_message_handler_github_scanned_events_total",
+            "counter",
+            "GitHub assignment events scanned by the handler.",
+            "github_scanned_events_total",
+        ),
+        (
+            "chatting_message_handler_github_new_events_total",
+            "counter",
+            "New GitHub assignment events discovered after checkpointing.",
+            "github_new_events_total",
+        ),
+        (
+            "chatting_message_handler_github_published_total",
+            "counter",
+            "GitHub assignment events published as tasks.",
+            "github_published_total",
+        ),
+        (
+            "chatting_message_handler_last_loop_completed_timestamp_seconds",
+            "gauge",
+            "Unix timestamp of the most recently completed loop.",
+            "last_loop_completed_timestamp_seconds",
+        ),
+        (
+            "chatting_message_handler_egress_received_total",
+            "counter",
+            "Egress messages received from the broker.",
+            "received_total",
+        ),
+        (
+            "chatting_message_handler_egress_dispatched_total",
+            "counter",
+            "Egress messages dispatched to downstream transports.",
+            "dispatched_total",
+        ),
+        (
+            "chatting_message_handler_egress_deduped_total",
+            "counter",
+            "Egress messages skipped due to deduplication.",
+            "deduped_total",
+        ),
+        (
+            "chatting_message_handler_egress_dedupe_hit_rate_pct",
+            "gauge",
+            "Percentage of handled egress events skipped by dedupe.",
+            "dedupe_hit_rate_pct",
+        ),
+        (
+            "chatting_message_handler_egress_dropped_total",
+            "counter",
+            "Egress messages dropped before dispatch.",
+            "dropped_total",
+        ),
+        (
+            "chatting_message_handler_egress_dropped_unknown_task_total",
+            "counter",
+            "Egress messages dropped because the task ledger entry was missing.",
+            "dropped_unknown_task_total",
+        ),
+        (
+            "chatting_message_handler_egress_dropped_disallowed_channel_total",
+            "counter",
+            "Egress messages dropped because the channel is not allowed.",
+            "dropped_disallowed_channel_total",
+        ),
+        (
+            "chatting_message_handler_egress_dropped_missing_event_id_total",
+            "counter",
+            "Egress messages dropped because they had no event id.",
+            "dropped_missing_event_id_total",
+        ),
+        (
+            "chatting_message_handler_egress_incremental_dispatched_total",
+            "counter",
+            "Incremental egress events dispatched in order.",
+            "incremental_dispatched_total",
+        ),
+        (
+            "chatting_message_handler_egress_final_dispatched_total",
+            "counter",
+            "Final egress events dispatched in order.",
+            "final_dispatched_total",
+        ),
+        (
+            "chatting_message_handler_egress_dispatch_latency_ms_avg",
+            "gauge",
+            "Average egress dispatch latency in milliseconds.",
+            "dispatch_latency_ms_avg",
+        ),
+        (
+            "chatting_message_handler_egress_dispatch_latency_ms_max",
+            "gauge",
+            "Maximum egress dispatch latency in milliseconds.",
+            "dispatch_latency_ms_max",
+        ),
+    )
+    lines: list[str] = []
+    for metric_name, metric_type, help_text, snapshot_key in definitions:
+        lines.append(f"# HELP {metric_name} {help_text}")
+        lines.append(f"# TYPE {metric_name} {metric_type}")
+        lines.append(f"{metric_name} {_format_prometheus_value(snapshot[snapshot_key])}")
+    return "\n".join(lines) + "\n"
+
+
+def _start_metrics_server(
+    metrics: MessageHandlerMetrics,
+    *,
+    host: str,
+    port: int,
+) -> MessageHandlerMetricsServer | None:
+    class _MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?", maxsplit=1)[0] != "/metrics":
+                self.send_response(404)
+                self.end_headers()
+                return
+            payload = _render_prometheus_metrics(metrics.snapshot()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            del format, args
+            return
+
+    try:
+        server = HTTPServer((host, port), _MetricsHandler)
+    except OSError:
+        LOGGER.exception("message_handler_metrics_server_failed host=%s port=%s", host, port)
+        return None
+
+    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
+    thread.start()
+    LOGGER.info(
+        "message_handler_metrics_server_started host=%s port=%s",
+        host,
+        server.server_address[1],
+    )
+    return MessageHandlerMetricsServer(server=server, thread=thread)
+
+
 def _configure_logging() -> None:
     if logging.getLogger().handlers:
         return
@@ -209,6 +465,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke runs.")
     parser.add_argument("--poll-interval-seconds", type=_positive_float, help="Loop interval.")
     parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Egress pickup timeout seconds.")
+    parser.add_argument("--metrics-host", help="Metrics bind host.")
+    parser.add_argument("--metrics-port", type=_positive_int, help="Metrics bind port.")
     parser.add_argument(
         "--allowed-egress-channel",
         action="append",
@@ -886,6 +1144,18 @@ def main() -> int:
         default_value=2,
         setting_name="poll_timeout_seconds",
     )
+    metrics_host = _resolve_str(
+        args.metrics_host,
+        config.get("metrics_host"),
+        default_value=DEFAULT_METRICS_HOST,
+        setting_name="metrics_host",
+    )
+    metrics_port = _resolve_positive_int(
+        args.metrics_port,
+        config.get("metrics_port"),
+        default_value=DEFAULT_METRICS_PORT,
+        setting_name="metrics_port",
+    )
     allowed_egress_channels = _resolve_allowed_egress_channels(args, config)
     github_ingress_settings: GitHubIngressSettings | None = None
     disabled_ingress_components: list[DisabledIngressComponent] = []
@@ -914,118 +1184,135 @@ def main() -> int:
         email_sender=_build_email_sender(args, config),
         telegram_sender=_build_telegram_sender(args, config),
     )
+    metrics = MessageHandlerMetrics()
+    metrics_server = _start_metrics_server(
+        metrics,
+        host=metrics_host,
+        port=metrics_port,
+    )
 
-    loop_count = 0
-    telemetry = EgressTelemetryRollup()
-    while True:
-        loop_count += 1
+    try:
+        loop_count = 0
+        telemetry = EgressTelemetryRollup()
+        while True:
+            loop_count += 1
 
-        for failure in disabled_ingress_components:
-            LOGGER.error(
-                "ingress_connector_disabled connector=%s loop=%s error=%s",
-                failure.component,
-                loop_count,
-                failure.error,
-            )
-
-        ingress_published = 0
-        for connector in connectors:
-            connector_name = type(connector).__name__
-            try:
-                envelopes = connector.poll()
-            except Exception:  # noqa: BLE001
-                LOGGER.exception(
-                    "ingress_connector_poll_failed connector=%s loop=%s",
-                    connector_name,
+            for failure in disabled_ingress_components:
+                LOGGER.error(
+                    "ingress_connector_disabled connector=%s loop=%s error=%s",
+                    failure.component,
                     loop_count,
+                    failure.error,
                 )
-                continue
-            for envelope in envelopes:
-                if store.seen(envelope.source, envelope.dedupe_key):
+
+            ingress_published = 0
+            for connector in connectors:
+                connector_name = type(connector).__name__
+                try:
+                    envelopes = connector.poll()
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception(
+                        "ingress_connector_poll_failed connector=%s loop=%s",
+                        connector_name,
+                        loop_count,
+                    )
                     continue
-                task_id = f"task:{envelope.id}"
-                task_envelope = _prepare_ingress_envelope(
-                    store=store,
-                    envelope=envelope,
-                    run_id=task_id,
-                )
-                task_message = TaskQueueMessage.from_envelope(
-                    task_envelope,
-                    trace_id=f"trace:{envelope.id}",
-                )
-                broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
-                ledger.record_task(task_message)
-                store.mark_seen(envelope.source, envelope.dedupe_key)
-                ingress_published += 1
+                for envelope in envelopes:
+                    if store.seen(envelope.source, envelope.dedupe_key):
+                        continue
+                    task_id = f"task:{envelope.id}"
+                    task_envelope = _prepare_ingress_envelope(
+                        store=store,
+                        envelope=envelope,
+                        run_id=task_id,
+                    )
+                    task_message = TaskQueueMessage.from_envelope(
+                        task_envelope,
+                        trace_id=f"trace:{envelope.id}",
+                    )
+                    broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
+                    ledger.record_task(task_message)
+                    store.mark_seen(envelope.source, envelope.dedupe_key)
+                    ingress_published += 1
 
-        github_scanned_events = 0
-        github_new_events = 0
-        github_published = 0
-        github_checkpoint = "disabled"
-        if github_ingress_settings is not None and github_checkpoint_store is not None:
-            try:
+            github_scanned_events = 0
+            github_new_events = 0
+            github_published = 0
+            github_checkpoint = "disabled"
+            if github_ingress_settings is not None and github_checkpoint_store is not None:
+                try:
+                    (
+                        github_scanned_events,
+                        github_new_events,
+                        github_published,
+                        github_checkpoint,
+                    ) = _poll_github_assignment_ingress(
+                        settings=github_ingress_settings,
+                        checkpoint_store=github_checkpoint_store,
+                        store=store,
+                        broker=broker,
+                    )
+                except Exception:  # noqa: BLE001
+                    github_checkpoint = "error"
+                    LOGGER.exception("ingress_connector_poll_failed connector=github loop=%s", loop_count)
+
+            egress_picked = broker.pickup_json(
+                EGRESS_QUEUE_NAME,
+                timeout_seconds=poll_timeout_seconds,
+                wait_seconds=BBMB_EGRESS_PICKUP_WAIT_SECONDS,
+            )
+            if egress_picked is not None:
+                _handle_egress_message(
+                    picked_guid=egress_picked.guid,
+                    picked_payload=egress_picked.payload,
+                    ledger=ledger,
+                    store=store,
+                    allowed_egress_channels=allowed_egress_channels,
+                    applier=applier,
+                    ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
+                    telemetry=telemetry,
+                )
+
+            telemetry_snapshot = telemetry.snapshot()
+            metrics.record_loop(
+                ingress_published=ingress_published,
+                github_scanned_events=github_scanned_events,
+                github_new_events=github_new_events,
+                github_published=github_published,
+                telemetry_snapshot=telemetry_snapshot,
+            )
+            LOGGER.info(
                 (
-                    github_scanned_events,
-                    github_new_events,
-                    github_published,
-                    github_checkpoint,
-                ) = _poll_github_assignment_ingress(
-                    settings=github_ingress_settings,
-                    checkpoint_store=github_checkpoint_store,
-                    store=store,
-                    broker=broker,
-                )
-            except Exception:  # noqa: BLE001
-                github_checkpoint = "error"
-                LOGGER.exception("ingress_connector_poll_failed connector=github loop=%s", loop_count)
-
-        egress_picked = broker.pickup_json(
-            EGRESS_QUEUE_NAME,
-            timeout_seconds=poll_timeout_seconds,
-            wait_seconds=BBMB_EGRESS_PICKUP_WAIT_SECONDS,
-        )
-        if egress_picked is not None:
-            _handle_egress_message(
-                picked_guid=egress_picked.guid,
-                picked_payload=egress_picked.payload,
-                ledger=ledger,
-                store=store,
-                allowed_egress_channels=allowed_egress_channels,
-                applier=applier,
-                ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
-                telemetry=telemetry,
+                    "message_handler_loop_completed loop=%s ingress_published=%s "
+                    "github_scanned_events=%s github_new_events=%s github_published=%s github_checkpoint=%s "
+                    "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
+                    "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
+                    "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
+                    "egress_incremental_dispatched_total=%s egress_final_dispatched_total=%s"
+                ),
+                loop_count,
+                ingress_published,
+                github_scanned_events,
+                github_new_events,
+                github_published,
+                github_checkpoint,
+                telemetry_snapshot["received_total"],
+                telemetry_snapshot["dispatched_total"],
+                telemetry_snapshot["deduped_total"],
+                telemetry_snapshot["dedupe_hit_rate_pct"],
+                telemetry_snapshot["dropped_total"],
+                telemetry_snapshot["dispatch_latency_ms_avg"],
+                telemetry_snapshot["dispatch_latency_ms_max"],
+                telemetry_snapshot["incremental_dispatched_total"],
+                telemetry_snapshot["final_dispatched_total"],
             )
 
-        telemetry_snapshot = telemetry.snapshot()
-        LOGGER.info(
-            (
-                "message_handler_loop_completed loop=%s ingress_published=%s "
-                "github_scanned_events=%s github_new_events=%s github_published=%s github_checkpoint=%s "
-                "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
-                "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
-                "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
-                "egress_incremental_dispatched_total=%s egress_final_dispatched_total=%s"
-            ),
-            loop_count,
-            ingress_published,
-            github_scanned_events,
-            github_new_events,
-            github_published,
-            github_checkpoint,
-            telemetry_snapshot["received_total"],
-            telemetry_snapshot["dispatched_total"],
-            telemetry_snapshot["deduped_total"],
-            telemetry_snapshot["dedupe_hit_rate_pct"],
-            telemetry_snapshot["dropped_total"],
-            telemetry_snapshot["dispatch_latency_ms_avg"],
-            telemetry_snapshot["dispatch_latency_ms_max"],
-            telemetry_snapshot["incremental_dispatched_total"],
-            telemetry_snapshot["final_dispatched_total"],
-        )
-
-        if max_loops and loop_count >= max_loops:
-            break
-        time.sleep(poll_interval_seconds)
+            if max_loops and loop_count >= max_loops:
+                break
+            time.sleep(poll_interval_seconds)
+    finally:
+        if metrics_server is not None:
+            metrics_server.shutdown()
 
     return 0
 
