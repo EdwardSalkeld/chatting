@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from app.models import (
@@ -43,6 +44,7 @@ class CodexExecutor:
 
     command: tuple[str, ...] = ("codex", "exec", "--json")
     cwd: str | None = None
+    now_provider: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
 
     def execute(
         self,
@@ -50,7 +52,7 @@ class CodexExecutor:
         reply_send: Callable[[dict[str, Any]], None] | None = None,
     ) -> ExecutionResult:
         del reply_send
-        payload = json.dumps(_task_payload(task))
+        payload = json.dumps(_task_payload(task, current_time=self.now_provider()))
         try:
             completed = subprocess.run(
                 self.command,
@@ -159,10 +161,13 @@ def _recover_last_json_object(raw_output: str) -> dict[str, Any] | None:
     return last_execution_like or last_object
 
 
-def _task_payload(task: RoutedTask) -> dict[str, Any]:
+def _task_payload(task: RoutedTask, *, current_time: datetime) -> dict[str, Any]:
+    if current_time.tzinfo is None:
+        raise ValueError("current_time must be timezone-aware")
     return {
         "schema_version": SCHEMA_VERSION,
         "task": task.to_dict(),
+        "current_time": current_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 
 

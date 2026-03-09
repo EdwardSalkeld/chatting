@@ -157,6 +157,7 @@ class RoutedTask:
     priority: Literal["low", "normal", "high"]
     execution_constraints: ExecutionConstraints
     policy_profile: str
+    event_time: datetime | None = None
     source: Literal["cron", "email", "im", "webhook", "internal"] | None = None
     actor: str | None = None
     content: str | None = None
@@ -171,6 +172,8 @@ class RoutedTask:
         _validate_required_string(self.envelope_id, field_name="envelope_id")
         _validate_required_string(self.workflow, field_name="workflow")
         _validate_required_string(self.policy_profile, field_name="policy_profile")
+        if self.event_time is not None and self.event_time.tzinfo is None:
+            raise ValueError("event_time must be timezone-aware")
         if self.source is not None and self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
         if self.actor is not None:
@@ -194,6 +197,10 @@ class RoutedTask:
             },
             "policy_profile": self.policy_profile,
         }
+        if self.event_time is not None:
+            payload["event_time"] = (
+                self.event_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
         if self.source is not None:
             payload["source"] = self.source
         if self.actor is not None:
