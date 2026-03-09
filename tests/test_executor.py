@@ -1,6 +1,7 @@
 import json
 import subprocess
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.executor import CodexExecutor, parse_execution_result
@@ -15,6 +16,7 @@ def _task() -> RoutedTask:
         priority="normal",
         execution_constraints=ExecutionConstraints(timeout_seconds=7, max_tokens=1000),
         policy_profile="default",
+        event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
         source="email",
         actor="alice@example.com",
         content="Subject: hello\\n\\nPlease summarize this thread.",
@@ -527,7 +529,10 @@ class CodexExecutorTests(unittest.TestCase):
             ),
             stderr="",
         )
-        executor = CodexExecutor(command=("codex", "exec", "--json"))
+        executor = CodexExecutor(
+            command=("codex", "exec", "--json"),
+            now_provider=lambda: datetime(2026, 2, 27, 18, 0, tzinfo=timezone.utc),
+        )
         task = _task()
 
         result = executor.execute(task)
@@ -536,6 +541,9 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(result.messages[0].body, "ok")
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.kwargs["timeout"], task.execution_constraints.timeout_seconds)
+        payload = json.loads(run_mock.call_args.kwargs["input"])
+        self.assertEqual(payload["task"]["event_time"], "2026-02-27T16:00:00Z")
+        self.assertEqual(payload["current_time"], "2026-02-27T18:00:00Z")
 
     @patch("app.executor.codex.subprocess.run")
     def test_execute_passes_configured_working_directory(self, run_mock) -> None:
