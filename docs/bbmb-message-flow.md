@@ -24,7 +24,7 @@ There are currently two BBMB queues:
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
-| `chatting.egress.v1` | `worker` | `message-handler` | Carries worker output as egress messages for ordered dispatch |
+| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for ordered dispatch |
 
 Important details:
 - Queue names are hardcoded today.
@@ -33,6 +33,7 @@ Important details:
   live in SQLite, not in BBMB.
 - The current worker emits `chatting.egress.v2` payloads on `chatting.egress.v1`. The queue name is
   transport-level; the `message_type` inside the JSON is the payload contract version.
+- `message-handler` enforces this contract and rejects legacy `chatting.egress.v1` payload types.
 
 ## End-To-End Flow
 
@@ -75,6 +76,7 @@ outbox/BBMB path.
 ### 3. Message-handler consumes egress
 
 `message-handler` picks one payload from `chatting.egress.v1` and then:
+- validates `message_type == "chatting.egress.v2"`
 - validates that the task exists in the ingress ledger
 - drops unknown-task egress
 - drops disallowed egress channels, except for the internal heartbeat log pong
