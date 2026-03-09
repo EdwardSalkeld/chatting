@@ -7,6 +7,7 @@ from app.connectors.fake_cron_connector import CronTrigger, FakeCronConnector
 from app.connectors.fake_email_connector import EmailMessage, FakeEmailConnector
 from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
 from app.connectors.imap_email_connector import ImapEmailConnector
+from app.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
 from app.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
@@ -346,6 +347,25 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
                 for line in logs.output
             )
         )
+
+
+class InternalHeartbeatConnectorTests(unittest.TestCase):
+    def test_poll_emits_internal_heartbeat_with_unique_ids(self) -> None:
+        current = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)
+        connector = InternalHeartbeatConnector(now_provider=lambda: current)
+
+        first = connector.poll()
+        second = connector.poll()
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(first[0].source, "internal")
+        self.assertEqual(first[0].actor, "message-handler")
+        self.assertEqual(first[0].reply_channel.type, "internal")
+        self.assertEqual(first[0].reply_channel.target, "heartbeat")
+        self.assertNotEqual(first[0].id, second[0].id)
+        self.assertEqual(first[0].dedupe_key, first[0].id)
+        self.assertEqual(second[0].dedupe_key, second[0].id)
 
 
 class ImapEmailConnectorTests(unittest.TestCase):

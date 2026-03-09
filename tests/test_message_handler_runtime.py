@@ -3,15 +3,18 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 
 from app.main_message_handler import (
     EgressTelemetryRollup,
+    HeartbeatTelemetryRollup,
     MessageHandlerMetrics,
     _handle_egress_message,
     _prepare_ingress_envelope,
     _render_prometheus_metrics,
 )
 from app.broker import EgressQueueMessage, TaskQueueMessage
+from app.internal_heartbeat import build_internal_heartbeat_egress, build_internal_heartbeat_envelope
 from app.message_handler_runtime import TaskLedgerStore
 from app.models import ApplyResult, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
@@ -49,6 +52,15 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             dedupe_key="email:1",
         )
         return TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:1")
+
+    def _build_internal_heartbeat_task_message(self) -> TaskQueueMessage:
+        return TaskQueueMessage.from_envelope(
+            build_internal_heartbeat_envelope(
+                sequence=1,
+                now=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+            ),
+            trace_id="trace:internal:heartbeat:1",
+        )
 
     def _build_telegram_envelope(self, *, envelope_id: str, content: str, target: str = "12345") -> TaskEnvelope:
         return TaskEnvelope(
@@ -253,6 +265,67 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(acked, ["guid-outbox-1"])
             self.assertEqual(applier.apply_calls, 1)
             self.assertEqual(store.list_replayable_egress_outbox_events(), [])
+
+    def test_handle_egress_message_allows_internal_heartbeat_log_channel_and_records_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_internal_heartbeat_task_message()
+            ledger.record_task(task_message)
+            heartbeat_telemetry = HeartbeatTelemetryRollup()
+            heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
+            acked: list[str] = []
+            applied_messages: list[tuple[str, str, str]] = []
+
+            @dataclass
+            class _HeartbeatApplier:
+                apply_calls: int = 0
+
+                def apply(self, decision, envelope=None):
+                    del envelope
+                    self.apply_calls += 1
+                    applied_messages.extend(
+                        (message.channel, message.target, message.body)
+                        for message in decision.approved_messages
+                    )
+                    return ApplyResult(
+                        applied_actions=[],
+                        skipped_actions=[],
+                        dispatched_messages=decision.approved_messages,
+                        reason_codes=[],
+                    )
+
+            applier = _HeartbeatApplier()
+            queued = build_internal_heartbeat_egress(
+                task_message=task_message,
+                worker_received_at=task_message.emitted_at,
+            )
+
+            _handle_egress_message(
+                picked_guid="guid-heartbeat-1",
+                picked_payload=queued.to_dict(),
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+                heartbeat_telemetry=heartbeat_telemetry,
+            )
+
+            self.assertEqual(acked, ["guid-heartbeat-1"])
+            self.assertEqual(applier.apply_calls, 1)
+            self.assertEqual(len(applied_messages), 1)
+            self.assertEqual(applied_messages[0][0], "log")
+            self.assertEqual(applied_messages[0][1], "heartbeat")
+            self.assertEqual(json.loads(applied_messages[0][2])["kind"], "heartbeat_pong")
+            snapshot = heartbeat_telemetry.snapshot()
+            self.assertEqual(snapshot["sent_total"], 1)
+            self.assertEqual(snapshot["received_total"], 1)
+            self.assertNotEqual(snapshot["latest_sent_at"], "none")
+            self.assertNotEqual(snapshot["latest_received_at"], "none")
+            self.assertIsInstance(snapshot["latest_latency_ms"], int)
+            self.assertGreaterEqual(snapshot["latest_latency_ms"], 0)
 
 
     def test_handle_egress_message_buffers_until_expected_sequence(self) -> None:
