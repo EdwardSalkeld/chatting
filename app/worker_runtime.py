@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +10,10 @@ from typing import Any, Callable
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.executor import Executor
+from app.internal_heartbeat import (
+    build_internal_heartbeat_egress,
+    is_internal_heartbeat_envelope,
+)
 from app.models import AuditEvent, OutboundMessage, PolicyDecision, RunRecord
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
@@ -38,6 +43,12 @@ def process_task_message(
         raise ValueError("max_attempts must be positive")
 
     envelope = task_message.envelope
+    if is_internal_heartbeat_envelope(envelope):
+        return _process_internal_heartbeat(
+            store=store,
+            task_message=task_message,
+        )
+
     run_id = f"run:{task_message.task_id}:{time.time_ns()}"
     task = router.route(envelope)
     started = time.perf_counter()
@@ -218,6 +229,73 @@ def process_task_message(
         run_record=run_record,
         egress_messages=egress_messages,
         dead_lettered=dead_lettered,
+    )
+
+
+def _process_internal_heartbeat(
+    *,
+    store: StateStore,
+    task_message: TaskQueueMessage,
+) -> WorkerProcessResult:
+    worker_received_at = datetime.now(timezone.utc)
+    egress_message = build_internal_heartbeat_egress(
+        task_message=task_message,
+        worker_received_at=worker_received_at,
+    )
+    ping_emitted_at = task_message.emitted_at.astimezone(timezone.utc)
+    run_record = RunRecord(
+        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+        envelope_id=task_message.envelope.id,
+        source=task_message.envelope.source,
+        workflow="internal_heartbeat",
+        policy_profile=task_message.envelope.policy_profile,
+        latency_ms=max(int((worker_received_at - ping_emitted_at).total_seconds() * 1000), 0),
+        result_status="success",
+        created_at=worker_received_at,
+    )
+    store.append_run(run_record)
+    store.append_audit_event(
+        AuditEvent(
+            run_id=run_record.run_id,
+            envelope_id=run_record.envelope_id,
+            source=run_record.source,
+            workflow=run_record.workflow,
+            policy_profile=run_record.policy_profile,
+            result_status=run_record.result_status,
+            detail={
+                "trace_id": task_message.trace_id,
+                "task_id": task_message.task_id,
+                "reason_codes": ["internal_heartbeat"],
+                "attempt_count": 1,
+                "max_attempts": 1,
+                "last_error": None,
+                "last_error_stage": None,
+                "execution_result": {
+                    "messages": [egress_message.message.to_dict()],
+                    "actions": [],
+                    "config_updates": [],
+                    "requires_human_review": False,
+                    "errors": [],
+                },
+                "policy_decision": {
+                    "approved_actions": [],
+                    "blocked_actions": [],
+                    "approved_messages": [egress_message.message.to_dict()],
+                    "config_updates": {"approved": [], "pending_review": [], "rejected": []},
+                    "reason_codes": ["internal_heartbeat"],
+                },
+                "incremental_reply_send_requested_count": 0,
+                "incremental_reply_send_published_count": 0,
+                "egress_message_count": 1,
+                "heartbeat": json.loads(egress_message.message.body),
+            },
+            created_at=run_record.created_at,
+        )
+    )
+    return WorkerProcessResult(
+        run_record=run_record,
+        egress_messages=[egress_message],
+        dead_lettered=False,
     )
 
 

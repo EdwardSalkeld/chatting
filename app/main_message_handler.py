@@ -24,12 +24,13 @@ from app.broker import (
     TASK_QUEUE_NAME,
     TaskQueueMessage,
 )
-from app.connectors import GitHubIssueAssignmentConnector
+from app.connectors import GitHubIssueAssignmentConnector, InternalHeartbeatConnector
 from app.github_ingress_runtime import (
     GitHubAssignmentCheckpointStore,
     default_graphql_runner,
     fetch_authenticated_viewer_login,
 )
+from app.internal_heartbeat import INTERNAL_HEARTBEAT_TARGET, is_internal_heartbeat_envelope
 from app.main import (
     TELEGRAM_MEMORY_TURN_LIMIT,
     _build_email_sender,
@@ -174,6 +175,39 @@ class EgressTelemetryRollup:
             "final_dispatched_total": self.final_dispatched_total,
             "dispatch_latency_ms_avg": avg_dispatch_latency_ms,
             "dispatch_latency_ms_max": self.dispatch_latency_ms_max,
+        }
+
+
+@dataclass
+class HeartbeatTelemetryRollup:
+    """In-memory telemetry for the message-handler/worker heartbeat."""
+
+    sent_total: int = 0
+    received_total: int = 0
+    latest_sent_at: datetime | None = None
+    latest_received_at: datetime | None = None
+    latest_latency_ms: int | None = None
+
+    def record_sent(self, *, sent_at: datetime) -> None:
+        self.sent_total += 1
+        self.latest_sent_at = sent_at.astimezone(timezone.utc)
+
+    def record_received(self, *, sent_at: datetime, received_at: datetime) -> None:
+        self.received_total += 1
+        self.latest_sent_at = sent_at.astimezone(timezone.utc)
+        self.latest_received_at = received_at.astimezone(timezone.utc)
+        self.latest_latency_ms = max(
+            int((self.latest_received_at - self.latest_sent_at).total_seconds() * 1000),
+            0,
+        )
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "sent_total": self.sent_total,
+            "received_total": self.received_total,
+            "latest_sent_at": _serialize_optional_datetime(self.latest_sent_at),
+            "latest_received_at": _serialize_optional_datetime(self.latest_received_at),
+            "latest_latency_ms": self.latest_latency_ms,
         }
 
 
@@ -435,6 +469,12 @@ def _configure_logging() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+
+
+def _serialize_optional_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "none"
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _positive_int(value: str) -> int:
@@ -746,7 +786,7 @@ def _build_live_connectors_fail_open(
     *,
     db_path: str,
 ) -> tuple[list[object], list[DisabledIngressComponent]]:
-    connectors: list[object] = []
+    connectors: list[object] = [InternalHeartbeatConnector()]
     disabled_components: list[DisabledIngressComponent] = []
 
     connector_args: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -939,6 +979,7 @@ def _handle_egress_message(
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
     ack_callback: Callable[[str], None],
+    heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
     def _ack_and_mark_outbox(event_id: str | None = None) -> None:
@@ -968,7 +1009,13 @@ def _handle_egress_message(
         _ack_and_mark_outbox(egress_message.event_id)
         return
 
-    if egress_message.message.channel not in allowed_egress_channels:
+    internal_heartbeat = is_internal_heartbeat_envelope(ledger_record.task_message.envelope)
+    heartbeat_log_message = (
+        internal_heartbeat
+        and egress_message.message.channel == "log"
+        and egress_message.message.target == INTERNAL_HEARTBEAT_TARGET
+    )
+    if egress_message.message.channel not in allowed_egress_channels and not heartbeat_log_message:
         if telemetry is not None:
             telemetry.record_dropped(reason="disallowed_channel")
         LOGGER.error(
@@ -1010,6 +1057,7 @@ def _handle_egress_message(
         ledger=ledger,
         store=store,
         applier=applier,
+        heartbeat_telemetry=heartbeat_telemetry,
         telemetry=telemetry,
     )
 
@@ -1020,6 +1068,7 @@ def _flush_task_egress_in_sequence(
     ledger: TaskLedgerStore,
     store: SQLiteStateStore,
     applier: IntegratedApplier,
+    heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
     ledger_record = ledger.get_task(task_id)
@@ -1068,6 +1117,19 @@ def _flush_task_egress_in_sequence(
             telemetry.record_dispatched(
                 event_kind=egress_message.event_kind,
                 latency_ms=max(dispatch_latency_ms, 0),
+            )
+        if is_internal_heartbeat_envelope(ledger_record.task_message.envelope) and heartbeat_telemetry is not None:
+            heartbeat_received_at = datetime.now(timezone.utc)
+            heartbeat_telemetry.record_received(
+                sent_at=ledger_record.task_message.emitted_at,
+                received_at=heartbeat_received_at,
+            )
+            LOGGER.info(
+                "heartbeat_roundtrip task_id=%s sent_at=%s received_at=%s latency_ms=%s",
+                egress_message.task_id,
+                _serialize_optional_datetime(ledger_record.task_message.emitted_at),
+                _serialize_optional_datetime(heartbeat_received_at),
+                heartbeat_telemetry.latest_latency_ms,
             )
         if _should_store_telegram_memory(ledger_record.task_message.envelope):
             for message in apply_result.dispatched_messages:
@@ -1163,6 +1225,7 @@ def main() -> int:
         host=metrics_host,
         port=metrics_port,
     )
+    heartbeat_telemetry = HeartbeatTelemetryRollup()
 
     try:
         loop_count = 0
@@ -1214,6 +1277,8 @@ def main() -> int:
                     broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
                     ledger.record_task(task_message)
                     store.mark_seen(envelope.source, envelope.dedupe_key)
+                    if is_internal_heartbeat_envelope(task_message.envelope):
+                        heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
                     ingress_published += 1
                     if isinstance(connector, GitHubIssueAssignmentConnector):
                         github_published += 1
@@ -1230,12 +1295,14 @@ def main() -> int:
                     ledger=ledger,
                     store=store,
                     allowed_egress_channels=allowed_egress_channels,
-                applier=applier,
-                ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
-                telemetry=telemetry,
-            )
+                    applier=applier,
+                    ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
+                    heartbeat_telemetry=heartbeat_telemetry,
+                    telemetry=telemetry,
+                )
 
             telemetry_snapshot = telemetry.snapshot()
+            heartbeat_snapshot = heartbeat_telemetry.snapshot()
             metrics.record_loop(
                 ingress_published=ingress_published,
                 github_scanned_events=github_scanned_events,
@@ -1247,6 +1314,8 @@ def main() -> int:
                 (
                     "message_handler_loop_completed loop=%s ingress_published=%s "
                     "github_scanned_events=%s github_new_events=%s github_published=%s github_checkpoint=%s "
+                    "heartbeat_sent_total=%s heartbeat_received_total=%s "
+                    "heartbeat_latest_sent_at=%s heartbeat_latest_received_at=%s heartbeat_latest_latency_ms=%s "
                     "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
                     "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
                     "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
@@ -1258,6 +1327,11 @@ def main() -> int:
                 github_new_events,
                 github_published,
                 github_checkpoint,
+                heartbeat_snapshot["sent_total"],
+                heartbeat_snapshot["received_total"],
+                heartbeat_snapshot["latest_sent_at"],
+                heartbeat_snapshot["latest_received_at"],
+                heartbeat_snapshot["latest_latency_ms"],
                 telemetry_snapshot["received_total"],
                 telemetry_snapshot["dispatched_total"],
                 telemetry_snapshot["deduped_total"],

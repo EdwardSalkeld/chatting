@@ -3,8 +3,10 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 
 from app.broker import TaskQueueMessage
+from app.internal_heartbeat import build_internal_heartbeat_envelope
 from app.models import (
     ActionProposal,
     ExecutionResult,
@@ -86,6 +88,15 @@ class WorkerRuntimeTests(unittest.TestCase):
             dedupe_key="email:1",
         )
         return TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:1")
+
+    def _build_internal_heartbeat_task_message(self) -> TaskQueueMessage:
+        return TaskQueueMessage.from_envelope(
+            build_internal_heartbeat_envelope(
+                sequence=1,
+                now=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+            ),
+            trace_id="trace:internal:heartbeat:1",
+        )
 
     def test_process_task_message_emits_multiple_egress_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -185,6 +196,31 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.egress_messages[0].event_kind, "final")
             audit_event = store.list_audit_events()[0]
             self.assertIn("incremental_reply_send_not_allowed", audit_event.detail["reason_codes"])
+
+    def test_process_task_message_handles_internal_heartbeat_without_executor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_internal_heartbeat_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=AlwaysFailExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=2,
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(result.run_record.workflow, "internal_heartbeat")
+            self.assertEqual(result.run_record.source, "internal")
+            self.assertEqual(len(result.egress_messages), 1)
+            egress_message = result.egress_messages[0]
+            self.assertEqual(egress_message.message.channel, "log")
+            self.assertEqual(egress_message.message.target, "heartbeat")
+            self.assertEqual(json.loads(egress_message.message.body)["kind"], "heartbeat_pong")
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(audit_event.workflow, "internal_heartbeat")
+            self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
+            self.assertEqual(audit_event.detail["heartbeat"]["kind"], "heartbeat_pong")
 
 
 if __name__ == "__main__":
