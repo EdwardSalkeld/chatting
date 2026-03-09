@@ -42,6 +42,8 @@ python3 -m app.main_worker --config /tmp/worker.json
 
 Or use the provided systemd unit templates in `deploy/systemd/`.
 
+The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics` by default. You can override the bind host and port with `metrics_host` and `metrics_port` in the message-handler config or the matching CLI flags.
+
 ## 5) Query state and metrics
 
 `app.main` is now query/admin only:

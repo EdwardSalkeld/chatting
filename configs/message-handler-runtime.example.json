@@ -3,6 +3,8 @@
   "bbmb_address": "127.0.0.1:9876",
   "poll_interval_seconds": 10.0,
   "poll_timeout_seconds": 2,
+  "metrics_host": "127.0.0.1",
+  "metrics_port": 9464,
   "max_loops": 1,
   "allowed_egress_channels": ["email", "telegram", "log"],
   "schedule_file": "configs/live-schedule.example.json",

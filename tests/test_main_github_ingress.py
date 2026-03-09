@@ -30,6 +30,14 @@ class _FakeBroker:
         self.acked.append((queue_name, guid))
 
 
+@dataclass
+class _FakeMetricsServer:
+    shutdown_calls: int = 0
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
 class MainGitHubIngressTests(unittest.TestCase):
     def test_load_config_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -62,6 +70,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                 patch(
                     "app.main_message_handler.BBMBQueueAdapter",
                     return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
                 ),
                 patch(
                     "app.main_message_handler.fetch_assignment_events_for_repository",
@@ -138,6 +150,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=broker,
                 ),
                 patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
                     "app.main_message_handler.fetch_authenticated_viewer_login",
                     return_value="BillyAcachofa",
                 ),
@@ -187,6 +203,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                 patch(
                     "app.main_message_handler.BBMBQueueAdapter",
                     return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
                 ),
                 patch(
                     "app.main_message_handler.LOGGER.error",
@@ -247,6 +267,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=broker,
                 ),
                 patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
                     "app.main_message_handler.LOGGER.error",
                 ) as error_logger,
                 patch(
@@ -281,6 +305,48 @@ class MainGitHubIngressTests(unittest.TestCase):
             ]
             self.assertEqual(len(disabled_log_calls), 1)
             self.assertEqual(disabled_log_calls[0].args[1], "imap")
+
+    def test_main_message_handler_starts_and_stops_metrics_server_with_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+            metrics_server = _FakeMetricsServer()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._build_live_connectors",
+                    return_value=[],
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=metrics_server,
+                ) as start_metrics_server,
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(metrics_server.shutdown_calls, 1)
+            _, kwargs = start_metrics_server.call_args
+            self.assertEqual(kwargs["host"], "127.0.0.1")
+            self.assertEqual(kwargs["port"], 9464)
 
 if __name__ == "__main__":
     unittest.main()
