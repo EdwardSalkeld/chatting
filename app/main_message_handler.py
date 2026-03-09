@@ -24,17 +24,11 @@ from app.broker import (
     TASK_QUEUE_NAME,
     TaskQueueMessage,
 )
+from app.connectors import GitHubIssueAssignmentConnector
 from app.github_ingress_runtime import (
-    AssignmentCheckpoint,
     GitHubAssignmentCheckpointStore,
-    checkpoint_scope_key,
     default_graphql_runner,
-    expand_repository_patterns,
-    fetch_assignment_events_for_repository,
     fetch_authenticated_viewer_login,
-    parse_repo_slug,
-    publish_assignment_events,
-    select_events_after_checkpoint,
 )
 from app.main import (
     TELEGRAM_MEMORY_TURN_LIMIT,
@@ -741,12 +735,16 @@ def _is_connector_configured(args: argparse.Namespace, config: dict[str, object]
             return False
         configured_value = config.get("telegram_enabled")
         return configured_value is not None and configured_value is not False
+    if connector == "github":
+        return bool(args.github_repository) or config.get("github_repositories") is not None
     raise ValueError(f"unsupported connector: {connector}")
 
 
 def _build_live_connectors_fail_open(
     args: argparse.Namespace,
     config: dict[str, object],
+    *,
+    db_path: str,
 ) -> tuple[list[object], list[DisabledIngressComponent]]:
     connectors: list[object] = []
     disabled_components: list[DisabledIngressComponent] = []
@@ -800,6 +798,28 @@ def _build_live_connectors_fail_open(
                 "context_refs",
             ),
         ),
+        "github": (
+            (
+                "github_repository",
+                "github_assignee_login",
+                "github_reply_channel_type",
+                "github_reply_channel_target",
+                "github_context_ref",
+                "github_policy_profile",
+                "github_max_issues",
+                "github_max_timeline_events",
+            ),
+            (
+                "github_repositories",
+                "github_assignee_login",
+                "github_reply_channel_type",
+                "github_reply_channel_target",
+                "github_context_refs",
+                "github_policy_profile",
+                "github_max_issues",
+                "github_max_timeline_events",
+            ),
+        ),
     }
 
     base_args = vars(args).copy()
@@ -820,10 +840,18 @@ def _build_live_connectors_fail_open(
             "telegram_allowed_channel_id": [],
             "telegram_context_ref": [],
             "context_ref": [],
+            "github_repository": [],
+            "github_assignee_login": None,
+            "github_reply_channel_type": None,
+            "github_reply_channel_target": None,
+            "github_context_ref": [],
+            "github_policy_profile": None,
+            "github_max_issues": None,
+            "github_max_timeline_events": None,
         }
     )
 
-    for connector_name in ("schedule", "imap", "telegram"):
+    for connector_name in ("schedule", "imap", "telegram", "github"):
         if not _is_connector_configured(args, config, connector=connector_name):
             continue
         selected_arg_keys, selected_config_keys = connector_args[connector_name]
@@ -837,6 +865,25 @@ def _build_live_connectors_fail_open(
         scoped_args = argparse.Namespace(**scoped_args_payload)
         scoped_config = {key: config[key] for key in selected_config_keys if key in config}
         try:
+            if connector_name == "github":
+                settings = _resolve_github_ingress_settings(scoped_args, scoped_config)
+                if settings is None:
+                    continue
+                connectors.append(
+                    GitHubIssueAssignmentConnector(
+                        repository_patterns=settings.repositories,
+                        assignee_login=settings.assignee_login,
+                        reply_channel_type=settings.reply_channel_type,
+                        reply_channel_target=settings.reply_channel_target,
+                        context_refs=settings.context_refs,
+                        policy_profile=settings.policy_profile,
+                        max_issues=settings.max_issues,
+                        max_timeline_events=settings.max_timeline_events,
+                        checkpoint_store=GitHubAssignmentCheckpointStore(db_path),
+                        graphql_runner=default_graphql_runner,
+                    )
+                )
+                continue
             connectors.extend(_build_live_connectors(scoped_args, scoped_config))
         except Exception as error:  # noqa: BLE001
             LOGGER.exception("ingress_connector_startup_failed connector=%s", connector_name)
@@ -847,70 +894,6 @@ def _build_live_connectors_fail_open(
                 )
             )
     return connectors, disabled_components
-
-
-def _poll_github_assignment_ingress(
-    *,
-    settings: GitHubIngressSettings,
-    checkpoint_store: GitHubAssignmentCheckpointStore,
-    store: SQLiteStateStore,
-    broker: BBMBQueueAdapter,
-) -> tuple[int, int, int, str]:
-    scope_key = checkpoint_scope_key(
-        repositories=settings.repositories,
-        assignee_login=settings.assignee_login,
-    )
-    checkpoint = checkpoint_store.get_checkpoint(scope_key)
-    events = []
-    scanned_event_count = 0
-    repositories_to_scan = expand_repository_patterns(
-        repository_patterns=settings.repositories,
-        graphql_runner=default_graphql_runner,
-    )
-    for repository in repositories_to_scan:
-        owner, name = parse_repo_slug(repository)
-        try:
-            repository_events = fetch_assignment_events_for_repository(
-                repo_owner=owner,
-                repo_name=name,
-                assignee_login=settings.assignee_login,
-                issue_limit=settings.max_issues,
-                timeline_limit=settings.max_timeline_events,
-                graphql_runner=default_graphql_runner,
-            )
-        except Exception:  # noqa: BLE001
-            LOGGER.exception(
-                "github_assignment_poll_failed repository=%s assignee=%s",
-                repository,
-                settings.assignee_login,
-            )
-            continue
-        scanned_event_count += len(repository_events)
-        events.extend(repository_events)
-
-    new_events = select_events_after_checkpoint(events, checkpoint=checkpoint)
-    published_count = publish_assignment_events(
-        events=new_events,
-        store=store,
-        broker=broker,
-        reply_channel_type=settings.reply_channel_type,
-        reply_channel_target=settings.reply_channel_target,
-        context_refs=settings.context_refs,
-        policy_profile=settings.policy_profile,
-    )
-    checkpoint_id = checkpoint.event_id if checkpoint else "none"
-    if new_events:
-        latest = new_events[-1]
-        checkpoint_store.set_checkpoint(
-            scope_key,
-            checkpoint=AssignmentCheckpoint(
-                event_created_at=latest.event_created_at,
-                event_id=latest.event_id,
-            ),
-        )
-        checkpoint_id = latest.event_id
-
-    return scanned_event_count, len(new_events), published_count, checkpoint_id
 
 
 def _build_policy_decision_for_message(egress_message: EgressQueueMessage) -> PolicyDecision:
@@ -1157,28 +1140,18 @@ def main() -> int:
         setting_name="metrics_port",
     )
     allowed_egress_channels = _resolve_allowed_egress_channels(args, config)
-    github_ingress_settings: GitHubIngressSettings | None = None
-    disabled_ingress_components: list[DisabledIngressComponent] = []
-    try:
-        github_ingress_settings = _resolve_github_ingress_settings(args, config)
-    except Exception as error:  # noqa: BLE001
-        LOGGER.exception("ingress_connector_startup_failed connector=github")
-        disabled_ingress_components.append(
-            DisabledIngressComponent(
-                component="github",
-                error=str(error),
-            )
-        )
 
     store = SQLiteStateStore(db_path)
     ledger = TaskLedgerStore(db_path)
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)
     broker.ensure_queue(EGRESS_QUEUE_NAME)
-    github_checkpoint_store = GitHubAssignmentCheckpointStore(db_path) if github_ingress_settings else None
 
-    connectors, connector_failures = _build_live_connectors_fail_open(args, config)
-    disabled_ingress_components.extend(connector_failures)
+    connectors, disabled_ingress_components = _build_live_connectors_fail_open(
+        args,
+        config,
+        db_path=db_path,
+    )
     applier = IntegratedApplier(
         base_dir=".",
         email_sender=_build_email_sender(args, config),
@@ -1206,6 +1179,10 @@ def main() -> int:
                 )
 
             ingress_published = 0
+            github_scanned_events = 0
+            github_new_events = 0
+            github_published = 0
+            github_checkpoint = "disabled"
             for connector in connectors:
                 connector_name = type(connector).__name__
                 try:
@@ -1217,6 +1194,10 @@ def main() -> int:
                         loop_count,
                     )
                     continue
+                if isinstance(connector, GitHubIssueAssignmentConnector):
+                    github_scanned_events = connector.last_poll_scanned_events
+                    github_new_events = connector.last_poll_new_events
+                    github_checkpoint = connector.last_poll_checkpoint_id
                 for envelope in envelopes:
                     if store.seen(envelope.source, envelope.dedupe_key):
                         continue
@@ -1234,27 +1215,8 @@ def main() -> int:
                     ledger.record_task(task_message)
                     store.mark_seen(envelope.source, envelope.dedupe_key)
                     ingress_published += 1
-
-            github_scanned_events = 0
-            github_new_events = 0
-            github_published = 0
-            github_checkpoint = "disabled"
-            if github_ingress_settings is not None and github_checkpoint_store is not None:
-                try:
-                    (
-                        github_scanned_events,
-                        github_new_events,
-                        github_published,
-                        github_checkpoint,
-                    ) = _poll_github_assignment_ingress(
-                        settings=github_ingress_settings,
-                        checkpoint_store=github_checkpoint_store,
-                        store=store,
-                        broker=broker,
-                    )
-                except Exception:  # noqa: BLE001
-                    github_checkpoint = "error"
-                    LOGGER.exception("ingress_connector_poll_failed connector=github loop=%s", loop_count)
+                    if isinstance(connector, GitHubIssueAssignmentConnector):
+                        github_published += 1
 
             egress_picked = broker.pickup_json(
                 EGRESS_QUEUE_NAME,
@@ -1268,10 +1230,10 @@ def main() -> int:
                     ledger=ledger,
                     store=store,
                     allowed_egress_channels=allowed_egress_channels,
-                    applier=applier,
-                    ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
-                    telemetry=telemetry,
-                )
+                applier=applier,
+                ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
+                telemetry=telemetry,
+            )
 
             telemetry_snapshot = telemetry.snapshot()
             metrics.record_loop(
