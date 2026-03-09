@@ -13,6 +13,11 @@ Queues are hardcoded:
 - `chatting.tasks.v1`
 - `chatting.egress.v1`
 
+Egress payload contract is v2-only:
+- Queue name `chatting.egress.v1` is transport-level only.
+- Worker publishes `message_type: "chatting.egress.v2"`.
+- `message-handler` rejects legacy `chatting.egress.v1` payload types.
+
 For a worked message example and the full message-handler <-> worker conversation, see
 [BBMB Message Flow](/home/edward/chatting/docs/bbmb-message-flow.md).
 
