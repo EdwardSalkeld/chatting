@@ -76,11 +76,11 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=_FakeMetricsServer(),
                 ),
                 patch(
-                    "app.main_message_handler.fetch_assignment_events_for_repository",
+                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     side_effect=[[event], [event]],
                 ),
                 patch(
-                    "app.main_message_handler.expand_repository_patterns",
+                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
@@ -158,11 +158,11 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value="BillyAcachofa",
                 ),
                 patch(
-                    "app.main_message_handler.expand_repository_patterns",
+                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch(
-                    "app.main_message_handler.fetch_assignment_events_for_repository",
+                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     return_value=[event],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
