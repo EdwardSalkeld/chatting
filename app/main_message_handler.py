@@ -103,6 +103,12 @@ class GitHubIngressSettings:
     max_timeline_events: int
 
 
+@dataclass(frozen=True)
+class DisabledIngressComponent:
+    component: str
+    error: str
+
+
 @dataclass
 class EgressTelemetryRollup:
     """In-memory telemetry rollup for split-mode egress lifecycle signals."""
@@ -465,6 +471,126 @@ def _resolve_github_ingress_settings(
     )
 
 
+def _is_connector_configured(args: argparse.Namespace, config: dict[str, object], *, connector: str) -> bool:
+    if connector == "schedule":
+        return args.schedule_file is not None or config.get("schedule_file") is not None
+    if connector == "imap":
+        return args.imap_host is not None or config.get("imap_host") is not None
+    if connector == "telegram":
+        if args.telegram_enabled:
+            return True
+        if "telegram_enabled" not in config:
+            return False
+        configured_value = config.get("telegram_enabled")
+        return configured_value is not None and configured_value is not False
+    raise ValueError(f"unsupported connector: {connector}")
+
+
+def _build_live_connectors_fail_open(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> tuple[list[object], list[DisabledIngressComponent]]:
+    connectors: list[object] = []
+    disabled_components: list[DisabledIngressComponent] = []
+
+    connector_args: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+        "schedule": (
+            ("schedule_file",),
+            ("schedule_file",),
+        ),
+        "imap": (
+            (
+                "imap_host",
+                "imap_port",
+                "imap_username",
+                "imap_password_env",
+                "imap_mailbox",
+                "imap_search",
+                "context_ref",
+            ),
+            (
+                "imap_host",
+                "imap_port",
+                "imap_username",
+                "imap_password_env",
+                "imap_mailbox",
+                "imap_search",
+                "context_ref",
+                "context_refs",
+            ),
+        ),
+        "telegram": (
+            (
+                "telegram_enabled",
+                "telegram_bot_token_env",
+                "telegram_api_base_url",
+                "telegram_poll_timeout_seconds",
+                "telegram_allowed_chat_id",
+                "telegram_allowed_channel_id",
+                "telegram_context_ref",
+                "context_ref",
+            ),
+            (
+                "telegram_enabled",
+                "telegram_bot_token_env",
+                "telegram_api_base_url",
+                "telegram_poll_timeout_seconds",
+                "telegram_allowed_chat_ids",
+                "telegram_allowed_channel_ids",
+                "telegram_context_refs",
+                "context_ref",
+                "context_refs",
+            ),
+        ),
+    }
+
+    base_args = vars(args).copy()
+    base_args.update(
+        {
+            "schedule_file": None,
+            "imap_host": None,
+            "imap_port": None,
+            "imap_username": None,
+            "imap_password_env": None,
+            "imap_mailbox": None,
+            "imap_search": None,
+            "telegram_enabled": False,
+            "telegram_bot_token_env": None,
+            "telegram_api_base_url": None,
+            "telegram_poll_timeout_seconds": None,
+            "telegram_allowed_chat_id": [],
+            "telegram_allowed_channel_id": [],
+            "telegram_context_ref": [],
+            "context_ref": [],
+        }
+    )
+
+    for connector_name in ("schedule", "imap", "telegram"):
+        if not _is_connector_configured(args, config, connector=connector_name):
+            continue
+        selected_arg_keys, selected_config_keys = connector_args[connector_name]
+        scoped_args_payload = base_args.copy()
+        for key in selected_arg_keys:
+            value = getattr(args, key)
+            if isinstance(value, list):
+                scoped_args_payload[key] = list(value)
+            else:
+                scoped_args_payload[key] = value
+        scoped_args = argparse.Namespace(**scoped_args_payload)
+        scoped_config = {key: config[key] for key in selected_config_keys if key in config}
+        try:
+            connectors.extend(_build_live_connectors(scoped_args, scoped_config))
+        except Exception as error:  # noqa: BLE001
+            LOGGER.exception("ingress_connector_startup_failed connector=%s", connector_name)
+            disabled_components.append(
+                DisabledIngressComponent(
+                    component=connector_name,
+                    error=str(error),
+                )
+            )
+    return connectors, disabled_components
+
+
 def _poll_github_assignment_ingress(
     *,
     settings: GitHubIngressSettings,
@@ -761,7 +887,18 @@ def main() -> int:
         setting_name="poll_timeout_seconds",
     )
     allowed_egress_channels = _resolve_allowed_egress_channels(args, config)
-    github_ingress_settings = _resolve_github_ingress_settings(args, config)
+    github_ingress_settings: GitHubIngressSettings | None = None
+    disabled_ingress_components: list[DisabledIngressComponent] = []
+    try:
+        github_ingress_settings = _resolve_github_ingress_settings(args, config)
+    except Exception as error:  # noqa: BLE001
+        LOGGER.exception("ingress_connector_startup_failed connector=github")
+        disabled_ingress_components.append(
+            DisabledIngressComponent(
+                component="github",
+                error=str(error),
+            )
+        )
 
     store = SQLiteStateStore(db_path)
     ledger = TaskLedgerStore(db_path)
@@ -770,7 +907,8 @@ def main() -> int:
     broker.ensure_queue(EGRESS_QUEUE_NAME)
     github_checkpoint_store = GitHubAssignmentCheckpointStore(db_path) if github_ingress_settings else None
 
-    connectors = _build_live_connectors(args, config)
+    connectors, connector_failures = _build_live_connectors_fail_open(args, config)
+    disabled_ingress_components.extend(connector_failures)
     applier = IntegratedApplier(
         base_dir=".",
         email_sender=_build_email_sender(args, config),
@@ -782,9 +920,27 @@ def main() -> int:
     while True:
         loop_count += 1
 
+        for failure in disabled_ingress_components:
+            LOGGER.error(
+                "ingress_connector_disabled connector=%s loop=%s error=%s",
+                failure.component,
+                loop_count,
+                failure.error,
+            )
+
         ingress_published = 0
         for connector in connectors:
-            for envelope in connector.poll():
+            connector_name = type(connector).__name__
+            try:
+                envelopes = connector.poll()
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "ingress_connector_poll_failed connector=%s loop=%s",
+                    connector_name,
+                    loop_count,
+                )
+                continue
+            for envelope in envelopes:
                 if store.seen(envelope.source, envelope.dedupe_key):
                     continue
                 task_id = f"task:{envelope.id}"
@@ -807,17 +963,21 @@ def main() -> int:
         github_published = 0
         github_checkpoint = "disabled"
         if github_ingress_settings is not None and github_checkpoint_store is not None:
-            (
-                github_scanned_events,
-                github_new_events,
-                github_published,
-                github_checkpoint,
-            ) = _poll_github_assignment_ingress(
-                settings=github_ingress_settings,
-                checkpoint_store=github_checkpoint_store,
-                store=store,
-                broker=broker,
-            )
+            try:
+                (
+                    github_scanned_events,
+                    github_new_events,
+                    github_published,
+                    github_checkpoint,
+                ) = _poll_github_assignment_ingress(
+                    settings=github_ingress_settings,
+                    checkpoint_store=github_checkpoint_store,
+                    store=store,
+                    broker=broker,
+                )
+            except Exception:  # noqa: BLE001
+                github_checkpoint = "error"
+                LOGGER.exception("ingress_connector_poll_failed connector=github loop=%s", loop_count)
 
         egress_picked = broker.pickup_json(
             EGRESS_QUEUE_NAME,
