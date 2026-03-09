@@ -162,9 +162,16 @@ class SplitModeE2ETests(unittest.TestCase):
 
             worker_store = SQLiteStateStore(str(worker_db_path))
             worker_runs = worker_store.list_runs()
-            self.assertTrue(any(run.run_id == expected_task_id for run in worker_runs))
             self.assertTrue(
-                any(run.run_id == expected_task_id and run.result_status == "success" for run in worker_runs)
+                any(run.envelope_id == expected_envelope_id for run in worker_runs),
+                msg=f"missing worker run for expected envelope_id={expected_envelope_id!r}",
+            )
+            self.assertTrue(
+                any(
+                    run.envelope_id == expected_envelope_id and run.result_status == "success"
+                    for run in worker_runs
+                ),
+                msg=f"missing successful worker run for expected envelope_id={expected_envelope_id!r}",
             )
 
             handler_store = SQLiteStateStore(str(handler_db_path))
