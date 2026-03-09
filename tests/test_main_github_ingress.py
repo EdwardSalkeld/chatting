@@ -178,5 +178,109 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(len(broker.published), 1)
             self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
 
+    def test_main_message_handler_disables_misconfigured_github_ingress_and_keeps_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler.LOGGER.error",
+                ) as error_logger,
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--github-repository",
+                        "brokensbone/chatting",
+                        "--max-loops",
+                        "2",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(len(broker.published), 0)
+            disabled_log_calls = [
+                call
+                for call in error_logger.call_args_list
+                if call.args and call.args[0] == "ingress_connector_disabled connector=%s loop=%s error=%s"
+            ]
+            self.assertEqual(len(disabled_log_calls), 2)
+            self.assertTrue(all(call.args[1] == "github" for call in disabled_log_calls))
+
+    def test_main_message_handler_continues_with_healthy_connectors_when_imap_misconfigured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "daily check",
+                            "interval_seconds": 1,
+                            "reply_channel_type": "log",
+                            "reply_channel_target": "ops",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler.LOGGER.error",
+                ) as error_logger,
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--schedule-file",
+                        str(schedule_path),
+                        "--imap-host",
+                        "imap.example.com",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(len(broker.published), 1)
+            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            disabled_log_calls = [
+                call
+                for call in error_logger.call_args_list
+                if call.args and call.args[0] == "ingress_connector_disabled connector=%s loop=%s error=%s"
+            ]
+            self.assertEqual(len(disabled_log_calls), 1)
+            self.assertEqual(disabled_log_calls[0].args[1], "imap")
+
 if __name__ == "__main__":
     unittest.main()
