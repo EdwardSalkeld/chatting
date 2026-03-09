@@ -30,6 +30,14 @@ class StagedEgressRecord:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class CompletedTaskRecord:
+    task_id: str
+    envelope_id: str
+    trace_id: str
+    completed_at: datetime
+
+
 class TaskLedgerStore:
     """Persist ingress task ledger for strict egress verification."""
 
@@ -76,12 +84,29 @@ class TaskLedgerStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS completed_task_ledger (
+                    task_id TEXT PRIMARY KEY,
+                    envelope_id TEXT NOT NULL,
+                    trace_id TEXT NOT NULL,
+                    completed_at TEXT NOT NULL
+                )
+                """
+            )
             connection.commit()
 
     def record_task(self, task_message: TaskQueueMessage) -> None:
         payload = task_message.to_dict()
         created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                DELETE FROM completed_task_ledger
+                WHERE task_id = ?
+                """,
+                (task_message.task_id,),
+            )
             connection.execute(
                 """
                 INSERT OR REPLACE INTO task_ledger (
@@ -157,6 +182,71 @@ class TaskLedgerStore:
                 VALUES (?, 0)
                 """,
                 (egress_message.task_id,),
+            )
+            connection.commit()
+
+    def get_completed_task(self, task_id: str) -> CompletedTaskRecord | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT task_id, envelope_id, trace_id, completed_at
+                FROM completed_task_ledger
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return CompletedTaskRecord(
+            task_id=row["task_id"],
+            envelope_id=row["envelope_id"],
+            trace_id=row["trace_id"],
+            completed_at=_parse_rfc3339_utc(row["completed_at"]),
+        )
+
+    def is_task_completed(self, *, task_id: str, envelope_id: str) -> bool:
+        completed_record = self.get_completed_task(task_id)
+        if completed_record is None:
+            return False
+        return completed_record.envelope_id == envelope_id
+
+    def mark_task_completed(self, *, task_id: str, envelope_id: str, trace_id: str) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO completed_task_ledger (
+                    task_id,
+                    envelope_id,
+                    trace_id,
+                    completed_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (task_id, envelope_id, trace_id, completed_at),
+            )
+            connection.execute(
+                """
+                DELETE FROM task_ledger
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM egress_sequence_state
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM staged_egress_events
+                WHERE task_id = ?
+                """,
+                (task_id,),
             )
             connection.commit()
 
@@ -236,6 +326,7 @@ def _parse_rfc3339_utc(raw_value: str) -> datetime:
 
 
 __all__ = [
+    "CompletedTaskRecord",
     "TaskLedgerRecord",
     "StagedEgressRecord",
     "TaskLedgerStore",

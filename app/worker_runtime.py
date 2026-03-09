@@ -167,6 +167,13 @@ def process_task_message(
                 decision=decision,
                 starting_sequence=next_sequence,
             )
+            if not final_egress_messages:
+                final_egress_messages = [
+                    _build_terminal_drop_egress(
+                        task_message=task_message,
+                        sequence=next_sequence,
+                    )
+                ]
             egress_messages = [*incremental_messages, *final_egress_messages]
             break
         except Exception as exc:  # noqa: BLE001
@@ -341,6 +348,31 @@ def _normalize_message_for_egress(*, message: OutboundMessage, task_message: Tas
         channel=task_message.envelope.reply_channel.type,
         target=task_message.envelope.reply_channel.target,
         body=message.body,
+    )
+
+
+def _build_terminal_drop_egress(*, task_message: TaskQueueMessage, sequence: int) -> EgressQueueMessage:
+    return EgressQueueMessage(
+        task_id=task_message.task_id,
+        envelope_id=task_message.envelope.id,
+        trace_id=task_message.trace_id,
+        event_index=sequence,
+        event_count=1,
+        message=OutboundMessage(
+            channel="drop",
+            target="task",
+            body="Worker completed without final reply; marking task complete.",
+        ),
+        emitted_at=datetime.now(timezone.utc),
+        event_id=_event_id_for_sequence(
+            task_id=task_message.task_id,
+            sequence=sequence,
+            event_kind="final",
+            dedupe_key="drop",
+        ),
+        sequence=sequence,
+        event_kind="final",
+        message_type="chatting.egress.v2",
     )
 
 
