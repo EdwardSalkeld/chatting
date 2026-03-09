@@ -13,6 +13,9 @@ Queues are hardcoded:
 - `chatting.tasks.v1`
 - `chatting.egress.v1`
 
+For a worked message example and the full message-handler <-> worker conversation, see
+[BBMB Message Flow](/home/edward/chatting/docs/bbmb-message-flow.md).
+
 ## Topology
 
 - Host A (`UserOne`): `python3 -m app.main_message_handler`
