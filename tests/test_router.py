@@ -52,7 +52,7 @@ class RuleBasedRouterTests(unittest.TestCase):
 
         self.assertEqual(task.workflow, "scheduled_automation")
         self.assertEqual(task.priority, "low")
-        self.assertEqual(task.execution_constraints.timeout_seconds, 120)
+        self.assertEqual(task.execution_constraints.timeout_seconds, 1800)
         self.assertEqual(task.execution_constraints.max_tokens, 8000)
 
     def test_urgent_email_is_prioritized_high(self) -> None:
