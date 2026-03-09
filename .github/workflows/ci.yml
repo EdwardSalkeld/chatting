@@ -18,10 +18,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Checkout BBMB
+        uses: actions/checkout@v4
+        with:
+          repository: EdwardSalkeld/bbmb
+          path: bbmb
+
+      - name: Build bbmb-server
+        run: |
+          cd bbmb/server
+          go build -o ../bbmb-server .
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
       - name: Run unit tests
+        env:
+          CHATTING_BBMB_SERVER_BIN: ${{ github.workspace }}/bbmb/bbmb-server
         run: python3 -m unittest discover -s tests
