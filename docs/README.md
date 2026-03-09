@@ -4,6 +4,7 @@
 
 - [Quick Start](/home/edward/chatting/docs/quick-start.md)
 - [Run Split Mode (BBMB)](/home/edward/chatting/docs/run-split-bbmb.md)
+- [BBMB Message Flow](/home/edward/chatting/docs/bbmb-message-flow.md)
 - [Debug And Test Guide](/home/edward/chatting/docs/debug-and-test.md)
 
 ## CI

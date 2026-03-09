@@ -56,5 +56,7 @@ python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-metrics
 
 ## Notes
 
+- For the queue-by-queue runtime conversation, payload examples, and config levers, see
+  [BBMB Message Flow](/home/edward/chatting/docs/bbmb-message-flow.md).
 - For full split-mode setup and operational details, see [Run Split Mode (BBMB)](/home/edward/chatting/docs/run-split-bbmb.md).
 - `app.main` no longer runs bootstrap/live runtime execution.
