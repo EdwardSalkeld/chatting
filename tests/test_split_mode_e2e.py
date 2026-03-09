@@ -96,7 +96,7 @@ class SplitModeE2ETests(unittest.TestCase):
 
             expected_envelope_id = "cron:ci-split-smoke:2026-01-01T00:00:00+00:00"
             expected_task_id = f"task:{expected_envelope_id}"
-            expected_event_id = f"v1:{expected_task_id}:0"
+            expected_event_id = f"evt:{expected_task_id}:0:final"
 
             try:
                 server_proc = subprocess.Popen(
