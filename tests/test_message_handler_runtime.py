@@ -92,6 +92,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 event_count=1,
                 message=OutboundMessage(channel="email", target="alice@example.com", body="reply"),
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:missing:0",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
             ).to_dict()
 
             _handle_egress_message(
@@ -125,6 +129,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 event_count=1,
                 message=OutboundMessage(channel="telegram", target="123", body="reply"),
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:0",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
             ).to_dict()
 
             _handle_egress_message(
@@ -158,6 +166,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 event_count=2,
                 message=OutboundMessage(channel="email", target="alice@example.com", body="reply"),
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:0",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
             ).to_dict()
 
             _handle_egress_message(
@@ -176,7 +188,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertTrue(
                 store.has_dispatched_event_id(
                     task_id=task_message.task_id,
-                    event_id="v1:task:email:1:0",
+                    event_id="evt:task:email:1:0",
                 )
             )
 
@@ -472,6 +484,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 event_count=1,
                 message=OutboundMessage(channel="telegram", target="12345", body="reply"),
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:200:0",
+                sequence=0,
+                event_kind="final",
+                message_type="chatting.egress.v2",
             ).to_dict()
 
             _handle_egress_message(
