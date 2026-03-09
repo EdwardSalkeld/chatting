@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-SOURCE_TYPES = ("cron", "email", "im", "webhook")
+SOURCE_TYPES = ("cron", "email", "im", "webhook", "internal")
 PRIORITY_TYPES = ("low", "normal", "high")
 SCHEMA_VERSION = "1.0"
 
@@ -101,7 +101,7 @@ class TaskEnvelope:
     """Normalized input event schema."""
 
     id: str
-    source: Literal["cron", "email", "im", "webhook"]
+    source: Literal["cron", "email", "im", "webhook", "internal"]
     received_at: datetime
     actor: str | None
     content: str
@@ -157,7 +157,7 @@ class RoutedTask:
     priority: Literal["low", "normal", "high"]
     execution_constraints: ExecutionConstraints
     policy_profile: str
-    source: Literal["cron", "email", "im", "webhook"] | None = None
+    source: Literal["cron", "email", "im", "webhook", "internal"] | None = None
     actor: str | None = None
     content: str | None = None
     reply_channel: ReplyChannel | None = None
@@ -435,7 +435,7 @@ class RunRecord:
 
     run_id: str
     envelope_id: str
-    source: Literal["cron", "email", "im", "webhook"]
+    source: Literal["cron", "email", "im", "webhook", "internal"]
     workflow: str
     policy_profile: str
     latency_ms: int
@@ -477,7 +477,7 @@ class AuditEvent:
 
     run_id: str
     envelope_id: str
-    source: Literal["cron", "email", "im", "webhook"]
+    source: Literal["cron", "email", "im", "webhook", "internal"]
     workflow: str
     policy_profile: str
     result_status: str

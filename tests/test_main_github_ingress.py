@@ -39,6 +39,13 @@ class _FakeMetricsServer:
 
 
 class MainGitHubIngressTests(unittest.TestCase):
+    def _non_heartbeat_published(self, broker: _FakeBroker) -> list[tuple[str, dict[str, object]]]:
+        return [
+            item
+            for item in broker.published
+            if item[1].get("envelope", {}).get("source") != "internal"
+        ]
+
     def test_load_config_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "message-handler.json"
@@ -109,16 +116,17 @@ class MainGitHubIngressTests(unittest.TestCase):
             ):
                 exit_code = main()
 
+            published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
             self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
-            self.assertEqual(len(broker.published), 1)
-            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0][0], "chatting.tasks.v1")
             self.assertEqual(
-                broker.published[0][1]["task_id"],
+                published[0][1]["task_id"],
                 "task:github-assignment:brokensbone/chatting:12:AE_1",
             )
             self.assertEqual(
-                broker.published[0][1]["envelope"]["reply_channel"],
+                published[0][1]["envelope"]["reply_channel"],
                 {
                     "type": "telegram",
                     "target": "8605042448",
@@ -189,10 +197,11 @@ class MainGitHubIngressTests(unittest.TestCase):
             ):
                 exit_code = main()
 
+            published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
             self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
-            self.assertEqual(len(broker.published), 1)
-            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0][0], "chatting.tasks.v1")
 
     def test_main_message_handler_disables_misconfigured_github_ingress_and_keeps_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -230,9 +239,11 @@ class MainGitHubIngressTests(unittest.TestCase):
             ):
                 exit_code = main()
 
+            published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
             self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
-            self.assertEqual(len(broker.published), 0)
+            self.assertEqual(len(published), 0)
+            self.assertEqual(len(broker.published), 2)
             disabled_log_calls = [
                 call
                 for call in error_logger.call_args_list
@@ -294,10 +305,11 @@ class MainGitHubIngressTests(unittest.TestCase):
             ):
                 exit_code = main()
 
+            published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
             self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
-            self.assertEqual(len(broker.published), 1)
-            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0][0], "chatting.tasks.v1")
             disabled_log_calls = [
                 call
                 for call in error_logger.call_args_list
@@ -305,6 +317,46 @@ class MainGitHubIngressTests(unittest.TestCase):
             ]
             self.assertEqual(len(disabled_log_calls), 1)
             self.assertEqual(disabled_log_calls[0].args[1], "imap")
+
+    def test_main_message_handler_publishes_internal_heartbeat_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(broker.published), 1)
+            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            self.assertEqual(broker.published[0][1]["envelope"]["source"], "internal")
+            self.assertEqual(
+                broker.published[0][1]["envelope"]["reply_channel"],
+                {"type": "internal", "target": "heartbeat"},
+            )
 
     def test_main_message_handler_starts_and_stops_metrics_server_with_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -11,6 +11,7 @@ from app.connectors import (
     FakeCronConnector,
     FakeEmailConnector,
     GitHubIssueAssignmentConnector,
+    InternalHeartbeatConnector,
     SlackConnector,
     TelegramConnector,
     WebhookConnector,
@@ -52,6 +53,12 @@ class InterfaceContractTests(unittest.TestCase):
 
         self.assertIsInstance(cron, Connector)
         self.assertIsInstance(email, Connector)
+        self.assertIsInstance(
+            InternalHeartbeatConnector(
+                now_provider=lambda: datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+            ),
+            Connector,
+        )
         self.assertIsInstance(
             SlackConnector(fetch_messages=lambda: []),
             Connector,
