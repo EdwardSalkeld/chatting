@@ -102,3 +102,20 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now chatting-message-handler.service
 sudo systemctl enable --now chatting-worker.service
 ```
+
+## 6) Publish an immediate incremental reply from worker side
+
+Use the worker-side CLI to push an egress event directly to BBMB without waiting for worker loop completion:
+
+```bash
+python3 -m app.main_reply task:email:53 \
+  --message "working on it" \
+  --channel email \
+  --target alice@example.com \
+  --config /tmp/worker.json
+```
+
+Notes:
+- `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
+- These ad-hoc events are intentionally unsequenced and dispatch immediately at message-handler.
+- `--event-id` can be supplied for stable idempotency across retries.

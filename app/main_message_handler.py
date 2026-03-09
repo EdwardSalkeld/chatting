@@ -39,7 +39,7 @@ from app.main import (
     _enrich_telegram_envelope_with_memory,
     _should_store_telegram_memory,
 )
-from app.message_handler_runtime import TaskLedgerStore
+from app.message_handler_runtime import TaskLedgerRecord, TaskLedgerStore
 from app.models import ConfigUpdateDecision, PolicyDecision, TaskEnvelope
 from app.state import SQLiteStateStore
 
@@ -1088,6 +1088,17 @@ def _handle_egress_message(
         _ack_and_mark_outbox(egress_message.event_id)
         return
 
+    if egress_message.sequence is None:
+        _ack_and_mark_outbox(egress_message.event_id)
+        _dispatch_unsequenced_egress(
+            egress_message=egress_message,
+            ledger_record=ledger_record,
+            store=store,
+            applier=applier,
+            telemetry=telemetry,
+        )
+        return
+
     ledger.stage_egress_event(egress_message)
     _ack_and_mark_outbox(egress_message.event_id)
     _flush_task_egress_in_sequence(
@@ -1097,6 +1108,54 @@ def _handle_egress_message(
         applier=applier,
         heartbeat_telemetry=heartbeat_telemetry,
         telemetry=telemetry,
+    )
+
+
+def _dispatch_unsequenced_egress(
+    *,
+    egress_message: EgressQueueMessage,
+    ledger_record: TaskLedgerRecord,
+    store: SQLiteStateStore,
+    applier: IntegratedApplier,
+    telemetry: EgressTelemetryRollup | None,
+) -> None:
+    decision = _build_policy_decision_for_message(egress_message)
+    apply_result = applier.apply(
+        decision,
+        envelope=ledger_record.task_message.envelope,
+    )
+    store.mark_dispatched_event_id(
+        task_id=egress_message.task_id,
+        event_id=egress_message.event_id,
+    )
+    dispatch_latency_ms = int(
+        (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
+    )
+    if telemetry is not None:
+        telemetry.record_dispatched(
+            event_kind=egress_message.event_kind,
+            latency_ms=max(dispatch_latency_ms, 0),
+        )
+    if _should_store_telegram_memory(ledger_record.task_message.envelope):
+        for message in apply_result.dispatched_messages:
+            if message.channel != "telegram":
+                continue
+            if message.target != ledger_record.task_message.envelope.reply_channel.target:
+                continue
+            store.append_conversation_turn(
+                channel="telegram",
+                target=message.target,
+                role="assistant",
+                content=message.body,
+                run_id=egress_message.task_id,
+            )
+    LOGGER.info(
+        "egress_dispatched task_id=%s event_id=%s sequence=%s event_kind=%s channel=%s",
+        egress_message.task_id,
+        egress_message.event_id,
+        egress_message.sequence,
+        egress_message.event_kind,
+        egress_message.message.channel,
     )
 
 
