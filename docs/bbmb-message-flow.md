@@ -193,9 +193,8 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
   Enable and scope Telegram ingress.
 - `context_ref` / `context_refs`
   Default context refs attached to some ingress sources.
-- `github_repositories`, `github_assignee_login`, `github_reply_channel_type`,
-  `github_reply_channel_target`, `github_context_refs`, `github_policy_profile`,
-  `github_max_issues`, `github_max_timeline_events`
+- `github_repositories`, `github_assignee_login`, `github_context_refs`,
+  `github_policy_profile`, `github_max_issues`, `github_max_timeline_events`
   Enable and shape GitHub assignment ingress.
 
 ### Message-handler egress and observability config

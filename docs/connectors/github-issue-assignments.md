@@ -22,8 +22,7 @@ other connectors.
 
 - `github_assignee_login`: only assignments to this GitHub login are emitted.
   If omitted, message-handler uses the authenticated `gh` user login (`viewer.login`).
-- `github_reply_channel_type`: reply channel type for generated tasks (for example `telegram`).
-- `github_reply_channel_target`: reply channel target for generated tasks.
+- Generated tasks always reply via GitHub issue comment egress to the assigned issue URL.
 
 ## Idempotency and checkpointing
 

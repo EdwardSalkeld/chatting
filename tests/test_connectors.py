@@ -256,8 +256,6 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
             connector = GitHubIssueAssignmentConnector(
                 repository_patterns=["brokensbone/chatting"],
                 assignee_login="BillyAcachofa",
-                reply_channel_type="telegram",
-                reply_channel_target="8605042448",
                 context_refs=["repo:/home/edward/chatting"],
                 checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
                 graphql_runner=_graphql_runner,
@@ -269,8 +267,11 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
         self.assertEqual(len(first_poll), 1)
         envelope = first_poll[0]
         self.assertEqual(envelope.id, "github-assignment:brokensbone/chatting:12:AE_1")
-        self.assertEqual(envelope.reply_channel.type, "telegram")
-        self.assertEqual(envelope.reply_channel.target, "8605042448")
+        self.assertEqual(envelope.reply_channel.type, "github")
+        self.assertEqual(
+            envelope.reply_channel.target,
+            "https://github.com/brokensbone/chatting/issues/12",
+        )
         self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
         self.assertEqual(envelope.dedupe_key, "github:R_1:I_1:AE_1")
         self.assertEqual(second_poll, [])
@@ -324,8 +325,6 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
             connector = GitHubIssueAssignmentConnector(
                 repository_patterns=["brokensbone/chatting", "brokensbone/bbmb"],
                 assignee_login="BillyAcachofa",
-                reply_channel_type="log",
-                reply_channel_target="ops",
                 context_refs=[],
                 checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
                 graphql_runner=_graphql_runner,
