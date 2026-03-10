@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.executor import CodexExecutor, parse_execution_result
-from app.models import ExecutionConstraints, ReplyChannel, RoutedTask
+from app.models import AttachmentRef, ExecutionConstraints, ReplyChannel, RoutedTask
 
 
 def _task() -> RoutedTask:
@@ -20,6 +20,7 @@ def _task() -> RoutedTask:
         source="email",
         actor="alice@example.com",
         content="Subject: hello\\n\\nPlease summarize this thread.",
+        attachments=[AttachmentRef(uri="file:///tmp/evidence.png", name="evidence.png")],
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
     )
 
@@ -543,6 +544,10 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(run_mock.call_args.kwargs["timeout"], task.execution_constraints.timeout_seconds)
         payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(payload["task"]["event_time"], "2026-02-27T16:00:00Z")
+        self.assertEqual(
+            payload["task"]["attachments"],
+            [{"uri": "file:///tmp/evidence.png", "name": "evidence.png"}],
+        )
         self.assertEqual(payload["current_time"], "2026-02-27T18:00:00Z")
 
     @patch("app.executor.codex.subprocess.run")

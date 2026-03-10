@@ -13,6 +13,7 @@ from app.connectors.interval_schedule_connector import (
     IntervalScheduleJob,
 )
 from app.connectors.telegram_connector import (
+    TelegramFileMetadata,
     TelegramConnector,
     TelegramGetUpdatesResponse,
 )
@@ -618,6 +619,87 @@ class TelegramConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "telegram_get_updates_failed"):
             connector.poll()
+
+    def test_poll_downloads_photo_attachment_and_uses_caption_as_content(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            connector = TelegramConnector(
+                bot_token="token",
+                attachment_root_dir=tmpdir,
+                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                    ok=True,
+                    result=[
+                        {
+                            "update_id": 4001,
+                            "message": {
+                                "message_id": 10,
+                                "date": 1772272800,
+                                "caption": "what is this plant?",
+                                "chat": {"id": 12345},
+                                "photo": [
+                                    {
+                                        "file_id": "small",
+                                        "file_unique_id": "u-small",
+                                        "width": 90,
+                                        "height": 90,
+                                        "file_size": 1200,
+                                    },
+                                    {
+                                        "file_id": "large",
+                                        "file_unique_id": "u-large",
+                                        "width": 1280,
+                                        "height": 960,
+                                        "file_size": 450000,
+                                    },
+                                ],
+                            },
+                        }
+                    ],
+                ),
+                resolve_file_metadata=lambda url, _timeout: (
+                    self.assertIn("file_id=large", url) or TelegramFileMetadata(file_path="photos/leaf.jpg")
+                ),
+                download_file_bytes=lambda url, _timeout: (
+                    self.assertIn("/file/bottoken/photos/leaf.jpg", url) or b"jpeg-bytes"
+                ),
+            )
+
+            envelopes = connector.poll()
+
+            self.assertEqual(len(envelopes), 1)
+            envelope = envelopes[0]
+            self.assertEqual(envelope.content, "what is this plant?")
+            self.assertEqual(len(envelope.attachments), 1)
+            self.assertEqual(envelope.attachments[0].name, "leaf.jpg")
+            self.assertTrue(envelope.attachments[0].uri.startswith("file://"))
+
+    def test_poll_accepts_photo_only_message_with_placeholder_content(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            connector = TelegramConnector(
+                bot_token="token",
+                attachment_root_dir=tmpdir,
+                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                    ok=True,
+                    result=[
+                        {
+                            "update_id": 4002,
+                            "message": {
+                                "message_id": 11,
+                                "date": 1772272800,
+                                "chat": {"id": 12345},
+                                "photo": [{"file_id": "only", "width": 800, "height": 600}],
+                            },
+                        }
+                    ],
+                ),
+                resolve_file_metadata=lambda _url, _timeout: TelegramFileMetadata(file_path="photos/photo.jpg"),
+                download_file_bytes=lambda _url, _timeout: b"jpeg-bytes",
+            )
+
+            envelopes = connector.poll()
+
+            self.assertEqual(len(envelopes), 1)
+            self.assertEqual(envelopes[0].content, "[photo attached]")
+            self.assertEqual(envelopes[0].attachments[0].name, "photo.jpg")
 
 
 class SlackConnectorTests(unittest.TestCase):

@@ -80,6 +80,7 @@ class RoutedTaskTests(unittest.TestCase):
             source="email",
             actor="alice@example.com",
             content="Please summarize and reply",
+            attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         )
 
@@ -100,6 +101,7 @@ class RoutedTaskTests(unittest.TestCase):
                 "source": "email",
                 "actor": "alice@example.com",
                 "content": "Please summarize and reply",
+                "attachments": [{"uri": "file:///tmp/photo.jpg", "name": "photo.jpg"}],
                 "reply_channel": {"type": "email", "target": "alice@example.com"},
             },
         )
