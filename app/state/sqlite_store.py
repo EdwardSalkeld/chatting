@@ -931,7 +931,7 @@ class SQLiteStateStore:
                 """
                 SELECT payload_json
                 FROM egress_outbox
-                WHERE publish_state IN ('pending_publish', 'published_unacked')
+                WHERE publish_state = 'pending_publish'
                 ORDER BY task_id ASC, sequence ASC, created_at ASC
                 """
             ).fetchall()

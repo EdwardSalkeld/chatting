@@ -88,6 +88,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
     }
 )
 BBMB_EGRESS_PICKUP_WAIT_SECONDS = 5
+BBMB_EGRESS_DRAIN_WAIT_SECONDS = 0
 DEFAULT_METRICS_HOST = "127.0.0.1"
 DEFAULT_METRICS_PORT = 9464
 
@@ -1111,6 +1112,44 @@ def _handle_egress_message(
     )
 
 
+def _drain_egress_queue(
+    *,
+    broker: BBMBQueueAdapter,
+    poll_timeout_seconds: int,
+    ledger: TaskLedgerStore,
+    store: SQLiteStateStore,
+    allowed_egress_channels: set[str],
+    applier: IntegratedApplier,
+    heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
+    telemetry: EgressTelemetryRollup | None = None,
+) -> int:
+    drained = 0
+    wait_seconds = BBMB_EGRESS_PICKUP_WAIT_SECONDS
+
+    while True:
+        egress_picked = broker.pickup_json(
+            EGRESS_QUEUE_NAME,
+            timeout_seconds=poll_timeout_seconds,
+            wait_seconds=wait_seconds,
+        )
+        if egress_picked is None:
+            return drained
+
+        drained += 1
+        _handle_egress_message(
+            picked_guid=egress_picked.guid,
+            picked_payload=egress_picked.payload,
+            ledger=ledger,
+            store=store,
+            allowed_egress_channels=allowed_egress_channels,
+            applier=applier,
+            ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
+            heartbeat_telemetry=heartbeat_telemetry,
+            telemetry=telemetry,
+        )
+        wait_seconds = BBMB_EGRESS_DRAIN_WAIT_SECONDS
+
+
 def _dispatch_unsequenced_egress(
     *,
     egress_message: EgressQueueMessage,
@@ -1387,23 +1426,16 @@ def main() -> int:
                     if isinstance(connector, GitHubIssueAssignmentConnector):
                         github_published += 1
 
-            egress_picked = broker.pickup_json(
-                EGRESS_QUEUE_NAME,
-                timeout_seconds=poll_timeout_seconds,
-                wait_seconds=BBMB_EGRESS_PICKUP_WAIT_SECONDS,
+            _drain_egress_queue(
+                broker=broker,
+                poll_timeout_seconds=poll_timeout_seconds,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels=allowed_egress_channels,
+                applier=applier,
+                heartbeat_telemetry=heartbeat_telemetry,
+                telemetry=telemetry,
             )
-            if egress_picked is not None:
-                _handle_egress_message(
-                    picked_guid=egress_picked.guid,
-                    picked_payload=egress_picked.payload,
-                    ledger=ledger,
-                    store=store,
-                    allowed_egress_channels=allowed_egress_channels,
-                    applier=applier,
-                    ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
-                    heartbeat_telemetry=heartbeat_telemetry,
-                    telemetry=telemetry,
-                )
 
             telemetry_snapshot = telemetry.snapshot()
             heartbeat_snapshot = heartbeat_telemetry.snapshot()
