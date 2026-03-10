@@ -32,6 +32,9 @@ class TelegramSender(Protocol):
     def send(self, target: str, body: str) -> None:
         """Send one outbound Telegram message."""
 
+    def react(self, target: str, message_id: int, emoji: str) -> None:
+        """React to one existing Telegram message."""
+
 
 class GitHubSender(Protocol):
     """Dispatch outbound GitHub issue comments."""
@@ -156,6 +159,26 @@ class TelegramMessageSender:
 
         raise RuntimeError("telegram_send_failed")
 
+    def react(self, target: str, message_id: int, emoji: str) -> None:
+        if not target:
+            raise ValueError("target is required")
+        if message_id <= 0:
+            raise ValueError("message_id must be positive")
+        if not emoji.strip():
+            raise ValueError("emoji is required")
+
+        client = self.http_post_json or _default_http_post_json
+        url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/setMessageReaction"
+        payload: dict[str, object] = {
+            "chat_id": target,
+            "message_id": message_id,
+            "reaction": [{"type": "emoji", "emoji": emoji.strip()}],
+        }
+        response = client(url, payload, self.timeout_seconds)
+        if response.get("ok") is True:
+            return
+        raise RuntimeError("telegram_reaction_failed")
+
 
 @dataclass(frozen=True)
 class GitHubIssueCommentSender:
@@ -230,6 +253,7 @@ class IntegratedApplier:
                 channel=dispatch_channel,
                 target=dispatch_target,
                 body=message.body,
+                metadata=dict(message.metadata),
             )
 
             if dispatch_channel == "log":
@@ -311,6 +335,33 @@ class IntegratedApplier:
                     )
                     raise MessageDispatchError(
                         reason_code="github_dispatch_failed",
+                        dispatched_messages=list(dispatched_messages),
+                    ) from None
+                continue
+            if dispatch_channel == "telegram_reaction":
+                if self.telegram_sender is None:
+                    LOGGER.warning(
+                        "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
+                    )
+                    reason_codes.append("telegram_dispatch_not_configured")
+                    continue
+                try:
+                    self.telegram_sender.react(
+                        dispatch_target,
+                        _resolve_telegram_reaction_message_id(message=message, envelope=envelope),
+                        message.body,
+                    )
+                    dispatched_messages.append(normalized_message)
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception(
+                        "drop_dispatch reason=telegram_dispatch_failed channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
+                    )
+                    raise MessageDispatchError(
+                        reason_code="telegram_dispatch_failed",
                         dispatched_messages=list(dispatched_messages),
                     ) from None
                 continue
@@ -417,6 +468,21 @@ def _resolve_dispatch_channel_and_target(
     if envelope is None:
         return message.channel, message.target
     return envelope.reply_channel.type, envelope.reply_channel.target
+
+
+def _resolve_telegram_reaction_message_id(
+    *,
+    message: OutboundMessage,
+    envelope: TaskEnvelope | None,
+) -> int:
+    message_id = message.metadata.get("message_id")
+    if isinstance(message_id, int) and message_id > 0:
+        return message_id
+    if envelope is not None:
+        reply_message_id = envelope.reply_channel.metadata.get("message_id")
+        if isinstance(reply_message_id, int) and reply_message_id > 0:
+            return reply_message_id
+    raise ValueError("telegram reaction message_id is required")
 
 
 def _default_http_post_json(

@@ -142,6 +142,24 @@ class ExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "body is required"):
             OutboundMessage(channel="email", target="alice@example.com", body="")
 
+    def test_outbound_message_serializes_metadata_when_present(self) -> None:
+        message = OutboundMessage(
+            channel="telegram_reaction",
+            target="8605042448",
+            body="👍",
+            metadata={"message_id": 12},
+        )
+
+        self.assertEqual(
+            message.to_dict(),
+            {
+                "channel": "telegram_reaction",
+                "target": "8605042448",
+                "body": "👍",
+                "metadata": {"message_id": 12},
+            },
+        )
+
 
 class PolicyDecisionTests(unittest.TestCase):
     def test_policy_decision_serializes_expected_shape(self) -> None:

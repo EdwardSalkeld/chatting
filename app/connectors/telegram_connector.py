@@ -186,6 +186,9 @@ class TelegramConnector:
             return None
 
         event_id = f"telegram:{update_id}"
+        message_id = payload.get("message_id")
+        if not isinstance(message_id, int):
+            return None
         received_at = _parse_message_timestamp(payload.get("date"))
         thread_id = payload.get("message_thread_id")
         content = text.strip()
@@ -201,7 +204,11 @@ class TelegramConnector:
             attachments=[],
             context_refs=self._context_refs,
             policy_profile=self._policy_profile,
-            reply_channel=ReplyChannel(type="telegram", target=chat_id_value),
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target=chat_id_value,
+                metadata={"message_id": message_id},
+            ),
             dedupe_key=event_id,
         )
 

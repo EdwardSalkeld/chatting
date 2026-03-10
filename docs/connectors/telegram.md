@@ -23,6 +23,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `source`: `im`
 - `id` / `dedupe_key`: `telegram:<update_id>`
 - `reply_channel`: `telegram:<chat_id>`
+- `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
 - `actor`: `<user_id>:<username>` when available
 - `content`: text body (thread id is prefixed when present)
 

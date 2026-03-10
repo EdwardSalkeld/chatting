@@ -46,6 +46,14 @@ def _parse_sequence(value: object) -> int:
         raise ValueError("sequence must be a non-negative integer")
     return value
 
+
+def _parse_optional_dict(value: object, *, field_name: str) -> dict[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return dict(value)
+
 @dataclass(frozen=True)
 class TaskQueueMessage:
     """Message published by ingress and consumed by worker."""
@@ -135,6 +143,10 @@ class TaskQueueMessage:
                 target=_require_non_empty_string(
                     reply_channel_payload.get("target"),
                     field_name="envelope.reply_channel.target",
+                ),
+                metadata=_parse_optional_dict(
+                    reply_channel_payload.get("metadata"),
+                    field_name="envelope.reply_channel.metadata",
                 ),
             ),
             dedupe_key=_require_non_empty_string(
@@ -252,6 +264,10 @@ class EgressQueueMessage:
                 channel=_require_non_empty_string(message_payload.get("channel"), field_name="message.channel"),
                 target=_require_non_empty_string(message_payload.get("target"), field_name="message.target"),
                 body=_require_non_empty_string(message_payload.get("body"), field_name="message.body"),
+                metadata=_parse_optional_dict(
+                    message_payload.get("metadata"),
+                    field_name="message.metadata",
+                ),
             ),
             emitted_at=_parse_utc_datetime(payload.get("emitted_at"), field_name="emitted_at"),
             event_id=event_id,
