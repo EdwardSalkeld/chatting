@@ -24,7 +24,7 @@ There are currently two BBMB queues:
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
-| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for ordered dispatch |
+| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for ordered dispatch and immediate ad-hoc incrementals |
 
 Important details:
 - Queue names are hardcoded today.
@@ -66,6 +66,8 @@ Current worker behavior:
 - normal replies are emitted as `chatting.egress.v2`
 - incremental replies use `event_kind="incremental"` and increasing `sequence`
 - final replies use `event_kind="final"`
+- worker-side `app.main_reply` can also publish unsequenced `event_kind="incremental"` messages for
+  immediate operator-visible updates
 - if execution/policy yields no final reply content, the worker emits a terminal
   `channel="drop", target="task"` final message as a completion marker
 - heartbeat tasks skip the normal executor path and emit a single log pong
@@ -85,7 +87,8 @@ outbox/BBMB path.
 - drops egress for tasks that are already completed
 - drops disallowed egress channels, except for the internal heartbeat log pong and terminal
   `drop/task` completion markers
-- stages the message by `event_id` and `sequence`
+- dispatches unsequenced incrementals immediately
+- stages sequenced events by `event_id` and `sequence`
 - dispatches staged events in order
 - records dispatched event ids so duplicate egress is ignored safely
 - marks the task complete after dispatching a final event, then rejects future egress for that task
@@ -114,7 +117,7 @@ An IMAP message from `alice@example.com` turns into a `chatting.task.v1` payload
     "actor": "alice@example.com",
     "content": "Subject: Please summarize\n\nSummarize the overnight logs.",
     "attachments": [],
-    "context_refs": ["repo:/home/edward/chatting"],
+    "context_refs": ["repo:/opt/chatting"],
     "policy_profile": "default",
     "reply_channel": {
       "type": "email",

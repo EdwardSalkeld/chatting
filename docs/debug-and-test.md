@@ -26,9 +26,30 @@ python3 -m unittest tests.test_executor.ParseExecutionResultTests
 ```bash
 python3 -m unittest tests.test_sqlite_store tests.test_state_contract
 ```
+- Split-mode runtime coverage:
+```bash
+python3 -m unittest tests.test_worker_runtime tests.test_message_handler_runtime tests.test_main_reply
+```
+- Split-mode smoke e2e:
+```bash
+python3 -m unittest tests.test_split_mode_e2e -v
+```
+This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
 
 ## Useful runtime inspection commands
 
+- Message-handler runtime help:
+```bash
+python3 -m app.main_message_handler --help
+```
+- Worker runtime help:
+```bash
+python3 -m app.main_worker --help
+```
+- Immediate reply CLI help:
+```bash
+python3 -m app.main_reply --help
+```
 - List runs:
 ```bash
 python3 -m app.main --db-path /tmp/chatting-state.db --list-runs --limit 50
@@ -77,7 +98,7 @@ python3 -m app.main --db-path /tmp/chatting-state.db --serve-metrics --metrics-p
 - `context_ref/context_refs entries must not be empty`:
   remove blank strings from context refs.
 - `schedule job ... unknown keys` or type errors:
-  validate schedule JSON against strict schema in `app.main`.
+  validate schedule JSON against strict message-handler schedule-file parsing.
 
 ## Logging behavior
 
@@ -101,3 +122,4 @@ Use these with DB queries to correlate outcomes.
 - Workflow file: `.github/workflows/ci.yml`
 - Triggers: push to `main`, and pull requests targeting `main`
 - Python version: `3.13`
+- CI also builds `bbmb-server` and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.

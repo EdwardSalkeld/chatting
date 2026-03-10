@@ -4,7 +4,7 @@ Module: `app.connectors.fake_email_connector`
 
 ## Purpose
 
-In-memory email connector used by bootstrap flow and tests.
+In-memory email connector used in tests and fixture-style local runs.
 
 ## Input model
 

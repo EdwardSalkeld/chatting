@@ -2,11 +2,11 @@
 
 Implemented connector docs:
 
-- [Fake Cron](/home/edward/chatting/docs/connectors/fake-cron.md)
-- [Fake Email](/home/edward/chatting/docs/connectors/fake-email.md)
-- [Interval Schedule](/home/edward/chatting/docs/connectors/interval-schedule.md)
-- [IMAP Email](/home/edward/chatting/docs/connectors/imap-email.md)
-- [Telegram](/home/edward/chatting/docs/connectors/telegram.md)
-- [Slack](/home/edward/chatting/docs/connectors/slack.md)
-- [Webhook](/home/edward/chatting/docs/connectors/webhook.md)
-- [GitHub Issue Assignments](/home/edward/chatting/docs/connectors/github-issue-assignments.md)
+- [Fake Cron](fake-cron.md)
+- [Fake Email](fake-email.md)
+- [Interval Schedule](interval-schedule.md)
+- [IMAP Email](imap-email.md)
+- [Telegram](telegram.md)
+- [Slack](slack.md)
+- [Webhook](webhook.md)
+- [GitHub Issue Assignments](github-issue-assignments.md)

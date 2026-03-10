@@ -4,7 +4,7 @@ Module: `app.connectors.fake_cron_connector`
 
 ## Purpose
 
-In-memory cron connector used by bootstrap flow and tests.
+In-memory cron connector used in tests and fixture-style local runs.
 
 ## Input model
 

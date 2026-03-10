@@ -2,21 +2,21 @@
 
 ## Getting started
 
-- [Quick Start](/home/edward/chatting/docs/quick-start.md)
-- [Run Split Mode (BBMB)](/home/edward/chatting/docs/run-split-bbmb.md)
-- [BBMB Message Flow](/home/edward/chatting/docs/bbmb-message-flow.md)
-- [Debug And Test Guide](/home/edward/chatting/docs/debug-and-test.md)
+- [Quick Start](quick-start.md)
+- [Run Split Mode (BBMB)](run-split-bbmb.md)
+- [BBMB Message Flow](bbmb-message-flow.md)
+- [Debug And Test Guide](debug-and-test.md)
 
 ## CI
 
-- [GitHub Actions CI Workflow](/home/edward/chatting/.github/workflows/ci.yml)
+- [GitHub Actions CI Workflow](../.github/workflows/ci.yml)
 
 ## Connectors
 
-- [Connector Docs Index](/home/edward/chatting/docs/connectors/README.md)
+- [Connector Docs Index](connectors/README.md)
 
 ## Architecture
 
-- [0001 Python Architecture For Private Single-User Automation](/home/edward/chatting/docs/architecture/0001-python-prototype-architecture.md)
-- [0002 Interface Contracts And Data Schemas](/home/edward/chatting/docs/architecture/0002-interface-contracts.md)
-- [0003 Current Implementation Overview (Single-User)](/home/edward/chatting/docs/architecture/0003-implementation-overview.md)
+- [0001 Split-Mode Architecture For Private Single-User Automation](architecture/0001-python-prototype-architecture.md)
+- [0002 Interface Contracts And BBMB Payload Schemas](architecture/0002-interface-contracts.md)
+- [0003 Current Implementation Overview (Split Mode)](architecture/0003-implementation-overview.md)

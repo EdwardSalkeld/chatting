@@ -1,4 +1,4 @@
-# 0003: Current Implementation Overview (Single-User)
+# 0003: Current Implementation Overview (Split Mode)
 
 ## Status
 Accepted
@@ -6,21 +6,21 @@ Accepted
 ## Scope
 
 This document describes the current implementation as of 2026-03-01.
-The deployment model is private, single-user, single-machine.
+The deployment model is private, single-user, split mode.
 
 ## Runtime flow
 
-1. Connectors emit canonical `TaskEnvelope` objects.
-2. `RuleBasedRouter` maps each envelope to `RoutedTask`.
-3. Executor (`StubExecutor` or `CodexExecutor`) returns `ExecutionResult`.
-4. `AllowlistPolicyEngine` gates actions/config updates/messages.
-5. Applier executes approved actions/messages.
-6. `SQLiteStateStore` persists idempotency, run history, audit, dead letters, approvals, and config versions.
+1. `app.main_message_handler` polls connectors and emits canonical `TaskEnvelope` objects.
+2. Message-handler publishes `TaskQueueMessage` payloads to `chatting.tasks.v1` and records them in the ingress ledger.
+3. `app.main_worker` consumes tasks, routes them, runs the executor, evaluates policy, and emits `EgressQueueMessage` payloads.
+4. Message-handler validates egress against the ingress ledger, dispatches allowed messages, and marks tasks complete on terminal final events.
+5. `SQLiteStateStore` persists idempotency, run history, audit, dead letters, approvals, config versions, and worker egress outbox state.
 
 ## Entrypoints
 
 - `app.main_message_handler`: ingress + egress dispatch in split mode
 - `app.main_worker`: task execution in split mode
+- `app.main_reply`: publish immediate worker-side incremental egress
 - `app.main`: read/query + admin commands only (`--list-*`, replay dead letters, approvals, rollback, metrics)
 
 ## Persistence tables (SQLite)
@@ -44,8 +44,8 @@ The deployment model is private, single-user, single-machine.
 
 ## Non-goals
 
-- distributed deployment
 - multi-tenant operation
-- external queue systems
+- replacing BBMB with multiple transport layers
 
-The implementation remains intentionally private and single-user; distributed scaling is not a project goal.
+The implementation remains intentionally private and single-user; the split deployment can run on one
+host or a small number of cooperating hosts.
