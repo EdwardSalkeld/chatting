@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.broker import EgressQueueMessage
 from app.models import (
+    AttachmentRef,
     AuditEvent,
     ConfigVersionRecord,
     DeadLetterRecord,
@@ -951,14 +952,28 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
     raw_context_refs = payload.get("context_refs", [])
     if not isinstance(raw_context_refs, list):
         raise ValueError("invalid dead letter envelope payload")
+    raw_attachments = payload.get("attachments", [])
+    if not isinstance(raw_attachments, list):
+        raise ValueError("invalid dead letter envelope payload")
     context_refs = [str(value) for value in raw_context_refs]
+    attachments: list[AttachmentRef] = []
+    for raw_attachment in raw_attachments:
+        if not isinstance(raw_attachment, dict):
+            raise ValueError("invalid dead letter envelope payload")
+        uri = raw_attachment.get("uri")
+        if not isinstance(uri, str) or not uri.strip():
+            raise ValueError("invalid dead letter envelope payload")
+        name = raw_attachment.get("name")
+        if name is not None and not isinstance(name, str):
+            raise ValueError("invalid dead letter envelope payload")
+        attachments.append(AttachmentRef(uri=uri, name=name))
     return TaskEnvelope(
         id=str(payload["id"]),
         source=str(payload["source"]),
         received_at=_parse_rfc3339_utc(str(payload["received_at"])),
         actor=payload.get("actor") if isinstance(payload.get("actor"), str) else None,
         content=str(payload["content"]),
-        attachments=[],
+        attachments=attachments,
         context_refs=context_refs,
         policy_profile=str(payload["policy_profile"]),
         reply_channel=ReplyChannel(

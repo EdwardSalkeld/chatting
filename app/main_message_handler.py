@@ -77,6 +77,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "telegram_poll_timeout_seconds",
         "telegram_allowed_chat_ids",
         "telegram_allowed_channel_ids",
+        "telegram_attachment_dir",
         "telegram_context_refs",
         "github_repositories",
         "github_assignee_login",
@@ -533,6 +534,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--telegram-api-base-url", help="Telegram API base URL.")
     parser.add_argument("--telegram-poll-timeout-seconds", type=_positive_int, help="Telegram poll timeout.")
     parser.add_argument(
+        "--telegram-attachment-dir",
+        help="Local directory for downloaded Telegram photo attachments.",
+    )
+    parser.add_argument(
         "--telegram-allowed-chat-id",
         action="append",
         default=[],
@@ -819,6 +824,7 @@ def _build_live_connectors_fail_open(
                 "telegram_bot_token_env",
                 "telegram_api_base_url",
                 "telegram_poll_timeout_seconds",
+                "telegram_attachment_dir",
                 "telegram_allowed_chat_id",
                 "telegram_allowed_channel_id",
                 "telegram_context_ref",
@@ -829,6 +835,7 @@ def _build_live_connectors_fail_open(
                 "telegram_bot_token_env",
                 "telegram_api_base_url",
                 "telegram_poll_timeout_seconds",
+                "telegram_attachment_dir",
                 "telegram_allowed_chat_ids",
                 "telegram_allowed_channel_ids",
                 "telegram_context_refs",
@@ -870,6 +877,7 @@ def _build_live_connectors_fail_open(
             "telegram_bot_token_env": None,
             "telegram_api_base_url": None,
             "telegram_poll_timeout_seconds": None,
+            "telegram_attachment_dir": None,
             "telegram_allowed_chat_id": [],
             "telegram_allowed_channel_id": [],
             "telegram_context_ref": [],

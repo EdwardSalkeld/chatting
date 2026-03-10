@@ -44,6 +44,7 @@ class RuleBasedRouter:
             source=envelope.source,
             actor=envelope.actor,
             content=envelope.content,
+            attachments=envelope.attachments,
             reply_channel=envelope.reply_channel,
         )
 

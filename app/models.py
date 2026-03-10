@@ -161,6 +161,7 @@ class RoutedTask:
     source: Literal["cron", "email", "im", "webhook", "internal"] | None = None
     actor: str | None = None
     content: str | None = None
+    attachments: list[AttachmentRef] = field(default_factory=list)
     reply_channel: ReplyChannel | None = None
     schema_version: str = SCHEMA_VERSION
 
@@ -180,6 +181,7 @@ class RoutedTask:
             _validate_required_string(self.actor, field_name="actor")
         if self.content is not None:
             _validate_required_string(self.content, field_name="content")
+        _validate_attachments(self.attachments)
         if self.reply_channel is not None:
             _validate_required_string(self.reply_channel.type, field_name="reply_channel.type")
             _validate_required_string(self.reply_channel.target, field_name="reply_channel.target")
@@ -207,6 +209,11 @@ class RoutedTask:
             payload["actor"] = self.actor
         if self.content is not None:
             payload["content"] = self.content
+        if self.attachments:
+            payload["attachments"] = [
+                {"uri": item.uri, "name": item.name}
+                for item in self.attachments
+            ]
         if self.reply_channel is not None:
             payload["reply_channel"] = {
                 "type": self.reply_channel.type,

@@ -62,6 +62,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "smtp_username",
         "telegram_allowed_chat_ids",
         "telegram_allowed_channel_ids",
+        "telegram_attachment_dir",
         "telegram_api_base_url",
         "telegram_bot_token_env",
         "telegram_context_refs",
@@ -876,6 +877,7 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
                 allowed_chat_ids=_resolve_telegram_allowed_chat_ids(args, config),
                 allowed_channel_ids=_resolve_telegram_allowed_channel_ids(args, config),
                 context_refs=telegram_context_refs,
+                attachment_root_dir=_resolve_telegram_attachment_dir(args, config),
             )
         )
 
@@ -1303,6 +1305,18 @@ def _resolve_telegram_context_refs(
     if any(not value.strip() for value in merged_values):
         raise ValueError("telegram_context_ref(s) entries must not be empty")
     return merged_values
+
+
+def _resolve_telegram_attachment_dir(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> str:
+    return _resolve_str(
+        cli_value=getattr(args, "telegram_attachment_dir", None),
+        config_value=config.get("telegram_attachment_dir"),
+        default_value=str(Path(tempfile.gettempdir()) / "chatting-telegram-attachments"),
+        setting_name="telegram_attachment_dir",
+    )
 
 
 def _resolve_telegram_allowed_channel_ids(
