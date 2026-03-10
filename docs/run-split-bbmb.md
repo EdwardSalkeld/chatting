@@ -126,3 +126,14 @@ Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
 - These ad-hoc events are intentionally unsequenced and dispatch immediately at message-handler.
 - `--event-id` can be supplied for stable idempotency across retries.
+- Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
+
+```bash
+python3 -m app.main_reply task:telegram:53 \
+  --channel telegram \
+  --target 8605042448 \
+  --telegram-reaction "👍" \
+  --config /tmp/worker.json
+```
+
+- If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.

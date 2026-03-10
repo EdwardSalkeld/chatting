@@ -964,6 +964,9 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
         reply_channel=ReplyChannel(
             type=str(reply_channel["type"]),
             target=str(reply_channel["target"]),
+            metadata=dict(reply_channel.get("metadata", {}))
+            if isinstance(reply_channel.get("metadata"), dict)
+            else {},
         ),
         dedupe_key=str(payload["dedupe_key"]),
         schema_version=str(payload.get("schema_version", "1.0")),

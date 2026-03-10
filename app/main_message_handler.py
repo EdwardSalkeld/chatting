@@ -652,7 +652,7 @@ def _resolve_allowed_egress_channels(args: argparse.Namespace, config: dict[str,
 
     merged = [*config_values, *args.allowed_egress_channel]
     if not merged:
-        return {"email", "telegram", "log"}
+        return {"email", "telegram", "telegram_reaction", "log"}
     if any(not item.strip() for item in merged):
         raise ValueError("allowed_egress_channel entries must not be empty")
     return set(merged)

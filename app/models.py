@@ -49,6 +49,14 @@ def _validate_context_refs(values: list[str]) -> None:
             raise ValueError("context_refs items must be non-empty strings")
 
 
+def _validate_metadata_dict(values: dict[str, Any], *, field_name: str) -> None:
+    if not isinstance(values, dict):
+        raise ValueError(f"{field_name} must be a dict")
+    for key in values:
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+
+
 def _validate_attachments(values: list["AttachmentRef"]) -> None:
     if not isinstance(values, list):
         raise ValueError("attachments must be a list")
@@ -76,10 +84,12 @@ class ReplyChannel:
 
     type: str
     target: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_required_string(self.type, field_name="type")
         _validate_required_string(self.target, field_name="target")
+        _validate_metadata_dict(self.metadata, field_name="metadata")
 
 
 @dataclass(frozen=True)
@@ -126,7 +136,7 @@ class TaskEnvelope:
             raise ValueError("received_at must be timezone-aware")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "id": self.id,
             "source": self.source,
@@ -145,6 +155,9 @@ class TaskEnvelope:
             },
             "dedupe_key": self.dedupe_key,
         }
+        if self.reply_channel.metadata:
+            payload["reply_channel"]["metadata"] = self.reply_channel.metadata
+        return payload
 
 
 @dataclass(frozen=True)
@@ -212,6 +225,8 @@ class RoutedTask:
                 "type": self.reply_channel.type,
                 "target": self.reply_channel.target,
             }
+            if self.reply_channel.metadata:
+                payload["reply_channel"]["metadata"] = self.reply_channel.metadata
         return payload
 
 
@@ -222,18 +237,23 @@ class OutboundMessage:
     channel: str
     target: str
     body: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_required_string(self.channel, field_name="channel")
         _validate_required_string(self.target, field_name="target")
         _validate_required_string(self.body, field_name="body")
+        _validate_metadata_dict(self.metadata, field_name="metadata")
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        payload = {
             "channel": self.channel,
             "target": self.target,
             "body": self.body,
         }
+        if self.metadata:
+            payload["metadata"] = self.metadata
+        return payload
 
 
 @dataclass(frozen=True)

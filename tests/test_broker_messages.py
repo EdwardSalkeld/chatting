@@ -16,7 +16,11 @@ class TaskQueueMessageTests(unittest.TestCase):
             attachments=[AttachmentRef(uri="file://inbox/msg1.txt", name="msg1.txt")],
             context_refs=["repo:/home/edward/develop/chatting"],
             policy_profile="default",
-            reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+            reply_channel=ReplyChannel(
+                type="email",
+                target="alice@example.com",
+                metadata={"thread_id": "abc"},
+            ),
             dedupe_key="email:1",
         )
 
@@ -27,6 +31,7 @@ class TaskQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.task_id, "task:email:1")
         self.assertEqual(parsed.envelope.id, envelope.id)
         self.assertEqual(parsed.envelope.attachments[0].uri, "file://inbox/msg1.txt")
+        self.assertEqual(parsed.envelope.reply_channel.metadata, {"thread_id": "abc"})
 
     def test_task_message_rejects_wrong_type(self) -> None:
         with self.assertRaises(ValueError):
@@ -41,7 +46,12 @@ class EgressQueueMessageTests(unittest.TestCase):
             trace_id="trace:email:1",
             event_index=0,
             event_count=2,
-            message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+            message=OutboundMessage(
+                channel="email",
+                target="alice@example.com",
+                body="hello",
+                metadata={"thread_id": "abc"},
+            ),
             emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
             event_id="evt:task:email:1:0",
             sequence=0,
@@ -58,6 +68,7 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.sequence, 0)
         self.assertEqual(parsed.event_kind, "final")
         self.assertEqual(parsed.message.target, "alice@example.com")
+        self.assertEqual(parsed.message.metadata, {"thread_id": "abc"})
 
     def test_egress_v2_message_round_trip(self) -> None:
         message = EgressQueueMessage(

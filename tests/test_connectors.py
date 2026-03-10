@@ -473,6 +473,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(envelope.actor, "77:alice")
         self.assertEqual(envelope.reply_channel.type, "telegram")
         self.assertEqual(envelope.reply_channel.target, "12345")
+        self.assertEqual(envelope.reply_channel.metadata, {"message_id": 1})
         self.assertEqual(envelope.content, "hello from telegram")
         self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
         self.assertEqual(second_poll, [])
@@ -570,6 +571,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(envelope.id, "telegram:3001")
         self.assertEqual(envelope.reply_channel.type, "telegram")
         self.assertEqual(envelope.reply_channel.target, "-100123")
+        self.assertEqual(envelope.reply_channel.metadata, {"message_id": 1})
         self.assertEqual(envelope.actor, "-100123:release-feed")
         self.assertEqual(envelope.content, "deploy completed")
 

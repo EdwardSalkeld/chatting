@@ -1,5 +1,5 @@
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -196,6 +196,40 @@ class IntegratedApplierTests(unittest.TestCase):
             self.assertEqual(
                 [message.channel for message in result.dispatched_messages],
                 ["telegram"],
+            )
+            self.assertEqual(result.reason_codes, [])
+
+    def test_apply_dispatches_telegram_reaction_with_sender(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingTelegramSender(sent=[])
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram_reaction",
+                        target="12345",
+                        body="👍",
+                        metadata={"message_id": 321},
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(sender.reactions, [("12345", 321, "👍")])
+            self.assertEqual(
+                result.dispatched_messages,
+                [
+                    OutboundMessage(
+                        channel="telegram_reaction",
+                        target="12345",
+                        body="👍",
+                        metadata={"message_id": 321},
+                    )
+                ],
             )
             self.assertEqual(result.reason_codes, [])
 
@@ -505,6 +539,39 @@ class TelegramMessageSenderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "telegram_send_failed"):
             sender.send("12345", "hello")
 
+    def test_react_posts_set_message_reaction_request(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": True}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.react("12345", 99, "👍")
+
+        self.assertEqual(
+            seen_calls,
+            [
+                (
+                    "https://api.telegram.org/bottoken/setMessageReaction",
+                    {
+                        "chat_id": "12345",
+                        "message_id": 99,
+                        "reaction": [{"type": "emoji", "emoji": "👍"}],
+                    },
+                    10.0,
+                )
+            ],
+        )
+
 
 class GitHubIssueCommentSenderTests(unittest.TestCase):
     def test_send_uses_gh_cli_for_issue_url_target(self) -> None:
@@ -576,9 +643,13 @@ class _FakeSmtpClient:
 @dataclass
 class _RecordingTelegramSender:
     sent: list[tuple[str, str]]
+    reactions: list[tuple[str, int, str]] = field(default_factory=list)
 
     def send(self, target: str, body: str) -> None:
         self.sent.append((target, body))
+
+    def react(self, target: str, message_id: int, emoji: str) -> None:
+        self.reactions.append((target, message_id, emoji))
 
 
 class _FailingTelegramSender:
