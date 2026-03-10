@@ -33,7 +33,15 @@ cp configs/worker-runtime.example.json /tmp/worker.json
 # edit bbmb_address and connector/executor settings as needed
 ```
 
-## 4) Start services
+## 4) Start BBMB
+
+```bash
+bbmb-server
+```
+
+By default `chatting` expects BBMB on `127.0.0.1:9876`.
+
+## 5) Start chatting services
 
 ```bash
 python3 -m app.main_message_handler --config /tmp/message-handler.json
@@ -44,7 +52,7 @@ Or use the provided systemd unit templates in `deploy/systemd/`.
 
 The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics` by default. You can override the bind host and port with `metrics_host` and `metrics_port` in the message-handler config or the matching CLI flags.
 
-## 5) Query state and metrics
+## 6) Query state and metrics
 
 `app.main` is now query/admin only:
 
@@ -57,6 +65,8 @@ python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-metrics
 ## Notes
 
 - For the queue-by-queue runtime conversation, payload examples, and config levers, see
-  [BBMB Message Flow](/home/edward/chatting/docs/bbmb-message-flow.md).
-- For full split-mode setup and operational details, see [Run Split Mode (BBMB)](/home/edward/chatting/docs/run-split-bbmb.md).
+  [BBMB Message Flow](bbmb-message-flow.md).
+- For full split-mode setup and operational details, see [Run Split Mode (BBMB)](run-split-bbmb.md).
 - `app.main` no longer runs bootstrap/live runtime execution.
+- `app.main` reads one SQLite database at a time. In split mode, point it at either the
+  message-handler DB or the worker DB depending on what you want to inspect.

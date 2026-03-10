@@ -9,7 +9,7 @@ Normalize Slack-style message payloads into canonical IM envelopes.
 ## Current integration state
 
 - Connector module is implemented and unit-tested.
-- It is not wired into `app.main` CLI/config yet.
+- It is not wired into the split-mode runtime CLI/config yet.
 - Intended for in-process/private integrations that provide `fetch_messages`.
 
 ## Constructor inputs
