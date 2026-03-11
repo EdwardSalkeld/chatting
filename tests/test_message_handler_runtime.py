@@ -728,6 +728,8 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         self.assertEqual(snapshot["github_new_events_total"], 2)
         self.assertEqual(snapshot["github_published_total"], 1)
         self.assertEqual(snapshot["last_loop_completed_timestamp_seconds"], 1772798460.0)
+        self.assertEqual(snapshot["egress_loops_total"], 0)
+        self.assertEqual(snapshot["last_egress_loop_completed_timestamp_seconds"], 0.0)
         self.assertEqual(snapshot["received_total"], 2)
         self.assertEqual(snapshot["dispatch_latency_ms_avg"], 120.5)
 
@@ -742,6 +744,8 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 "github_new_events_total": 3,
                 "github_published_total": 1,
                 "last_loop_completed_timestamp_seconds": 1772798460.0,
+                "egress_loops_total": 5,
+                "last_egress_loop_completed_timestamp_seconds": 1772798461.0,
                 "received_total": 7,
                 "dispatched_total": 6,
                 "deduped_total": 1,
@@ -766,6 +770,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         )
         self.assertIn("chatting_message_handler_loops_total 2", rendered)
         self.assertIn("chatting_message_handler_github_published_total 1", rendered)
+        self.assertIn("chatting_message_handler_egress_loops_total 5", rendered)
         self.assertIn("chatting_message_handler_egress_received_total 7", rendered)
         self.assertIn(
             "chatting_message_handler_egress_dedupe_hit_rate_pct 14.290000",

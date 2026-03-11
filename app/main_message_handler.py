@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Callable, Mapping
 
 from app.applier import GitHubIssueCommentSender, IntegratedApplier
@@ -191,27 +191,33 @@ class HeartbeatTelemetryRollup:
     latest_received_at: datetime | None = None
     latest_latency_ms: int | None = None
 
+    def __post_init__(self) -> None:
+        self._lock = Lock()
+
     def record_sent(self, *, sent_at: datetime) -> None:
-        self.sent_total += 1
-        self.latest_sent_at = sent_at.astimezone(timezone.utc)
+        with self._lock:
+            self.sent_total += 1
+            self.latest_sent_at = sent_at.astimezone(timezone.utc)
 
     def record_received(self, *, sent_at: datetime, received_at: datetime) -> None:
-        self.received_total += 1
-        self.latest_sent_at = sent_at.astimezone(timezone.utc)
-        self.latest_received_at = received_at.astimezone(timezone.utc)
-        self.latest_latency_ms = max(
-            int((self.latest_received_at - self.latest_sent_at).total_seconds() * 1000),
-            0,
-        )
+        with self._lock:
+            self.received_total += 1
+            self.latest_sent_at = sent_at.astimezone(timezone.utc)
+            self.latest_received_at = received_at.astimezone(timezone.utc)
+            self.latest_latency_ms = max(
+                int((self.latest_received_at - self.latest_sent_at).total_seconds() * 1000),
+                0,
+            )
 
     def snapshot(self) -> dict[str, object]:
-        return {
-            "sent_total": self.sent_total,
-            "received_total": self.received_total,
-            "latest_sent_at": _serialize_optional_datetime(self.latest_sent_at),
-            "latest_received_at": _serialize_optional_datetime(self.latest_received_at),
-            "latest_latency_ms": self.latest_latency_ms,
-        }
+        with self._lock:
+            return {
+                "sent_total": self.sent_total,
+                "received_total": self.received_total,
+                "latest_sent_at": _serialize_optional_datetime(self.latest_sent_at),
+                "latest_received_at": _serialize_optional_datetime(self.latest_received_at),
+                "latest_latency_ms": self.latest_latency_ms,
+            }
 
 
 @dataclass(frozen=True)
@@ -243,7 +249,9 @@ class MessageHandlerMetrics:
         self._github_scanned_events_total = 0
         self._github_new_events_total = 0
         self._github_published_total = 0
+        self._egress_loops_total = 0
         self._last_loop_completed_at: datetime | None = None
+        self._last_egress_loop_completed_at: datetime | None = None
         self._egress_snapshot: dict[str, float | int] = EgressTelemetryRollup().snapshot()
 
     def record_loop(
@@ -266,12 +274,29 @@ class MessageHandlerMetrics:
             self._last_loop_completed_at = loop_completed_at.astimezone(timezone.utc)
             self._egress_snapshot = dict(telemetry_snapshot)
 
+    def record_egress_loop(
+        self,
+        *,
+        telemetry_snapshot: dict[str, float | int],
+        completed_at: datetime | None = None,
+    ) -> None:
+        loop_completed_at = completed_at or datetime.now(timezone.utc)
+        with self._lock:
+            self._egress_loops_total += 1
+            self._last_egress_loop_completed_at = loop_completed_at.astimezone(timezone.utc)
+            self._egress_snapshot = dict(telemetry_snapshot)
+
     def snapshot(self) -> dict[str, float | int]:
         with self._lock:
             uptime_seconds = max(self._monotonic_fn() - self._started_monotonic, 0.0)
-            last_loop_timestamp = (
+            last_ingress_loop_timestamp = (
                 self._last_loop_completed_at.timestamp()
                 if self._last_loop_completed_at is not None
+                else 0.0
+            )
+            last_egress_loop_timestamp = (
+                self._last_egress_loop_completed_at.timestamp()
+                if self._last_egress_loop_completed_at is not None
                 else 0.0
             )
             snapshot = {
@@ -282,7 +307,12 @@ class MessageHandlerMetrics:
                 "github_scanned_events_total": self._github_scanned_events_total,
                 "github_new_events_total": self._github_new_events_total,
                 "github_published_total": self._github_published_total,
-                "last_loop_completed_timestamp_seconds": round(last_loop_timestamp, 6),
+                "last_loop_completed_timestamp_seconds": round(last_ingress_loop_timestamp, 6),
+                "egress_loops_total": self._egress_loops_total,
+                "last_egress_loop_completed_timestamp_seconds": round(
+                    last_egress_loop_timestamp,
+                    6,
+                ),
             }
             snapshot.update(self._egress_snapshot)
             return snapshot
@@ -343,6 +373,18 @@ def _render_prometheus_metrics(snapshot: Mapping[str, float | int]) -> str:
             "gauge",
             "Unix timestamp of the most recently completed loop.",
             "last_loop_completed_timestamp_seconds",
+        ),
+        (
+            "chatting_message_handler_egress_loops_total",
+            "counter",
+            "Completed egress polling loops.",
+            "egress_loops_total",
+        ),
+        (
+            "chatting_message_handler_last_egress_loop_completed_timestamp_seconds",
+            "gauge",
+            "Unix timestamp of the most recently completed egress loop.",
+            "last_egress_loop_completed_timestamp_seconds",
         ),
         (
             "chatting_message_handler_egress_received_total",
@@ -1290,6 +1332,154 @@ def _flush_task_egress_in_sequence(
             return
 
 
+def _run_ingress_loop(
+    *,
+    stop_event: Event,
+    store: SQLiteStateStore,
+    ledger: TaskLedgerStore,
+    broker: BBMBQueueAdapter,
+    connectors: list[object],
+    disabled_ingress_components: list[DisabledIngressComponent],
+    heartbeat_telemetry: HeartbeatTelemetryRollup,
+    metrics: MessageHandlerMetrics,
+    poll_interval_seconds: float,
+    max_loops: int,
+) -> None:
+    loop_count = 0
+    while not stop_event.is_set():
+        loop_count += 1
+
+        for failure in disabled_ingress_components:
+            LOGGER.error(
+                "ingress_connector_disabled connector=%s loop=%s error=%s",
+                failure.component,
+                loop_count,
+                failure.error,
+            )
+
+        ingress_published = 0
+        github_scanned_events = 0
+        github_new_events = 0
+        github_published = 0
+        github_checkpoint = "disabled"
+        for connector in connectors:
+            connector_name = type(connector).__name__
+            try:
+                envelopes = connector.poll()
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "ingress_connector_poll_failed connector=%s loop=%s",
+                    connector_name,
+                    loop_count,
+                )
+                continue
+            if isinstance(connector, GitHubIssueAssignmentConnector):
+                github_scanned_events = connector.last_poll_scanned_events
+                github_new_events = connector.last_poll_new_events
+                github_checkpoint = connector.last_poll_checkpoint_id
+            for envelope in envelopes:
+                if store.seen(envelope.source, envelope.dedupe_key):
+                    continue
+                task_id = f"task:{envelope.id}"
+                task_envelope = _prepare_ingress_envelope(
+                    store=store,
+                    envelope=envelope,
+                    run_id=task_id,
+                )
+                task_message = TaskQueueMessage.from_envelope(
+                    task_envelope,
+                    trace_id=f"trace:{envelope.id}",
+                )
+                broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
+                ledger.record_task(task_message)
+                store.mark_seen(envelope.source, envelope.dedupe_key)
+                if is_internal_heartbeat_envelope(task_message.envelope):
+                    heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
+                ingress_published += 1
+                if isinstance(connector, GitHubIssueAssignmentConnector):
+                    github_published += 1
+
+        metrics.record_loop(
+            ingress_published=ingress_published,
+            github_scanned_events=github_scanned_events,
+            github_new_events=github_new_events,
+            github_published=github_published,
+            telemetry_snapshot=metrics.snapshot(),
+        )
+        heartbeat_snapshot = heartbeat_telemetry.snapshot()
+        egress_snapshot = metrics.snapshot()
+        LOGGER.info(
+            (
+                "ingress_loop_completed loop=%s ingress_published=%s "
+                "github_scanned_events=%s github_new_events=%s github_published=%s github_checkpoint=%s "
+                "heartbeat_sent_total=%s heartbeat_received_total=%s "
+                "heartbeat_latest_sent_at=%s heartbeat_latest_received_at=%s heartbeat_latest_latency_ms=%s "
+                "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
+                "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
+                "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
+                "egress_incremental_dispatched_total=%s egress_final_dispatched_total=%s"
+            ),
+            loop_count,
+            ingress_published,
+            github_scanned_events,
+            github_new_events,
+            github_published,
+            github_checkpoint,
+            heartbeat_snapshot["sent_total"],
+            heartbeat_snapshot["received_total"],
+            heartbeat_snapshot["latest_sent_at"],
+            heartbeat_snapshot["latest_received_at"],
+            heartbeat_snapshot["latest_latency_ms"],
+            egress_snapshot["received_total"],
+            egress_snapshot["dispatched_total"],
+            egress_snapshot["deduped_total"],
+            egress_snapshot["dedupe_hit_rate_pct"],
+            egress_snapshot["dropped_total"],
+            egress_snapshot["dispatch_latency_ms_avg"],
+            egress_snapshot["dispatch_latency_ms_max"],
+            egress_snapshot["incremental_dispatched_total"],
+            egress_snapshot["final_dispatched_total"],
+        )
+
+        if max_loops and loop_count >= max_loops:
+            stop_event.set()
+            break
+        if stop_event.wait(poll_interval_seconds):
+            break
+
+
+def _run_egress_loop(
+    *,
+    stop_event: Event,
+    ledger: TaskLedgerStore,
+    store: SQLiteStateStore,
+    broker: BBMBQueueAdapter,
+    allowed_egress_channels: set[str],
+    applier: IntegratedApplier,
+    heartbeat_telemetry: HeartbeatTelemetryRollup,
+    metrics: MessageHandlerMetrics,
+    poll_timeout_seconds: int,
+) -> None:
+    telemetry = EgressTelemetryRollup()
+    while True:
+        timeout_seconds = 1 if stop_event.is_set() else poll_timeout_seconds
+        drained = _drain_egress_queue(
+            broker=broker,
+            poll_timeout_seconds=timeout_seconds,
+            ledger=ledger,
+            store=store,
+            allowed_egress_channels=allowed_egress_channels,
+            applier=applier,
+            heartbeat_telemetry=heartbeat_telemetry,
+            telemetry=telemetry,
+        )
+        if drained == 0 and not stop_event.is_set():
+            stop_event.wait(0.01)
+        metrics.record_egress_loop(telemetry_snapshot=telemetry.snapshot())
+        if stop_event.is_set():
+            break
+
+
 def main() -> int:
     _configure_logging()
     args = _parse_args()
@@ -1363,119 +1553,62 @@ def main() -> int:
         port=metrics_port,
     )
     heartbeat_telemetry = HeartbeatTelemetryRollup()
+    stop_event = Event()
+    thread_errors: list[BaseException] = []
+    thread_errors_lock = Lock()
+
+    def _run_thread(name: str, target: Callable[[], None]) -> None:
+        try:
+            target()
+        except Exception as error:  # noqa: BLE001
+            LOGGER.exception("%s_failed", name)
+            with thread_errors_lock:
+                thread_errors.append(error)
+            stop_event.set()
 
     try:
-        loop_count = 0
-        telemetry = EgressTelemetryRollup()
-        while True:
-            loop_count += 1
-
-            for failure in disabled_ingress_components:
-                LOGGER.error(
-                    "ingress_connector_disabled connector=%s loop=%s error=%s",
-                    failure.component,
-                    loop_count,
-                    failure.error,
-                )
-
-            ingress_published = 0
-            github_scanned_events = 0
-            github_new_events = 0
-            github_published = 0
-            github_checkpoint = "disabled"
-            for connector in connectors:
-                connector_name = type(connector).__name__
-                try:
-                    envelopes = connector.poll()
-                except Exception:  # noqa: BLE001
-                    LOGGER.exception(
-                        "ingress_connector_poll_failed connector=%s loop=%s",
-                        connector_name,
-                        loop_count,
-                    )
-                    continue
-                if isinstance(connector, GitHubIssueAssignmentConnector):
-                    github_scanned_events = connector.last_poll_scanned_events
-                    github_new_events = connector.last_poll_new_events
-                    github_checkpoint = connector.last_poll_checkpoint_id
-                for envelope in envelopes:
-                    if store.seen(envelope.source, envelope.dedupe_key):
-                        continue
-                    task_id = f"task:{envelope.id}"
-                    task_envelope = _prepare_ingress_envelope(
-                        store=store,
-                        envelope=envelope,
-                        run_id=task_id,
-                    )
-                    task_message = TaskQueueMessage.from_envelope(
-                        task_envelope,
-                        trace_id=f"trace:{envelope.id}",
-                    )
-                    broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
-                    ledger.record_task(task_message)
-                    store.mark_seen(envelope.source, envelope.dedupe_key)
-                    if is_internal_heartbeat_envelope(task_message.envelope):
-                        heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
-                    ingress_published += 1
-                    if isinstance(connector, GitHubIssueAssignmentConnector):
-                        github_published += 1
-
-            _drain_egress_queue(
-                broker=broker,
-                poll_timeout_seconds=poll_timeout_seconds,
-                ledger=ledger,
-                store=store,
-                allowed_egress_channels=allowed_egress_channels,
-                applier=applier,
-                heartbeat_telemetry=heartbeat_telemetry,
-                telemetry=telemetry,
-            )
-
-            telemetry_snapshot = telemetry.snapshot()
-            heartbeat_snapshot = heartbeat_telemetry.snapshot()
-            metrics.record_loop(
-                ingress_published=ingress_published,
-                github_scanned_events=github_scanned_events,
-                github_new_events=github_new_events,
-                github_published=github_published,
-                telemetry_snapshot=telemetry_snapshot,
-            )
-            LOGGER.info(
-                (
-                    "message_handler_loop_completed loop=%s ingress_published=%s "
-                    "github_scanned_events=%s github_new_events=%s github_published=%s github_checkpoint=%s "
-                    "heartbeat_sent_total=%s heartbeat_received_total=%s "
-                    "heartbeat_latest_sent_at=%s heartbeat_latest_received_at=%s heartbeat_latest_latency_ms=%s "
-                    "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
-                    "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
-                    "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
-                    "egress_incremental_dispatched_total=%s egress_final_dispatched_total=%s"
+        ingress_thread = Thread(
+            target=lambda: _run_thread(
+                "ingress_loop",
+                lambda: _run_ingress_loop(
+                    stop_event=stop_event,
+                    store=store,
+                    ledger=ledger,
+                    broker=broker,
+                    connectors=connectors,
+                    disabled_ingress_components=disabled_ingress_components,
+                    heartbeat_telemetry=heartbeat_telemetry,
+                    metrics=metrics,
+                    poll_interval_seconds=poll_interval_seconds,
+                    max_loops=max_loops,
                 ),
-                loop_count,
-                ingress_published,
-                github_scanned_events,
-                github_new_events,
-                github_published,
-                github_checkpoint,
-                heartbeat_snapshot["sent_total"],
-                heartbeat_snapshot["received_total"],
-                heartbeat_snapshot["latest_sent_at"],
-                heartbeat_snapshot["latest_received_at"],
-                heartbeat_snapshot["latest_latency_ms"],
-                telemetry_snapshot["received_total"],
-                telemetry_snapshot["dispatched_total"],
-                telemetry_snapshot["deduped_total"],
-                telemetry_snapshot["dedupe_hit_rate_pct"],
-                telemetry_snapshot["dropped_total"],
-                telemetry_snapshot["dispatch_latency_ms_avg"],
-                telemetry_snapshot["dispatch_latency_ms_max"],
-                telemetry_snapshot["incremental_dispatched_total"],
-                telemetry_snapshot["final_dispatched_total"],
-            )
-
-            if max_loops and loop_count >= max_loops:
-                break
-            time.sleep(poll_interval_seconds)
+            ),
+            name="chatting-ingress",
+        )
+        egress_thread = Thread(
+            target=lambda: _run_thread(
+                "egress_loop",
+                lambda: _run_egress_loop(
+                    stop_event=stop_event,
+                    ledger=ledger,
+                    store=store,
+                    broker=broker,
+                    allowed_egress_channels=allowed_egress_channels,
+                    applier=applier,
+                    heartbeat_telemetry=heartbeat_telemetry,
+                    metrics=metrics,
+                    poll_timeout_seconds=poll_timeout_seconds,
+                ),
+            ),
+            name="chatting-egress",
+        )
+        ingress_thread.start()
+        egress_thread.start()
+        ingress_thread.join()
+        stop_event.set()
+        egress_thread.join()
+        if thread_errors:
+            raise thread_errors[0]
     finally:
         if metrics_server is not None:
             metrics_server.shutdown()
