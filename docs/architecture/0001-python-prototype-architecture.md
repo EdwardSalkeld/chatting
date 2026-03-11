@@ -57,6 +57,7 @@ SQLite-backed persistence for:
 - config versions + rollback
 - worker egress outbox replay state
 - ingress task ledger, staged egress, and task-completion markers
+- task completion is internal-only; user-visible replies are separate egress events
 
 ## Runtime topology
 

@@ -459,11 +459,11 @@ class MainGitHubIngressTests(unittest.TestCase):
                 trace_id=task_message.trace_id,
                 event_index=1,
                 event_count=2,
-                message=OutboundMessage(channel="email", target="alice@example.com", body="second"),
+                message=OutboundMessage(channel="internal", target="task", body="done"),
                 emitted_at=datetime(2026, 3, 7, 10, 47, 37, tzinfo=timezone.utc),
                 event_id="evt:task:email:drain-1:1",
                 sequence=1,
-                event_kind="final",
+                event_kind="completion",
                 message_type="chatting.egress.v2",
             )
             broker.egress_messages.extend(

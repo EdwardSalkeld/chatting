@@ -265,7 +265,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             )
 

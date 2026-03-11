@@ -76,8 +76,8 @@ python3 -m app.main_worker
 - `message-handler` owns integration secrets (`IMAP`, `SMTP`, `Telegram`).
 - `worker` does not read integration secrets and does not dispatch directly.
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
-- Worker always emits a terminal final egress event; when there is no user-visible reply it emits a
-  `drop/task` completion marker so `message-handler` can close the task and reject future egress.
+- Worker emits zero or more task-scoped visible `message` egress events and exactly one terminal
+  internal `completion` event so `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
 ## 5) Configure GitHub assignment polling (in message-handler)
@@ -110,7 +110,7 @@ sudo systemctl enable --now chatting-message-handler.service
 sudo systemctl enable --now chatting-worker.service
 ```
 
-## 7) Publish an immediate incremental reply from worker side
+## 7) Publish an immediate out-of-band reply from worker side
 
 Use the worker-side CLI to push an egress event directly to BBMB without waiting for worker loop completion:
 
@@ -124,7 +124,8 @@ python3 -m app.main_reply task:email:53 \
 
 Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
-- These ad-hoc events are intentionally unsequenced and dispatch immediately at message-handler.
+- These ad-hoc events are intentionally unsequenced, out-of-band, and dispatch immediately at
+  message-handler.
 - `--event-id` can be supplied for stable idempotency across retries.
 - Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
 

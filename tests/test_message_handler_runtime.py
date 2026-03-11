@@ -94,7 +94,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:missing:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
@@ -136,7 +136,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
@@ -173,7 +173,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
@@ -190,7 +190,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(acked, ["guid-2"])
             self.assertEqual(applier.apply_calls, 0)
 
-    def test_handle_egress_message_dispatches_and_marks_checkpoint(self) -> None:
+    def test_handle_egress_message_dispatches_visible_message_without_closing_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")
             store = SQLiteStateStore(db_path)
@@ -210,7 +210,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
@@ -233,15 +233,15 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                     event_id="evt:task:email:1:0",
                 )
             )
-            self.assertIsNone(ledger.get_task(task_message.task_id))
-            self.assertTrue(
+            self.assertIsNotNone(ledger.get_task(task_message.task_id))
+            self.assertFalse(
                 ledger.is_task_completed(
                     task_id=task_message.task_id,
                     envelope_id=task_message.envelope.id,
                 )
             )
 
-    def test_handle_egress_message_accepts_terminal_drop_marker(self) -> None:
+    def test_handle_egress_message_applies_completion_without_external_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")
             store = SQLiteStateStore(db_path)
@@ -258,19 +258,19 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 event_index=0,
                 event_count=1,
                 message=OutboundMessage(
-                    channel="drop",
+                    channel="internal",
                     target="task",
-                    body="Worker completed without final reply; marking task complete.",
+                    body="Worker completed; task closure is internal-only.",
                 ),
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
-                event_id="evt:task:email:1:0:final:drop",
+                event_id="evt:task:email:1:0:completion",
                 sequence=0,
-                event_kind="final",
+                event_kind="completion",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
             _handle_egress_message(
-                picked_guid="guid-drop-terminal",
+                picked_guid="guid-completion",
                 picked_payload=payload,
                 ledger=ledger,
                 store=store,
@@ -279,8 +279,8 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 ack_callback=acked.append,
             )
 
-            self.assertEqual(acked, ["guid-drop-terminal"])
-            self.assertEqual(applier.apply_calls, 1)
+            self.assertEqual(acked, ["guid-completion"])
+            self.assertEqual(applier.apply_calls, 0)
             self.assertTrue(
                 ledger.is_task_completed(
                     task_id=task_message.task_id,
@@ -411,7 +411,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:outbox",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             )
             store.queue_egress_outbox_event(queued)
@@ -526,7 +526,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:1",
                 sequence=1,
-                event_kind="incremental",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
             first_payload = EgressQueueMessage(
@@ -539,7 +539,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="incremental",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
@@ -639,7 +639,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
                 event_id="evt:task:telegram:200:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             ).to_dict()
 
@@ -663,19 +663,21 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         telemetry.record_received()
         telemetry.record_received()
         telemetry.record_dispatched(event_kind="incremental", latency_ms=120)
-        telemetry.record_dispatched(event_kind="final", latency_ms=80)
+        telemetry.record_dispatched(event_kind="message", latency_ms=80)
+        telemetry.record_dispatched(event_kind="completion", latency_ms=5)
         telemetry.record_deduped()
         telemetry.record_dropped(reason="unknown_task")
         telemetry.record_dropped(reason="disallowed_channel")
         snapshot = telemetry.snapshot()
 
         self.assertEqual(snapshot["received_total"], 2)
-        self.assertEqual(snapshot["dispatched_total"], 2)
+        self.assertEqual(snapshot["dispatched_total"], 3)
         self.assertEqual(snapshot["incremental_dispatched_total"], 1)
-        self.assertEqual(snapshot["final_dispatched_total"], 1)
+        self.assertEqual(snapshot["message_dispatched_total"], 1)
+        self.assertEqual(snapshot["completion_applied_total"], 1)
         self.assertEqual(snapshot["deduped_total"], 1)
-        self.assertEqual(snapshot["dedupe_hit_rate_pct"], 33.33)
-        self.assertEqual(snapshot["dispatch_latency_ms_avg"], 100.0)
+        self.assertEqual(snapshot["dedupe_hit_rate_pct"], 25.0)
+        self.assertEqual(snapshot["dispatch_latency_ms_avg"], 68.33)
         self.assertEqual(snapshot["dispatch_latency_ms_max"], 120)
         self.assertEqual(snapshot["dropped_total"], 2)
         self.assertEqual(snapshot["dropped_unknown_task_total"], 1)
@@ -704,7 +706,8 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             "dropped_disallowed_channel_total": 0,
             "dropped_missing_event_id_total": 0,
             "incremental_dispatched_total": 1,
-            "final_dispatched_total": 0,
+            "message_dispatched_total": 0,
+            "completion_applied_total": 0,
             "dispatch_latency_ms_avg": 120.5,
             "dispatch_latency_ms_max": 121,
         }
@@ -756,7 +759,8 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 "dropped_disallowed_channel_total": 1,
                 "dropped_missing_event_id_total": 0,
                 "incremental_dispatched_total": 4,
-                "final_dispatched_total": 2,
+                "message_dispatched_total": 2,
+                "completion_applied_total": 1,
                 "dispatch_latency_ms_avg": 99.5,
                 "dispatch_latency_ms_max": 140,
             }
@@ -772,6 +776,8 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         self.assertIn("chatting_message_handler_github_published_total 1", rendered)
         self.assertIn("chatting_message_handler_egress_loops_total 5", rendered)
         self.assertIn("chatting_message_handler_egress_received_total 7", rendered)
+        self.assertIn("chatting_message_handler_egress_message_dispatched_total 2", rendered)
+        self.assertIn("chatting_message_handler_egress_completion_applied_total 1", rendered)
         self.assertIn(
             "chatting_message_handler_egress_dedupe_hit_rate_pct 14.290000",
             rendered,

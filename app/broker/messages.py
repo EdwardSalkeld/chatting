@@ -193,7 +193,7 @@ class EgressQueueMessage:
     emitted_at: datetime
     event_id: str | None = None
     sequence: int | None = None
-    event_kind: str = "final"
+    event_kind: str = "message"
     schema_version: str = SCHEMA_VERSION
     message_type: str = _EGRESS_MESSAGE_TYPE_V2
 
@@ -209,11 +209,11 @@ class EgressQueueMessage:
             raise ValueError("emitted_at must be timezone-aware")
         _require_positive_int(self.event_count, field_name="event_count")
         _require_non_empty_string(self.event_id, field_name="event_id")
-        if self.event_kind not in {"final", "incremental"}:
-            raise ValueError("event_kind must be final or incremental")
+        if self.event_kind not in {"message", "completion", "incremental"}:
+            raise ValueError("event_kind must be message, completion, or incremental")
         if self.sequence is None:
             if self.event_kind != "incremental":
-                raise ValueError("sequence is required for final events")
+                raise ValueError("sequence is required for message and completion events")
             object.__setattr__(self, "event_index", 0)
             return
         _parse_sequence(self.sequence)
