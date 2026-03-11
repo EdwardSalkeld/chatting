@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from app.models import ActionProposal, ExecutionResult, OutboundMessage, RoutedTask
 
