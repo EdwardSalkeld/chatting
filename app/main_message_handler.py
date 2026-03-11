@@ -1250,10 +1250,6 @@ def _apply_completion_event(
         task_id=egress_message.task_id,
         event_id=egress_message.event_id,
     )
-    store.mark_dispatched_event(
-        run_id=egress_message.task_id,
-        event_index=egress_message.event_index,
-    )
     dispatch_latency_ms = int(
         (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
     )
