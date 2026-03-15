@@ -24,7 +24,7 @@ There are currently two BBMB queues:
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
-| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for ordered dispatch and immediate ad-hoc incrementals |
+| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for visible executor-published incrementals and internal completion |
 
 Important details:
 - Queue names are hardcoded today.
@@ -59,18 +59,17 @@ Examples:
 ### 2. Worker consumes the task
 
 `worker` picks one payload from `chatting.tasks.v1`, parses `chatting.task.v1`, routes it, executes
-it, runs policy, persists run and audit records, and always builds at least one terminal
-`event_kind="final"` egress message.
+it, runs policy, persists run and audit records, and always emits exactly one terminal
+`event_kind="completion"` egress message.
 
 Current worker behavior:
-- normal replies are emitted as `chatting.egress.v2`
-- incremental replies use `event_kind="incremental"` and increasing `sequence`
-- final replies use `event_kind="final"`
-- worker-side `app.main_reply` can also publish unsequenced `event_kind="incremental"` messages for
-  immediate operator-visible updates
-- if execution/policy yields no final reply content, the worker emits a terminal
-  `channel="drop", target="task"` final message as a completion marker
-- heartbeat tasks skip the normal executor path and emit a single log pong
+- the executor returns only completion metadata, actions, config updates, and errors
+- the executor must publish any visible reply itself with `app.main_reply`
+- terminal task closure uses `event_kind="completion"` and is internal-only
+- worker-side `app.main_reply` publishes unsequenced `event_kind="incremental"` messages for both
+  intermediate acknowledgements and final user-visible replies
+- the worker emits only the completion event for normal task processing
+- heartbeat tasks skip the normal executor path and emit a log pong followed by completion
 
 Before publishing each egress message, the worker writes it to the SQLite egress outbox. That lets
 the worker replay unpublished or unacked egress after restart.
@@ -85,16 +84,17 @@ outbox/BBMB path.
 - validates that the task exists in the ingress ledger
 - drops unknown-task egress
 - drops egress for tasks that are already completed
-- drops disallowed egress channels, except for the internal heartbeat log pong and terminal
-  `drop/task` completion markers
+- drops disallowed egress channels, except for the internal heartbeat log pong and internal
+  completion events
 - dispatches unsequenced incrementals immediately
 - stages sequenced events by `event_id` and `sequence`
 - dispatches staged events in order
 - records dispatched event ids so duplicate egress is ignored safely
-- marks the task complete after dispatching a final event, then rejects future egress for that task
+- applies completion after all earlier sequenced visible messages and then rejects future egress for
+  that task
 
 This is the strict boundary in split mode: the worker can suggest output, but only the
-message-handler can dispatch it to external systems.
+message-handler can dispatch it to external systems or close the task internally.
 
 ## Worked Example
 
@@ -130,7 +130,7 @@ An IMAP message from `alice@example.com` turns into a `chatting.task.v1` payload
 
 ### Example reply on `chatting.egress.v1`
 
-If the worker decides to send one final email reply, it publishes a `chatting.egress.v2` payload
+If the worker decides to send one email reply, it publishes a `chatting.egress.v2` payload
 like this:
 
 ```json
@@ -140,9 +140,9 @@ like this:
   "task_id": "task:email:101",
   "envelope_id": "email:101",
   "trace_id": "trace:email:101",
-  "event_id": "evt:task:email:101:0:final",
+  "event_id": "evt:task:email:101:0:message",
   "sequence": 0,
-  "event_kind": "final",
+  "event_kind": "message",
   "emitted_at": "2026-03-09T10:00:04Z",
   "message": {
     "channel": "email",
@@ -152,11 +152,33 @@ like this:
 }
 ```
 
+The worker then emits a second sequenced payload to close the task:
+
+```json
+{
+  "schema_version": "1.0",
+  "message_type": "chatting.egress.v2",
+  "task_id": "task:email:101",
+  "envelope_id": "email:101",
+  "trace_id": "trace:email:101",
+  "event_id": "evt:task:email:101:1:completion",
+  "sequence": 1,
+  "event_kind": "completion",
+  "emitted_at": "2026-03-09T10:00:04Z",
+  "message": {
+    "channel": "internal",
+    "target": "task",
+    "body": "Worker completed; task closure is internal-only."
+  }
+}
+```
+
 Then `message-handler`:
 - verifies `task:email:101` is in the ledger
 - verifies `email` is allowed by `allowed_egress_channels`
 - dispatches through the configured SMTP sender
-- records the event id as dispatched so replay or duplicate delivery is harmless
+- records both event ids as dispatched so replay or duplicate delivery is harmless
+- marks the task complete only when the completion event is applied
 
 ## Internal Heartbeat
 
@@ -165,8 +187,9 @@ Each message-handler loop also emits one internal heartbeat task by default.
 Flow:
 - `message-handler` creates an internal `TaskEnvelope`
 - it publishes that envelope to `chatting.tasks.v1`
-- `worker` turns it into a single log-based pong on `chatting.egress.v1`
+- `worker` turns it into a log-based pong on `chatting.egress.v1`, then emits completion
 - `message-handler` accepts and logs that pong even if `log` is not otherwise allowlisted
+- `message-handler` closes the heartbeat task when the completion event arrives
 
 This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBMB -> handler path.
 

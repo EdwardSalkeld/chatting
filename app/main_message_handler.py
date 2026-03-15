@@ -125,7 +125,8 @@ class EgressTelemetryRollup:
     dispatch_latency_ms_count: int = 0
     dispatch_latency_ms_max: int = 0
     incremental_dispatched_total: int = 0
-    final_dispatched_total: int = 0
+    message_dispatched_total: int = 0
+    completion_applied_total: int = 0
 
     def record_received(self) -> None:
         self.received_total += 1
@@ -148,8 +149,10 @@ class EgressTelemetryRollup:
         self.dispatched_total += 1
         if event_kind == "incremental":
             self.incremental_dispatched_total += 1
+        elif event_kind == "message":
+            self.message_dispatched_total += 1
         else:
-            self.final_dispatched_total += 1
+            self.completion_applied_total += 1
         self.dispatch_latency_ms_total += latency_ms
         self.dispatch_latency_ms_count += 1
         self.dispatch_latency_ms_max = max(self.dispatch_latency_ms_max, latency_ms)
@@ -175,7 +178,8 @@ class EgressTelemetryRollup:
             "dropped_disallowed_channel_total": self.dropped_disallowed_channel_total,
             "dropped_missing_event_id_total": self.dropped_missing_event_id_total,
             "incremental_dispatched_total": self.incremental_dispatched_total,
-            "final_dispatched_total": self.final_dispatched_total,
+            "message_dispatched_total": self.message_dispatched_total,
+            "completion_applied_total": self.completion_applied_total,
             "dispatch_latency_ms_avg": avg_dispatch_latency_ms,
             "dispatch_latency_ms_max": self.dispatch_latency_ms_max,
         }
@@ -395,7 +399,7 @@ def _render_prometheus_metrics(snapshot: Mapping[str, float | int]) -> str:
         (
             "chatting_message_handler_egress_dispatched_total",
             "counter",
-            "Egress messages dispatched to downstream transports.",
+            "Egress events applied by the message-handler.",
             "dispatched_total",
         ),
         (
@@ -447,10 +451,16 @@ def _render_prometheus_metrics(snapshot: Mapping[str, float | int]) -> str:
             "incremental_dispatched_total",
         ),
         (
-            "chatting_message_handler_egress_final_dispatched_total",
+            "chatting_message_handler_egress_message_dispatched_total",
             "counter",
-            "Final egress events dispatched in order.",
-            "final_dispatched_total",
+            "Task-scoped visible egress messages dispatched in order.",
+            "message_dispatched_total",
+        ),
+        (
+            "chatting_message_handler_egress_completion_applied_total",
+            "counter",
+            "Internal completion events applied in order.",
+            "completion_applied_total",
         ),
         (
             "chatting_message_handler_egress_dispatch_latency_ms_avg",
@@ -992,12 +1002,8 @@ def _build_github_sender() -> GitHubIssueCommentSender | None:
     return GitHubIssueCommentSender()
 
 
-def _is_terminal_drop_message(egress_message: EgressQueueMessage) -> bool:
-    return (
-        egress_message.event_kind == "final"
-        and egress_message.message.channel == "drop"
-        and egress_message.message.target == "task"
-    )
+def _is_completion_event(egress_message: EgressQueueMessage) -> bool:
+    return egress_message.event_kind == "completion"
 
 
 def _prepare_ingress_envelope(
@@ -1084,11 +1090,11 @@ def _handle_egress_message(
         and egress_message.message.channel == "log"
         and egress_message.message.target == INTERNAL_HEARTBEAT_TARGET
     )
-    terminal_drop_message = _is_terminal_drop_message(egress_message)
+    completion_event = _is_completion_event(egress_message)
     if (
         egress_message.message.channel not in allowed_egress_channels
         and not heartbeat_log_message
-        and not terminal_drop_message
+        and not completion_event
     ):
         if telemetry is not None:
             telemetry.record_dropped(reason="disallowed_channel")
@@ -1233,6 +1239,38 @@ def _dispatch_unsequenced_egress(
     )
 
 
+def _apply_completion_event(
+    *,
+    egress_message: EgressQueueMessage,
+    ledger: TaskLedgerStore,
+    store: SQLiteStateStore,
+    telemetry: EgressTelemetryRollup | None,
+) -> None:
+    store.mark_dispatched_event_id(
+        task_id=egress_message.task_id,
+        event_id=egress_message.event_id,
+    )
+    dispatch_latency_ms = int(
+        (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
+    )
+    if telemetry is not None:
+        telemetry.record_dispatched(
+            event_kind=egress_message.event_kind,
+            latency_ms=max(dispatch_latency_ms, 0),
+        )
+    ledger.mark_task_completed(
+        task_id=egress_message.task_id,
+        envelope_id=egress_message.envelope_id,
+        trace_id=egress_message.trace_id,
+    )
+    LOGGER.info(
+        "egress_completion_applied task_id=%s event_id=%s sequence=%s",
+        egress_message.task_id,
+        egress_message.event_id,
+        egress_message.sequence,
+    )
+
+
 def _flush_task_egress_in_sequence(
     *,
     task_id: str,
@@ -1262,6 +1300,20 @@ def _flush_task_egress_in_sequence(
                 sequence=staged.sequence,
             )
             continue
+
+        if egress_message.event_kind == "completion":
+            ledger.mark_staged_event_dispatched(
+                task_id=task_id,
+                event_id=staged.event_id,
+                sequence=staged.sequence,
+            )
+            _apply_completion_event(
+                egress_message=egress_message,
+                ledger=ledger,
+                store=store,
+                telemetry=telemetry,
+            )
+            return
 
         decision = _build_policy_decision_for_message(egress_message)
         apply_result = applier.apply(
@@ -1323,13 +1375,6 @@ def _flush_task_egress_in_sequence(
             egress_message.event_kind,
             egress_message.message.channel,
         )
-        if egress_message.event_kind == "final":
-            ledger.mark_task_completed(
-                task_id=task_id,
-                envelope_id=egress_message.envelope_id,
-                trace_id=egress_message.trace_id,
-            )
-            return
 
 
 def _run_ingress_loop(
@@ -1417,7 +1462,8 @@ def _run_ingress_loop(
                 "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
                 "egress_dedupe_hit_rate_pct=%s egress_dropped_total=%s "
                 "egress_dispatch_latency_ms_avg=%s egress_dispatch_latency_ms_max=%s "
-                "egress_incremental_dispatched_total=%s egress_final_dispatched_total=%s"
+                "egress_incremental_dispatched_total=%s egress_message_dispatched_total=%s "
+                "egress_completion_applied_total=%s"
             ),
             loop_count,
             ingress_published,
@@ -1438,7 +1484,8 @@ def _run_ingress_loop(
             egress_snapshot["dispatch_latency_ms_avg"],
             egress_snapshot["dispatch_latency_ms_max"],
             egress_snapshot["incremental_dispatched_total"],
-            egress_snapshot["final_dispatched_total"],
+            egress_snapshot["message_dispatched_total"],
+            egress_snapshot["completion_applied_total"],
         )
 
         if max_loops and loop_count >= max_loops:

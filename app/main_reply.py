@@ -1,4 +1,4 @@
-"""Worker-side CLI to publish immediate incremental egress messages."""
+"""Worker-side CLI to publish visible egress messages."""
 
 from __future__ import annotations
 
@@ -16,7 +16,12 @@ from app.models import OutboundMessage
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Publish one immediate incremental reply message.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Publish one visible egress message. "
+            "Executors should use this for user-visible acknowledgements and final replies."
+        )
+    )
     parser.add_argument("task_id", help="Task identifier (for example: task:email:53).")
     parser.add_argument("--message", help="Reply body text.")
     parser.add_argument("--channel", required=True, help="Outbound channel (for example: email, telegram, github).")

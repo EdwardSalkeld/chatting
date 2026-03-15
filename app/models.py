@@ -309,7 +309,6 @@ class ConfigUpdate:
 class ExecutionResult:
     """Structured output contract from executor."""
 
-    messages: list[OutboundMessage]
     actions: list[ActionProposal]
     config_updates: list[ConfigUpdate]
     requires_human_review: bool
@@ -318,11 +317,6 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
-        _validate_typed_list(
-            self.messages,
-            field_name="messages",
-            item_type=OutboundMessage,
-        )
         _validate_typed_list(
             self.actions,
             field_name="actions",
@@ -338,7 +332,6 @@ class ExecutionResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
-            "messages": [message.to_dict() for message in self.messages],
             "actions": [action.to_dict() for action in self.actions],
             "config_updates": [update.to_dict() for update in self.config_updates],
             "requires_human_review": self.requires_human_review,

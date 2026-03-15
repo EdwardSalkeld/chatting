@@ -55,7 +55,7 @@ class EgressQueueMessageTests(unittest.TestCase):
             emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
             event_id="evt:task:email:1:0",
             sequence=0,
-            event_kind="final",
+            event_kind="message",
             message_type="chatting.egress.v2",
         )
 
@@ -66,7 +66,7 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.event_count, 1)
         self.assertEqual(parsed.event_id, "evt:task:email:1:0")
         self.assertEqual(parsed.sequence, 0)
-        self.assertEqual(parsed.event_kind, "final")
+        self.assertEqual(parsed.event_kind, "message")
         self.assertEqual(parsed.message.target, "alice@example.com")
         self.assertEqual(parsed.message.metadata, {"thread_id": "abc"})
 
@@ -105,7 +105,7 @@ class EgressQueueMessageTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v1",
             )
 
@@ -120,7 +120,7 @@ class EgressQueueMessageTests(unittest.TestCase):
                 message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             )
 
@@ -145,7 +145,7 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertIsNone(parsed.sequence)
         self.assertEqual(parsed.event_kind, "incremental")
 
-    def test_egress_v2_final_message_requires_sequence(self) -> None:
+    def test_egress_v2_message_requires_sequence(self) -> None:
         with self.assertRaises(ValueError):
             EgressQueueMessage(
                 task_id="task:email:2",
@@ -155,9 +155,25 @@ class EgressQueueMessageTests(unittest.TestCase):
                 event_count=1,
                 message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
-                event_id="evt:task:email:2:final",
+                event_id="evt:task:email:2:message",
                 sequence=None,
-                event_kind="final",
+                event_kind="message",
+                message_type="chatting.egress.v2",
+            )
+
+    def test_egress_v2_completion_requires_sequence(self) -> None:
+        with self.assertRaises(ValueError):
+            EgressQueueMessage(
+                task_id="task:email:2",
+                envelope_id="email:2",
+                trace_id="trace:email:2",
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="internal", target="task", body="done"),
+                emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:2:completion",
+                sequence=None,
+                event_kind="completion",
                 message_type="chatting.egress.v2",
             )
 

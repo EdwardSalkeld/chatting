@@ -247,7 +247,6 @@ def _process_envelope(
         error_stage = "executor"
         try:
             execution_result = executor_impl.execute(task)
-            execution_message_count = len(execution_result.messages)
             execution_action_count = len(execution_result.actions)
             execution_config_update_count = len(execution_result.config_updates)
             execution_error_count = len(execution_result.errors)
@@ -264,9 +263,7 @@ def _process_envelope(
                     config_path=update.path,
                     config_value=update.value,
                 )
-            dispatched_event_indices = store.list_dispatched_event_indices(run_id=base_run_id)
-            pending_message_start_index = _first_undelivered_event_index(dispatched_event_indices)
-            pending_messages = decision.approved_messages[pending_message_start_index:]
+            pending_messages: list[OutboundMessage] = []
             apply_decision = PolicyDecision(
                 approved_actions=decision.approved_actions,
                 blocked_actions=decision.blocked_actions,
@@ -283,7 +280,7 @@ def _process_envelope(
                     original_messages=pending_messages,
                     dispatched_messages=dispatch_error.dispatched_messages,
                     envelope=envelope,
-                    start_index=pending_message_start_index,
+                    start_index=0,
                 ):
                     store.mark_dispatched_event(run_id=base_run_id, event_index=event_index)
                 raise
@@ -291,7 +288,7 @@ def _process_envelope(
                 original_messages=pending_messages,
                 dispatched_messages=apply_result.dispatched_messages,
                 envelope=envelope,
-                start_index=pending_message_start_index,
+                start_index=0,
             ):
                 store.mark_dispatched_event(run_id=base_run_id, event_index=event_index)
             apply_result_payload = apply_result.to_dict()
@@ -311,7 +308,6 @@ def _process_envelope(
             reason_codes = decision.reason_codes
             approved_action_count = len(decision.approved_actions)
             blocked_action_count = len(decision.blocked_actions)
-            approved_message_count = len(decision.approved_messages)
             applied_action_count = len(apply_result.applied_actions)
             skipped_action_count = len(apply_result.skipped_actions)
             dispatched_message_count = len(

@@ -96,7 +96,7 @@ class SplitModeE2ETests(unittest.TestCase):
 
             expected_envelope_id = "cron:ci-split-smoke:2026-01-01T00:00:00+00:00"
             expected_task_id = f"task:{expected_envelope_id}"
-            expected_event_id = f"evt:{expected_task_id}:0:final"
+            expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
 
             try:
                 server_proc = subprocess.Popen(
@@ -175,10 +175,7 @@ class SplitModeE2ETests(unittest.TestCase):
             )
 
             handler_store = SQLiteStateStore(str(handler_db_path))
-            self.assertEqual(
-                handler_store.list_dispatched_event_indices(run_id=expected_task_id),
-                [0],
-            )
+            self.assertEqual(handler_store.list_dispatched_event_indices(run_id=expected_task_id), [])
             self.assertTrue(
                 handler_store.has_dispatched_event_id(
                     task_id=expected_task_id,
