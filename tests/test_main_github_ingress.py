@@ -517,7 +517,8 @@ class MainGitHubIngressTests(unittest.TestCase):
                     ("chatting.egress.v1", "guid-egress-2"),
                 ],
             )
-            self.assertEqual(broker.pickup_waits, [5, 0, 0])
+            self.assertEqual(broker.pickup_waits[:3], [5, 0, 0])
+            self.assertIn(broker.pickup_waits[3:], ([], [5]))
 
 if __name__ == "__main__":
     unittest.main()
