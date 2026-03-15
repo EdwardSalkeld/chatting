@@ -42,6 +42,7 @@ from app.main import (
     _build_live_connectors,
     _build_telegram_sender,
     _enrich_telegram_envelope_with_memory,
+    _message_content_for_telegram_memory,
     _resolve_telegram_attachment_dir,
     _should_store_telegram_memory,
 )
@@ -52,7 +53,7 @@ from app.message_handler_runtime import (
     TelegramAttachmentStore,
     cleanup_telegram_attachments,
 )
-from app.models import ConfigUpdateDecision, PolicyDecision, TaskEnvelope
+from app.models import ConfigUpdateDecision, OutboundMessage, PolicyDecision, TaskEnvelope
 from app.state import SQLiteStateStore
 
 MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR = "CHATTING_MESSAGE_HANDLER_CONFIG_PATH"
@@ -1285,6 +1286,8 @@ def _handle_egress_message(
             egress_message=egress_message,
             ledger_record=ledger_record,
             store=store,
+            attachment_store=attachment_store,
+            attachment_cleanup_settings=attachment_cleanup_settings,
             applier=applier,
             telemetry=telemetry,
         )
@@ -1351,6 +1354,8 @@ def _dispatch_unsequenced_egress(
     egress_message: EgressQueueMessage,
     ledger_record: TaskLedgerRecord,
     store: SQLiteStateStore,
+    attachment_store: TelegramAttachmentStore | None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     applier: IntegratedApplier,
     telemetry: EgressTelemetryRollup | None,
 ) -> None:
@@ -1358,6 +1363,12 @@ def _dispatch_unsequenced_egress(
     apply_result = applier.apply(
         decision,
         envelope=ledger_record.task_message.envelope,
+    )
+    _record_outbound_telegram_attachments(
+        egress_message=egress_message,
+        attachment_store=attachment_store,
+        attachment_cleanup_settings=attachment_cleanup_settings,
+        dispatched_messages=apply_result.dispatched_messages,
     )
     store.mark_dispatched_event_id(
         task_id=egress_message.task_id,
@@ -1443,6 +1454,38 @@ def _apply_completion_event(
     )
 
 
+def _record_outbound_telegram_attachments(
+    *,
+    egress_message: EgressQueueMessage,
+    attachment_store: TelegramAttachmentStore | None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
+    dispatched_messages: list[OutboundMessage],
+) -> None:
+    if attachment_store is None or attachment_cleanup_settings is None:
+        return
+
+    tracked_count = 0
+    for dispatched_message in dispatched_messages:
+        attachment = getattr(dispatched_message, "attachment", None)
+        channel = getattr(dispatched_message, "channel", None)
+        if channel != "telegram" or attachment is None:
+            continue
+        if attachment_store.record_outbound_attachment(
+            task_id=egress_message.task_id,
+            envelope_id=egress_message.envelope_id,
+            attachment=attachment,
+            attachment_root_dir=attachment_cleanup_settings.attachment_root_dir,
+        ):
+            tracked_count += 1
+
+    if tracked_count:
+        LOGGER.info(
+            "telegram_attachment_tracked task_id=%s tracked_attachments=%s source=egress",
+            egress_message.task_id,
+            tracked_count,
+        )
+
+
 def _flush_task_egress_in_sequence(
     *,
     task_id: str,
@@ -1496,6 +1539,12 @@ def _flush_task_egress_in_sequence(
             decision,
             envelope=ledger_record.task_message.envelope,
         )
+        _record_outbound_telegram_attachments(
+            egress_message=egress_message,
+            attachment_store=attachment_store,
+            attachment_cleanup_settings=attachment_cleanup_settings,
+            dispatched_messages=apply_result.dispatched_messages,
+        )
         store.mark_dispatched_event_id(
             task_id=task_id,
             event_id=staged.event_id,
@@ -1540,7 +1589,7 @@ def _flush_task_egress_in_sequence(
                     channel="telegram",
                     target=message.target,
                     role="assistant",
-                    content=message.body,
+                    content=_message_content_for_telegram_memory(message),
                     run_id=task_id,
                 )
         LOGGER.info(

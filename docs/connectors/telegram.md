@@ -43,3 +43,21 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
   terminal tasks wait for `telegram_attachment_cleanup_grace_seconds`, while orphaned/dead-lettered attachments are still reclaimed once they exceed `telegram_attachment_max_age_seconds`.
 - Cleanup runs in the message-handler loop and logs tracked, eligible, deleted, missing, and failed attachment cleanup events.
 - In production, point `telegram_attachment_dir` at durable storage when workers need access beyond ingress, but expect the handler to reclaim old files automatically unless you increase the retention settings.
+
+## Outbound egress
+
+- Telegram egress supports:
+  - plain text replies through `sendMessage`
+  - image attachments through `sendPhoto`
+  - PDFs and other files through `sendDocument`
+- Outbound attachment messages use the normal `OutboundMessage` contract with:
+  - optional `body` as the text message or attachment caption
+  - optional `attachment` object containing a local `file://` URI and optional `name`
+- Attachment selection is inferred from the local file type:
+  - image MIME types go to `sendPhoto`
+  - everything else goes to `sendDocument`
+- Attachment constraints:
+  - only local absolute `file://` paths are supported today
+  - the referenced file must already exist on disk when dispatch runs
+  - upload/API failures surface deterministic Telegram reason codes such as `telegram_attachment_missing` and `telegram_attachment_send_failed`
+- Outbound attachments under `telegram_attachment_dir` are tracked in the same cleanup ledger as inbound downloads and become cleanup-eligible after task completion.

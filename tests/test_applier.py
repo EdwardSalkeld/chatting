@@ -15,6 +15,7 @@ from app.applier import (
 )
 from app.models import (
     ActionProposal,
+    AttachmentRef,
     ConfigUpdateDecision,
     OutboundMessage,
     PolicyDecision,
@@ -192,7 +193,10 @@ class IntegratedApplierTests(unittest.TestCase):
 
             result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
 
-            self.assertEqual(sender.sent, [("12345", "Done via telegram.")])
+            self.assertEqual(
+                sender.sent,
+                [("12345", OutboundMessage(channel="telegram", target="12345", body="Done via telegram."))],
+            )
             self.assertEqual(
                 [message.channel for message in result.dispatched_messages],
                 ["telegram"],
@@ -232,6 +236,108 @@ class IntegratedApplierTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(result.reason_codes, [])
+
+    def test_apply_dispatches_telegram_photo_attachment(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingTelegramSender(sent=[])
+            image_path = Path(tmpdir) / "menu.png"
+            image_path.write_bytes(b"png")
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        body="caption",
+                        attachment=AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(len(sender.sent), 1)
+            self.assertEqual(sender.sent[0][0], "12345")
+            self.assertEqual(sender.sent[0][1].attachment, AttachmentRef(uri=image_path.as_uri(), name="menu.png"))
+            self.assertEqual(result.dispatched_messages[0].attachment, AttachmentRef(uri=image_path.as_uri(), name="menu.png"))
+
+    def test_apply_dispatches_telegram_document_attachment(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = _RecordingTelegramSender(sent=[])
+            pdf_path = Path(tmpdir) / "menu.pdf"
+            pdf_path.write_bytes(b"%PDF")
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(len(sender.sent), 1)
+            self.assertEqual(sender.sent[0][1].attachment, AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"))
+            self.assertIsNone(result.dispatched_messages[0].body)
+
+    def test_apply_raises_attachment_dispatch_error_for_missing_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            sender = TelegramMessageSender(bot_token="token", http_post_multipart=lambda *_args: {"ok": True})
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        attachment=AttachmentRef(uri="file:///does/not/exist.pdf", name="missing.pdf"),
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            with self.assertRaises(MessageDispatchError) as context:
+                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(context.exception.reason_code, "telegram_attachment_missing")
+
+    def test_apply_raises_attachment_dispatch_error_on_telegram_api_failure(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            pdf_path = Path(tmpdir) / "menu.pdf"
+            pdf_path.write_bytes(b"%PDF")
+            sender = TelegramMessageSender(
+                bot_token="token",
+                http_post_multipart=lambda *_args: {"ok": False},
+            )
+            decision = PolicyDecision(
+                approved_actions=[],
+                blocked_actions=[],
+                approved_messages=[
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        body="menu",
+                        attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                    )
+                ],
+                config_updates=ConfigUpdateDecision(),
+                reason_codes=[],
+            )
+
+            with self.assertRaises(MessageDispatchError) as context:
+                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+
+            self.assertEqual(context.exception.reason_code, "telegram_attachment_send_failed")
 
     def test_apply_skips_write_outside_base_dir(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -411,7 +517,10 @@ class IntegratedApplierTests(unittest.TestCase):
                 envelope=envelope,
             )
 
-            self.assertEqual(sender.sent, [("8605042448", "Answer from model.")])
+            self.assertEqual(
+                sender.sent,
+                [("8605042448", OutboundMessage(channel="final", target="user", body="Answer from model."))],
+            )
             self.assertEqual(
                 [message.channel for message in result.dispatched_messages],
                 ["telegram"],
@@ -486,7 +595,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
             http_post_json=fake_http_post_json,
         )
 
-        sender.send("12345", "hello")
+        sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
 
         self.assertEqual(len(seen_calls), 1)
         call_url, call_payload, call_timeout = seen_calls[0]
@@ -518,7 +627,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
             http_post_json=fake_http_post_json,
         )
 
-        sender.send("12345", "hello")
+        sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
 
         self.assertEqual(len(seen_calls), 2)
         self.assertEqual(
@@ -537,7 +646,107 @@ class TelegramMessageSenderTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "telegram_send_failed"):
-            sender.send("12345", "hello")
+            sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
+
+    def test_send_photo_attachment_posts_multipart_with_caption(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], str, Path, float]] = []
+
+        def fake_http_post_multipart(
+            url: str,
+            payload: dict[str, object],
+            field_name: str,
+            file_path: Path,
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, field_name, file_path, timeout))
+            return {"ok": True, "result": {"message_id": 3}}
+
+        with TemporaryDirectory() as tmpdir:
+            image_path = Path(tmpdir) / "menu.jpg"
+            image_path.write_bytes(b"jpg")
+            sender = TelegramMessageSender(
+                bot_token="token",
+                http_post_multipart=fake_http_post_multipart,
+            )
+
+            sender.send(
+                "12345",
+                OutboundMessage(
+                    channel="telegram",
+                    target="12345",
+                    body="fresh menu",
+                    attachment=AttachmentRef(uri=image_path.as_uri(), name="menu.jpg"),
+                ),
+            )
+
+        self.assertEqual(len(seen_calls), 1)
+        call_url, call_payload, field_name, file_path, call_timeout = seen_calls[0]
+        self.assertEqual(call_url, "https://api.telegram.org/bottoken/sendPhoto")
+        self.assertEqual(
+            call_payload,
+            {"chat_id": "12345", "caption": "fresh menu", "parse_mode": "Markdown"},
+        )
+        self.assertEqual(field_name, "photo")
+        self.assertEqual(file_path.name, "menu.jpg")
+        self.assertEqual(call_timeout, 10.0)
+
+    def test_send_document_attachment_retries_without_parse_mode(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], str, Path, float]] = []
+
+        def fake_http_post_multipart(
+            url: str,
+            payload: dict[str, object],
+            field_name: str,
+            file_path: Path,
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, field_name, file_path, timeout))
+            if len(seen_calls) == 1:
+                return {"ok": False, "description": "Bad Request: can't parse entities"}
+            return {"ok": True, "result": {"message_id": 4}}
+
+        with TemporaryDirectory() as tmpdir:
+            pdf_path = Path(tmpdir) / "menu.pdf"
+            pdf_path.write_bytes(b"%PDF")
+            sender = TelegramMessageSender(
+                bot_token="token",
+                http_post_multipart=fake_http_post_multipart,
+            )
+
+            sender.send(
+                "12345",
+                OutboundMessage(
+                    channel="telegram",
+                    target="12345",
+                    body="**menu**",
+                    attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                ),
+            )
+
+        self.assertEqual(len(seen_calls), 2)
+        self.assertEqual(seen_calls[0][0], "https://api.telegram.org/bottoken/sendDocument")
+        self.assertEqual(seen_calls[0][1]["parse_mode"], "Markdown")
+        self.assertNotIn("parse_mode", seen_calls[1][1])
+        self.assertEqual(seen_calls[0][2], "document")
+
+    def test_send_attachment_raises_when_telegram_response_not_ok(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            pdf_path = Path(tmpdir) / "menu.pdf"
+            pdf_path.write_bytes(b"%PDF")
+            sender = TelegramMessageSender(
+                bot_token="token",
+                http_post_multipart=lambda *_args: {"ok": False},
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "telegram_attachment_send_failed"):
+                sender.send(
+                    "12345",
+                    OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                    ),
+                )
 
     def test_react_posts_set_message_reaction_request(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
@@ -660,11 +869,11 @@ class _FakeSmtpClient:
 
 @dataclass
 class _RecordingTelegramSender:
-    sent: list[tuple[str, str]]
+    sent: list[tuple[str, OutboundMessage]]
     reactions: list[tuple[str, int, str]] = field(default_factory=list)
 
-    def send(self, target: str, body: str) -> None:
-        self.sent.append((target, body))
+    def send(self, target: str, message: OutboundMessage) -> None:
+        self.sent.append((target, message))
 
     def react(self, target: str, message_id: int, emoji: str) -> None:
         self.reactions.append((target, message_id, emoji))
@@ -674,7 +883,7 @@ class _FailingTelegramSender:
     def __init__(self) -> None:
         self._count = 0
 
-    def send(self, target: str, body: str) -> None:
+    def send(self, target: str, message: OutboundMessage) -> None:
         self._count += 1
         if self._count == 2:
             raise RuntimeError("simulated dispatch failure")
@@ -692,7 +901,7 @@ class _FailingGitHubSender:
     def __init__(self) -> None:
         self._count = 0
 
-    def send(self, target: str, body: str) -> None:
+    def send(self, target: str, message: OutboundMessage) -> None:
         self._count += 1
         if self._count == 2:
             raise RuntimeError("simulated dispatch failure")

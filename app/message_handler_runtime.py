@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
+from app.models import AttachmentRef
 
 LOGGER = logging.getLogger(__name__)
 
@@ -431,6 +432,60 @@ class TelegramAttachmentStore:
                 )
             connection.commit()
         return len(tracked_paths)
+
+    def record_outbound_attachment(
+        self,
+        *,
+        task_id: str,
+        envelope_id: str,
+        attachment: AttachmentRef,
+        attachment_root_dir: str,
+    ) -> bool:
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not envelope_id:
+            raise ValueError("envelope_id is required")
+
+        root_dir = Path(attachment_root_dir).resolve()
+        tracked_path = _tracked_attachment_path(
+            attachment_uri=attachment.uri,
+            attachment_root_dir=root_dir,
+        )
+        if tracked_path is None:
+            return False
+
+        created_at = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO telegram_attachment_ledger (
+                    attachment_path,
+                    attachment_uri,
+                    task_id,
+                    envelope_id,
+                    created_at,
+                    eligible_after,
+                    deleted_at,
+                    cleanup_attempts,
+                    last_cleanup_error
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(tracked_path),
+                    attachment.uri,
+                    task_id,
+                    envelope_id,
+                    created_at,
+                    None,
+                    None,
+                    0,
+                    None,
+                ),
+            )
+            inserted = connection.total_changes > 0
+            connection.commit()
+        return inserted
 
     def mark_task_attachments_eligible(
         self,

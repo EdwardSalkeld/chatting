@@ -164,7 +164,6 @@ def _task_payload(task: RoutedTask, *, current_time: datetime) -> dict[str, Any]
         },
     }
 
-
 def _parse_actions(value: Any) -> list[ActionProposal]:
     if not isinstance(value, list):
         raise ValueError("actions_must_be_list")
@@ -229,6 +228,16 @@ def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
     if key not in payload:
         raise ValueError(f"{context}_{key}_required")
     value = payload[key]
+    if not isinstance(value, str):
+        raise ValueError(f"{context}_{key}_must_be_string")
+    if _is_blank(value):
+        raise ValueError(f"{context}_{key}_required")
+    return value
+
+
+def _optional_required_str(value: Any, key: str, context: str) -> str | None:
+    if value is None:
+        return None
     if not isinstance(value, str):
         raise ValueError(f"{context}_{key}_must_be_string")
     if _is_blank(value):

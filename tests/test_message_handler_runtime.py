@@ -318,6 +318,122 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertIsNotNone(records[0].eligible_after)
             self.assertTrue(attachment_path.exists())
 
+    def test_handle_egress_message_tracks_outbound_attachment_for_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            attachment_dir = Path(tmpdir) / "attachments"
+            attachment_dir.mkdir()
+            attachment_path = attachment_dir / "menu.pdf"
+            attachment_path.write_bytes(b"%PDF")
+
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            attachment_store = TelegramAttachmentStore(db_path)
+            task_message = self._build_telegram_envelope(
+                envelope_id="telegram:outbound-1",
+                content="send the menu",
+            )
+            queued_task = TaskQueueMessage.from_envelope(
+                task_message,
+                trace_id="trace:telegram:outbound-1",
+            )
+            ledger.record_task(queued_task)
+            acked: list[str] = []
+
+            @dataclass
+            class _AttachmentApplier:
+                def apply(self, decision, envelope=None):
+                    del decision, envelope
+                    dispatched = OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        body="menu attached",
+                        attachment=AttachmentRef(
+                            uri=attachment_path.resolve().as_uri(),
+                            name="menu.pdf",
+                        ),
+                    )
+                    return ApplyResult(
+                        applied_actions=[],
+                        skipped_actions=[],
+                        dispatched_messages=[dispatched],
+                        reason_codes=[],
+                    )
+
+            payload = EgressQueueMessage(
+                task_id=queued_task.task_id,
+                envelope_id=queued_task.envelope.id,
+                trace_id=queued_task.trace_id,
+                event_index=0,
+                event_count=2,
+                message=OutboundMessage(channel="telegram", target="12345", body="menu attached"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:outbound-1:0",
+                sequence=0,
+                event_kind="message",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-telegram-outbound",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                attachment_store=attachment_store,
+                attachment_cleanup_settings=TelegramAttachmentCleanupSettings(
+                    attachment_root_dir=str(attachment_dir),
+                    cleanup_grace_seconds=3600,
+                    max_age_seconds=86400,
+                ),
+                allowed_egress_channels={"telegram"},
+                applier=_AttachmentApplier(),
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-telegram-outbound"])
+            records = attachment_store.list_records()
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].attachment_path, str(attachment_path.resolve()))
+            self.assertIsNone(records[0].eligible_after)
+
+            completion_payload = EgressQueueMessage(
+                task_id=queued_task.task_id,
+                envelope_id=queued_task.envelope.id,
+                trace_id=queued_task.trace_id,
+                event_index=1,
+                event_count=2,
+                message=OutboundMessage(channel="internal", target="task", body="done"),
+                emitted_at=datetime(2026, 3, 6, 12, 2, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:outbound-1:1",
+                sequence=1,
+                event_kind="completion",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-telegram-outbound-completion",
+                picked_payload=completion_payload,
+                ledger=ledger,
+                store=store,
+                attachment_store=attachment_store,
+                attachment_cleanup_settings=TelegramAttachmentCleanupSettings(
+                    attachment_root_dir=str(attachment_dir),
+                    cleanup_grace_seconds=3600,
+                    max_age_seconds=86400,
+                ),
+                allowed_egress_channels={"telegram"},
+                applier=_AttachmentApplier(),
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(
+                acked,
+                ["guid-telegram-outbound", "guid-telegram-outbound-completion"],
+            )
+            completion_records = attachment_store.list_records()
+            self.assertEqual(len(completion_records), 1)
+            self.assertIsNotNone(completion_records[0].eligible_after)
+
     def test_cleanup_telegram_attachments_deletes_only_after_completion_grace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")
@@ -809,6 +925,63 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(applier.apply_calls, 1)
             turns = store.list_recent_conversation_turns(channel="telegram", target="12345", limit=5)
             self.assertEqual(turns, [("assistant", "reply-1")])
+
+    def test_handle_egress_message_persists_attachment_only_dispatch_as_assistant_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = TaskQueueMessage.from_envelope(
+                self._build_telegram_envelope(envelope_id="telegram:201", content="hello"),
+                trace_id="trace:telegram:201",
+            )
+            ledger.record_task(task_message)
+
+            @dataclass
+            class _TelegramApplier:
+                def apply(self, decision, envelope=None):
+                    del decision, envelope
+                    return ApplyResult(
+                        applied_actions=[],
+                        skipped_actions=[],
+                        dispatched_messages=[
+                            OutboundMessage(
+                                channel="telegram",
+                                target="12345",
+                                attachment=AttachmentRef(
+                                    uri="file:///tmp/menu.pdf",
+                                    name="menu.pdf",
+                                ),
+                            )
+                        ],
+                        reason_codes=[],
+                    )
+
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="telegram", target="12345", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:201:0",
+                sequence=0,
+                event_kind="message",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-7",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"telegram"},
+                applier=_TelegramApplier(),
+                ack_callback=lambda _guid: None,
+            )
+
+            turns = store.list_recent_conversation_turns(channel="telegram", target="12345", limit=5)
+            self.assertEqual(turns, [("assistant", "[Attachment sent: menu.pdf]")])
 
     def test_egress_telemetry_rollup_reports_dedupe_rate_and_latency(self) -> None:
         telemetry = EgressTelemetryRollup()
