@@ -9,7 +9,7 @@ Drain queued webhook events into canonical webhook envelopes.
 ## Current integration state
 
 - Connector module is implemented and unit-tested.
-- It is not wired into `app.main` CLI/config yet.
+- It is not wired into the split-mode runtime CLI/config yet.
 - Intended for private local integrations where events are pushed in-process.
 
 ## Input model

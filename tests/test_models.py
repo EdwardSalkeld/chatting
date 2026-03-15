@@ -76,9 +76,11 @@ class RoutedTaskTests(unittest.TestCase):
             priority="normal",
             execution_constraints=ExecutionConstraints(timeout_seconds=180, max_tokens=12000),
             policy_profile="default",
+            event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
             source="email",
             actor="alice@example.com",
             content="Please summarize and reply",
+            attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         )
 
@@ -95,9 +97,11 @@ class RoutedTaskTests(unittest.TestCase):
                     "max_tokens": 12000,
                 },
                 "policy_profile": "default",
+                "event_time": "2026-02-27T16:00:00Z",
                 "source": "email",
                 "actor": "alice@example.com",
                 "content": "Please summarize and reply",
+                "attachments": [{"uri": "file:///tmp/photo.jpg", "name": "photo.jpg"}],
                 "reply_channel": {"type": "email", "target": "alice@example.com"},
             },
         )
@@ -113,7 +117,6 @@ class RoutedTaskTests(unittest.TestCase):
 class ExecutionResultTests(unittest.TestCase):
     def test_execution_result_serializes_expected_shape(self) -> None:
         result = ExecutionResult(
-            messages=[OutboundMessage(channel="email", target="alice@example.com", body="Done.")],
             actions=[ActionProposal(type="write_file", path="docs/notes.md", content="hello")],
             config_updates=[ConfigUpdate(path="routing.default_timeout", value=240)],
             requires_human_review=False,
@@ -124,9 +127,6 @@ class ExecutionResultTests(unittest.TestCase):
             result.to_dict(),
             {
                 "schema_version": "1.0",
-                "messages": [
-                    {"channel": "email", "target": "alice@example.com", "body": "Done."}
-                ],
                 "actions": [
                     {"type": "write_file", "path": "docs/notes.md", "content": "hello"}
                 ],
@@ -160,6 +160,23 @@ class ExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "body or attachment is required"):
             OutboundMessage(channel="telegram", target="12345", body=None)
 
+    def test_outbound_message_serializes_metadata_when_present(self) -> None:
+        message = OutboundMessage(
+            channel="telegram_reaction",
+            target="8605042448",
+            body="👍",
+            metadata={"message_id": 12},
+        )
+
+        self.assertEqual(
+            message.to_dict(),
+            {
+                "channel": "telegram_reaction",
+                "target": "8605042448",
+                "body": "👍",
+                "metadata": {"message_id": 12},
+            },
+        )
 
 class PolicyDecisionTests(unittest.TestCase):
     def test_policy_decision_serializes_expected_shape(self) -> None:
@@ -341,7 +358,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "schema_version is required"):
             ExecutionResult(
-                messages=[],
                 actions=[],
                 config_updates=[],
                 requires_human_review=False,
@@ -412,7 +428,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
             ExecutionResult(
-                messages=[],
                 actions=[],
                 config_updates=[],
                 requires_human_review=False,
@@ -425,7 +440,6 @@ class StringListContractValidationTests(unittest.TestCase):
     def test_execution_result_rejects_blank_error_items(self) -> None:
         with self.assertRaisesRegex(ValueError, "errors items must be non-empty strings"):
             ExecutionResult(
-                messages=[],
                 actions=[],
                 config_updates=[],
                 requires_human_review=False,
@@ -454,18 +468,8 @@ class StringListContractValidationTests(unittest.TestCase):
 
 class TypedCollectionContractValidationTests(unittest.TestCase):
     def test_execution_result_rejects_invalid_typed_collections(self) -> None:
-        with self.assertRaisesRegex(ValueError, "messages items must be OutboundMessage"):
-            ExecutionResult(
-                messages=[object()],  # type: ignore[list-item]
-                actions=[],
-                config_updates=[],
-                requires_human_review=False,
-                errors=[],
-            )
-
         with self.assertRaisesRegex(ValueError, "actions items must be ActionProposal"):
             ExecutionResult(
-                messages=[],
                 actions=[object()],  # type: ignore[list-item]
                 config_updates=[],
                 requires_human_review=False,
@@ -474,7 +478,6 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "config_updates items must be ConfigUpdate"):
             ExecutionResult(
-                messages=[],
                 actions=[],
                 config_updates=[object()],  # type: ignore[list-item]
                 requires_human_review=False,

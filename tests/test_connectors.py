@@ -1,20 +1,25 @@
 import unittest
 from datetime import datetime, timezone
 from email.message import EmailMessage as ParsedEmailMessage
+from tempfile import TemporaryDirectory
 
 from app.connectors.fake_cron_connector import CronTrigger, FakeCronConnector
 from app.connectors.fake_email_connector import EmailMessage, FakeEmailConnector
+from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
 from app.connectors.imap_email_connector import ImapEmailConnector
+from app.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
 from app.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
 )
 from app.connectors.telegram_connector import (
+    TelegramFileMetadata,
     TelegramConnector,
     TelegramGetUpdatesResponse,
 )
 from app.connectors.slack_connector import SlackConnector
 from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
+from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
 
 
 class FakeCronConnectorTests(unittest.TestCase):
@@ -171,6 +176,198 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
         self.assertEqual(envelopes[0].reply_channel.target, "8605042448")
 
 
+class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
+    def test_poll_normalizes_new_assignment_events_to_envelopes(self) -> None:
+        responses = [
+            {
+                "data": {
+                    "repository": {
+                        "id": "R_1",
+                        "nameWithOwner": "brokensbone/chatting",
+                        "issues": {
+                            "nodes": [
+                                {
+                                    "id": "I_1",
+                                    "number": 12,
+                                    "title": "Plan milestone 5",
+                                    "body": "Body text",
+                                    "url": "https://github.com/brokensbone/chatting/issues/12",
+                                    "labels": {"nodes": [{"name": "enhancement"}]},
+                                    "timelineItems": {
+                                        "nodes": [
+                                            {
+                                                "id": "AE_1",
+                                                "createdAt": "2026-03-07T10:47:35Z",
+                                                "actor": {"login": "edward"},
+                                                "assignee": {
+                                                    "__typename": "User",
+                                                    "login": "BillyAcachofa",
+                                                },
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repository": {
+                        "id": "R_1",
+                        "nameWithOwner": "brokensbone/chatting",
+                        "issues": {
+                            "nodes": [
+                                {
+                                    "id": "I_1",
+                                    "number": 12,
+                                    "title": "Plan milestone 5",
+                                    "body": "Body text",
+                                    "url": "https://github.com/brokensbone/chatting/issues/12",
+                                    "labels": {"nodes": [{"name": "enhancement"}]},
+                                    "timelineItems": {
+                                        "nodes": [
+                                            {
+                                                "id": "AE_1",
+                                                "createdAt": "2026-03-07T10:47:35Z",
+                                                "actor": {"login": "edward"},
+                                                "assignee": {
+                                                    "__typename": "User",
+                                                    "login": "BillyAcachofa",
+                                                },
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            },
+        ]
+
+        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+            del query
+            self.assertEqual(variables["repoOwner"], "brokensbone")
+            self.assertEqual(variables["repoName"], "chatting")
+            return responses.pop(0)
+
+        with TemporaryDirectory() as tmpdir:
+            connector = GitHubIssueAssignmentConnector(
+                repository_patterns=["brokensbone/chatting"],
+                assignee_login="BillyAcachofa",
+                context_refs=["repo:/home/edward/chatting"],
+                checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
+                graphql_runner=_graphql_runner,
+            )
+
+            first_poll = connector.poll()
+            second_poll = connector.poll()
+
+        self.assertEqual(len(first_poll), 1)
+        envelope = first_poll[0]
+        self.assertEqual(envelope.id, "github-assignment:brokensbone/chatting:12:AE_1")
+        self.assertEqual(envelope.reply_channel.type, "github")
+        self.assertEqual(
+            envelope.reply_channel.target,
+            "https://github.com/brokensbone/chatting/issues/12",
+        )
+        self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
+        self.assertEqual(envelope.dedupe_key, "github:R_1:I_1:AE_1")
+        self.assertEqual(second_poll, [])
+        self.assertEqual(connector.last_poll_scanned_events, 1)
+        self.assertEqual(connector.last_poll_new_events, 0)
+        self.assertEqual(connector.last_poll_checkpoint_id, "AE_1")
+
+    def test_poll_continues_when_one_repository_fetch_fails(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+            del query
+            calls.append((str(variables["repoOwner"]), str(variables["repoName"])))
+            if variables["repoName"] == "chatting":
+                raise RuntimeError("boom")
+            return {
+                "data": {
+                    "repository": {
+                        "id": "R_2",
+                        "nameWithOwner": "brokensbone/bbmb",
+                        "issues": {
+                            "nodes": [
+                                {
+                                    "id": "I_2",
+                                    "number": 34,
+                                    "title": "Build something",
+                                    "body": "",
+                                    "url": "https://github.com/brokensbone/bbmb/issues/34",
+                                    "labels": {"nodes": []},
+                                    "timelineItems": {
+                                        "nodes": [
+                                            {
+                                                "id": "AE_2",
+                                                "createdAt": "2026-03-07T11:00:00Z",
+                                                "actor": {"login": "edward"},
+                                                "assignee": {
+                                                    "__typename": "User",
+                                                    "login": "BillyAcachofa",
+                                                },
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+
+        with TemporaryDirectory() as tmpdir:
+            connector = GitHubIssueAssignmentConnector(
+                repository_patterns=["brokensbone/chatting", "brokensbone/bbmb"],
+                assignee_login="BillyAcachofa",
+                context_refs=[],
+                checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
+                graphql_runner=_graphql_runner,
+            )
+
+            with self.assertLogs(
+                "app.connectors.github_issue_assignment_connector",
+                level="ERROR",
+            ) as logs:
+                envelopes = connector.poll()
+
+        self.assertEqual([call[1] for call in calls], ["chatting", "bbmb"])
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(envelopes[0].id, "github-assignment:brokensbone/bbmb:34:AE_2")
+        self.assertTrue(
+            any(
+                "github_assignment_poll_failed repository=brokensbone/chatting assignee=BillyAcachofa"
+                in line
+                for line in logs.output
+            )
+        )
+
+
+class InternalHeartbeatConnectorTests(unittest.TestCase):
+    def test_poll_emits_internal_heartbeat_with_unique_ids(self) -> None:
+        current = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)
+        connector = InternalHeartbeatConnector(now_provider=lambda: current)
+
+        first = connector.poll()
+        second = connector.poll()
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(first[0].source, "internal")
+        self.assertEqual(first[0].actor, "message-handler")
+        self.assertEqual(first[0].reply_channel.type, "internal")
+        self.assertEqual(first[0].reply_channel.target, "heartbeat")
+        self.assertNotEqual(first[0].id, second[0].id)
+        self.assertEqual(first[0].dedupe_key, first[0].id)
+        self.assertEqual(second[0].dedupe_key, second[0].id)
+
+
 class ImapEmailConnectorTests(unittest.TestCase):
     def test_poll_normalizes_imap_messages_to_envelopes(self) -> None:
         raw_message = _build_raw_email(
@@ -277,6 +474,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(envelope.actor, "77:alice")
         self.assertEqual(envelope.reply_channel.type, "telegram")
         self.assertEqual(envelope.reply_channel.target, "12345")
+        self.assertEqual(envelope.reply_channel.metadata, {"message_id": 1})
         self.assertEqual(envelope.content, "hello from telegram")
         self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
         self.assertEqual(second_poll, [])
@@ -374,6 +572,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(envelope.id, "telegram:3001")
         self.assertEqual(envelope.reply_channel.type, "telegram")
         self.assertEqual(envelope.reply_channel.target, "-100123")
+        self.assertEqual(envelope.reply_channel.metadata, {"message_id": 1})
         self.assertEqual(envelope.actor, "-100123:release-feed")
         self.assertEqual(envelope.content, "deploy completed")
 
@@ -420,6 +619,87 @@ class TelegramConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "telegram_get_updates_failed"):
             connector.poll()
+
+    def test_poll_downloads_photo_attachment_and_uses_caption_as_content(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            connector = TelegramConnector(
+                bot_token="token",
+                attachment_root_dir=tmpdir,
+                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                    ok=True,
+                    result=[
+                        {
+                            "update_id": 4001,
+                            "message": {
+                                "message_id": 10,
+                                "date": 1772272800,
+                                "caption": "what is this plant?",
+                                "chat": {"id": 12345},
+                                "photo": [
+                                    {
+                                        "file_id": "small",
+                                        "file_unique_id": "u-small",
+                                        "width": 90,
+                                        "height": 90,
+                                        "file_size": 1200,
+                                    },
+                                    {
+                                        "file_id": "large",
+                                        "file_unique_id": "u-large",
+                                        "width": 1280,
+                                        "height": 960,
+                                        "file_size": 450000,
+                                    },
+                                ],
+                            },
+                        }
+                    ],
+                ),
+                resolve_file_metadata=lambda url, _timeout: (
+                    self.assertIn("file_id=large", url) or TelegramFileMetadata(file_path="photos/leaf.jpg")
+                ),
+                download_file_bytes=lambda url, _timeout: (
+                    self.assertIn("/file/bottoken/photos/leaf.jpg", url) or b"jpeg-bytes"
+                ),
+            )
+
+            envelopes = connector.poll()
+
+            self.assertEqual(len(envelopes), 1)
+            envelope = envelopes[0]
+            self.assertEqual(envelope.content, "what is this plant?")
+            self.assertEqual(len(envelope.attachments), 1)
+            self.assertEqual(envelope.attachments[0].name, "leaf.jpg")
+            self.assertTrue(envelope.attachments[0].uri.startswith("file://"))
+
+    def test_poll_accepts_photo_only_message_with_placeholder_content(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            connector = TelegramConnector(
+                bot_token="token",
+                attachment_root_dir=tmpdir,
+                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                    ok=True,
+                    result=[
+                        {
+                            "update_id": 4002,
+                            "message": {
+                                "message_id": 11,
+                                "date": 1772272800,
+                                "chat": {"id": 12345},
+                                "photo": [{"file_id": "only", "width": 800, "height": 600}],
+                            },
+                        }
+                    ],
+                ),
+                resolve_file_metadata=lambda _url, _timeout: TelegramFileMetadata(file_path="photos/photo.jpg"),
+                download_file_bytes=lambda _url, _timeout: b"jpeg-bytes",
+            )
+
+            envelopes = connector.poll()
+
+            self.assertEqual(len(envelopes), 1)
+            self.assertEqual(envelopes[0].content, "[photo attached]")
+            self.assertEqual(envelopes[0].attachments[0].name, "photo.jpg")
 
 
 class SlackConnectorTests(unittest.TestCase):

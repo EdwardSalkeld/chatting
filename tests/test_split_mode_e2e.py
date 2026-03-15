@@ -96,7 +96,7 @@ class SplitModeE2ETests(unittest.TestCase):
 
             expected_envelope_id = "cron:ci-split-smoke:2026-01-01T00:00:00+00:00"
             expected_task_id = f"task:{expected_envelope_id}"
-            expected_event_id = f"v1:{expected_task_id}:0"
+            expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
 
             try:
                 server_proc = subprocess.Popen(
@@ -162,21 +162,20 @@ class SplitModeE2ETests(unittest.TestCase):
 
             worker_store = SQLiteStateStore(str(worker_db_path))
             worker_runs = worker_store.list_runs()
-            matching_worker_runs = [run for run in worker_runs if run.envelope_id == expected_envelope_id]
             self.assertTrue(
-                matching_worker_runs,
-                msg=f"expected at least one worker run for envelope_id={expected_envelope_id}",
+                any(run.envelope_id == expected_envelope_id for run in worker_runs),
+                msg=f"missing worker run for expected envelope_id={expected_envelope_id!r}",
             )
             self.assertTrue(
-                any(run.result_status == "success" for run in matching_worker_runs),
-                msg=f"expected at least one successful worker run for envelope_id={expected_envelope_id}",
+                any(
+                    run.envelope_id == expected_envelope_id and run.result_status == "success"
+                    for run in worker_runs
+                ),
+                msg=f"missing successful worker run for expected envelope_id={expected_envelope_id!r}",
             )
 
             handler_store = SQLiteStateStore(str(handler_db_path))
-            self.assertEqual(
-                handler_store.list_dispatched_event_indices(run_id=expected_task_id),
-                [0],
-            )
+            self.assertEqual(handler_store.list_dispatched_event_indices(run_id=expected_task_id), [])
             self.assertTrue(
                 handler_store.has_dispatched_event_id(
                     task_id=expected_task_id,

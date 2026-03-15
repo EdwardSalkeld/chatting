@@ -1,13 +1,16 @@
 import json
 import tempfile
 import unittest
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from app.github_ingress_runtime import GitHubIssueAssignmentEvent
+from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.main_message_handler import _load_config, main
+from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
 
 
 @dataclass
@@ -30,7 +33,22 @@ class _FakeBroker:
         self.acked.append((queue_name, guid))
 
 
+@dataclass
+class _FakeMetricsServer:
+    shutdown_calls: int = 0
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
 class MainGitHubIngressTests(unittest.TestCase):
+    def _non_heartbeat_published(self, broker: _FakeBroker) -> list[tuple[str, dict[str, object]]]:
+        return [
+            item
+            for item in broker.published
+            if item[1].get("envelope", {}).get("source") != "internal"
+        ]
+
     def test_load_config_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "message-handler.json"
@@ -64,11 +82,15 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=broker,
                 ),
                 patch(
-                    "app.main_message_handler.fetch_assignment_events_for_repository",
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     side_effect=[[event], [event]],
                 ),
                 patch(
-                    "app.main_message_handler.expand_repository_patterns",
+                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
@@ -84,10 +106,6 @@ class MainGitHubIngressTests(unittest.TestCase):
                         "brokensbone/chatting",
                         "--github-assignee-login",
                         "BillyAcachofa",
-                        "--github-reply-channel-type",
-                        "telegram",
-                        "--github-reply-channel-target",
-                        "8605042448",
                         "--max-loops",
                         "2",
                         "--poll-interval-seconds",
@@ -97,19 +115,20 @@ class MainGitHubIngressTests(unittest.TestCase):
             ):
                 exit_code = main()
 
+            published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
             self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
-            self.assertEqual(len(broker.published), 1)
-            self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0][0], "chatting.tasks.v1")
             self.assertEqual(
-                broker.published[0][1]["task_id"],
+                published[0][1]["task_id"],
                 "task:github-assignment:brokensbone/chatting:12:AE_1",
             )
             self.assertEqual(
-                broker.published[0][1]["envelope"]["reply_channel"],
+                published[0][1]["envelope"]["reply_channel"],
                 {
-                    "type": "telegram",
-                    "target": "8605042448",
+                    "type": "github",
+                    "target": "https://github.com/brokensbone/chatting/issues/12",
                 },
             )
 
@@ -138,15 +157,19 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=broker,
                 ),
                 patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
                     "app.main_message_handler.fetch_authenticated_viewer_login",
                     return_value="BillyAcachofa",
                 ),
                 patch(
-                    "app.main_message_handler.expand_repository_patterns",
+                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch(
-                    "app.main_message_handler.fetch_assignment_events_for_repository",
+                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     return_value=[event],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
@@ -160,10 +183,162 @@ class MainGitHubIngressTests(unittest.TestCase):
                         "127.0.0.1:9876",
                         "--github-repository",
                         "brokensbone/*",
-                        "--github-reply-channel-type",
-                        "telegram",
-                        "--github-reply-channel-target",
-                        "8605042448",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            published = self._non_heartbeat_published(broker)
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0][0], "chatting.tasks.v1")
+
+    def test_main_message_handler_disables_misconfigured_github_ingress_and_keeps_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "app.main_message_handler.fetch_authenticated_viewer_login",
+                    side_effect=RuntimeError("no gh login"),
+                ),
+                patch(
+                    "app.main_message_handler.LOGGER.error",
+                ) as error_logger,
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--github-repository",
+                        "brokensbone/chatting",
+                        "--max-loops",
+                        "2",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            published = self._non_heartbeat_published(broker)
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(len(published), 0)
+            self.assertEqual(len(broker.published), 2)
+            disabled_log_calls = [
+                call
+                for call in error_logger.call_args_list
+                if call.args and call.args[0] == "ingress_connector_disabled connector=%s loop=%s error=%s"
+            ]
+            self.assertEqual(len(disabled_log_calls), 2)
+            self.assertTrue(all(call.args[1] == "github" for call in disabled_log_calls))
+
+    def test_main_message_handler_continues_with_healthy_connectors_when_imap_misconfigured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "heartbeat",
+                            "content": "daily check",
+                            "interval_seconds": 1,
+                            "reply_channel_type": "log",
+                            "reply_channel_target": "ops",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "app.main_message_handler.LOGGER.error",
+                ) as error_logger,
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--schedule-file",
+                        str(schedule_path),
+                        "--imap-host",
+                        "imap.example.com",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            published = self._non_heartbeat_published(broker)
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0][0], "chatting.tasks.v1")
+            disabled_log_calls = [
+                call
+                for call in error_logger.call_args_list
+                if call.args and call.args[0] == "ingress_connector_disabled connector=%s loop=%s error=%s"
+            ]
+            self.assertEqual(len(disabled_log_calls), 1)
+            self.assertEqual(disabled_log_calls[0].args[1], "imap")
+
+    def test_main_message_handler_publishes_internal_heartbeat_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
                         "--max-loops",
                         "1",
                         "--poll-interval-seconds",
@@ -174,9 +349,176 @@ class MainGitHubIngressTests(unittest.TestCase):
                 exit_code = main()
 
             self.assertEqual(exit_code, 0)
-            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
             self.assertEqual(len(broker.published), 1)
             self.assertEqual(broker.published[0][0], "chatting.tasks.v1")
+            self.assertEqual(broker.published[0][1]["envelope"]["source"], "internal")
+            self.assertEqual(
+                broker.published[0][1]["envelope"]["reply_channel"],
+                {"type": "internal", "target": "heartbeat"},
+            )
+
+    def test_main_message_handler_starts_and_stops_metrics_server_with_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+            metrics_server = _FakeMetricsServer()
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._build_live_connectors",
+                    return_value=[],
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=metrics_server,
+                ) as start_metrics_server,
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(metrics_server.shutdown_calls, 1)
+            _, kwargs = start_metrics_server.call_args
+            self.assertEqual(kwargs["host"], "127.0.0.1")
+            self.assertEqual(kwargs["port"], 9464)
+
+    def test_main_message_handler_drains_egress_queue_until_empty(self) -> None:
+        @dataclass
+        class _QueueDrainingBroker(_FakeBroker):
+            egress_messages: deque[tuple[str, dict[str, object]]] = field(default_factory=deque)
+            pickup_waits: list[int] = field(default_factory=list)
+
+            def pickup_json(self, queue_name: str, timeout_seconds: int, wait_seconds: int):
+                del timeout_seconds
+                self.pickup_waits.append(wait_seconds)
+                if queue_name != "chatting.egress.v1" or not self.egress_messages:
+                    return None
+                guid, payload = self.egress_messages.popleft()
+                return type("PickedMessage", (), {"guid": guid, "payload": payload})()
+
+        @dataclass
+        class _SingleEnvelopeConnector:
+            envelope: TaskEnvelope
+            emitted: bool = False
+
+            def poll(self):
+                if self.emitted:
+                    return []
+                self.emitted = True
+                return [self.envelope]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _QueueDrainingBroker()
+            envelope = TaskEnvelope(
+                id="email:drain-1",
+                source="email",
+                received_at=datetime(2026, 3, 7, 10, 47, 35, tzinfo=timezone.utc),
+                actor="alice@example.com",
+                content="hello",
+                attachments=[],
+                context_refs=[],
+                policy_profile="default",
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:drain-1",
+            )
+            task_message = TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:drain-1")
+            first_egress = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=2,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="first"),
+                emitted_at=datetime(2026, 3, 7, 10, 47, 36, tzinfo=timezone.utc),
+                event_id="evt:task:email:drain-1:0",
+                sequence=0,
+                event_kind="incremental",
+                message_type="chatting.egress.v2",
+            )
+            second_egress = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=1,
+                event_count=2,
+                message=OutboundMessage(channel="internal", target="task", body="done"),
+                emitted_at=datetime(2026, 3, 7, 10, 47, 37, tzinfo=timezone.utc),
+                event_id="evt:task:email:drain-1:1",
+                sequence=1,
+                event_kind="completion",
+                message_type="chatting.egress.v2",
+            )
+            broker.egress_messages.extend(
+                [
+                    ("guid-egress-1", first_egress.to_dict()),
+                    ("guid-egress-2", second_egress.to_dict()),
+                ]
+            )
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "app.main_message_handler._build_live_connectors",
+                    return_value=[_SingleEnvelopeConnector(envelope=envelope)],
+                ),
+                patch(
+                    "app.main_message_handler._build_email_sender",
+                    return_value=lambda message: None,
+                ),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--max-loops",
+                        "1",
+                        "--poll-interval-seconds",
+                        "0.01",
+                        "--allowed-egress-channel",
+                        "email",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                broker.acked,
+                [
+                    ("chatting.egress.v1", "guid-egress-1"),
+                    ("chatting.egress.v1", "guid-egress-2"),
+                ],
+            )
+            self.assertEqual(broker.pickup_waits[:3], [5, 0, 0])
+            self.assertIn(broker.pickup_waits[3:], ([], [5]))
 
 if __name__ == "__main__":
     unittest.main()

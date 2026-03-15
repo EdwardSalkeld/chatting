@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import smtplib
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Callable, Protocol
+from urllib.parse import urlparse
 
 from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision, TaskEnvelope
 
@@ -32,6 +34,16 @@ class TelegramSender(Protocol):
 
     def send(self, target: str, message: OutboundMessage) -> None:
         """Send one outbound Telegram message."""
+
+    def react(self, target: str, message_id: int, emoji: str) -> None:
+        """React to one existing Telegram message."""
+
+
+class GitHubSender(Protocol):
+    """Dispatch outbound GitHub issue comments."""
+
+    def send(self, target: str, body: str) -> None:
+        """Send one outbound GitHub issue comment."""
 
 
 @dataclass(frozen=True)
@@ -184,6 +196,55 @@ class TelegramMessageSender:
 
         raise RuntimeError("telegram_send_failed")
 
+    def react(self, target: str, message_id: int, emoji: str) -> None:
+        if not target:
+            raise ValueError("target is required")
+        if message_id <= 0:
+            raise ValueError("message_id must be positive")
+        if not emoji.strip():
+            raise ValueError("emoji is required")
+
+        client = self.http_post_json or _default_http_post_json
+        url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/setMessageReaction"
+        payload: dict[str, object] = {
+            "chat_id": target,
+            "message_id": message_id,
+            "reaction": [{"type": "emoji", "emoji": emoji.strip()}],
+        }
+        response = client(url, payload, self.timeout_seconds)
+        if response.get("ok") is True:
+            return
+        raise RuntimeError("telegram_reaction_failed")
+
+
+@dataclass(frozen=True)
+class GitHubIssueCommentSender:
+    """GitHub CLI sender used by the integrated applier."""
+
+    command_runner: Callable[[list[str]], object] | None = None
+
+    def send(self, target: str, body: str) -> None:
+        if not target:
+            raise ValueError("target is required")
+        if not body.strip():
+            raise ValueError("body is required")
+        repository, issue_number = _parse_github_issue_target(target)
+        command = [
+            "gh",
+            "issue",
+            "comment",
+            str(issue_number),
+            "--repo",
+            repository,
+            "--body",
+            body,
+        ]
+        runner = self.command_runner or _default_gh_command_runner
+        result = runner(command)
+        returncode = getattr(result, "returncode", 0)
+        if returncode != 0:
+            raise RuntimeError("github_issue_comment_failed")
+
 
 @dataclass(frozen=True)
 class IntegratedApplier:
@@ -192,6 +253,7 @@ class IntegratedApplier:
     base_dir: str
     email_sender: EmailSender | None = None
     telegram_sender: TelegramSender | None = None
+    github_sender: GitHubSender | None = None
 
     def apply(self, decision: PolicyDecision, envelope: TaskEnvelope | None = None) -> ApplyResult:
         applied_actions: list[ActionProposal] = []
@@ -229,10 +291,15 @@ class IntegratedApplier:
                 target=dispatch_target,
                 body=message.body,
                 attachment=message.attachment,
+                metadata=dict(message.metadata),
             )
 
             if dispatch_channel == "log":
                 LOGGER.info("log_dispatch target=%s body=%s", dispatch_target, message.body)
+                dispatched_messages.append(normalized_message)
+                continue
+            if dispatch_channel == "drop":
+                LOGGER.info("drop_marker target=%s body=%s", dispatch_target, message.body)
                 dispatched_messages.append(normalized_message)
                 continue
             if dispatch_channel == "email":
@@ -285,6 +352,56 @@ class IntegratedApplier:
                     )
                     raise MessageDispatchError(
                         reason_code=error_reason,
+                        dispatched_messages=list(dispatched_messages),
+                    ) from None
+                continue
+            if dispatch_channel == "github":
+                if self.github_sender is None:
+                    LOGGER.warning(
+                        "drop_dispatch reason=github_dispatch_not_configured channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
+                    )
+                    reason_codes.append("github_dispatch_not_configured")
+                    continue
+                try:
+                    self.github_sender.send(dispatch_target, message.body)
+                    dispatched_messages.append(normalized_message)
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception(
+                        "drop_dispatch reason=github_dispatch_failed channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
+                    )
+                    raise MessageDispatchError(
+                        reason_code="github_dispatch_failed",
+                        dispatched_messages=list(dispatched_messages),
+                    ) from None
+                continue
+            if dispatch_channel == "telegram_reaction":
+                if self.telegram_sender is None:
+                    LOGGER.warning(
+                        "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
+                    )
+                    reason_codes.append("telegram_dispatch_not_configured")
+                    continue
+                try:
+                    self.telegram_sender.react(
+                        dispatch_target,
+                        _resolve_telegram_reaction_message_id(message=message, envelope=envelope),
+                        message.body,
+                    )
+                    dispatched_messages.append(normalized_message)
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception(
+                        "drop_dispatch reason=telegram_dispatch_failed channel=%s target=%s",
+                        dispatch_channel,
+                        dispatch_target,
+                    )
+                    raise MessageDispatchError(
+                        reason_code="telegram_dispatch_failed",
                         dispatched_messages=list(dispatched_messages),
                     ) from None
                 continue
@@ -393,6 +510,21 @@ def _resolve_dispatch_channel_and_target(
     if envelope is None:
         return message.channel, message.target
     return envelope.reply_channel.type, envelope.reply_channel.target
+
+
+def _resolve_telegram_reaction_message_id(
+    *,
+    message: OutboundMessage,
+    envelope: TaskEnvelope | None,
+) -> int:
+    message_id = message.metadata.get("message_id")
+    if isinstance(message_id, int) and message_id > 0:
+        return message_id
+    if envelope is not None:
+        reply_message_id = envelope.reply_channel.metadata.get("message_id")
+        if isinstance(reply_message_id, int) and reply_message_id > 0:
+            return reply_message_id
+    raise ValueError("telegram reaction message_id is required")
 
 
 def _default_http_post_json(
@@ -531,8 +663,45 @@ def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
     return "parse entities" in normalized
 
 
+def _default_gh_command_runner(command: list[str]) -> object:
+    return subprocess.run(command, capture_output=True, text=True, check=False)
+
+
+def _parse_github_issue_target(target: str) -> tuple[str, int]:
+    if not target.strip():
+        raise ValueError("github_issue_target_invalid")
+
+    stripped = target.strip()
+    if stripped.startswith("http://") or stripped.startswith("https://"):
+        parsed = urlparse(stripped)
+        if parsed.netloc.casefold() != "github.com":
+            raise ValueError("github_issue_target_invalid")
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) < 4 or parts[2] != "issues":
+            raise ValueError("github_issue_target_invalid")
+        repository = f"{parts[0]}/{parts[1]}"
+        number_text = parts[3]
+    else:
+        if "#" not in stripped:
+            raise ValueError("github_issue_target_invalid")
+        repository, _, number_text = stripped.partition("#")
+        repository = repository.strip()
+        number_text = number_text.strip()
+        if not repository or "/" not in repository:
+            raise ValueError("github_issue_target_invalid")
+
+    if not number_text.isdigit():
+        raise ValueError("github_issue_target_invalid")
+    issue_number = int(number_text)
+    if issue_number <= 0:
+        raise ValueError("github_issue_target_invalid")
+    return repository, issue_number
+
+
 __all__ = [
     "EmailSender",
+    "GitHubIssueCommentSender",
+    "GitHubSender",
     "IntegratedApplier",
     "MessageDispatchError",
     "SmtpEmailSender",

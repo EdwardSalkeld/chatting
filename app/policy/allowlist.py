@@ -57,7 +57,7 @@ class AllowlistPolicyEngine:
         return PolicyDecision(
             approved_actions=approved_actions,
             blocked_actions=blocked_actions,
-            approved_messages=result.messages,
+            approved_messages=[],
             config_updates=config_decision,
             reason_codes=_dedupe_in_order(reason_codes),
         )

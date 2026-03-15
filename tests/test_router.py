@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from app.models import ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.router import RuleBasedRouter
 
 
@@ -13,7 +13,7 @@ class RuleBasedRouterTests(unittest.TestCase):
             received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
             actor="alice@example.com",
             content="Subject: hello\n\nPlease summarize this thread.",
-            attachments=[],
+            attachments=[AttachmentRef(uri="file:///tmp/request.txt", name="request.txt")],
             context_refs=["repo:/home/edward/chatting"],
             policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
@@ -29,9 +29,11 @@ class RuleBasedRouterTests(unittest.TestCase):
         self.assertEqual(task.execution_constraints.timeout_seconds, 1800)
         self.assertEqual(task.execution_constraints.max_tokens, 12000)
         self.assertEqual(task.policy_profile, "default")
+        self.assertEqual(task.event_time, envelope.received_at)
         self.assertEqual(task.source, "email")
         self.assertEqual(task.actor, "alice@example.com")
         self.assertEqual(task.content, envelope.content)
+        self.assertEqual(task.attachments, envelope.attachments)
         self.assertEqual(task.reply_channel, envelope.reply_channel)
 
     def test_routes_cron_to_scheduled_automation_with_cron_constraints(self) -> None:

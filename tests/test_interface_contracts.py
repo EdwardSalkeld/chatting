@@ -10,11 +10,14 @@ from app.connectors import (
     EmailMessage,
     FakeCronConnector,
     FakeEmailConnector,
+    GitHubIssueAssignmentConnector,
+    InternalHeartbeatConnector,
     SlackConnector,
     TelegramConnector,
     WebhookConnector,
     WebhookEvent,
 )
+from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
 from app.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.executor import CodexExecutor, Executor, StubExecutor
 from app.policy import AllowlistPolicyEngine, PolicyEngine
@@ -51,9 +54,26 @@ class InterfaceContractTests(unittest.TestCase):
         self.assertIsInstance(cron, Connector)
         self.assertIsInstance(email, Connector)
         self.assertIsInstance(
+            InternalHeartbeatConnector(
+                now_provider=lambda: datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+            ),
+            Connector,
+        )
+        self.assertIsInstance(
             SlackConnector(fetch_messages=lambda: []),
             Connector,
         )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertIsInstance(
+                GitHubIssueAssignmentConnector(
+                    repository_patterns=["brokensbone/chatting"],
+                    assignee_login="BillyAcachofa",
+                    context_refs=[],
+                    checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
+                    graphql_runner=lambda _query, _variables: {"data": {"repository": None}},
+                ),
+                Connector,
+            )
         self.assertIsInstance(
             TelegramConnector(
                 bot_token="token",

@@ -8,7 +8,7 @@ Live cron-style connector that emits events on fixed intervals.
 
 ## Runtime config keys
 
-Configured via `schedule_file` JSON loaded by `app.main`.
+Configured via `schedule_file` JSON loaded by `app.main_message_handler`.
 Each job supports:
 - `job_name` (required)
 - `content` (required)

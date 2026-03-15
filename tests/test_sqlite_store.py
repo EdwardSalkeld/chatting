@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.broker import EgressQueueMessage
-from app.models import AuditEvent, OutboundMessage, ReplyChannel, RunRecord, TaskEnvelope
+from app.models import AttachmentRef, AuditEvent, OutboundMessage, ReplyChannel, RunRecord, TaskEnvelope
 from app.state.sqlite_store import SQLiteStateStore
 
 
@@ -102,7 +102,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 received_at=datetime(2026, 2, 27, 16, 10, tzinfo=timezone.utc),
                 actor="alice@example.com",
                 content="Please retry",
-                attachments=[],
+                attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
                 context_refs=["repo:/home/edward/chatting"],
                 policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
@@ -120,6 +120,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0].dead_letter_id, dead_letter_id)
             self.assertEqual(pending[0].envelope.id, envelope.id)
+            self.assertEqual(pending[0].envelope.attachments, envelope.attachments)
             self.assertEqual(pending[0].status, "pending")
 
             store.mark_dead_letter_replayed(dead_letter_id, "run:email:dead-1:replay:1")
@@ -264,7 +265,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
-                event_kind="final",
+                event_kind="message",
                 message_type="chatting.egress.v2",
             )
 
@@ -275,8 +276,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
 
             store.mark_egress_outbox_event_published(event_id="evt:task:email:1:0")
             replayable = store.list_replayable_egress_outbox_events()
-            self.assertEqual(len(replayable), 1)
-            self.assertEqual(replayable[0].event_id, "evt:task:email:1:0")
+            self.assertEqual(replayable, [])
 
             store.mark_egress_outbox_event_acked(event_id="evt:task:email:1:0")
             replayable = store.list_replayable_egress_outbox_events()

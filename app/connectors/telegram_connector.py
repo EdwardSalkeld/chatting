@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
-from app.models import ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +24,13 @@ class TelegramGetUpdatesResponse:
 
     ok: bool
     result: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class TelegramFileMetadata:
+    """Resolved Telegram file metadata used for attachment downloads."""
+
+    file_path: str
 
 
 class TelegramConnector:
@@ -39,8 +48,11 @@ class TelegramConnector:
         allowed_channel_ids: list[str] | None = None,
         context_refs: list[str] | None = None,
         policy_profile: str = "default",
+        attachment_root_dir: str | None = None,
         request_timeout_seconds: float = 30.0,
         http_get_json: Callable[[str, float], TelegramGetUpdatesResponse] | None = None,
+        resolve_file_metadata: Callable[[str, float], TelegramFileMetadata] | None = None,
+        download_file_bytes: Callable[[str, float], bytes] | None = None,
     ) -> None:
         if not bot_token:
             raise ValueError("bot_token is required")
@@ -71,8 +83,13 @@ class TelegramConnector:
         self._allowed_channel_ids = set(allowed_channel_ids or [])
         self._context_refs = list(context_refs or [])
         self._policy_profile = policy_profile
+        self._attachment_root_dir = Path(
+            attachment_root_dir or Path(tempfile.gettempdir()) / "chatting-telegram-attachments"
+        )
         self._request_timeout_seconds = request_timeout_seconds
         self._http_get_json = http_get_json or _default_http_get_json
+        self._resolve_file_metadata = resolve_file_metadata or _default_resolve_file_metadata
+        self._download_file_bytes = download_file_bytes or _default_download_file_bytes
         self._next_offset: int | None = None
 
     def poll(self) -> list[TaskEnvelope]:
@@ -181,14 +198,19 @@ class TelegramConnector:
         chat_id_value: str,
         actor: str | None,
     ) -> TaskEnvelope | None:
-        text = payload.get("text")
-        if not isinstance(text, str) or not text.strip():
+        message_id = payload.get("message_id")
+        if not isinstance(message_id, int):
             return None
-
+        attachments = self._extract_attachments(update_id=update_id, message_id=message_id, payload=payload)
+        content = _extract_content(payload, fallback_for_attachments=bool(attachments))
+        if content is None:
+            return None
         event_id = f"telegram:{update_id}"
+        message_id = payload.get("message_id")
+        if not isinstance(message_id, int):
+            return None
         received_at = _parse_message_timestamp(payload.get("date"))
         thread_id = payload.get("message_thread_id")
-        content = text.strip()
         if isinstance(thread_id, int):
             content = f"[thread_id={thread_id}] {content}"
 
@@ -198,12 +220,70 @@ class TelegramConnector:
             received_at=received_at,
             actor=actor,
             content=content,
-            attachments=[],
+            attachments=attachments,
             context_refs=self._context_refs,
             policy_profile=self._policy_profile,
-            reply_channel=ReplyChannel(type="telegram", target=chat_id_value),
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target=chat_id_value,
+                metadata={"message_id": message_id},
+            ),
             dedupe_key=event_id,
         )
+
+    def _extract_attachments(
+        self,
+        *,
+        update_id: int,
+        message_id: int,
+        payload: dict[str, object],
+    ) -> list[AttachmentRef]:
+        raw_photos = payload.get("photo")
+        if not isinstance(raw_photos, list):
+            return []
+        selected_photo = _select_best_photo(raw_photos)
+        if selected_photo is None:
+            return []
+        return [
+            self._download_photo_attachment(
+                update_id=update_id,
+                message_id=message_id,
+                photo=selected_photo,
+            )
+        ]
+
+    def _download_photo_attachment(
+        self,
+        *,
+        update_id: int,
+        message_id: int,
+        photo: dict[str, object],
+    ) -> AttachmentRef:
+        file_id = photo.get("file_id")
+        if not isinstance(file_id, str) or not file_id.strip():
+            raise RuntimeError("telegram_photo_missing_file_id")
+        metadata = self._resolve_file_metadata(
+            self._build_get_file_url(file_id),
+            self._request_timeout_seconds,
+        )
+        suffix = Path(metadata.file_path).suffix or ".jpg"
+        file_unique_id = photo.get("file_unique_id")
+        unique_fragment = file_unique_id if isinstance(file_unique_id, str) and file_unique_id.strip() else file_id
+        safe_unique_fragment = _safe_path_fragment(unique_fragment)
+        local_name = f"telegram-{update_id}-{message_id}-{safe_unique_fragment}{suffix}"
+        destination = self._attachment_root_dir / local_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        file_url = self._build_file_download_url(metadata.file_path)
+        destination.write_bytes(self._download_file_bytes(file_url, self._request_timeout_seconds))
+        return AttachmentRef(uri=destination.resolve().as_uri(), name=Path(metadata.file_path).name)
+
+    def _build_get_file_url(self, file_id: str) -> str:
+        query = urllib.parse.urlencode({"file_id": file_id})
+        return f"{self._api_base_url}/bot{self._bot_token}/getFile?{query}"
+
+    def _build_file_download_url(self, file_path: str) -> str:
+        quoted_path = urllib.parse.quote(file_path)
+        return f"{self._api_base_url}/file/bot{self._bot_token}/{quoted_path}"
 
 
 def _extract_chat_id(chat: dict[str, object]) -> str | None:
@@ -225,6 +305,45 @@ def _extract_actor(raw_sender: object) -> str | None:
     if isinstance(sender_id, int):
         return str(sender_id)
     return None
+
+
+def _extract_content(
+    payload: dict[str, object],
+    *,
+    fallback_for_attachments: bool,
+) -> str | None:
+    for field_name in ("text", "caption"):
+        raw_value = payload.get(field_name)
+        if isinstance(raw_value, str) and raw_value.strip():
+            return raw_value.strip()
+    if fallback_for_attachments:
+        return "[photo attached]"
+    return None
+
+
+def _select_best_photo(raw_photos: list[object]) -> dict[str, object] | None:
+    best_photo: dict[str, object] | None = None
+    best_sort_key = (-1, -1, -1)
+    for raw_photo in raw_photos:
+        if not isinstance(raw_photo, dict):
+            continue
+        file_size = raw_photo.get("file_size")
+        width = raw_photo.get("width")
+        height = raw_photo.get("height")
+        sort_key = (
+            file_size if isinstance(file_size, int) else -1,
+            width if isinstance(width, int) else -1,
+            height if isinstance(height, int) else -1,
+        )
+        if sort_key > best_sort_key:
+            best_photo = raw_photo
+            best_sort_key = sort_key
+    return best_photo
+
+
+def _safe_path_fragment(value: str) -> str:
+    sanitized = "".join(character if character.isalnum() or character in {"-", "_"} else "_" for character in value)
+    return sanitized or "attachment"
 
 
 def _extract_sender_chat_actor(raw_sender_chat: object) -> str | None:
@@ -271,4 +390,35 @@ def _default_http_get_json(url: str, timeout_seconds: float) -> TelegramGetUpdat
     return TelegramGetUpdatesResponse(ok=ok, result=result)
 
 
-__all__ = ["TelegramConnector", "TelegramGetUpdatesResponse"]
+def _default_resolve_file_metadata(url: str, timeout_seconds: float) -> TelegramFileMetadata:
+    request = urllib.request.Request(url=url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as error:
+        raise RuntimeError("telegram_http_error") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError("telegram_invalid_json") from error
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("telegram_invalid_response_shape")
+    ok = payload.get("ok")
+    result = payload.get("result")
+    if ok is not True or not isinstance(result, dict):
+        raise RuntimeError("telegram_invalid_response_shape")
+    file_path = result.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        raise RuntimeError("telegram_file_path_missing")
+    return TelegramFileMetadata(file_path=file_path)
+
+
+def _default_download_file_bytes(url: str, timeout_seconds: float) -> bytes:
+    request = urllib.request.Request(url=url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return response.read()
+    except urllib.error.URLError as error:
+        raise RuntimeError("telegram_http_error") from error
+
+
+__all__ = ["TelegramConnector", "TelegramFileMetadata", "TelegramGetUpdatesResponse"]

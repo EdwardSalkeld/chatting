@@ -3,6 +3,8 @@
 from app.applier.base import Applier
 from app.applier.integrated import (
     EmailSender,
+    GitHubIssueCommentSender,
+    GitHubSender,
     IntegratedApplier,
     MessageDispatchError,
     SmtpEmailSender,
@@ -14,6 +16,8 @@ from app.applier.noop import NoOpApplier
 __all__ = [
     "Applier",
     "EmailSender",
+    "GitHubIssueCommentSender",
+    "GitHubSender",
     "IntegratedApplier",
     "MessageDispatchError",
     "NoOpApplier",

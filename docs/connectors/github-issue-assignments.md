@@ -2,15 +2,17 @@
 
 `chatting` can ingest GitHub issue assignments without exposing any webhook endpoint.
 
-GitHub polling now runs inside the existing message-handler loop:
+GitHub assignment polling is implemented as a first-class connector inside the existing
+message-handler loop:
 
 ```bash
 python3 -m app.main_message_handler --config /path/to/message-handler-runtime.json
 ```
 
-When `github_repositories` is configured, message-handler polls `gh api graphql` for `AssignedEvent`
-timeline items, filters by assignee login, and publishes normalized `TaskQueueMessage` payloads to
-`chatting.tasks.v1`.
+When `github_repositories` is configured, the GitHub connector polls `gh api graphql` for
+`AssignedEvent` timeline items, filters by assignee login, and emits normalized `TaskEnvelope`
+objects. Message-handler then handles publication to `chatting.tasks.v1` the same way it does for
+other connectors.
 
 ## Required config
 
@@ -20,8 +22,7 @@ timeline items, filters by assignee login, and publishes normalized `TaskQueueMe
 
 - `github_assignee_login`: only assignments to this GitHub login are emitted.
   If omitted, message-handler uses the authenticated `gh` user login (`viewer.login`).
-- `github_reply_channel_type`: reply channel type for generated tasks (for example `telegram`).
-- `github_reply_channel_target`: reply channel target for generated tasks.
+- Generated tasks always reply via GitHub issue comment egress to the assigned issue URL.
 
 ## Idempotency and checkpointing
 

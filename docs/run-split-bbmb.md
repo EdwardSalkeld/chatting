@@ -1,8 +1,8 @@
 # Running Split Mode With BBMB
 
 This mode runs `chatting` as a 3-part application:
-- `message-handler` on `UserOne` (connectors + outbound dispatch)
-- `worker` on `UserTwo` (routing + executor + policy)
+- `message-handler` on the integration host (connectors + outbound dispatch)
+- `worker` on the execution host (routing + executor + policy)
 - `bbmb-server` in the middle (message bus)
 
 GitHub assignment polling is part of `message-handler` when configured.
@@ -13,15 +13,31 @@ Queues are hardcoded:
 - `chatting.tasks.v1`
 - `chatting.egress.v1`
 
+Egress payload contract is v2-only:
+- Queue name `chatting.egress.v1` is transport-level only.
+- Worker publishes `message_type: "chatting.egress.v2"`.
+- `message-handler` rejects legacy `chatting.egress.v1` payload types.
+
+For a worked message example and the full message-handler <-> worker conversation, see
+[BBMB Message Flow](bbmb-message-flow.md).
+
 ## Topology
 
-- Host A (`UserOne`): `python3 -m app.main_message_handler`
-- Host B (`UserTwo`): `python3 -m app.main_worker`
+- Host A (integration host): `python3 -m app.main_message_handler`
+- Host B (execution host): `python3 -m app.main_worker`
 - Host C (or A/B): `bbmb-server` on `:9876`
 
 All hosts must have network reachability to the BBMB TCP endpoint.
 
-## 1) Configure message-handler (`UserOne`)
+## 1) Start BBMB
+
+```bash
+bbmb-server
+```
+
+If BBMB is listening somewhere else, set `bbmb_address` in both runtime configs.
+
+## 2) Configure message-handler
 
 ```bash
 cp configs/message-handler-runtime.example.json /tmp/message-handler.json
@@ -36,7 +52,7 @@ export CHATTING_MESSAGE_HANDLER_CONFIG_PATH=/tmp/message-handler.json
 python3 -m app.main_message_handler
 ```
 
-## 2) Configure worker (`UserTwo`)
+## 3) Configure worker
 
 ```bash
 cp configs/worker-runtime.example.json /tmp/worker.json
@@ -55,25 +71,26 @@ export CHATTING_WORKER_CONFIG_PATH=/tmp/worker.json
 python3 -m app.main_worker
 ```
 
-## 3) Security boundary expectations
+## 4) Security boundary expectations
 
 - `message-handler` owns integration secrets (`IMAP`, `SMTP`, `Telegram`).
 - `worker` does not read integration secrets and does not dispatch directly.
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
+- Worker emits zero or more task-scoped visible `message` egress events and exactly one terminal
+  internal `completion` event so `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
-## 4) Configure GitHub assignment polling (in message-handler)
+## 5) Configure GitHub assignment polling (in message-handler)
 
 ```bash
 # edit message-handler config: github_repositories (owner/repo or owner/*)
 # optional: github_assignee_login (defaults to authenticated gh user)
-# required for assignment-generated tasks: github_reply_channel_type and github_reply_channel_target
 python3 -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
-`gh` CLI must already be authenticated on the message-handler host.
+`gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
 
-## 5) Run as `systemd` services
+## 6) Run as `systemd` services
 
 Use:
 - `deploy/systemd/chatting-message-handler.service`
@@ -93,9 +110,11 @@ sudo systemctl enable --now chatting-message-handler.service
 sudo systemctl enable --now chatting-worker.service
 ```
 
-## 6) Publish an immediate incremental reply from worker side
+## 7) Publish a visible reply from worker side
 
-Use the worker-side CLI to push an egress event directly to BBMB without waiting for worker loop completion:
+Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
+path for both quick acknowledgements and final user-visible answers instead of returning replies in
+their stdout JSON:
 
 ```bash
 python3 -m app.main_reply task:email:53 \
@@ -107,5 +126,17 @@ python3 -m app.main_reply task:email:53 \
 
 Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
-- These ad-hoc events are intentionally unsequenced and dispatch immediately at message-handler.
+- These events are intentionally unsequenced and dispatch immediately at `message-handler`.
+- In the current contract, executor stdout is completion-only; visible replies belong here.
 - `--event-id` can be supplied for stable idempotency across retries.
+- Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
+
+```bash
+python3 -m app.main_reply task:telegram:53 \
+  --channel telegram \
+  --target 8605042448 \
+  --telegram-reaction "👍" \
+  --config /tmp/worker.json
+```
+
+- If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.

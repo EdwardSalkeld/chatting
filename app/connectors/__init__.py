@@ -3,7 +3,9 @@
 from app.connectors.base import Connector
 from app.connectors.fake_cron_connector import CronTrigger, FakeCronConnector
 from app.connectors.fake_email_connector import EmailMessage, FakeEmailConnector
+from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
 from app.connectors.imap_email_connector import ImapEmailConnector
+from app.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
 from app.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
@@ -18,7 +20,9 @@ __all__ = [
     "EmailMessage",
     "FakeCronConnector",
     "FakeEmailConnector",
+    "GitHubIssueAssignmentConnector",
     "ImapEmailConnector",
+    "InternalHeartbeatConnector",
     "IntervalScheduleConnector",
     "IntervalScheduleJob",
     "SlackConnector",

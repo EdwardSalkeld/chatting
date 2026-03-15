@@ -1,11 +1,12 @@
-# 0002: Interface Contracts And Data Schemas
+# 0002: Interface Contracts And BBMB Payload Schemas
 
 ## Status
 Accepted
 
 ## Purpose
 
-Define stable contracts across connectors/router/executor/policy/applier/state so behavior remains consistent as modules evolve.
+Define stable contracts across message-handler, worker, BBMB payloads, and persistence layers so
+behavior remains consistent as modules evolve.
 
 ## Core Python protocol contracts
 
@@ -24,14 +25,6 @@ class Executor(Protocol):
 class PolicyEngine(Protocol):
     def evaluate(self, result: "ExecutionResult") -> "PolicyDecision": ...
 
-class Applier(Protocol):
-    def apply(self, decision: "PolicyDecision") -> "ApplyResult": ...
-
-class QueueBackend(Protocol):
-    def enqueue(self, envelope: "TaskEnvelope") -> None: ...
-    def dequeue(self) -> "TaskEnvelope | None": ...
-    def size(self) -> int: ...
-
 class StateStore(Protocol):
     def seen(self, source: str, dedupe_key: str) -> bool: ...
     def mark_seen(self, source: str, dedupe_key: str) -> None: ...
@@ -42,10 +35,11 @@ class StateStore(Protocol):
 ## Canonical top-level schema objects
 
 - `TaskEnvelope`
+- `TaskQueueMessage`
+- `EgressQueueMessage`
 - `RoutedTask`
 - `ExecutionResult`
 - `PolicyDecision`
-- `ApplyResult`
 - `RunRecord`
 - `AuditEvent`
 
@@ -53,8 +47,13 @@ Operational extensions:
 - `DeadLetterRecord`
 - `PendingApprovalRecord`
 - `ConfigVersionRecord`
+- task-ledger and staged-egress records in `app.message_handler_runtime`
 
-All top-level objects include `schema_version` and enforce strict required fields.
+The BBMB payload contracts are:
+- `chatting.task.v1` on `chatting.tasks.v1`
+- `chatting.egress.v2` on `chatting.egress.v1`
+
+All top-level payload objects include `schema_version` and enforce strict required fields.
 
 ## Observability contract
 
@@ -74,8 +73,9 @@ Each run emits:
 - action execution deny-by-default
 - sensitive config updates require explicit approval workflow
 - all decisions/audit outcomes persisted in SQLite
+- `message-handler` is the only process allowed to dispatch to external systems
 
 ## Deployment scope
 
-Contracts are implemented for a private single-user system.
-No distributed orchestration contract is required.
+Contracts are implemented for a private single-user system with a split runtime.
+The transport contract is BBMB-backed; there is no multi-tenant orchestration layer.

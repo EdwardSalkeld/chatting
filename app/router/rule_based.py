@@ -40,9 +40,11 @@ class RuleBasedRouter:
                 max_tokens=max_tokens,
             ),
             policy_profile=envelope.policy_profile,
+            event_time=envelope.received_at,
             source=envelope.source,
             actor=envelope.actor,
             content=envelope.content,
+            attachments=envelope.attachments,
             reply_channel=envelope.reply_channel,
         )
 

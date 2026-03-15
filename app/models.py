@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-SOURCE_TYPES = ("cron", "email", "im", "webhook")
+SOURCE_TYPES = ("cron", "email", "im", "webhook", "internal")
 PRIORITY_TYPES = ("low", "normal", "high")
 SCHEMA_VERSION = "1.0"
 
@@ -49,6 +49,14 @@ def _validate_context_refs(values: list[str]) -> None:
             raise ValueError("context_refs items must be non-empty strings")
 
 
+def _validate_metadata_dict(values: dict[str, Any], *, field_name: str) -> None:
+    if not isinstance(values, dict):
+        raise ValueError(f"{field_name} must be a dict")
+    for key in values:
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+
+
 def _validate_attachments(values: list["AttachmentRef"]) -> None:
     if not isinstance(values, list):
         raise ValueError("attachments must be a list")
@@ -76,10 +84,12 @@ class ReplyChannel:
 
     type: str
     target: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_required_string(self.type, field_name="type")
         _validate_required_string(self.target, field_name="target")
+        _validate_metadata_dict(self.metadata, field_name="metadata")
 
 
 @dataclass(frozen=True)
@@ -101,7 +111,7 @@ class TaskEnvelope:
     """Normalized input event schema."""
 
     id: str
-    source: Literal["cron", "email", "im", "webhook"]
+    source: Literal["cron", "email", "im", "webhook", "internal"]
     received_at: datetime
     actor: str | None
     content: str
@@ -126,7 +136,7 @@ class TaskEnvelope:
             raise ValueError("received_at must be timezone-aware")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "id": self.id,
             "source": self.source,
@@ -145,6 +155,9 @@ class TaskEnvelope:
             },
             "dedupe_key": self.dedupe_key,
         }
+        if self.reply_channel.metadata:
+            payload["reply_channel"]["metadata"] = self.reply_channel.metadata
+        return payload
 
 
 @dataclass(frozen=True)
@@ -157,9 +170,11 @@ class RoutedTask:
     priority: Literal["low", "normal", "high"]
     execution_constraints: ExecutionConstraints
     policy_profile: str
-    source: Literal["cron", "email", "im", "webhook"] | None = None
+    event_time: datetime | None = None
+    source: Literal["cron", "email", "im", "webhook", "internal"] | None = None
     actor: str | None = None
     content: str | None = None
+    attachments: list[AttachmentRef] = field(default_factory=list)
     reply_channel: ReplyChannel | None = None
     schema_version: str = SCHEMA_VERSION
 
@@ -171,12 +186,15 @@ class RoutedTask:
         _validate_required_string(self.envelope_id, field_name="envelope_id")
         _validate_required_string(self.workflow, field_name="workflow")
         _validate_required_string(self.policy_profile, field_name="policy_profile")
+        if self.event_time is not None and self.event_time.tzinfo is None:
+            raise ValueError("event_time must be timezone-aware")
         if self.source is not None and self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
         if self.actor is not None:
             _validate_required_string(self.actor, field_name="actor")
         if self.content is not None:
             _validate_required_string(self.content, field_name="content")
+        _validate_attachments(self.attachments)
         if self.reply_channel is not None:
             _validate_required_string(self.reply_channel.type, field_name="reply_channel.type")
             _validate_required_string(self.reply_channel.target, field_name="reply_channel.target")
@@ -194,17 +212,28 @@ class RoutedTask:
             },
             "policy_profile": self.policy_profile,
         }
+        if self.event_time is not None:
+            payload["event_time"] = (
+                self.event_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
         if self.source is not None:
             payload["source"] = self.source
         if self.actor is not None:
             payload["actor"] = self.actor
         if self.content is not None:
             payload["content"] = self.content
+        if self.attachments:
+            payload["attachments"] = [
+                {"uri": item.uri, "name": item.name}
+                for item in self.attachments
+            ]
         if self.reply_channel is not None:
             payload["reply_channel"] = {
                 "type": self.reply_channel.type,
                 "target": self.reply_channel.target,
             }
+            if self.reply_channel.metadata:
+                payload["reply_channel"]["metadata"] = self.reply_channel.metadata
         return payload
 
 
@@ -216,6 +245,7 @@ class OutboundMessage:
     target: str
     body: str | None = None
     attachment: AttachmentRef | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_required_string(self.channel, field_name="channel")
@@ -226,9 +256,10 @@ class OutboundMessage:
             raise ValueError("attachment must be AttachmentRef")
         if self.body is None and self.attachment is None:
             raise ValueError("body or attachment is required")
-
-    def to_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
+        _validate_metadata_dict(self.metadata, field_name="metadata")
+    
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "channel": self.channel,
             "target": self.target,
         }
@@ -239,6 +270,8 @@ class OutboundMessage:
                 "uri": self.attachment.uri,
                 "name": self.attachment.name,
             }
+        if self.metadata:
+            payload["metadata"] = self.metadata
         return payload
 
 
@@ -288,7 +321,6 @@ class ConfigUpdate:
 class ExecutionResult:
     """Structured output contract from executor."""
 
-    messages: list[OutboundMessage]
     actions: list[ActionProposal]
     config_updates: list[ConfigUpdate]
     requires_human_review: bool
@@ -297,11 +329,6 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
-        _validate_typed_list(
-            self.messages,
-            field_name="messages",
-            item_type=OutboundMessage,
-        )
         _validate_typed_list(
             self.actions,
             field_name="actions",
@@ -317,7 +344,6 @@ class ExecutionResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
-            "messages": [message.to_dict() for message in self.messages],
             "actions": [action.to_dict() for action in self.actions],
             "config_updates": [update.to_dict() for update in self.config_updates],
             "requires_human_review": self.requires_human_review,
@@ -448,7 +474,7 @@ class RunRecord:
 
     run_id: str
     envelope_id: str
-    source: Literal["cron", "email", "im", "webhook"]
+    source: Literal["cron", "email", "im", "webhook", "internal"]
     workflow: str
     policy_profile: str
     latency_ms: int
@@ -490,7 +516,7 @@ class AuditEvent:
 
     run_id: str
     envelope_id: str
-    source: Literal["cron", "email", "im", "webhook"]
+    source: Literal["cron", "email", "im", "webhook", "internal"]
     workflow: str
     policy_profile: str
     result_status: str

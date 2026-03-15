@@ -1,10 +1,11 @@
 import json
 import subprocess
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.executor import CodexExecutor, parse_execution_result
-from app.models import ExecutionConstraints, ReplyChannel, RoutedTask
+from app.models import AttachmentRef, ExecutionConstraints, ReplyChannel, RoutedTask
 
 
 def _task() -> RoutedTask:
@@ -15,9 +16,11 @@ def _task() -> RoutedTask:
         priority="normal",
         execution_constraints=ExecutionConstraints(timeout_seconds=7, max_tokens=1000),
         policy_profile="default",
+        event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
         source="email",
         actor="alice@example.com",
         content="Subject: hello\\n\\nPlease summarize this thread.",
+        attachments=[AttachmentRef(uri="file:///tmp/evidence.png", name="evidence.png")],
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
     )
 
@@ -27,13 +30,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [
-                    {
-                        "channel": "email",
-                        "target": "alice@example.com",
-                        "body": "Done.",
-                    }
-                ],
                 "actions": [
                     {
                         "type": "write_file",
@@ -49,7 +45,6 @@ class ParseExecutionResultTests(unittest.TestCase):
 
         result = parse_execution_result(payload)
 
-        self.assertEqual(result.to_dict()["messages"][0]["channel"], "email")
         self.assertEqual(result.to_dict()["actions"][0]["type"], "write_file")
         self.assertEqual(result.to_dict()["config_updates"][0]["path"], "routing.default_timeout")
 
@@ -57,13 +52,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         valid_payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [
-                    {
-                        "channel": "email",
-                        "target": "alice@example.com",
-                        "body": "Done.",
-                    }
-                ],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -74,13 +62,12 @@ class ParseExecutionResultTests(unittest.TestCase):
 
         result = parse_execution_result(mixed_output)
 
-        self.assertEqual(result.to_dict()["messages"][0]["channel"], "email")
+        self.assertEqual(result.to_dict()["actions"], [])
 
     def test_parse_execution_result_rejects_unknown_top_level_keys(self) -> None:
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -92,18 +79,11 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown_top_level_keys"):
             parse_execution_result(payload)
 
-    def test_parse_execution_result_rejects_unknown_message_keys(self) -> None:
+    def test_parse_execution_result_rejects_legacy_messages_field(self) -> None:
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [
-                    {
-                        "channel": "email",
-                        "target": "alice@example.com",
-                        "body": "Done.",
-                        "priority": "high",
-                    }
-                ],
+                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -111,81 +91,13 @@ class ParseExecutionResultTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaisesRegex(ValueError, "unknown_message_keys"):
+        with self.assertRaisesRegex(ValueError, "unknown_top_level_keys:messages"):
             parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_message_missing_required_field(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "messages": [
-                    {
-                        "channel": "email",
-                        "target": "alice@example.com",
-                    }
-                ],
-                "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "message_body_or_attachment_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_message_body_with_only_whitespace(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "messages": [
-                    {
-                        "channel": "email",
-                        "target": "alice@example.com",
-                        "body": "   ",
-                    }
-                ],
-                "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "message_body_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_accepts_attachment_message_without_body(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "messages": [
-                    {
-                        "channel": "telegram",
-                        "target": "12345",
-                        "attachment": {
-                            "uri": "file:///tmp/report.pdf",
-                            "name": "report.pdf",
-                        },
-                    }
-                ],
-                "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        result = parse_execution_result(payload)
-
-        self.assertIsNone(result.messages[0].body)
-        self.assertIsNotNone(result.messages[0].attachment)
 
     def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [
                     {
                         "type": "write_file",
@@ -206,7 +118,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"path": "docs/notes.md"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -221,7 +132,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "  "}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -236,7 +146,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "write_file", "content": "hello"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -251,7 +160,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "write_file", "path": "docs/notes.md"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -266,7 +174,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "write_file", "path": "", "content": "hello"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -283,7 +190,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "write_file", "path": "   ", "content": "hello"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -298,7 +204,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "write_file", "path": "docs/notes.md", "content": ""}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -315,7 +220,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "write_file", "path": "docs/notes.md", "content": "   "}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -330,7 +234,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "run_shell", "path": "echo hi"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -345,7 +248,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [{"type": "run_shell", "content": "echo hi"}],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -360,7 +262,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [
                     {
@@ -381,7 +282,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [{"value": 240}],
                 "requires_human_review": False,
@@ -398,7 +298,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [{"path": " ", "value": 240}],
                 "requires_human_review": False,
@@ -415,7 +314,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [{"path": "routing.default_timeout"}],
                 "requires_human_review": False,
@@ -429,7 +327,6 @@ class ParseExecutionResultTests(unittest.TestCase):
     def test_parse_execution_result_rejects_missing_schema_version(self) -> None:
         payload = json.dumps(
             {
-                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -444,7 +341,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "",
-                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -459,7 +355,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "2.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -474,7 +369,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -491,7 +385,6 @@ class ParseExecutionResultTests(unittest.TestCase):
         payload = json.dumps(
             {
                 "schema_version": "1.0",
-                "messages": [],
                 "actions": [],
                 "config_updates": [],
                 "requires_human_review": False,
@@ -514,7 +407,7 @@ class CodexExecutorTests(unittest.TestCase):
         result = executor.execute(_task())
 
         self.assertEqual(result.errors, ["executor_timeout"])
-        self.assertEqual(result.messages, [])
+        self.assertEqual(result.actions, [])
 
     @patch("app.executor.codex.subprocess.run")
     def test_execute_returns_nonzero_exit_error(self, run_mock) -> None:
@@ -538,13 +431,6 @@ class CodexExecutorTests(unittest.TestCase):
             stdout=json.dumps(
                 {
                     "schema_version": "1.0",
-                    "messages": [
-                        {
-                            "channel": "log",
-                            "target": "evt_1",
-                            "body": "ok",
-                        }
-                    ],
                     "actions": [],
                     "config_updates": [],
                     "requires_human_review": False,
@@ -553,15 +439,30 @@ class CodexExecutorTests(unittest.TestCase):
             ),
             stderr="",
         )
-        executor = CodexExecutor(command=("codex", "exec", "--json"))
+        executor = CodexExecutor(
+            command=("codex", "exec", "--json"),
+            now_provider=lambda: datetime(2026, 2, 27, 18, 0, tzinfo=timezone.utc),
+        )
         task = _task()
 
         result = executor.execute(task)
 
         self.assertEqual(result.errors, [])
-        self.assertEqual(result.messages[0].body, "ok")
+        self.assertEqual(result.actions, [])
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.kwargs["timeout"], task.execution_constraints.timeout_seconds)
+        payload = json.loads(run_mock.call_args.kwargs["input"])
+        self.assertEqual(payload["task"]["event_time"], "2026-02-27T16:00:00Z")
+        self.assertEqual(
+            payload["task"]["attachments"],
+            [{"uri": "file:///tmp/evidence.png", "name": "evidence.png"}],
+        )
+        self.assertEqual(payload["current_time"], "2026-02-27T18:00:00Z")
+        self.assertEqual(
+            payload["reply_contract"]["visible_replies_must_use"],
+            "python3 -m app.main_reply",
+        )
+        self.assertEqual(payload["reply_contract"]["executor_output_is_completion_only"], True)
 
     @patch("app.executor.codex.subprocess.run")
     def test_execute_passes_configured_working_directory(self, run_mock) -> None:
@@ -571,7 +472,6 @@ class CodexExecutorTests(unittest.TestCase):
             stdout=json.dumps(
                 {
                     "schema_version": "1.0",
-                    "messages": [],
                     "actions": [],
                     "config_updates": [],
                     "requires_human_review": False,

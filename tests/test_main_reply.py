@@ -2,10 +2,14 @@ import io
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from app.broker import TaskQueueMessage
 from app.main_reply import main
+from app.message_handler_runtime import TaskLedgerStore
+from app.models import ReplyChannel, TaskEnvelope
 
 
 class _FakeBroker:
@@ -113,6 +117,82 @@ class MainReplyCliTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "envelope_id is required"):
                 main()
 
+    def test_main_reply_publishes_telegram_reaction_using_explicit_message_id(self) -> None:
+        broker = _FakeBroker("127.0.0.1:9876")
+        with (
+            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+            patch(
+                "sys.argv",
+                [
+                    "main_reply.py",
+                    "task:telegram:53",
+                    "--channel",
+                    "telegram",
+                    "--target",
+                    "8605042448",
+                    "--telegram-reaction",
+                    "👍",
+                    "--telegram-message-id",
+                    "123",
+                ],
+            ),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        _, payload = broker.published[0]
+        self.assertEqual(payload["message"]["channel"], "telegram_reaction")
+        self.assertEqual(payload["message"]["body"], "👍")
+        self.assertEqual(payload["message"]["metadata"], {"message_id": 123})
+
+    def test_main_reply_publishes_telegram_reaction_using_task_ledger_message_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.db"
+            config_path = Path(tmpdir) / "worker.json"
+            config_path.write_text(json.dumps({"db_path": str(db_path)}), encoding="utf-8")
+            ledger = TaskLedgerStore(str(db_path))
+            envelope = TaskEnvelope(
+                id="telegram:53",
+                source="im",
+                received_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc),
+                actor="8605042448:edsalkeld",
+                content="hello",
+                attachments=[],
+                context_refs=[],
+                policy_profile="default",
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="8605042448",
+                    metadata={"message_id": 456},
+                ),
+                dedupe_key="telegram:53",
+            )
+            ledger.record_task(TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53"))
+
+            broker = _FakeBroker("127.0.0.1:9876")
+            with (
+                patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "task:telegram:53",
+                        "--channel",
+                        "telegram",
+                        "--target",
+                        "8605042448",
+                        "--telegram-reaction",
+                        "👍",
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        _, payload = broker.published[0]
+        self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
 
 if __name__ == "__main__":
     unittest.main()

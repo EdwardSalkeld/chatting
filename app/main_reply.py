@@ -1,4 +1,4 @@
-"""Worker-side CLI to publish immediate incremental egress messages."""
+"""Worker-side CLI to publish visible egress messages."""
 
 from __future__ import annotations
 
@@ -10,16 +10,24 @@ import time
 from datetime import datetime, timezone
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
+from app.message_handler_runtime import TaskLedgerStore
 from app.main_worker import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 from app.models import OutboundMessage
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Publish one immediate incremental reply message.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Publish one visible egress message. "
+            "Executors should use this for user-visible acknowledgements and final replies."
+        )
+    )
     parser.add_argument("task_id", help="Task identifier (for example: task:email:53).")
-    parser.add_argument("--message", required=True, help="Reply body text.")
+    parser.add_argument("--message", help="Reply body text.")
     parser.add_argument("--channel", required=True, help="Outbound channel (for example: email, telegram, github).")
     parser.add_argument("--target", required=True, help="Outbound channel target.")
+    parser.add_argument("--telegram-reaction", help="React to the Telegram source message instead of sending a text message.")
+    parser.add_argument("--telegram-message-id", type=int, help="Telegram message id to react to.")
     parser.add_argument("--event-id", help="Optional stable event id for idempotency.")
     parser.add_argument("--envelope-id", help="Envelope id (defaults to task_id without 'task:' prefix).")
     parser.add_argument("--trace-id", help="Trace id (defaults to trace:<envelope_id>).")
@@ -59,7 +67,62 @@ def _resolve_event_id(task_id: str, explicit_value: str | None) -> str:
         return explicit_value
     return f"evt:{task_id}:adhoc:{time.time_ns()}"
 
+def _resolve_telegram_message_id(
+    *,
+    task_id: str,
+    explicit_value: int | None,
+    config: dict[str, object],
+) -> int:
+    if explicit_value is not None:
+        if explicit_value <= 0:
+            raise ValueError("telegram_message_id must be positive")
+        return explicit_value
 
+    db_path = _resolve_str(
+        None,
+        config.get("db_path"),
+        default_value="",
+        setting_name="db_path",
+    ).strip()
+    if not db_path:
+        raise ValueError("telegram_message_id is required")
+
+    ledger_record = TaskLedgerStore(db_path).get_task(task_id)
+    if ledger_record is None:
+        raise ValueError("telegram_message_id is required")
+
+    message_id = ledger_record.task_message.envelope.reply_channel.metadata.get("message_id")
+    if isinstance(message_id, int) and message_id > 0:
+        return message_id
+
+    raise ValueError("telegram_message_id is required")
+
+
+def _resolve_reply_message(args: argparse.Namespace, config: dict[str, object]) -> OutboundMessage:
+    if args.telegram_reaction is not None:
+        if args.channel != "telegram":
+            raise ValueError("telegram reactions require --channel telegram")
+        emoji = args.telegram_reaction.strip()
+        if not emoji:
+            raise ValueError("telegram_reaction must not be empty")
+        message_id = _resolve_telegram_message_id(
+            task_id=args.task_id,
+            explicit_value=args.telegram_message_id,
+            config=config,
+        )
+        return OutboundMessage(
+            channel="telegram_reaction",
+            target=args.target,
+            body=emoji,
+            metadata={"message_id": message_id},
+        )
+
+    if args.message is None:
+        raise ValueError("message must not be empty")
+    body = args.message.strip()
+    if not body:
+        raise ValueError("message must not be empty")
+    return OutboundMessage(channel=args.channel, target=args.target, body=body)
 def main() -> int:
     args = _parse_args()
     config = _load_config(args.config, os.environ)
@@ -75,9 +138,7 @@ def main() -> int:
     trace_id = _resolve_trace_id(envelope_id, args.trace_id)
     event_id = _resolve_event_id(args.task_id, args.event_id)
 
-    body = args.message.strip()
-    if not body:
-        raise ValueError("message must not be empty")
+    outbound_message = _resolve_reply_message(args, config)
 
     egress_message = EgressQueueMessage(
         task_id=args.task_id,
@@ -85,7 +146,7 @@ def main() -> int:
         trace_id=trace_id,
         event_index=0,
         event_count=1,
-        message=OutboundMessage(channel=args.channel, target=args.target, body=body),
+        message=outbound_message,
         emitted_at=datetime.now(timezone.utc),
         event_id=event_id,
         sequence=None,

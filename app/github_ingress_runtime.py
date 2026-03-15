@@ -166,8 +166,6 @@ class GitHubIssueAssignmentEvent:
     def to_task_envelope(
         self,
         *,
-        reply_channel_type: str,
-        reply_channel_target: str,
         context_refs: list[str],
         policy_profile: str,
     ) -> TaskEnvelope:
@@ -195,7 +193,7 @@ class GitHubIssueAssignmentEvent:
             attachments=[],
             context_refs=list(context_refs),
             policy_profile=policy_profile,
-            reply_channel=ReplyChannel(type=reply_channel_type, target=reply_channel_target),
+            reply_channel=ReplyChannel(type="github", target=self.issue_url),
             dedupe_key=self.dedupe_key(),
         )
 
@@ -571,8 +569,6 @@ def publish_assignment_events(
     events: list[GitHubIssueAssignmentEvent],
     store: SQLiteStateStore,
     broker: BBMBQueueAdapter,
-    reply_channel_type: str,
-    reply_channel_target: str,
     context_refs: list[str],
     policy_profile: str,
 ) -> int:
@@ -580,8 +576,6 @@ def publish_assignment_events(
     published_count = 0
     for event in events:
         envelope = event.to_task_envelope(
-            reply_channel_type=reply_channel_type,
-            reply_channel_target=reply_channel_target,
             context_refs=context_refs,
             policy_profile=policy_profile,
         )
