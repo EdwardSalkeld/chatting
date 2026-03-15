@@ -280,7 +280,7 @@ def _process_envelope(
                     original_messages=pending_messages,
                     dispatched_messages=dispatch_error.dispatched_messages,
                     envelope=envelope,
-                    start_index=pending_message_start_index,
+                    start_index=0,
                 ):
                     store.mark_dispatched_event(run_id=base_run_id, event_index=event_index)
                 raise
@@ -288,7 +288,7 @@ def _process_envelope(
                 original_messages=pending_messages,
                 dispatched_messages=apply_result.dispatched_messages,
                 envelope=envelope,
-                start_index=pending_message_start_index,
+                start_index=0,
             ):
                 store.mark_dispatched_event(run_id=base_run_id, event_index=event_index)
             apply_result_payload = apply_result.to_dict()
