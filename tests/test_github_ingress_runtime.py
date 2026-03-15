@@ -10,11 +10,13 @@ from app.github_ingress_runtime import (
     AssignmentCheckpoint,
     GitHubAssignmentCheckpointStore,
     GitHubIssueAssignmentEvent,
+    GitHubPullRequestReviewEvent,
     checkpoint_scope_key,
     default_graphql_runner,
     expand_repository_patterns,
     fetch_assignment_events_for_repository,
     fetch_authenticated_viewer_login,
+    fetch_pull_request_review_events_for_repository,
     list_owner_repositories,
     parse_repo_slug,
     publish_assignment_events,
@@ -85,6 +87,97 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
         self.assertEqual(event.repository_name_with_owner, "brokensbone/chatting")
         self.assertEqual(event.labels, ["enhancement", "ai"])
 
+    def test_fetch_pull_request_review_events_for_repository_filters_by_author_login(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "id": "R_123",
+                    "nameWithOwner": "brokensbone/chatting",
+                    "pullRequests": {
+                        "nodes": [
+                            {
+                                "id": "PR_1",
+                                "number": 60,
+                                "title": "Add ingress from GitHub reviews",
+                                "body": "Implements the review ingress flow.",
+                                "url": "https://github.com/brokensbone/chatting/pull/60",
+                                "author": {"login": "BillyAcachofa"},
+                                "closingIssuesReferences": {
+                                    "nodes": [
+                                        {
+                                            "number": 60,
+                                            "title": "Add ingress from GitHub reviews",
+                                            "url": "https://github.com/brokensbone/chatting/issues/60",
+                                        }
+                                    ]
+                                },
+                                "reviews": {
+                                    "nodes": [
+                                        {
+                                            "id": "PRR_1",
+                                            "submittedAt": "2026-03-07T12:00:00Z",
+                                            "state": "CHANGES_REQUESTED",
+                                            "body": "Please wire this into ingress.",
+                                            "url": "https://github.com/brokensbone/chatting/pull/60#pullrequestreview-1",
+                                            "author": {"login": "brokensbone"},
+                                            "comments": {"totalCount": 2},
+                                        },
+                                        {
+                                            "id": "PRR_2",
+                                            "submittedAt": "2026-03-07T12:05:00Z",
+                                            "state": "COMMENTED",
+                                            "body": "Self review should be ignored.",
+                                            "url": "https://github.com/brokensbone/chatting/pull/60#pullrequestreview-2",
+                                            "author": {"login": "BillyAcachofa"},
+                                            "comments": {"totalCount": 0},
+                                        },
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "PR_2",
+                                "number": 61,
+                                "title": "Other author's PR",
+                                "body": "",
+                                "url": "https://github.com/brokensbone/chatting/pull/61",
+                                "author": {"login": "someoneelse"},
+                                "closingIssuesReferences": {"nodes": []},
+                                "reviews": {
+                                    "nodes": [
+                                        {
+                                            "id": "PRR_3",
+                                            "submittedAt": "2026-03-07T12:10:00Z",
+                                            "state": "COMMENTED",
+                                            "body": "Should not be picked up.",
+                                            "url": "https://github.com/brokensbone/chatting/pull/61#pullrequestreview-3",
+                                            "author": {"login": "brokensbone"},
+                                            "comments": {"totalCount": 1},
+                                        }
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                }
+            }
+        }
+
+        events = fetch_pull_request_review_events_for_repository(
+            repo_owner="brokensbone",
+            repo_name="chatting",
+            author_login="billyacachofa",
+            pull_request_limit=20,
+            review_limit=10,
+            graphql_runner=lambda _query, _variables: payload,
+        )
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.event_id, "PRR_1")
+        self.assertEqual(event.repository_name_with_owner, "brokensbone/chatting")
+        self.assertEqual(event.pull_request_number, 60)
+        self.assertEqual(event.closing_issue_refs, ["#60 Add ingress from GitHub reviews"])
+
     def test_select_events_after_checkpoint_filters_boundary(self) -> None:
         older = GitHubIssueAssignmentEvent(
             event_id="AE_1",
@@ -124,6 +217,54 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual([event.event_id for event in selected], ["AE_2"])
+
+    def test_select_events_after_checkpoint_supports_pull_request_review_events(self) -> None:
+        older = GitHubPullRequestReviewEvent(
+            event_id="PRR_1",
+            event_created_at=datetime(2026, 3, 7, 12, 0, 0, tzinfo=timezone.utc),
+            repository_id="R_1",
+            repository_name_with_owner="brokensbone/chatting",
+            pull_request_id="PR_1",
+            pull_request_number=60,
+            pull_request_title="Add ingress from GitHub reviews",
+            pull_request_body="PR body",
+            pull_request_url="https://example.com/pr/60",
+            pull_request_author_login="BillyAcachofa",
+            review_author_login="brokensbone",
+            review_state="CHANGES_REQUESTED",
+            review_body="Please fix this",
+            review_url="https://example.com/pr/60#review-1",
+            review_comment_count=1,
+            closing_issue_refs=["#60 Add ingress from GitHub reviews"],
+        )
+        newer = GitHubPullRequestReviewEvent(
+            event_id="PRR_2",
+            event_created_at=datetime(2026, 3, 7, 12, 0, 0, tzinfo=timezone.utc),
+            repository_id="R_1",
+            repository_name_with_owner="brokensbone/chatting",
+            pull_request_id="PR_1",
+            pull_request_number=60,
+            pull_request_title="Add ingress from GitHub reviews",
+            pull_request_body="PR body",
+            pull_request_url="https://example.com/pr/60",
+            pull_request_author_login="BillyAcachofa",
+            review_author_login="brokensbone",
+            review_state="COMMENTED",
+            review_body="Another note",
+            review_url="https://example.com/pr/60#review-2",
+            review_comment_count=0,
+            closing_issue_refs=["#60 Add ingress from GitHub reviews"],
+        )
+
+        selected = select_events_after_checkpoint(
+            [newer, older],
+            checkpoint=AssignmentCheckpoint(
+                event_created_at=older.event_created_at,
+                event_id=older.event_id,
+            ),
+        )
+
+        self.assertEqual([event.event_id for event in selected], ["PRR_2"])
 
     def test_publish_assignment_events_emits_task_messages_and_dedupes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

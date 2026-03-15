@@ -533,7 +533,7 @@ def _parse_github_issue_target(target: str) -> tuple[str, int]:
         if parsed.netloc.casefold() != "github.com":
             raise ValueError("github_issue_target_invalid")
         parts = [part for part in parsed.path.split("/") if part]
-        if len(parts) < 4 or parts[2] != "issues":
+        if len(parts) < 4 or parts[2] not in {"issues", "pull"}:
             raise ValueError("github_issue_target_invalid")
         repository = f"{parts[0]}/{parts[1]}"
         number_text = parts[3]

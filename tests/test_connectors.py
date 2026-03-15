@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from app.connectors.fake_cron_connector import CronTrigger, FakeCronConnector
 from app.connectors.fake_email_connector import EmailMessage, FakeEmailConnector
 from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
+from app.connectors.github_pull_request_review_connector import GitHubPullRequestReviewConnector
 from app.connectors.imap_email_connector import ImapEmailConnector
 from app.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
 from app.connectors.interval_schedule_connector import (
@@ -343,6 +344,191 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
         self.assertTrue(
             any(
                 "github_assignment_poll_failed repository=brokensbone/chatting assignee=BillyAcachofa"
+                in line
+                for line in logs.output
+            )
+        )
+
+
+class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
+    def test_poll_normalizes_new_review_events_to_envelopes(self) -> None:
+        responses = [
+            {
+                "data": {
+                    "repository": {
+                        "id": "R_1",
+                        "nameWithOwner": "brokensbone/chatting",
+                        "pullRequests": {
+                            "nodes": [
+                                {
+                                    "id": "PR_1",
+                                    "number": 60,
+                                    "title": "Add ingress from GitHub reviews",
+                                    "body": "PR body",
+                                    "url": "https://github.com/brokensbone/chatting/pull/60",
+                                    "author": {"login": "BillyAcachofa"},
+                                    "closingIssuesReferences": {
+                                        "nodes": [
+                                            {
+                                                "number": 60,
+                                                "title": "Add ingress from GitHub reviews",
+                                                "url": "https://github.com/brokensbone/chatting/issues/60",
+                                            }
+                                        ]
+                                    },
+                                    "reviews": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRR_1",
+                                                "submittedAt": "2026-03-07T12:00:00Z",
+                                                "state": "CHANGES_REQUESTED",
+                                                "body": "Please address the comments.",
+                                                "url": "https://github.com/brokensbone/chatting/pull/60#pullrequestreview-1",
+                                                "author": {"login": "brokensbone"},
+                                                "comments": {"totalCount": 2},
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repository": {
+                        "id": "R_1",
+                        "nameWithOwner": "brokensbone/chatting",
+                        "pullRequests": {
+                            "nodes": [
+                                {
+                                    "id": "PR_1",
+                                    "number": 60,
+                                    "title": "Add ingress from GitHub reviews",
+                                    "body": "PR body",
+                                    "url": "https://github.com/brokensbone/chatting/pull/60",
+                                    "author": {"login": "BillyAcachofa"},
+                                    "closingIssuesReferences": {"nodes": []},
+                                    "reviews": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRR_1",
+                                                "submittedAt": "2026-03-07T12:00:00Z",
+                                                "state": "CHANGES_REQUESTED",
+                                                "body": "Please address the comments.",
+                                                "url": "https://github.com/brokensbone/chatting/pull/60#pullrequestreview-1",
+                                                "author": {"login": "brokensbone"},
+                                                "comments": {"totalCount": 2},
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            },
+        ]
+
+        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+            del query
+            self.assertEqual(variables["repoOwner"], "brokensbone")
+            self.assertEqual(variables["repoName"], "chatting")
+            return responses.pop(0)
+
+        with TemporaryDirectory() as tmpdir:
+            connector = GitHubPullRequestReviewConnector(
+                repository_patterns=["brokensbone/chatting"],
+                author_login="BillyAcachofa",
+                context_refs=["repo:/home/edward/chatting"],
+                checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
+                graphql_runner=_graphql_runner,
+            )
+
+            first_poll = connector.poll()
+            second_poll = connector.poll()
+
+        self.assertEqual(len(first_poll), 1)
+        envelope = first_poll[0]
+        self.assertEqual(envelope.id, "github-review:brokensbone/chatting:60:PRR_1")
+        self.assertEqual(envelope.reply_channel.type, "github")
+        self.assertEqual(
+            envelope.reply_channel.target,
+            "https://github.com/brokensbone/chatting/pull/60",
+        )
+        self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
+        self.assertEqual(envelope.dedupe_key, "github-review:R_1:PR_1:PRR_1")
+        self.assertIn("Linked issues: #60 Add ingress from GitHub reviews", envelope.content)
+        self.assertEqual(second_poll, [])
+        self.assertEqual(connector.last_poll_scanned_events, 1)
+        self.assertEqual(connector.last_poll_new_events, 0)
+        self.assertEqual(connector.last_poll_checkpoint_id, "PRR_1")
+
+    def test_poll_continues_when_one_repository_fetch_fails(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+            del query
+            calls.append((str(variables["repoOwner"]), str(variables["repoName"])))
+            if variables["repoName"] == "chatting":
+                raise RuntimeError("boom")
+            return {
+                "data": {
+                    "repository": {
+                        "id": "R_2",
+                        "nameWithOwner": "brokensbone/bbmb",
+                        "pullRequests": {
+                            "nodes": [
+                                {
+                                    "id": "PR_2",
+                                    "number": 34,
+                                    "title": "Build something",
+                                    "body": "",
+                                    "url": "https://github.com/brokensbone/bbmb/pull/34",
+                                    "author": {"login": "BillyAcachofa"},
+                                    "closingIssuesReferences": {"nodes": []},
+                                    "reviews": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRR_2",
+                                                "submittedAt": "2026-03-07T13:00:00Z",
+                                                "state": "COMMENTED",
+                                                "body": "",
+                                                "url": "https://github.com/brokensbone/bbmb/pull/34#pullrequestreview-2",
+                                                "author": {"login": "brokensbone"},
+                                                "comments": {"totalCount": 1},
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+
+        with TemporaryDirectory() as tmpdir:
+            connector = GitHubPullRequestReviewConnector(
+                repository_patterns=["brokensbone/chatting", "brokensbone/bbmb"],
+                author_login="BillyAcachofa",
+                context_refs=[],
+                checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
+                graphql_runner=_graphql_runner,
+            )
+
+            with self.assertLogs(
+                "app.connectors.github_pull_request_review_connector",
+                level="ERROR",
+            ) as logs:
+                envelopes = connector.poll()
+
+        self.assertEqual([call[1] for call in calls], ["chatting", "bbmb"])
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(envelopes[0].id, "github-review:brokensbone/bbmb:34:PRR_2")
+        self.assertTrue(
+            any(
+                "github_pull_request_review_poll_failed repository=brokensbone/chatting author=BillyAcachofa"
                 in line
                 for line in logs.output
             )
