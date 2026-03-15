@@ -131,7 +131,7 @@ class ParseExecutionResultTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaisesRegex(ValueError, "message_body_required"):
+        with self.assertRaisesRegex(ValueError, "message_body_or_attachment_required"):
             parse_execution_result(payload)
 
     def test_parse_execution_result_rejects_message_body_with_only_whitespace(self) -> None:
@@ -154,6 +154,32 @@ class ParseExecutionResultTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "message_body_required"):
             parse_execution_result(payload)
+
+    def test_parse_execution_result_accepts_attachment_message_without_body(self) -> None:
+        payload = json.dumps(
+            {
+                "schema_version": "1.0",
+                "messages": [
+                    {
+                        "channel": "telegram",
+                        "target": "12345",
+                        "attachment": {
+                            "uri": "file:///tmp/report.pdf",
+                            "name": "report.pdf",
+                        },
+                    }
+                ],
+                "actions": [],
+                "config_updates": [],
+                "requires_human_review": False,
+                "errors": [],
+            }
+        )
+
+        result = parse_execution_result(payload)
+
+        self.assertIsNone(result.messages[0].body)
+        self.assertIsNotNone(result.messages[0].attachment)
 
     def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
         payload = json.dumps(

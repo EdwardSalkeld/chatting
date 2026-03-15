@@ -214,19 +214,32 @@ class OutboundMessage:
 
     channel: str
     target: str
-    body: str
+    body: str | None = None
+    attachment: AttachmentRef | None = None
 
     def __post_init__(self) -> None:
         _validate_required_string(self.channel, field_name="channel")
         _validate_required_string(self.target, field_name="target")
-        _validate_required_string(self.body, field_name="body")
+        if self.body is not None:
+            _validate_required_string(self.body, field_name="body")
+        if self.attachment is not None and not isinstance(self.attachment, AttachmentRef):
+            raise ValueError("attachment must be AttachmentRef")
+        if self.body is None and self.attachment is None:
+            raise ValueError("body or attachment is required")
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
             "channel": self.channel,
             "target": self.target,
-            "body": self.body,
         }
+        if self.body is not None:
+            payload["body"] = self.body
+        if self.attachment is not None:
+            payload["attachment"] = {
+                "uri": self.attachment.uri,
+                "name": self.attachment.name,
+            }
+        return payload
 
 
 @dataclass(frozen=True)

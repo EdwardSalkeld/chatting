@@ -78,6 +78,34 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.event_kind, "incremental")
         self.assertEqual(parsed.event_index, 1)
 
+    def test_egress_v2_attachment_message_round_trip(self) -> None:
+        message = EgressQueueMessage(
+            task_id="task:telegram:2",
+            envelope_id="telegram:2",
+            trace_id="trace:telegram:2",
+            event_index=0,
+            event_count=1,
+            message=OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body="menu attached",
+                attachment=AttachmentRef(uri="file:///tmp/menu.pdf", name="menu.pdf"),
+            ),
+            emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+            event_id="evt:task:telegram:2:1",
+            sequence=0,
+            event_kind="final",
+            message_type="chatting.egress.v2",
+        )
+
+        parsed = EgressQueueMessage.from_dict(message.to_dict())
+
+        self.assertEqual(parsed.message.body, "menu attached")
+        self.assertIsNotNone(parsed.message.attachment)
+        assert parsed.message.attachment is not None
+        self.assertEqual(parsed.message.attachment.uri, "file:///tmp/menu.pdf")
+        self.assertEqual(parsed.message.attachment.name, "menu.pdf")
+
     def test_egress_message_rejects_event_index_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
             EgressQueueMessage(

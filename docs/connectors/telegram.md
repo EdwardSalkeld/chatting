@@ -33,3 +33,20 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `channel_post` updates are ignored unless the channel ID is present in `telegram_allowed_channel_ids`.
 - Ignored `channel_post` updates log `update_id`, `channel_id`, and an explicit reason so new channel IDs can be copied from logs.
 - Offset is advanced as `highest_update_id + 1` each poll.
+
+## Outbound egress
+
+- Telegram egress supports:
+  - plain text replies through `sendMessage`
+  - image attachments through `sendPhoto`
+  - PDFs and other files through `sendDocument`
+- Outbound attachment messages use the normal `OutboundMessage` contract with:
+  - optional `body` as the text message or attachment caption
+  - optional `attachment` object containing a local `file://` URI and optional `name`
+- Attachment selection is inferred from the local file type:
+  - image MIME types go to `sendPhoto`
+  - everything else goes to `sendDocument`
+- Attachment constraints:
+  - only local absolute `file://` paths are supported today
+  - the referenced file must already exist on disk when dispatch runs
+  - upload/API failures surface deterministic Telegram reason codes such as `telegram_attachment_missing` and `telegram_attachment_send_failed`

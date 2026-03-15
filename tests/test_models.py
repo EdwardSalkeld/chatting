@@ -140,6 +140,26 @@ class ExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "body is required"):
             OutboundMessage(channel="email", target="alice@example.com", body="")
 
+    def test_execution_result_message_allows_attachment_without_body(self) -> None:
+        message = OutboundMessage(
+            channel="telegram",
+            target="12345",
+            attachment=AttachmentRef(uri="file:///tmp/report.pdf", name="report.pdf"),
+        )
+
+        self.assertEqual(
+            message.to_dict(),
+            {
+                "channel": "telegram",
+                "target": "12345",
+                "attachment": {"uri": "file:///tmp/report.pdf", "name": "report.pdf"},
+            },
+        )
+
+    def test_execution_result_message_requires_body_or_attachment(self) -> None:
+        with self.assertRaisesRegex(ValueError, "body or attachment is required"):
+            OutboundMessage(channel="telegram", target="12345", body=None)
+
 
 class PolicyDecisionTests(unittest.TestCase):
     def test_policy_decision_serializes_expected_shape(self) -> None:

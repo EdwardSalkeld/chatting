@@ -263,6 +263,7 @@ def _normalize_message_for_egress(*, message: OutboundMessage, task_message: Tas
         channel=task_message.envelope.reply_channel.type,
         target=task_message.envelope.reply_channel.target,
         body=message.body,
+        attachment=message.attachment,
     )
 
 

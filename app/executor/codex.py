@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from app.models import (
     ActionProposal,
+    AttachmentRef,
     ConfigUpdate,
     ExecutionResult,
     OutboundMessage,
@@ -32,7 +33,7 @@ _REQUIRED_TOP_LEVEL_KEYS = {
     "requires_human_review",
     "errors",
 }
-_ALLOWED_MESSAGE_KEYS = {"channel", "target", "body"}
+_ALLOWED_MESSAGE_KEYS = {"channel", "target", "body", "attachment"}
 _ALLOWED_ACTION_KEYS = {"type", "path", "content"}
 _ALLOWED_CONFIG_UPDATE_KEYS = {"path", "value"}
 
@@ -177,14 +178,33 @@ def _parse_messages(value: Any) -> list[OutboundMessage]:
         unknown_keys = set(item) - _ALLOWED_MESSAGE_KEYS
         if unknown_keys:
             raise ValueError("unknown_message_keys:" + ",".join(sorted(unknown_keys)))
+        attachment = _parse_message_attachment(item.get("attachment"))
+        body = _optional_required_str(item.get("body"), "body", "message")
+        if body is None and attachment is None:
+            raise ValueError("message_body_or_attachment_required")
         messages.append(
             OutboundMessage(
                 channel=_required_str(item, "channel", "message"),
                 target=_required_str(item, "target", "message"),
-                body=_required_str(item, "body", "message"),
+                body=body,
+                attachment=attachment,
             )
         )
     return messages
+
+
+def _parse_message_attachment(value: Any) -> AttachmentRef | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("message_attachment_must_be_object")
+    unknown_keys = set(value) - {"uri", "name"}
+    if unknown_keys:
+        raise ValueError("unknown_message_attachment_keys:" + ",".join(sorted(unknown_keys)))
+    return AttachmentRef(
+        uri=_required_str(value, "uri", "message_attachment"),
+        name=_optional_required_str(value.get("name"), "name", "message_attachment"),
+    )
 
 
 def _parse_actions(value: Any) -> list[ActionProposal]:
@@ -251,6 +271,16 @@ def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
     if key not in payload:
         raise ValueError(f"{context}_{key}_required")
     value = payload[key]
+    if not isinstance(value, str):
+        raise ValueError(f"{context}_{key}_must_be_string")
+    if _is_blank(value):
+        raise ValueError(f"{context}_{key}_required")
+    return value
+
+
+def _optional_required_str(value: Any, key: str, context: str) -> str | None:
+    if value is None:
+        return None
     if not isinstance(value, str):
         raise ValueError(f"{context}_{key}_must_be_string")
     if _is_blank(value):

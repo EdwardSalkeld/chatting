@@ -40,6 +40,7 @@ from app.main import (
     _build_live_connectors,
     _build_telegram_sender,
     _enrich_telegram_envelope_with_memory,
+    _message_content_for_telegram_memory,
     _should_store_telegram_memory,
 )
 from app.message_handler_runtime import TaskLedgerStore
@@ -712,7 +713,7 @@ def _flush_task_egress_in_sequence(
                     channel="telegram",
                     target=message.target,
                     role="assistant",
-                    content=message.body,
+                    content=_message_content_for_telegram_memory(message),
                     run_id=task_id,
                 )
         LOGGER.info(

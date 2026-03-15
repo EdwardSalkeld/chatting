@@ -19,6 +19,12 @@ def _require_non_empty_string(value: object, *, field_name: str) -> str:
     return value
 
 
+def _optional_non_empty_string(value: object, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _require_non_empty_string(value, field_name=field_name)
+
+
 def _require_positive_int(value: object, *, field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{field_name} must be a positive integer")
@@ -292,7 +298,8 @@ class EgressQueueMessage:
             message=OutboundMessage(
                 channel=_require_non_empty_string(message_payload.get("channel"), field_name="message.channel"),
                 target=_require_non_empty_string(message_payload.get("target"), field_name="message.target"),
-                body=_require_non_empty_string(message_payload.get("body"), field_name="message.body"),
+                body=_optional_non_empty_string(message_payload.get("body"), field_name="message.body"),
+                attachment=_parse_message_attachment(message_payload.get("attachment")),
             ),
             emitted_at=_parse_utc_datetime(payload.get("emitted_at"), field_name="emitted_at"),
             event_id=event_id,
@@ -304,6 +311,17 @@ class EgressQueueMessage:
             ),
             message_type=message_type,
         )
+
+
+def _parse_message_attachment(value: object) -> AttachmentRef | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("message.attachment must be an object")
+    return AttachmentRef(
+        uri=_require_non_empty_string(value.get("uri"), field_name="message.attachment.uri"),
+        name=_optional_non_empty_string(value.get("name"), field_name="message.attachment.name"),
+    )
 
 
 __all__ = [
