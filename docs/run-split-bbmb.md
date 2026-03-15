@@ -110,9 +110,11 @@ sudo systemctl enable --now chatting-message-handler.service
 sudo systemctl enable --now chatting-worker.service
 ```
 
-## 7) Publish an immediate out-of-band reply from worker side
+## 7) Publish a visible reply from worker side
 
-Use the worker-side CLI to push an egress event directly to BBMB without waiting for worker loop completion:
+Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
+path for both quick acknowledgements and final user-visible answers instead of returning replies in
+their stdout JSON:
 
 ```bash
 python3 -m app.main_reply task:email:53 \
@@ -124,8 +126,8 @@ python3 -m app.main_reply task:email:53 \
 
 Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
-- These ad-hoc events are intentionally unsequenced, out-of-band, and dispatch immediately at
-  message-handler.
+- These events are intentionally unsequenced and dispatch immediately at `message-handler`.
+- In the current contract, executor stdout is completion-only; visible replies belong here.
 - `--event-id` can be supplied for stable idempotency across retries.
 - Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
 

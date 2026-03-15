@@ -21,24 +21,23 @@ can change this protocol coherently without carrying a long mixed-version compat
 
 Split the semantics explicitly:
 
-- task-scoped visible replies use `event_kind="message"`
+- task-scoped visible replies are published by the executor itself via `app.main_reply`
 - terminal task closure uses `event_kind="completion"`
-- operator/ad-hoc side-channel egress keeps using unsequenced `event_kind="incremental"`
+- visible executor-published replies use unsequenced `event_kind="incremental"`
 
 Completion is internal-only:
 
-- it is ordered with other sequenced task-scoped events
+- it is ordered only as an internal terminal event
 - it is not routed to real-world transports
 - `message-handler` applies it by closing the task ledger entry
 
 ## Rules
 
 1. A successful task emits exactly one `completion` event.
-2. A task may emit zero, one, or many visible `message` events before completion.
-3. If a task emits no visible messages, completion alone closes it.
-4. `completion` is the last sequenced event for the task.
-5. `incremental` remains the out-of-band path for manual/operator nudges and similar immediate
-   updates.
+2. The executor must not return visible replies in its structured JSON output.
+3. Any visible reply must be sent by the executor itself, typically with `python3 -m app.main_reply`.
+4. If a task emits no visible replies, completion alone closes it.
+5. `incremental` is the visible reply path for both intermediate and final executor-published text.
 6. Conversation memory stores only externally visible assistant text on the real reply channel.
    It never stores completion events or reactions.
 
@@ -46,13 +45,12 @@ Completion is internal-only:
 
 Benefits:
 
-- user-visible replies are the primary runtime output, not a side effect of terminal closure
+- user-visible replies are emitted directly by the executor, not inferred from its return payload
 - silent-success tasks stay possible without synthetic drop/final replies
 - task closure semantics are clearer in logs, docs, and telemetry
 
 Tradeoffs:
 
 - `worker` and `message-handler` must both understand `completion`
+- executor prompts must be explicit that visible replies belong in `app.main_reply`, not stdout JSON
 - older terminology around `final`/`incremental` needs cleanup
-- `app.main_reply` remains mechanically important, but it is no longer the conceptual model for
-  task-scoped reply semantics

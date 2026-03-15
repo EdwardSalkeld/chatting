@@ -1,4 +1,4 @@
-"""Worker-side CLI to publish immediate out-of-band egress messages."""
+"""Worker-side CLI to publish visible egress messages."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from app.models import OutboundMessage
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Publish one immediate out-of-band egress message. "
-            "This is intended for operator-driven nudges, reactions, or ad hoc replies."
+            "Publish one visible egress message. "
+            "Executors should use this for user-visible acknowledgements and final replies."
         )
     )
     parser.add_argument("task_id", help="Task identifier (for example: task:email:53).")

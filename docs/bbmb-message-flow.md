@@ -24,7 +24,7 @@ There are currently two BBMB queues:
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
-| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for ordered task-scoped replies, internal completion, and out-of-band incrementals |
+| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for visible executor-published incrementals and internal completion |
 
 Important details:
 - Queue names are hardcoded today.
@@ -63,11 +63,12 @@ it, runs policy, persists run and audit records, and always emits exactly one te
 `event_kind="completion"` egress message.
 
 Current worker behavior:
-- task-scoped visible replies use `event_kind="message"` with increasing `sequence`
+- the executor returns only completion metadata, actions, config updates, and errors
+- the executor must publish any visible reply itself with `app.main_reply`
 - terminal task closure uses `event_kind="completion"` and is internal-only
-- worker-side `app.main_reply` can publish unsequenced `event_kind="incremental"` messages for
-  immediate out-of-band/operator-visible updates
-- if execution/policy yields no visible reply content, the worker emits only the completion event
+- worker-side `app.main_reply` publishes unsequenced `event_kind="incremental"` messages for both
+  intermediate acknowledgements and final user-visible replies
+- the worker emits only the completion event for normal task processing
 - heartbeat tasks skip the normal executor path and emit a log pong followed by completion
 
 Before publishing each egress message, the worker writes it to the SQLite egress outbox. That lets

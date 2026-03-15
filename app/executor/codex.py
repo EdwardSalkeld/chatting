@@ -12,14 +12,12 @@ from app.models import (
     ActionProposal,
     ConfigUpdate,
     ExecutionResult,
-    OutboundMessage,
     RoutedTask,
     SCHEMA_VERSION,
 )
 
 _ALLOWED_TOP_LEVEL_KEYS = {
     "schema_version",
-    "messages",
     "actions",
     "config_updates",
     "requires_human_review",
@@ -27,13 +25,11 @@ _ALLOWED_TOP_LEVEL_KEYS = {
 }
 _REQUIRED_TOP_LEVEL_KEYS = {
     "schema_version",
-    "messages",
     "actions",
     "config_updates",
     "requires_human_review",
     "errors",
 }
-_ALLOWED_MESSAGE_KEYS = {"channel", "target", "body"}
 _ALLOWED_ACTION_KEYS = {"type", "path", "content"}
 _ALLOWED_CONFIG_UPDATE_KEYS = {"path", "value"}
 
@@ -46,12 +42,7 @@ class CodexExecutor:
     cwd: str | None = None
     now_provider: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
 
-    def execute(
-        self,
-        task: RoutedTask,
-        reply_send: Callable[[dict[str, Any]], None] | None = None,
-    ) -> ExecutionResult:
-        del reply_send
+    def execute(self, task: RoutedTask) -> ExecutionResult:
         payload = json.dumps(_task_payload(task, current_time=self.now_provider()))
         try:
             completed = subprocess.run(
@@ -96,7 +87,6 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
     if missing:
         raise ValueError("missing_top_level_keys:" + ",".join(sorted(missing)))
 
-    messages = _parse_messages(payload["messages"])
     actions = _parse_actions(payload["actions"])
     config_updates = _parse_config_updates(payload["config_updates"])
 
@@ -119,7 +109,6 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
         raise ValueError(f"unsupported_schema_version:{schema_version}")
 
     return ExecutionResult(
-        messages=messages,
         actions=actions,
         config_updates=config_updates,
         requires_human_review=requires_human_review,
@@ -168,28 +157,12 @@ def _task_payload(task: RoutedTask, *, current_time: datetime) -> dict[str, Any]
         "schema_version": SCHEMA_VERSION,
         "task": task.to_dict(),
         "current_time": current_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "reply_contract": {
+            "visible_replies_must_use": "python3 -m app.main_reply",
+            "visible_replies_must_not_be_returned_in_executor_output": True,
+            "executor_output_is_completion_only": True,
+        },
     }
-
-
-def _parse_messages(value: Any) -> list[OutboundMessage]:
-    if not isinstance(value, list):
-        raise ValueError("messages_must_be_list")
-
-    messages: list[OutboundMessage] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise ValueError("messages_items_must_be_objects")
-        unknown_keys = set(item) - _ALLOWED_MESSAGE_KEYS
-        if unknown_keys:
-            raise ValueError("unknown_message_keys:" + ",".join(sorted(unknown_keys)))
-        messages.append(
-            OutboundMessage(
-                channel=_required_str(item, "channel", "message"),
-                target=_required_str(item, "target", "message"),
-                body=_required_str(item, "body", "message"),
-            )
-        )
-    return messages
 
 
 def _parse_actions(value: Any) -> list[ActionProposal]:
@@ -284,7 +257,6 @@ def _validate_action_payload(
 
 def _error_result(error: str) -> ExecutionResult:
     return ExecutionResult(
-        messages=[],
         actions=[],
         config_updates=[],
         requires_human_review=False,

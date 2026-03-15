@@ -20,7 +20,7 @@ The deployment model is private, single-user, split mode.
 
 - `app.main_message_handler`: ingress + egress dispatch in split mode
 - `app.main_worker`: task execution in split mode
-- `app.main_reply`: publish immediate out-of-band worker-side incremental egress
+- `app.main_reply`: publish visible worker-side incremental egress for acknowledgements and final replies
 - `app.main`: read/query + admin commands only (`--list-*`, replay dead letters, approvals, rollback, metrics)
 
 ## Persistence tables (SQLite)

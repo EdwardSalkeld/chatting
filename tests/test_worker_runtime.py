@@ -10,7 +10,6 @@ from app.internal_heartbeat import build_internal_heartbeat_envelope
 from app.models import (
     ActionProposal,
     ExecutionResult,
-    OutboundMessage,
     ReplyChannel,
     TaskEnvelope,
 )
@@ -24,17 +23,7 @@ from app.worker_runtime import process_task_message
 class MultiMessageExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(
-            messages=[
-                OutboundMessage(channel="email", target="alice@example.com", body="one"),
-                OutboundMessage(channel="email", target="alice@example.com", body="two"),
-                OutboundMessage(channel="email", target="ops@example.com", body="three"),
-            ],
-            actions=[],
-            config_updates=[],
-            requires_human_review=False,
-            errors=[],
-        )
+        return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
 
 
 @dataclass(frozen=True)
@@ -42,7 +31,6 @@ class WriteFileExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(
-            messages=[OutboundMessage(channel="email", target="alice@example.com", body="done")],
             actions=[ActionProposal(type="write_file", path="output.txt", content="hello")],
             config_updates=[],
             requires_human_review=False,
@@ -59,13 +47,9 @@ class AlwaysFailExecutor:
 
 @dataclass(frozen=True)
 class IncrementalReplyExecutor:
-    def execute(self, task, reply_send=None):
+    def execute(self, task):
         del task
-        if reply_send is not None:
-            reply_send({"body": "working on it"})
-            reply_send({"body": "still working"})
         return ExecutionResult(
-            messages=[OutboundMessage(channel="email", target="alice@example.com", body="done")],
             actions=[],
             config_updates=[],
             requires_human_review=False,
@@ -77,26 +61,14 @@ class IncrementalReplyExecutor:
 class NoMessageExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(
-            messages=[],
-            actions=[],
-            config_updates=[],
-            requires_human_review=False,
-            errors=[],
-        )
+        return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
 
 
 @dataclass(frozen=True)
 class FinalAliasExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(
-            messages=[OutboundMessage(channel="final", target="ignored", body="done")],
-            actions=[],
-            config_updates=[],
-            requires_human_review=False,
-            errors=[],
-        )
+        return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
 
 
 class WorkerRuntimeTests(unittest.TestCase):
@@ -124,7 +96,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             trace_id="trace:internal:heartbeat:1",
         )
 
-    def test_process_task_message_emits_visible_messages_followed_by_completion(self) -> None:
+    def test_process_task_message_emits_completion_only_for_successful_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -137,14 +109,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(result.egress_messages), 4)
-            self.assertEqual(result.egress_messages[0].event_index, 0)
-            self.assertEqual(result.egress_messages[0].event_count, 4)
-            self.assertEqual(result.egress_messages[0].message.target, "alice@example.com")
-            self.assertEqual(result.egress_messages[1].message.body, "two")
-            self.assertEqual(result.egress_messages[2].message.target, "ops@example.com")
-            self.assertEqual(result.egress_messages[3].event_kind, "completion")
-            self.assertEqual(result.egress_messages[3].message.channel, "internal")
+            self.assertEqual(len(result.egress_messages), 1)
+            self.assertEqual(result.egress_messages[0].event_kind, "completion")
+            self.assertEqual(result.egress_messages[0].message.channel, "internal")
 
     def test_process_task_message_marks_dropped_actions_reason_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,40 +148,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.dead_lettered, True)
             self.assertEqual(store.list_dead_letters()[0].reason_codes, ["retry_exhausted"])
 
-    def test_process_task_message_emits_visible_messages_and_completion(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            policy = AllowlistPolicyEngine(
-                allowed_action_types=frozenset({"write_file"}),
-                allow_incremental_reply_send=True,
-            )
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
-                executor_impl=IncrementalReplyExecutor(),
-                policy=policy,
-                max_attempts=2,
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(result.egress_messages), 4)
-            self.assertEqual(result.egress_messages[0].event_kind, "message")
-            self.assertEqual(result.egress_messages[1].event_kind, "message")
-            self.assertEqual(result.egress_messages[2].event_kind, "message")
-            self.assertEqual(result.egress_messages[3].event_kind, "completion")
-            self.assertEqual([item.sequence for item in result.egress_messages], [0, 1, 2, 3])
-            self.assertEqual(
-                [item.message_type for item in result.egress_messages],
-                [
-                    "chatting.egress.v2",
-                    "chatting.egress.v2",
-                    "chatting.egress.v2",
-                    "chatting.egress.v2",
-                ],
-            )
-
-    def test_process_task_message_blocks_incremental_reply_send_when_policy_disabled(self) -> None:
+    def test_process_task_message_emits_completion_even_when_executor_does_no_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -226,11 +160,29 @@ class WorkerRuntimeTests(unittest.TestCase):
                 max_attempts=2,
             )
 
-            self.assertEqual(len(result.egress_messages), 2)
-            self.assertEqual(result.egress_messages[0].event_kind, "message")
-            self.assertEqual(result.egress_messages[1].event_kind, "completion")
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(len(result.egress_messages), 1)
+            self.assertEqual(result.egress_messages[0].event_kind, "completion")
             audit_event = store.list_audit_events()[0]
-            self.assertIn("incremental_reply_send_not_allowed", audit_event.detail["reason_codes"])
+            self.assertEqual(audit_event.detail["incremental_reply_send_requested_count"], 0)
+            self.assertEqual(audit_event.detail["incremental_reply_send_published_count"], 0)
+
+    def test_process_task_message_ignores_incremental_reply_policy_when_executor_returns_completion_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=IncrementalReplyExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=2,
+            )
+
+            self.assertEqual(len(result.egress_messages), 1)
+            self.assertEqual(result.egress_messages[0].event_kind, "completion")
+            audit_event = store.list_audit_events()[0]
+            self.assertNotIn("incremental_reply_send_not_allowed", audit_event.detail["reason_codes"])
 
     def test_process_task_message_handles_internal_heartbeat_without_executor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -279,25 +231,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(terminal.message.channel, "internal")
             self.assertEqual(terminal.message.target, "task")
             self.assertEqual(terminal.sequence, 0)
-
-    def test_process_task_message_rejects_final_channel_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
-                executor_impl=FinalAliasExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
-                max_attempts=1,
-            )
-
-            self.assertEqual(result.run_record.result_status, "dead_letter")
-            self.assertEqual(result.egress_messages, [])
-            audit_event = store.list_audit_events()[0]
-            self.assertIn("retry_exhausted", audit_event.detail["reason_codes"])
-            self.assertIn("channel='final' is no longer supported", audit_event.detail["last_error"])
-
 
 if __name__ == "__main__":
     unittest.main()
