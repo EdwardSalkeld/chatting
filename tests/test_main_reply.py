@@ -194,5 +194,6 @@ class MainReplyCliTests(unittest.TestCase):
         _, payload = broker.published[0]
         self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
 
+
 if __name__ == "__main__":
     unittest.main()

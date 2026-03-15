@@ -860,9 +860,6 @@ class _RecordingTelegramSender:
     def react(self, target: str, message_id: int, emoji: str) -> None:
         self.reactions.append((target, message_id, emoji))
 
-    def send(self, target: str, message: OutboundMessage) -> None:
-        self.sent.append((target, message))
-
 
 class _FailingTelegramSender:
     def __init__(self) -> None:

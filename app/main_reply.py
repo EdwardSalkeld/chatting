@@ -67,6 +67,7 @@ def _resolve_event_id(task_id: str, explicit_value: str | None) -> str:
         return explicit_value
     return f"evt:{task_id}:adhoc:{time.time_ns()}"
 
+
 def _resolve_telegram_message_id(
     *,
     task_id: str,
@@ -123,6 +124,8 @@ def _resolve_reply_message(args: argparse.Namespace, config: dict[str, object]) 
     if not body:
         raise ValueError("message must not be empty")
     return OutboundMessage(channel=args.channel, target=args.target, body=body)
+
+
 def main() -> int:
     args = _parse_args()
     config = _load_config(args.config, os.environ)
