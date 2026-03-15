@@ -302,7 +302,7 @@ def _process_envelope(
                         channel="telegram",
                         target=message.target,
                         role="assistant",
-                        content=message.body,
+                        content=_message_content_for_telegram_memory(message),
                         run_id=base_run_id,
                     )
             reason_codes = decision.reason_codes
@@ -505,6 +505,7 @@ def _normalize_outbound_message_for_dispatch(
         channel=envelope.reply_channel.type,
         target=envelope.reply_channel.target,
         body=message.body,
+        attachment=message.attachment,
     )
 
 
@@ -513,11 +514,23 @@ def _outbound_messages_match(expected: OutboundMessage, actual: OutboundMessage)
         expected.channel == actual.channel
         and expected.target == actual.target
         and expected.body == actual.body
+        and expected.attachment == actual.attachment
     )
 
 
 def _should_store_telegram_memory(envelope: TaskEnvelope) -> bool:
     return envelope.reply_channel.type == "telegram"
+
+
+def _message_content_for_telegram_memory(message: OutboundMessage) -> str:
+    if message.body is not None:
+        return message.body
+    if message.attachment is None:
+        raise ValueError("telegram memory requires message body or attachment")
+    attachment_name = message.attachment.name
+    if attachment_name is None:
+        attachment_name = Path(message.attachment.uri).name or message.attachment.uri
+    return f"[Attachment sent: {attachment_name}]"
 
 
 def _enrich_telegram_envelope_with_memory(

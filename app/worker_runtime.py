@@ -236,7 +236,6 @@ def _build_completion_egress_messages(
         )
     ]
 
-
 def _build_completion_egress(
     *,
     task_message: TaskQueueMessage,

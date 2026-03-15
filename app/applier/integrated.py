@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import smtplib
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
@@ -29,7 +32,7 @@ class EmailSender(Protocol):
 class TelegramSender(Protocol):
     """Dispatch outbound Telegram messages."""
 
-    def send(self, target: str, body: str) -> None:
+    def send(self, target: str, message: OutboundMessage) -> None:
         """Send one outbound Telegram message."""
 
     def react(self, target: str, message_id: int, emoji: str) -> None:
@@ -124,6 +127,9 @@ class TelegramMessageSender:
     parse_mode: str | None = "Markdown"
     timeout_seconds: float = 10.0
     http_post_json: Callable[[str, dict[str, object], float], dict[str, object]] | None = None
+    http_post_multipart: (
+        Callable[[str, dict[str, object], str, Path, float], dict[str, object]] | None
+    ) = None
 
     def __post_init__(self) -> None:
         if not self.bot_token:
@@ -135,9 +141,40 @@ class TelegramMessageSender:
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
-    def send(self, target: str, body: str) -> None:
+    def send(self, target: str, message: OutboundMessage) -> None:
         if not target:
             raise ValueError("target is required")
+        if message.attachment is None:
+            if message.body is None or not message.body.strip():
+                raise ValueError("body is required")
+            self._send_text_message(target, message.body)
+            return
+
+        file_path = _resolve_telegram_attachment_path(message.attachment.uri)
+        api_method = _telegram_api_method_for_attachment(file_path)
+        field_name = "photo" if api_method == "sendPhoto" else "document"
+        url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/{api_method}"
+        payload: dict[str, object] = {"chat_id": target}
+        if message.body is not None:
+            payload["caption"] = message.body
+        if self.parse_mode is not None and message.body is not None:
+            payload["parse_mode"] = self.parse_mode
+
+        client = self.http_post_multipart or _default_http_post_multipart
+        response = client(url, payload, field_name, file_path, self.timeout_seconds)
+        if response.get("ok") is True:
+            return
+
+        if self.parse_mode is not None and message.body is not None and _is_telegram_parse_mode_error(response):
+            fallback_payload = dict(payload)
+            fallback_payload.pop("parse_mode", None)
+            fallback_response = client(url, fallback_payload, field_name, file_path, self.timeout_seconds)
+            if fallback_response.get("ok") is True:
+                return
+
+        raise RuntimeError("telegram_attachment_send_failed")
+
+    def _send_text_message(self, target: str, body: str) -> None:
         if not body.strip():
             raise ValueError("body is required")
 
@@ -254,6 +291,7 @@ class IntegratedApplier:
                 target=dispatch_target,
                 body=message.body,
                 metadata=dict(message.metadata),
+                attachment=message.attachment,
             )
 
             if dispatch_channel == "log":
@@ -302,16 +340,18 @@ class IntegratedApplier:
                     reason_codes.append("telegram_dispatch_not_configured")
                     continue
                 try:
-                    self.telegram_sender.send(dispatch_target, message.body)
+                    self.telegram_sender.send(dispatch_target, message)
                     dispatched_messages.append(normalized_message)
-                except Exception:  # noqa: BLE001
+                except Exception as error:  # noqa: BLE001
+                    error_reason = _telegram_dispatch_reason_code(message, exception=error)
                     LOGGER.exception(
-                        "drop_dispatch reason=telegram_dispatch_failed channel=%s target=%s",
+                        "drop_dispatch reason=%s channel=%s target=%s",
+                        error_reason,
                         dispatch_channel,
                         dispatch_target,
                     )
                     raise MessageDispatchError(
-                        reason_code="telegram_dispatch_failed",
+                        reason_code=error_reason,
                         dispatched_messages=list(dispatched_messages),
                     ) from None
                 continue
@@ -408,6 +448,8 @@ def _format_email_reply(
     message: OutboundMessage,
     envelope: TaskEnvelope | None,
 ) -> tuple[str | None, str]:
+    if message.body is None:
+        raise ValueError("email body is required")
     cleaned_body = _strip_leading_subject_line(message.body)
 
     if envelope is None or envelope.source != "email":
@@ -509,6 +551,108 @@ def _default_http_post_json(
     if not isinstance(parsed, dict):
         raise RuntimeError("telegram_invalid_response_shape")
     return parsed
+
+
+def _default_http_post_multipart(
+    url: str,
+    payload: dict[str, object],
+    file_field_name: str,
+    file_path: Path,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    boundary = f"----chatting-{uuid.uuid4().hex}"
+    encoded_payload = _encode_multipart_payload(
+        payload=payload,
+        file_field_name=file_field_name,
+        file_path=file_path,
+        boundary=boundary,
+    )
+    request = urllib.request.Request(
+        url=url,
+        data=encoded_payload,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.URLError as error:
+        raise RuntimeError("telegram_http_error") from error
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("telegram_invalid_json") from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError("telegram_invalid_response_shape")
+    return parsed
+
+
+def _encode_multipart_payload(
+    *,
+    payload: dict[str, object],
+    file_field_name: str,
+    file_path: Path,
+    boundary: str,
+) -> bytes:
+    lines: list[bytes] = []
+    for key, value in payload.items():
+        lines.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"),
+                f"{value}\r\n".encode("utf-8"),
+            ]
+        )
+    mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    lines.extend(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            (
+                f'Content-Disposition: form-data; name="{file_field_name}"; '
+                f'filename="{file_path.name}"\r\n'
+            ).encode("utf-8"),
+            f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"),
+            file_path.read_bytes(),
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    return b"".join(lines)
+
+
+def _resolve_telegram_attachment_path(uri: str) -> Path:
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme and parsed.scheme != "file":
+        raise RuntimeError("telegram_attachment_unsupported_uri")
+    if parsed.scheme == "file":
+        path = urllib.request.url2pathname(parsed.path)
+        if parsed.netloc:
+            path = f"//{parsed.netloc}{path}"
+    else:
+        path = uri
+    attachment_path = Path(path)
+    if not attachment_path.is_absolute():
+        raise RuntimeError("telegram_attachment_path_not_absolute")
+    if not attachment_path.is_file():
+        raise RuntimeError("telegram_attachment_missing")
+    return attachment_path
+
+
+def _telegram_api_method_for_attachment(file_path: Path) -> str:
+    mime_type, _ = mimetypes.guess_type(file_path.name)
+    if mime_type is not None and mime_type.startswith("image/"):
+        return "sendPhoto"
+    return "sendDocument"
+
+
+def _telegram_dispatch_reason_code(message: OutboundMessage, exception: Exception | None) -> str:
+    if exception is not None:
+        reason = str(exception).strip()
+        if reason.startswith("telegram_"):
+            return reason
+    if message.attachment is not None:
+        return "telegram_attachment_dispatch_failed"
+    return "telegram_dispatch_failed"
 
 
 def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:

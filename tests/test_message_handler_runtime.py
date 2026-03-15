@@ -16,7 +16,7 @@ from app.main_message_handler import (
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_egress, build_internal_heartbeat_envelope
 from app.message_handler_runtime import TaskLedgerStore
-from app.models import ApplyResult, OutboundMessage, ReplyChannel, TaskEnvelope
+from app.models import ApplyResult, AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 
 
@@ -657,6 +657,63 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(applier.apply_calls, 1)
             turns = store.list_recent_conversation_turns(channel="telegram", target="12345", limit=5)
             self.assertEqual(turns, [("assistant", "reply-1")])
+
+    def test_handle_egress_message_persists_attachment_only_dispatch_as_assistant_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = TaskQueueMessage.from_envelope(
+                self._build_telegram_envelope(envelope_id="telegram:201", content="hello"),
+                trace_id="trace:telegram:201",
+            )
+            ledger.record_task(task_message)
+
+            @dataclass
+            class _TelegramApplier:
+                def apply(self, decision, envelope=None):
+                    del decision, envelope
+                    return ApplyResult(
+                        applied_actions=[],
+                        skipped_actions=[],
+                        dispatched_messages=[
+                            OutboundMessage(
+                                channel="telegram",
+                                target="12345",
+                                attachment=AttachmentRef(
+                                    uri="file:///tmp/menu.pdf",
+                                    name="menu.pdf",
+                                ),
+                            )
+                        ],
+                        reason_codes=[],
+                    )
+
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="telegram", target="12345", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:201:0",
+                sequence=0,
+                event_kind="message",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-7",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"telegram"},
+                applier=_TelegramApplier(),
+                ack_callback=lambda _guid: None,
+            )
+
+            turns = store.list_recent_conversation_turns(channel="telegram", target="12345", limit=5)
+            self.assertEqual(turns, [("assistant", "[Attachment sent: menu.pdf]")])
 
     def test_egress_telemetry_rollup_reports_dedupe_rate_and_latency(self) -> None:
         telemetry = EgressTelemetryRollup()
