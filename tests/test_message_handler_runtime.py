@@ -208,6 +208,63 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertEqual(acked, ["guid-4", "guid-5"])
             self.assertEqual(applier.apply_calls, 1)
 
+    def test_handle_egress_message_dispatches_unsequenced_incremental_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_task_message()
+            ledger.record_task(task_message)
+            acked: list[str] = []
+            applied_bodies: list[str] = []
+
+            @dataclass
+            class _BodyRecordingApplier:
+                def apply(self, decision, envelope=None):
+                    del envelope
+                    applied_bodies.append(decision.approved_messages[0].body)
+                    return ApplyResult(
+                        applied_actions=[],
+                        skipped_actions=[],
+                        dispatched_messages=decision.approved_messages,
+                        reason_codes=[],
+                    )
+
+            applier = _BodyRecordingApplier()
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="working on it"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:1:adhoc",
+                sequence=None,
+                event_kind="incremental",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-adhoc-1",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"email"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-adhoc-1"])
+            self.assertEqual(applied_bodies, ["working on it"])
+            self.assertTrue(
+                store.has_dispatched_event_id(
+                    task_id=task_message.task_id,
+                    event_id="evt:task:email:1:adhoc",
+                )
+            )
+            self.assertEqual(store.list_dispatched_event_indices(run_id=task_message.task_id), [])
+
     def test_handle_egress_message_marks_outbox_event_acked(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")

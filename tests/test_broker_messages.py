@@ -133,6 +133,43 @@ class EgressQueueMessageTests(unittest.TestCase):
                 message_type="chatting.egress.v2",
             )
 
+    def test_egress_v2_message_allows_missing_sequence(self) -> None:
+        message = EgressQueueMessage(
+            task_id="task:email:2",
+            envelope_id="email:2",
+            trace_id="trace:email:2",
+            event_index=0,
+            event_count=1,
+            message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+            emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+            event_id="evt:task:email:2:adhoc",
+            sequence=None,
+            event_kind="incremental",
+            message_type="chatting.egress.v2",
+        )
+
+        payload = message.to_dict()
+        self.assertNotIn("sequence", payload)
+        parsed = EgressQueueMessage.from_dict(payload)
+        self.assertIsNone(parsed.sequence)
+        self.assertEqual(parsed.event_kind, "incremental")
+
+    def test_egress_v2_final_message_requires_sequence(self) -> None:
+        with self.assertRaises(ValueError):
+            EgressQueueMessage(
+                task_id="task:email:2",
+                envelope_id="email:2",
+                trace_id="trace:email:2",
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+                event_id="evt:task:email:2:final",
+                sequence=None,
+                event_kind="final",
+                message_type="chatting.egress.v2",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

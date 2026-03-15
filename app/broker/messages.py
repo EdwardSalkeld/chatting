@@ -231,11 +231,14 @@ class EgressQueueMessage:
             return
 
         _require_non_empty_string(self.event_id, field_name="event_id")
-        if self.sequence is None:
-            raise ValueError("sequence is required")
-        _parse_sequence(self.sequence)
         if self.event_kind not in {"final", "incremental"}:
             raise ValueError("event_kind must be final or incremental")
+        if self.sequence is None:
+            if self.event_kind != "incremental":
+                raise ValueError("sequence is required for final events")
+            object.__setattr__(self, "event_index", 0)
+            return
+        _parse_sequence(self.sequence)
         object.__setattr__(self, "event_index", self.sequence)
 
     def to_dict(self) -> dict[str, Any]:
@@ -251,18 +254,20 @@ class EgressQueueMessage:
                 "emitted_at": _serialize_utc_datetime(self.emitted_at),
                 "message": self.message.to_dict(),
             }
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "message_type": self.message_type,
             "task_id": self.task_id,
             "envelope_id": self.envelope_id,
             "trace_id": self.trace_id,
             "event_id": self.event_id,
-            "sequence": self.sequence,
             "event_kind": self.event_kind,
             "emitted_at": _serialize_utc_datetime(self.emitted_at),
             "message": self.message.to_dict(),
         }
+        if self.sequence is not None:
+            payload["sequence"] = self.sequence
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "EgressQueueMessage":
@@ -286,7 +291,9 @@ class EgressQueueMessage:
             event_count = _require_positive_int(payload.get("event_count"), field_name="event_count")
         else:
             event_id = _require_non_empty_string(payload.get("event_id"), field_name="event_id")
-            sequence = _parse_sequence(payload.get("sequence"))
+            raw_sequence = payload.get("sequence")
+            if raw_sequence is not None:
+                sequence = _parse_sequence(raw_sequence)
             event_kind = _require_non_empty_string(payload.get("event_kind"), field_name="event_kind")
 
         return cls(

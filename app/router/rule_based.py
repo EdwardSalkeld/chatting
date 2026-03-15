@@ -13,7 +13,7 @@ class RuleBasedRouter:
 
     default_timeout_seconds: int = 1800
     default_max_tokens: int = 12000
-    cron_timeout_seconds: int = 120
+    cron_timeout_seconds: int = 1800
     cron_max_tokens: int = 8000
 
     def route(self, envelope: TaskEnvelope) -> RoutedTask:
