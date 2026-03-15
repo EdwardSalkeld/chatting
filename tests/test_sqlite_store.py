@@ -54,6 +54,31 @@ class SQLiteStateStoreTests(unittest.TestCase):
             store.mark_seen("email", "legacy-key")
             self.assertTrue(store.seen("email", "legacy-key"))
 
+    def test_initialization_drops_legacy_admin_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.db"
+            connection = sqlite3.connect(db_path)
+            connection.execute("CREATE TABLE pending_approvals (approval_id INTEGER PRIMARY KEY)")
+            connection.execute("CREATE TABLE current_config (config_path TEXT PRIMARY KEY)")
+            connection.execute("CREATE TABLE config_versions (version_id INTEGER PRIMARY KEY)")
+            connection.commit()
+            connection.close()
+
+            SQLiteStateStore(str(db_path))
+
+            connection = sqlite3.connect(db_path)
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            connection.close()
+
+            self.assertNotIn("pending_approvals", tables)
+            self.assertNotIn("current_config", tables)
+            self.assertNotIn("config_versions", tables)
+
     def test_append_run_persists_and_lists_run_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
@@ -128,52 +153,6 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(len(replayed), 1)
             self.assertEqual(replayed[0].dead_letter_id, dead_letter_id)
             self.assertEqual(replayed[0].replayed_run_id, "run:email:dead-1:replay:1")
-
-    def test_pending_approval_roundtrip_and_resolution(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            approval_id = store.append_pending_approval(
-                run_id="run:email:1",
-                envelope_id="email:1",
-                config_path="secrets.api_key",
-                config_value="new-secret",
-            )
-            pending = store.list_pending_approvals(status="pending")
-            self.assertEqual(len(pending), 1)
-            self.assertEqual(pending[0].approval_id, approval_id)
-            self.assertEqual(pending[0].config_path, "secrets.api_key")
-            self.assertEqual(pending[0].status, "pending")
-
-            store.resolve_pending_approval(approval_id, "approved")
-            approved = store.list_pending_approvals(status="approved")
-            self.assertEqual(len(approved), 1)
-            self.assertEqual(approved[0].approval_id, approval_id)
-            self.assertEqual(approved[0].status, "approved")
-
-    def test_apply_config_update_and_rollback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            version_id = store.apply_config_update(
-                config_path="routing.default_timeout",
-                new_value=240,
-                source="pending_approval",
-                source_ref="approval:1",
-            )
-            versions = store.list_config_versions()
-            self.assertEqual(len(versions), 1)
-            self.assertEqual(versions[0].version_id, version_id)
-            self.assertEqual(versions[0].old_value, None)
-            self.assertEqual(versions[0].new_value, 240)
-
-            rollback_version_id = store.rollback_config_version(version_id)
-            versions = store.list_config_versions()
-            self.assertEqual(len(versions), 2)
-            self.assertEqual(versions[1].version_id, rollback_version_id)
-            self.assertEqual(versions[1].source, "rollback")
 
     def test_conversation_turns_roundtrip_scoped_by_channel_and_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

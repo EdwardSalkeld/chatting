@@ -6,9 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from app.models import (
     AuditEvent,
-    ConfigVersionRecord,
     DeadLetterRecord,
-    PendingApprovalRecord,
     RunRecord,
     TaskEnvelope,
 )
@@ -52,41 +50,6 @@ class StateStore(Protocol):
 
     def mark_dead_letter_replayed(self, dead_letter_id: int, replayed_run_id: str) -> None:
         """Mark a dead-letter entry as replayed."""
-
-    def append_pending_approval(
-        self,
-        *,
-        run_id: str,
-        envelope_id: str,
-        config_path: str,
-        config_value: object,
-    ) -> int:
-        """Persist one pending human-approval item and return its ID."""
-
-    def list_pending_approvals(self, *, status: str | None = None) -> list[PendingApprovalRecord]:
-        """Return pending-approval entries in storage order."""
-
-    def resolve_pending_approval(self, approval_id: int, status: str) -> None:
-        """Mark one pending-approval item as approved or rejected."""
-
-    def get_pending_approval(self, approval_id: int) -> PendingApprovalRecord | None:
-        """Return one pending-approval item by ID, if present."""
-
-    def apply_config_update(
-        self,
-        *,
-        config_path: str,
-        new_value: object,
-        source: str,
-        source_ref: str | None,
-    ) -> int:
-        """Apply a config update and append one config version record."""
-
-    def list_config_versions(self) -> list[ConfigVersionRecord]:
-        """Return config version records in storage order."""
-
-    def rollback_config_version(self, version_id: int) -> int:
-        """Rollback one config version and return the new rollback version ID."""
 
     def append_conversation_turn(
         self,

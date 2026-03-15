@@ -1,4 +1,4 @@
-"""Shared runtime helpers plus admin/query CLI for split-mode deployment."""
+"""Shared split-mode helpers plus the admin/query CLI compatibility entrypoint."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import shlex
 import sys
 import tempfile
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -258,13 +257,6 @@ def _process_envelope(
             error_stage = "policy"
             decision = policy.evaluate(execution_result)
             policy_decision_payload = decision.to_dict()
-            for update in decision.config_updates.pending_review:
-                store.append_pending_approval(
-                    run_id=base_run_id,
-                    envelope_id=envelope.id,
-                    config_path=update.path,
-                    config_value=update.value,
-                )
             pending_messages: list[OutboundMessage] = []
             apply_decision = PolicyDecision(
                 approved_actions=decision.approved_actions,
@@ -575,7 +567,7 @@ def _enrich_telegram_envelope_with_memory(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run bootstrap prototype flow.")
+    parser = argparse.ArgumentParser(description="Query chatting state and replay dead letters.")
     parser.add_argument(
         "--config",
         help="Path to JSON config file. CLI flags override config values.",
@@ -605,54 +597,9 @@ def _parse_args() -> argparse.Namespace:
         help="Replay pending dead-letter envelopes through the worker pipeline.",
     )
     parser.add_argument(
-        "--list-pending-approvals",
-        action="store_true",
-        help="List pending/approved/rejected config approval items as JSON and exit.",
-    )
-    parser.add_argument(
-        "--approve-pending-approval",
-        action="append",
-        type=_positive_int,
-        default=[],
-        help="Mark one pending approval ID as approved (repeatable).",
-    )
-    parser.add_argument(
-        "--reject-pending-approval",
-        action="append",
-        type=_positive_int,
-        default=[],
-        help="Mark one pending approval ID as rejected (repeatable).",
-    )
-    parser.add_argument(
-        "--list-config-versions",
-        action="store_true",
-        help="List persisted config version records as JSON and exit.",
-    )
-    parser.add_argument(
-        "--rollback-config-version",
-        type=_positive_int,
-        help="Rollback one config version ID and record a new rollback version.",
-    )
-    parser.add_argument(
         "--list-metrics",
         action="store_true",
         help="Output computed run metrics as JSON and exit.",
-    )
-    parser.add_argument(
-        "--serve-metrics",
-        action="store_true",
-        help="Serve /metrics JSON and /dashboard HTML from persisted run data.",
-    )
-    parser.add_argument(
-        "--metrics-host",
-        default="127.0.0.1",
-        help="Host interface for --serve-metrics.",
-    )
-    parser.add_argument(
-        "--metrics-port",
-        type=_positive_int,
-        default=8080,
-        help="Port for --serve-metrics.",
     )
     parser.add_argument(
         "--result-status",
@@ -687,7 +634,7 @@ def main() -> int:
     db_path = _resolve_str(
         cli_value=args.db_path,
         config_value=config.get("db_path"),
-        default_value=str(Path(tempfile.gettempdir()) / "chatting-bootstrap-state.db"),
+        default_value=str(Path(tempfile.gettempdir()) / "chatting-cli-state.db"),
         setting_name="db_path",
     )
     max_attempts = _resolve_positive_int(
@@ -702,21 +649,13 @@ def main() -> int:
             args.list_audit_events,
             args.list_dead_letters,
             args.replay_dead_letters,
-            args.list_pending_approvals,
-            bool(args.approve_pending_approval),
-            bool(args.reject_pending_approval),
-            args.list_config_versions,
-            args.rollback_config_version is not None,
             args.list_metrics,
-            args.serve_metrics,
         ]
     )
     if list_mode_count > 1:
         raise ValueError(
             "--list-runs/--list-audit-events/--list-dead-letters/--replay-dead-letters/"
-            "--list-pending-approvals/--approve-pending-approval/--reject-pending-approval/"
-            "--list-config-versions/--rollback-config-version/--list-metrics/--serve-metrics "
-            "cannot be combined"
+            "--list-metrics cannot be combined"
         )
 
     if (
@@ -724,13 +663,7 @@ def main() -> int:
         or args.list_audit_events
         or args.list_dead_letters
         or args.replay_dead_letters
-        or args.list_pending_approvals
-        or args.approve_pending_approval
-        or args.reject_pending_approval
-        or args.list_config_versions
-        or args.rollback_config_version is not None
         or args.list_metrics
-        or args.serve_metrics
     ):
         result_status = args.result_status
         if result_status is not None:
@@ -750,31 +683,8 @@ def main() -> int:
         elif args.list_dead_letters:
             dead_letters = _query_dead_letters(db_path, limit=args.limit, status=result_status)
             payload = [entry.to_dict() for entry in dead_letters]
-        elif args.list_pending_approvals:
-            approvals = _query_pending_approvals(db_path, limit=args.limit, status=result_status)
-            payload = [entry.to_dict() for entry in approvals]
-        elif args.approve_pending_approval:
-            payload = _resolve_pending_approvals(
-                db_path,
-                approval_ids=args.approve_pending_approval,
-                status="approved",
-            )
-        elif args.reject_pending_approval:
-            payload = _resolve_pending_approvals(
-                db_path,
-                approval_ids=args.reject_pending_approval,
-                status="rejected",
-            )
-        elif args.list_config_versions:
-            versions = _query_config_versions(db_path, limit=args.limit)
-            payload = [entry.to_dict() for entry in versions]
-        elif args.rollback_config_version is not None:
-            payload = _rollback_config_version(db_path, version_id=args.rollback_config_version)
         elif args.list_metrics:
             payload = _build_metrics_payload(db_path)
-        elif args.serve_metrics:
-            _serve_metrics(db_path, host=args.metrics_host, port=args.metrics_port)
-            payload = {"status": "metrics_server_stopped"}
         else:
             replayed = _replay_dead_letters(
                 db_path,
@@ -1396,75 +1306,6 @@ def _query_dead_letters(
     return dead_letters
 
 
-def _query_pending_approvals(
-    db_path: str,
-    *,
-    limit: int | None,
-    status: str | None,
-):
-    store = SQLiteStateStore(db_path)
-    approvals = store.list_pending_approvals(status=status)
-    if limit is not None:
-        approvals = approvals[-limit:]
-    return approvals
-
-
-def _resolve_pending_approvals(
-    db_path: str,
-    *,
-    approval_ids: list[int],
-    status: str,
-) -> list[dict[str, object]]:
-    store = SQLiteStateStore(db_path)
-    if status not in {"approved", "rejected"}:
-        raise ValueError("status must be approved or rejected")
-    results: list[dict[str, object]] = []
-    for approval_id in approval_ids:
-        version_id: int | None = None
-        if status == "approved":
-            approval = store.get_pending_approval(approval_id)
-            if approval is None:
-                raise ValueError(f"pending approval not found: {approval_id}")
-            version_id = store.apply_config_update(
-                config_path=approval.config_path,
-                new_value=approval.config_value,
-                source="pending_approval",
-                source_ref=f"approval:{approval_id}",
-            )
-        store.resolve_pending_approval(approval_id, status)
-        payload: dict[str, object] = {
-            "approval_id": approval_id,
-            "status": status,
-        }
-        if version_id is not None:
-            payload["version_id"] = version_id
-        results.append(payload)
-    return results
-
-
-def _query_config_versions(
-    db_path: str,
-    *,
-    limit: int | None,
-):
-    store = SQLiteStateStore(db_path)
-    versions = store.list_config_versions()
-    if limit is not None:
-        versions = versions[-limit:]
-    return versions
-
-
-def _rollback_config_version(db_path: str, *, version_id: int) -> list[dict[str, object]]:
-    store = SQLiteStateStore(db_path)
-    rollback_version_id = store.rollback_config_version(version_id)
-    return [
-        {
-            "rolled_back_version_id": version_id,
-            "rollback_version_id": rollback_version_id,
-        }
-    ]
-
-
 def _build_metrics_payload(db_path: str) -> dict[str, object]:
     runs = SQLiteStateStore(db_path).list_runs()
     by_status: dict[str, int] = {}
@@ -1478,66 +1319,6 @@ def _build_metrics_payload(db_path: str) -> dict[str, object]:
         "average_latency_ms": average_latency_ms,
         "by_status": by_status,
     }
-
-
-def _serve_metrics(db_path: str, *, host: str, port: int) -> None:
-    class _MetricsHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            if self.path == "/metrics":
-                payload = _build_metrics_payload(db_path)
-                encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(encoded)))
-                self.end_headers()
-                self.wfile.write(encoded)
-                return
-            if self.path == "/dashboard":
-                metrics = _build_metrics_payload(db_path)
-                html = _render_metrics_dashboard(metrics)
-                encoded = html.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(encoded)))
-                self.end_headers()
-                self.wfile.write(encoded)
-                return
-            self.send_response(404)
-            self.end_headers()
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-            return
-
-    server = HTTPServer((host, port), _MetricsHandler)
-    LOGGER.info("metrics_server_started host=%s port=%s", host, port)
-    server.serve_forever()
-
-
-def _render_metrics_dashboard(metrics: dict[str, object]) -> str:
-    total_runs = metrics.get("total_runs", 0)
-    average_latency_ms = metrics.get("average_latency_ms", 0.0)
-    by_status = metrics.get("by_status", {})
-    by_status_json = json.dumps(by_status, sort_keys=True)
-    return f"""
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>Chatting Metrics Dashboard</title>
-    <style>
-      body {{ font-family: monospace; margin: 24px; background: #f7f7f7; color: #111; }}
-      .card {{ background: #fff; border: 1px solid #ccc; padding: 16px; margin-bottom: 12px; }}
-      pre {{ background: #111; color: #0f0; padding: 12px; overflow: auto; }}
-    </style>
-  </head>
-  <body>
-    <h1>Chatting Metrics Dashboard</h1>
-    <div class="card"><strong>Total runs:</strong> {total_runs}</div>
-    <div class="card"><strong>Average latency (ms):</strong> {average_latency_ms}</div>
-    <div class="card"><strong>Status counts</strong><pre>{by_status_json}</pre></div>
-  </body>
-</html>
-""".strip()
 
 
 def _replay_dead_letters(

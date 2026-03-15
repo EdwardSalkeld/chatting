@@ -12,9 +12,7 @@ from app.broker import EgressQueueMessage
 from app.models import (
     AttachmentRef,
     AuditEvent,
-    ConfigVersionRecord,
     DeadLetterRecord,
-    PendingApprovalRecord,
     ReplyChannel,
     RunRecord,
     TaskEnvelope,
@@ -37,6 +35,7 @@ class SQLiteStateStore:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection:
             self._initialize_idempotency_table(connection)
+            self._drop_legacy_admin_tables(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_records (
@@ -80,45 +79,6 @@ class SQLiteStateStore:
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     replayed_run_id TEXT,
-                    schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS pending_approvals (
-                    approval_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    envelope_id TEXT NOT NULL,
-                    config_path TEXT NOT NULL,
-                    config_value_json TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    resolved_at TEXT,
-                    schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS current_config (
-                    config_path TEXT PRIMARY KEY,
-                    config_value_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS config_versions (
-                    version_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    config_path TEXT NOT NULL,
-                    old_value_json TEXT,
-                    new_value_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    source_ref TEXT,
-                    created_at TEXT NOT NULL,
                     schema_version TEXT NOT NULL
                 )
                 """
@@ -171,6 +131,11 @@ class SQLiteStateStore:
                 """
             )
             connection.commit()
+
+    def _drop_legacy_admin_tables(self, connection: sqlite3.Connection) -> None:
+        connection.execute("DROP TABLE IF EXISTS pending_approvals")
+        connection.execute("DROP TABLE IF EXISTS current_config")
+        connection.execute("DROP TABLE IF EXISTS config_versions")
 
     def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
         idempotency_columns = connection.execute(
@@ -443,296 +408,6 @@ class SQLiteStateStore:
                 ("replayed", replayed_run_id, dead_letter_id),
             )
             connection.commit()
-
-    def append_pending_approval(
-        self,
-        *,
-        run_id: str,
-        envelope_id: str,
-        config_path: str,
-        config_value: object,
-    ) -> int:
-        if not run_id:
-            raise ValueError("run_id is required")
-        if not envelope_id:
-            raise ValueError("envelope_id is required")
-        if not config_path:
-            raise ValueError("config_path is required")
-        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO pending_approvals (
-                    run_id,
-                    envelope_id,
-                    config_path,
-                    config_value_json,
-                    status,
-                    created_at,
-                    resolved_at,
-                    schema_version
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    envelope_id,
-                    config_path,
-                    json.dumps(config_value, sort_keys=True),
-                    "pending",
-                    created_at,
-                    None,
-                    "1.0",
-                ),
-            )
-            connection.commit()
-            return int(cursor.lastrowid)
-
-    def list_pending_approvals(self, *, status: str | None = None) -> list[PendingApprovalRecord]:
-        with closing(self._connect()) as connection:
-            if status is None:
-                rows = connection.execute(
-                    "SELECT * FROM pending_approvals ORDER BY approval_id ASC"
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """
-                    SELECT * FROM pending_approvals
-                    WHERE status = ?
-                    ORDER BY approval_id ASC
-                    """,
-                    (status,),
-                ).fetchall()
-
-        return [
-            PendingApprovalRecord(
-                approval_id=row["approval_id"],
-                run_id=row["run_id"],
-                envelope_id=row["envelope_id"],
-                config_path=row["config_path"],
-                config_value=json.loads(row["config_value_json"]),
-                status=row["status"],
-                created_at=_parse_rfc3339_utc(row["created_at"]),
-                resolved_at=(
-                    _parse_rfc3339_utc(row["resolved_at"])
-                    if row["resolved_at"] is not None
-                    else None
-                ),
-                schema_version=row["schema_version"],
-            )
-            for row in rows
-        ]
-
-    def resolve_pending_approval(self, approval_id: int, status: str) -> None:
-        if approval_id <= 0:
-            raise ValueError("approval_id must be positive")
-        if status not in {"approved", "rejected"}:
-            raise ValueError("status must be approved or rejected")
-        resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE pending_approvals
-                SET status = ?, resolved_at = ?
-                WHERE approval_id = ?
-                """,
-                (status, resolved_at, approval_id),
-            )
-            connection.commit()
-
-    def get_pending_approval(self, approval_id: int) -> PendingApprovalRecord | None:
-        if approval_id <= 0:
-            raise ValueError("approval_id must be positive")
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM pending_approvals WHERE approval_id = ?",
-                (approval_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return PendingApprovalRecord(
-            approval_id=row["approval_id"],
-            run_id=row["run_id"],
-            envelope_id=row["envelope_id"],
-            config_path=row["config_path"],
-            config_value=json.loads(row["config_value_json"]),
-            status=row["status"],
-            created_at=_parse_rfc3339_utc(row["created_at"]),
-            resolved_at=(
-                _parse_rfc3339_utc(row["resolved_at"])
-                if row["resolved_at"] is not None
-                else None
-            ),
-            schema_version=row["schema_version"],
-        )
-
-    def apply_config_update(
-        self,
-        *,
-        config_path: str,
-        new_value: object,
-        source: str,
-        source_ref: str | None,
-    ) -> int:
-        if not config_path:
-            raise ValueError("config_path is required")
-        if not source:
-            raise ValueError("source is required")
-        if source_ref is not None and not source_ref:
-            raise ValueError("source_ref must not be empty")
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        new_value_json = json.dumps(new_value, sort_keys=True)
-        with closing(self._connect()) as connection:
-            existing = connection.execute(
-                "SELECT config_value_json FROM current_config WHERE config_path = ?",
-                (config_path,),
-            ).fetchone()
-            old_value_json = existing["config_value_json"] if existing is not None else None
-            connection.execute(
-                """
-                INSERT INTO current_config (
-                    config_path,
-                    config_value_json,
-                    updated_at,
-                    schema_version
-                )
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(config_path)
-                DO UPDATE SET
-                    config_value_json = excluded.config_value_json,
-                    updated_at = excluded.updated_at,
-                    schema_version = excluded.schema_version
-                """,
-                (
-                    config_path,
-                    new_value_json,
-                    now,
-                    "1.0",
-                ),
-            )
-            cursor = connection.execute(
-                """
-                INSERT INTO config_versions (
-                    config_path,
-                    old_value_json,
-                    new_value_json,
-                    source,
-                    source_ref,
-                    created_at,
-                    schema_version
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    config_path,
-                    old_value_json,
-                    new_value_json,
-                    source,
-                    source_ref,
-                    now,
-                    "1.0",
-                ),
-            )
-            connection.commit()
-            return int(cursor.lastrowid)
-
-    def list_config_versions(self) -> list[ConfigVersionRecord]:
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM config_versions ORDER BY version_id ASC"
-            ).fetchall()
-        return [
-            ConfigVersionRecord(
-                version_id=row["version_id"],
-                config_path=row["config_path"],
-                old_value=(
-                    json.loads(row["old_value_json"])
-                    if row["old_value_json"] is not None
-                    else None
-                ),
-                new_value=json.loads(row["new_value_json"]),
-                source=row["source"],
-                source_ref=row["source_ref"],
-                created_at=_parse_rfc3339_utc(row["created_at"]),
-                schema_version=row["schema_version"],
-            )
-            for row in rows
-        ]
-
-    def rollback_config_version(self, version_id: int) -> int:
-        if version_id <= 0:
-            raise ValueError("version_id must be positive")
-        with closing(self._connect()) as connection:
-            target = connection.execute(
-                "SELECT * FROM config_versions WHERE version_id = ?",
-                (version_id,),
-            ).fetchone()
-            if target is None:
-                raise ValueError(f"config version not found: {version_id}")
-
-            config_path = target["config_path"]
-            current = connection.execute(
-                "SELECT config_value_json FROM current_config WHERE config_path = ?",
-                (config_path,),
-            ).fetchone()
-            current_value_json = current["config_value_json"] if current is not None else None
-            restore_value_json = target["old_value_json"]
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-            if restore_value_json is None:
-                connection.execute(
-                    "DELETE FROM current_config WHERE config_path = ?",
-                    (config_path,),
-                )
-            else:
-                connection.execute(
-                    """
-                    INSERT INTO current_config (
-                        config_path,
-                        config_value_json,
-                        updated_at,
-                        schema_version
-                    )
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(config_path)
-                    DO UPDATE SET
-                        config_value_json = excluded.config_value_json,
-                        updated_at = excluded.updated_at,
-                        schema_version = excluded.schema_version
-                    """,
-                    (
-                        config_path,
-                        restore_value_json,
-                        now,
-                        "1.0",
-                    ),
-                )
-
-            cursor = connection.execute(
-                """
-                INSERT INTO config_versions (
-                    config_path,
-                    old_value_json,
-                    new_value_json,
-                    source,
-                    source_ref,
-                    created_at,
-                    schema_version
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    config_path,
-                    current_value_json,
-                    restore_value_json if restore_value_json is not None else "null",
-                    "rollback",
-                    f"version:{version_id}",
-                    now,
-                    "1.0",
-                ),
-            )
-            connection.commit()
-            return int(cursor.lastrowid)
 
     def append_conversation_turn(
         self,

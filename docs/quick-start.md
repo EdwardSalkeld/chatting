@@ -54,12 +54,12 @@ The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9
 
 ## 6) Query state and metrics
 
-`app.main` is now query/admin only:
+`app.cli` is the preferred admin/query entrypoint. `app.main` remains as a compatibility alias.
 
 ```bash
-python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-runs --limit 20
-python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20
-python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-metrics
+python3 -m app.cli --db-path /tmp/chatting-message-handler.db --list-runs --limit 20
+python3 -m app.cli --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20
+python3 -m app.cli --db-path /tmp/chatting-message-handler.db --list-metrics
 ```
 
 ## Notes
@@ -67,6 +67,6 @@ python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-metrics
 - For the queue-by-queue runtime conversation, payload examples, and config levers, see
   [BBMB Message Flow](bbmb-message-flow.md).
 - For full split-mode setup and operational details, see [Run Split Mode (BBMB)](run-split-bbmb.md).
-- `app.main` no longer runs bootstrap/live runtime execution.
-- `app.main` reads one SQLite database at a time. In split mode, point it at either the
+- `app.cli`/`app.main` no longer run bootstrap/live runtime execution.
+- `app.cli` reads one SQLite database at a time. In split mode, point it at either the
   message-handler DB or the worker DB depending on what you want to inspect.
