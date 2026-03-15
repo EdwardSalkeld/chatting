@@ -45,8 +45,6 @@ class StateStore(Protocol):
 
 Operational extensions:
 - `DeadLetterRecord`
-- `PendingApprovalRecord`
-- `ConfigVersionRecord`
 - task-ledger and staged-egress records in `app.message_handler_runtime`
 
 The BBMB payload contracts are:
@@ -71,7 +69,6 @@ Each run emits:
 
 - no raw secrets in envelopes/prompt payloads
 - action execution deny-by-default
-- sensitive config updates require explicit approval workflow
 - all decisions/audit outcomes persisted in SQLite
 - `message-handler` is the only process allowed to dispatch to external systems
 

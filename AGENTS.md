@@ -11,13 +11,18 @@
 - Split mode only:
   - `python3 -m app.main_message_handler --config <message-handler.json>`
   - `python3 -m app.main_worker --config <worker.json>`
-- `app.main` is query/admin only (`--list-*`, dead-letter replay, approvals, rollback, metrics).
+- `app.cli` is the preferred admin/query CLI (`--list-*`, dead-letter replay, metrics).
+- `app.main` remains available as a compatibility alias for the same admin/query CLI.
 
 ## Query Examples
 
-- List runs: `python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-runs --limit 20`
-- List audit events: `python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20`
-- List metrics: `python3 -m app.main --db-path /tmp/chatting-message-handler.db --list-metrics`
+- List runs: `python3 -m app.cli --db-path /tmp/chatting-message-handler.db --list-runs --limit 20`
+- List audit events: `python3 -m app.cli --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20`
+- List metrics: `python3 -m app.cli --db-path /tmp/chatting-message-handler.db --list-metrics`
+
+## GitHub Workflow
+
+- If asked to complete a GitHub issue in this repo, opening or updating a PR is part of the expected deliverable unless the user explicitly says not to create one.
 
 ## Tooling Note
 

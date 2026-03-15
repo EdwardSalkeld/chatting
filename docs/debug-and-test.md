@@ -50,39 +50,29 @@ python3 -m app.main_worker --help
 ```bash
 python3 -m app.main_reply --help
 ```
+- Admin/query CLI help:
+```bash
+python3 -m app.cli --help
+```
 - List runs:
 ```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --list-runs --limit 50
+python3 -m app.cli --db-path /tmp/chatting-state.db --list-runs --limit 50
 ```
 - List audit events:
 ```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --list-audit-events --limit 50
+python3 -m app.cli --db-path /tmp/chatting-state.db --list-audit-events --limit 50
 ```
 - List dead letters:
 ```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --list-dead-letters --result-status pending
+python3 -m app.cli --db-path /tmp/chatting-state.db --list-dead-letters --result-status pending
 ```
 - Replay dead letters with stub executor:
 ```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --replay-dead-letters --use-stub-executor
+python3 -m app.cli --db-path /tmp/chatting-state.db --replay-dead-letters --use-stub-executor
 ```
-- List pending config approvals:
+- List persisted metrics summary:
 ```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --list-pending-approvals --result-status pending
-```
-- Approve one pending item:
-```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --approve-pending-approval 1
-```
-- List config versions / rollback:
-```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --list-config-versions
-python3 -m app.main --db-path /tmp/chatting-state.db --rollback-config-version 1
-```
-- Serve metrics + dashboard:
-```bash
-python3 -m app.main --db-path /tmp/chatting-state.db --serve-metrics --metrics-port 8080
-# open /metrics and /dashboard
+python3 -m app.cli --db-path /tmp/chatting-state.db --list-metrics
 ```
 
 ## Common failures and fixes
