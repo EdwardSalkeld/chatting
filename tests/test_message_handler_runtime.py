@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
 
@@ -9,14 +9,19 @@ from app.main_message_handler import (
     EgressTelemetryRollup,
     HeartbeatTelemetryRollup,
     MessageHandlerMetrics,
+    TelegramAttachmentCleanupSettings,
     _handle_egress_message,
     _prepare_ingress_envelope,
     _render_prometheus_metrics,
 )
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_egress, build_internal_heartbeat_envelope
-from app.message_handler_runtime import TaskLedgerStore
-from app.models import ApplyResult, OutboundMessage, ReplyChannel, TaskEnvelope
+from app.message_handler_runtime import (
+    TaskLedgerStore,
+    TelegramAttachmentStore,
+    cleanup_telegram_attachments,
+)
+from app.models import ApplyResult, AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 
 
@@ -61,6 +66,21 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             ),
             trace_id="trace:internal:heartbeat:1",
         )
+
+    def _build_telegram_attachment_task_message(self, attachment_uri: str) -> TaskQueueMessage:
+        envelope = TaskEnvelope(
+            id="telegram:photo-1",
+            source="im",
+            received_at=datetime(2026, 3, 6, 12, 0, tzinfo=timezone.utc),
+            actor="77:alice",
+            content="[photo attached]",
+            attachments=[AttachmentRef(uri=attachment_uri, name="telegram-photo.jpg")],
+            context_refs=[],
+            policy_profile="default",
+            reply_channel=ReplyChannel(type="telegram", target="12345"),
+            dedupe_key="telegram:photo-1",
+        )
+        return TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:photo-1")
 
     def _build_telegram_envelope(self, *, envelope_id: str, content: str, target: str = "12345") -> TaskEnvelope:
         return TaskEnvelope(
@@ -240,6 +260,138 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                     envelope_id=task_message.envelope.id,
                 )
             )
+
+    def test_handle_egress_message_marks_telegram_attachments_cleanup_eligible_on_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            attachment_dir = Path(tmpdir) / "attachments"
+            attachment_dir.mkdir()
+            attachment_path = attachment_dir / "telegram-photo.jpg"
+            attachment_path.write_bytes(b"photo-bytes")
+
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            attachment_store = TelegramAttachmentStore(db_path)
+            task_message = self._build_telegram_attachment_task_message(attachment_path.resolve().as_uri())
+            ledger.record_task(task_message)
+            tracked = attachment_store.record_task_attachments(
+                task_message=task_message,
+                attachment_root_dir=str(attachment_dir),
+            )
+            self.assertEqual(tracked, 1)
+            applier = _RecordingApplier()
+            acked: list[str] = []
+
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="log", target="ops", body="done"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:photo-1:0",
+                sequence=0,
+                event_kind="completion",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-telegram-completion",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                attachment_store=attachment_store,
+                attachment_cleanup_settings=TelegramAttachmentCleanupSettings(
+                    attachment_root_dir=str(attachment_dir),
+                    cleanup_grace_seconds=3600,
+                    max_age_seconds=86400,
+                ),
+                allowed_egress_channels={"log"},
+                applier=applier,
+                ack_callback=acked.append,
+            )
+
+            self.assertEqual(acked, ["guid-telegram-completion"])
+            records = attachment_store.list_records()
+            self.assertEqual(len(records), 1)
+            self.assertIsNotNone(records[0].eligible_after)
+            self.assertTrue(attachment_path.exists())
+
+    def test_cleanup_telegram_attachments_deletes_only_after_completion_grace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            attachment_dir = Path(tmpdir) / "attachments"
+            attachment_dir.mkdir()
+            attachment_path = attachment_dir / "telegram-photo.jpg"
+            attachment_path.write_bytes(b"photo-bytes")
+
+            attachment_store = TelegramAttachmentStore(db_path)
+            task_message = self._build_telegram_attachment_task_message(attachment_path.resolve().as_uri())
+            attachment_store.record_task_attachments(
+                task_message=task_message,
+                attachment_root_dir=str(attachment_dir),
+            )
+            attachment_store.mark_task_attachments_eligible(
+                task_id=task_message.task_id,
+                eligible_after=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
+            )
+
+            before = cleanup_telegram_attachments(
+                attachment_store=attachment_store,
+                attachment_root_dir=str(attachment_dir),
+                completion_grace_period=timedelta(hours=1),
+                max_attachment_age=timedelta(days=30),
+                now=datetime(2026, 3, 6, 12, 59, tzinfo=timezone.utc),
+            )
+            self.assertEqual(before.deleted_count, 0)
+            self.assertTrue(attachment_path.exists())
+
+            after = cleanup_telegram_attachments(
+                attachment_store=attachment_store,
+                attachment_root_dir=str(attachment_dir),
+                completion_grace_period=timedelta(hours=1),
+                max_attachment_age=timedelta(days=30),
+                now=datetime(2026, 3, 6, 13, 1, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(after.deleted_count, 1)
+            self.assertFalse(attachment_path.exists())
+
+    def test_cleanup_telegram_attachments_deletes_orphaned_file_after_max_age(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            attachment_dir = Path(tmpdir) / "attachments"
+            attachment_dir.mkdir()
+            attachment_path = attachment_dir / "telegram-photo.jpg"
+            attachment_path.write_bytes(b"photo-bytes")
+
+            attachment_store = TelegramAttachmentStore(db_path)
+            task_message = self._build_telegram_attachment_task_message(attachment_path.resolve().as_uri())
+            attachment_store.record_task_attachments(
+                task_message=task_message,
+                attachment_root_dir=str(attachment_dir),
+            )
+
+            import sqlite3
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "UPDATE telegram_attachment_ledger SET created_at = ? WHERE task_id = ?",
+                    ("2026-02-01T00:00:00Z", task_message.task_id),
+                )
+                connection.commit()
+
+            result = cleanup_telegram_attachments(
+                attachment_store=attachment_store,
+                attachment_root_dir=str(attachment_dir),
+                completion_grace_period=timedelta(days=7),
+                max_attachment_age=timedelta(days=30),
+                now=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(result.deleted_count, 1)
+            self.assertFalse(attachment_path.exists())
 
     def test_handle_egress_message_applies_completion_without_external_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -718,6 +870,7 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             github_scanned_events=5,
             github_new_events=2,
             github_published=1,
+            telegram_attachment_cleanup=None,
             telemetry_snapshot=telemetry_snapshot,
             completed_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
         )
@@ -730,6 +883,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         self.assertEqual(snapshot["github_scanned_events_total"], 5)
         self.assertEqual(snapshot["github_new_events_total"], 2)
         self.assertEqual(snapshot["github_published_total"], 1)
+        self.assertEqual(snapshot["telegram_attachment_cleanup_deleted_total"], 0)
+        self.assertEqual(snapshot["telegram_attachment_cleanup_missing_total"], 0)
+        self.assertEqual(snapshot["telegram_attachment_cleanup_failed_total"], 0)
+        self.assertEqual(snapshot["telegram_attachment_cleanup_reclaimed_bytes_total"], 0)
         self.assertEqual(snapshot["last_loop_completed_timestamp_seconds"], 1772798460.0)
         self.assertEqual(snapshot["egress_loops_total"], 0)
         self.assertEqual(snapshot["last_egress_loop_completed_timestamp_seconds"], 0.0)
@@ -746,6 +903,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 "github_scanned_events_total": 5,
                 "github_new_events_total": 3,
                 "github_published_total": 1,
+                "telegram_attachment_cleanup_deleted_total": 2,
+                "telegram_attachment_cleanup_missing_total": 1,
+                "telegram_attachment_cleanup_failed_total": 0,
+                "telegram_attachment_cleanup_reclaimed_bytes_total": 4096,
                 "last_loop_completed_timestamp_seconds": 1772798460.0,
                 "egress_loops_total": 5,
                 "last_egress_loop_completed_timestamp_seconds": 1772798461.0,
@@ -774,6 +935,11 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         )
         self.assertIn("chatting_message_handler_loops_total 2", rendered)
         self.assertIn("chatting_message_handler_github_published_total 1", rendered)
+        self.assertIn("chatting_message_handler_telegram_attachment_cleanup_deleted_total 2", rendered)
+        self.assertIn(
+            "chatting_message_handler_telegram_attachment_cleanup_reclaimed_bytes_total 4096",
+            rendered,
+        )
         self.assertIn("chatting_message_handler_egress_loops_total 5", rendered)
         self.assertIn("chatting_message_handler_egress_received_total 7", rendered)
         self.assertIn("chatting_message_handler_egress_message_dispatched_total 2", rendered)

@@ -63,6 +63,8 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "telegram_allowed_chat_ids",
         "telegram_allowed_channel_ids",
         "telegram_attachment_dir",
+        "telegram_attachment_cleanup_grace_seconds",
+        "telegram_attachment_max_age_seconds",
         "telegram_api_base_url",
         "telegram_bot_token_env",
         "telegram_context_refs",

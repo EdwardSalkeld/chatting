@@ -13,6 +13,8 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_api_base_url` (default `https://api.telegram.org`)
 - `telegram_poll_timeout_seconds` (default `20`)
 - `telegram_attachment_dir` (optional local directory for downloaded photo attachments; defaults to a temp-dir path if omitted)
+- `telegram_attachment_cleanup_grace_seconds` (default `604800`, or 7 days)
+- `telegram_attachment_max_age_seconds` (default `2592000`, or 30 days)
 - `telegram_allowed_chat_ids` (optional list)
 - `telegram_allowed_channel_ids` (optional list, required to ingest `channel_post`)
 - `telegram_context_refs` (optional list)
@@ -36,4 +38,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `channel_post` updates are ignored unless the channel ID is present in `telegram_allowed_channel_ids`.
 - Ignored `channel_post` updates log `update_id`, `channel_id`, and an explicit reason so new channel IDs can be copied from logs.
 - Offset is advanced as `highest_update_id + 1` each poll.
-- In production, point `telegram_attachment_dir` at durable storage so Codex can still access files after ingress has completed.
+- The message handler tracks downloaded Telegram attachments in its SQLite DB and only makes them cleanup-eligible after the task reaches terminal completion.
+- Cleanup uses a hybrid policy:
+  terminal tasks wait for `telegram_attachment_cleanup_grace_seconds`, while orphaned/dead-lettered attachments are still reclaimed once they exceed `telegram_attachment_max_age_seconds`.
+- Cleanup runs in the message-handler loop and logs tracked, eligible, deleted, missing, and failed attachment cleanup events.
+- In production, point `telegram_attachment_dir` at durable storage when workers need access beyond ingress, but expect the handler to reclaim old files automatically unless you increase the retention settings.
