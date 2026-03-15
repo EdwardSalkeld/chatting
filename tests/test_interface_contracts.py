@@ -11,6 +11,7 @@ from app.connectors import (
     FakeCronConnector,
     FakeEmailConnector,
     GitHubIssueAssignmentConnector,
+    GitHubPullRequestReviewConnector,
     InternalHeartbeatConnector,
     SlackConnector,
     TelegramConnector,
@@ -68,6 +69,16 @@ class InterfaceContractTests(unittest.TestCase):
                 GitHubIssueAssignmentConnector(
                     repository_patterns=["brokensbone/chatting"],
                     assignee_login="BillyAcachofa",
+                    context_refs=[],
+                    checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
+                    graphql_runner=lambda _query, _variables: {"data": {"repository": None}},
+                ),
+                Connector,
+            )
+            self.assertIsInstance(
+                GitHubPullRequestReviewConnector(
+                    repository_patterns=["brokensbone/chatting"],
+                    author_login="BillyAcachofa",
                     context_refs=[],
                     checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
                     graphql_runner=lambda _query, _variables: {"data": {"repository": None}},

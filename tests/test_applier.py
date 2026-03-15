@@ -819,6 +819,24 @@ class GitHubIssueCommentSenderTests(unittest.TestCase):
             [["gh", "issue", "comment", "13", "--repo", "brokensbone/chatting", "--body", "hello"]],
         )
 
+    def test_send_uses_gh_cli_for_pull_request_url_target(self) -> None:
+        seen_commands: list[list[str]] = []
+
+        class _Result:
+            returncode = 0
+
+        def runner(command: list[str]) -> object:
+            seen_commands.append(command)
+            return _Result()
+
+        sender = GitHubIssueCommentSender(command_runner=runner)
+        sender.send("https://github.com/brokensbone/chatting/pull/60", "hello")
+
+        self.assertEqual(
+            seen_commands,
+            [["gh", "issue", "comment", "60", "--repo", "brokensbone/chatting", "--body", "hello"]],
+        )
+
     def test_send_raises_for_invalid_target(self) -> None:
         sender = GitHubIssueCommentSender(command_runner=lambda _command: object())
         with self.assertRaisesRegex(ValueError, "github_issue_target_invalid"):

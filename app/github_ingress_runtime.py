@@ -9,7 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Protocol, TypeVar
 
 from app.broker import TASK_QUEUE_NAME, BBMBQueueAdapter, TaskQueueMessage
 from app.models import ReplyChannel, TaskEnvelope
@@ -51,6 +51,58 @@ query (
                   login
                 }
               }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+PULL_REQUEST_REVIEWS_QUERY = """
+query (
+  $repoOwner: String!
+  $repoName: String!
+  $pullRequestLimit: Int!
+  $reviewLimit: Int!
+) {
+  repository(owner: $repoOwner, name: $repoName) {
+    id
+    nameWithOwner
+    pullRequests(
+      first: $pullRequestLimit
+      states: OPEN
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      nodes {
+        id
+        number
+        title
+        body
+        url
+        author {
+          login
+        }
+        closingIssuesReferences(first: 10) {
+          nodes {
+            number
+            title
+            url
+          }
+        }
+        reviews(last: $reviewLimit) {
+          nodes {
+            id
+            submittedAt
+            state
+            body
+            url
+            author {
+              login
+            }
+            comments {
+              totalCount
             }
           }
         }
@@ -194,6 +246,105 @@ class GitHubIssueAssignmentEvent:
             context_refs=list(context_refs),
             policy_profile=policy_profile,
             reply_channel=ReplyChannel(type="github", target=self.issue_url),
+            dedupe_key=self.dedupe_key(),
+        )
+
+
+@dataclass(frozen=True)
+class GitHubPullRequestReviewEvent:
+    """Normalized GitHub pull request review payload."""
+
+    event_id: str
+    event_created_at: datetime
+    repository_id: str
+    repository_name_with_owner: str
+    pull_request_id: str
+    pull_request_number: int
+    pull_request_title: str
+    pull_request_body: str
+    pull_request_url: str
+    pull_request_author_login: str
+    review_author_login: str
+    review_state: str
+    review_body: str
+    review_url: str
+    review_comment_count: int
+    closing_issue_refs: list[str]
+
+    def __post_init__(self) -> None:
+        if not self.event_id:
+            raise ValueError("event_id is required")
+        if self.event_created_at.tzinfo is None:
+            raise ValueError("event_created_at must be timezone-aware")
+        if not self.repository_id:
+            raise ValueError("repository_id is required")
+        if not self.repository_name_with_owner:
+            raise ValueError("repository_name_with_owner is required")
+        if not self.pull_request_id:
+            raise ValueError("pull_request_id is required")
+        if self.pull_request_number <= 0:
+            raise ValueError("pull_request_number must be positive")
+        if not self.pull_request_title:
+            raise ValueError("pull_request_title is required")
+        if not self.pull_request_url:
+            raise ValueError("pull_request_url is required")
+        if not self.pull_request_author_login:
+            raise ValueError("pull_request_author_login is required")
+        if not self.review_author_login:
+            raise ValueError("review_author_login is required")
+        if not self.review_state:
+            raise ValueError("review_state is required")
+        if not self.review_url:
+            raise ValueError("review_url is required")
+        if self.review_comment_count < 0:
+            raise ValueError("review_comment_count must be non-negative")
+        if any(not ref for ref in self.closing_issue_refs):
+            raise ValueError("closing_issue_refs must be non-empty strings")
+
+    def dedupe_key(self) -> str:
+        return f"github-review:{self.repository_id}:{self.pull_request_id}:{self.event_id}"
+
+    def envelope_id(self) -> str:
+        return f"github-review:{self.repository_name_with_owner}:{self.pull_request_number}:{self.event_id}"
+
+    def to_task_envelope(
+        self,
+        *,
+        context_refs: list[str],
+        policy_profile: str,
+    ) -> TaskEnvelope:
+        closing_issues_summary = ", ".join(self.closing_issue_refs) if self.closing_issue_refs else "(none linked)"
+        review_body = self.review_body.strip() if self.review_body.strip() else "(empty)"
+        pull_request_body = self.pull_request_body.strip() if self.pull_request_body.strip() else "(empty)"
+        content = (
+            "GitHub pull request review detected.\n\n"
+            f"Repository: {self.repository_name_with_owner}\n"
+            f"Pull request: #{self.pull_request_number} {self.pull_request_title}\n"
+            f"Pull request URL: {self.pull_request_url}\n"
+            f"Pull request author: {self.pull_request_author_login}\n"
+            f"Review state: {self.review_state}\n"
+            f"Review author: {self.review_author_login}\n"
+            f"Review URL: {self.review_url}\n"
+            f"Inline review comments: {self.review_comment_count}\n"
+            f"Linked issues: {closing_issues_summary}\n"
+            f"Review id: {self.event_id}\n"
+            f"Reviewed at: {_serialize_utc_datetime(self.event_created_at)}\n\n"
+            "Read the review and any inline comments on this pull request, then make changes or respond on GitHub as needed.\n\n"
+            "Review body:\n"
+            f"{review_body}\n\n"
+            "Pull request body:\n"
+            f"{pull_request_body}"
+        )
+        return TaskEnvelope(
+            id=self.envelope_id(),
+            source="webhook",
+            received_at=self.event_created_at,
+            actor=self.review_author_login,
+            content=content,
+            attachments=[],
+            context_refs=list(context_refs),
+            policy_profile=policy_profile,
+            reply_channel=ReplyChannel(type="github", target=self.pull_request_url),
             dedupe_key=self.dedupe_key(),
         )
 
@@ -497,12 +648,155 @@ def fetch_assignment_events_for_repository(
     return events
 
 
-def checkpoint_scope_key(*, repositories: list[str], assignee_login: str) -> str:
+def fetch_pull_request_review_events_for_repository(
+    *,
+    repo_owner: str,
+    repo_name: str,
+    author_login: str,
+    pull_request_limit: int,
+    review_limit: int,
+    graphql_runner: Callable[[str, Mapping[str, object]], dict[str, object]],
+) -> list[GitHubPullRequestReviewEvent]:
+    """Fetch submitted review events for open pull requests authored by one login."""
+    if pull_request_limit <= 0:
+        raise ValueError("pull_request_limit must be positive")
+    if review_limit <= 0:
+        raise ValueError("review_limit must be positive")
+
+    payload = graphql_runner(
+        PULL_REQUEST_REVIEWS_QUERY,
+        {
+            "repoOwner": repo_owner,
+            "repoName": repo_name,
+            "pullRequestLimit": pull_request_limit,
+            "reviewLimit": review_limit,
+        },
+    )
+    if payload.get("errors"):
+        raise RuntimeError(f"github_graphql_errors:{payload['errors']}")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("github_graphql_missing_data")
+    repository = data.get("repository")
+    if repository is None:
+        return []
+    if not isinstance(repository, dict):
+        raise RuntimeError("github_graphql_invalid_repository")
+
+    repository_id = _require_non_empty_string(repository.get("id"), field_name="repository.id")
+    repo_name_with_owner = _require_non_empty_string(
+        repository.get("nameWithOwner"),
+        field_name="repository.nameWithOwner",
+    )
+    pull_requests = repository.get("pullRequests")
+    if not isinstance(pull_requests, dict):
+        raise RuntimeError("github_graphql_invalid_pull_requests")
+    pull_request_nodes = pull_requests.get("nodes")
+    if not isinstance(pull_request_nodes, list):
+        raise RuntimeError("github_graphql_invalid_pull_request_nodes")
+
+    expected_author_login = author_login.casefold()
+    events: list[GitHubPullRequestReviewEvent] = []
+    for pull_request_node in pull_request_nodes:
+        if not isinstance(pull_request_node, dict):
+            continue
+        author = pull_request_node.get("author")
+        if not isinstance(author, dict):
+            continue
+        pull_request_author_login = _parse_actor_login(author)
+        if pull_request_author_login is None or pull_request_author_login.casefold() != expected_author_login:
+            continue
+
+        try:
+            pull_request_id = _require_non_empty_string(
+                pull_request_node.get("id"),
+                field_name="pull_request.id",
+            )
+            pull_request_number = _require_positive_int(
+                pull_request_node.get("number"),
+                field_name="pull_request.number",
+            )
+            pull_request_title = _require_non_empty_string(
+                pull_request_node.get("title"),
+                field_name="pull_request.title",
+            )
+            pull_request_url = _require_non_empty_string(
+                pull_request_node.get("url"),
+                field_name="pull_request.url",
+            )
+        except RuntimeError:
+            continue
+        pull_request_body_raw = pull_request_node.get("body")
+        pull_request_body = pull_request_body_raw if isinstance(pull_request_body_raw, str) else ""
+        closing_issue_refs = _parse_issue_reference_summaries(
+            pull_request_node.get("closingIssuesReferences"),
+        )
+
+        reviews = pull_request_node.get("reviews")
+        if not isinstance(reviews, dict):
+            continue
+        review_nodes = reviews.get("nodes")
+        if not isinstance(review_nodes, list):
+            continue
+        for review_node in review_nodes:
+            if not isinstance(review_node, dict):
+                continue
+            review_author_login = _parse_actor_login(review_node.get("author"))
+            if review_author_login is None or review_author_login.casefold() == expected_author_login:
+                continue
+            submitted_at = review_node.get("submittedAt")
+            if not isinstance(submitted_at, str) or not submitted_at.strip():
+                continue
+            try:
+                event_id = _require_non_empty_string(review_node.get("id"), field_name="review.id")
+                review_state = _require_non_empty_string(review_node.get("state"), field_name="review.state")
+                review_url = _require_non_empty_string(review_node.get("url"), field_name="review.url")
+                review_created_at = _parse_rfc3339_utc(submitted_at)
+                review_comment_count = _parse_total_count(
+                    review_node.get("comments"),
+                    field_name="review.comments.totalCount",
+                )
+            except RuntimeError:
+                continue
+            review_body_raw = review_node.get("body")
+            review_body = review_body_raw if isinstance(review_body_raw, str) else ""
+            events.append(
+                GitHubPullRequestReviewEvent(
+                    event_id=event_id,
+                    event_created_at=review_created_at,
+                    repository_id=repository_id,
+                    repository_name_with_owner=repo_name_with_owner,
+                    pull_request_id=pull_request_id,
+                    pull_request_number=pull_request_number,
+                    pull_request_title=pull_request_title,
+                    pull_request_body=pull_request_body,
+                    pull_request_url=pull_request_url,
+                    pull_request_author_login=pull_request_author_login,
+                    review_author_login=review_author_login,
+                    review_state=review_state,
+                    review_body=review_body,
+                    review_url=review_url,
+                    review_comment_count=review_comment_count,
+                    closing_issue_refs=closing_issue_refs,
+                )
+            )
+    return events
+
+
+def checkpoint_scope_key(
+    *,
+    repositories: list[str],
+    assignee_login: str,
+    stream_name: str = "assignments",
+) -> str:
     """Build deterministic checkpoint scope for repo set + assignee."""
     if not repositories:
         raise ValueError("repositories are required")
+    if not stream_name.strip():
+        raise ValueError("stream_name is required")
     normalized_repos = sorted(repo.strip() for repo in repositories)
-    return f"{assignee_login.casefold()}:{','.join(normalized_repos)}"
+    return f"{stream_name.strip().casefold()}:{assignee_login.casefold()}:{','.join(normalized_repos)}"
 
 
 def expand_repository_patterns(
@@ -540,13 +834,21 @@ def expand_repository_patterns(
     return expanded
 
 
+class _CheckpointedEvent(Protocol):
+    event_id: str
+    event_created_at: datetime
+
+
+EventT = TypeVar("EventT", bound=_CheckpointedEvent)
+
+
 def select_events_after_checkpoint(
-    events: list[GitHubIssueAssignmentEvent],
+    events: list[EventT],
     *,
     checkpoint: AssignmentCheckpoint | None,
-) -> list[GitHubIssueAssignmentEvent]:
+) -> list[EventT]:
     """Sort events and filter to entries after checkpoint boundary."""
-    unique_by_id: dict[str, GitHubIssueAssignmentEvent] = {}
+    unique_by_id: dict[str, EventT] = {}
     for event in events:
         unique_by_id[event.event_id] = event
 
@@ -638,6 +940,36 @@ def _parse_actor_login(raw_actor: object) -> str | None:
     return login
 
 
+def _parse_issue_reference_summaries(raw_references: object) -> list[str]:
+    if not isinstance(raw_references, dict):
+        return []
+    nodes = raw_references.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    references: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        number = node.get("number")
+        if not isinstance(number, int) or number <= 0:
+            continue
+        title = node.get("title")
+        if isinstance(title, str) and title.strip():
+            references.append(f"#{number} {title.strip()}")
+        else:
+            references.append(f"#{number}")
+    return references
+
+
+def _parse_total_count(raw_connection: object, *, field_name: str) -> int:
+    if not isinstance(raw_connection, dict):
+        raise RuntimeError(f"{field_name} must be an object")
+    total_count = raw_connection.get("totalCount")
+    if not isinstance(total_count, int) or isinstance(total_count, bool) or total_count < 0:
+        raise RuntimeError(f"{field_name} must be a non-negative integer")
+    return total_count
+
+
 def _require_non_empty_string(value: object, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise RuntimeError(f"{field_name} must be a non-empty string")
@@ -664,15 +996,18 @@ def _serialize_utc_datetime(value: datetime) -> str:
 __all__ = [
     "ASSIGNED_EVENTS_QUERY",
     "OWNER_REPOSITORIES_QUERY",
+    "PULL_REQUEST_REVIEWS_QUERY",
     "AssignmentCheckpoint",
     "GitHubAssignmentCheckpointStore",
     "GitHubIssueAssignmentEvent",
+    "GitHubPullRequestReviewEvent",
     "VIEWER_LOGIN_QUERY",
     "checkpoint_scope_key",
     "default_graphql_runner",
     "expand_repository_patterns",
     "fetch_assignment_events_for_repository",
     "fetch_authenticated_viewer_login",
+    "fetch_pull_request_review_events_for_repository",
     "list_owner_repositories",
     "parse_repo_slug",
     "publish_assignment_events",
