@@ -25,7 +25,11 @@ from app.broker import (
     TASK_QUEUE_NAME,
     TaskQueueMessage,
 )
-from app.connectors import GitHubIssueAssignmentConnector, InternalHeartbeatConnector
+from app.connectors import (
+    GitHubIssueAssignmentConnector,
+    GitHubPullRequestReviewConnector,
+    InternalHeartbeatConnector,
+)
 from app.github_ingress_runtime import (
     GitHubAssignmentCheckpointStore,
     default_graphql_runner,
@@ -617,9 +621,12 @@ def _parse_args() -> argparse.Namespace:
         "--github-repository",
         action="append",
         default=[],
-        help="GitHub repository in owner/repo format (repeatable).",
+        help="GitHub repository in owner/repo format for issue-assignment and PR-review ingress (repeatable).",
     )
-    parser.add_argument("--github-assignee-login", help="GitHub login to filter assigned events for.")
+    parser.add_argument(
+        "--github-assignee-login",
+        help="GitHub login to filter assigned issues and authored pull request reviews for.",
+    )
     parser.add_argument("--github-reply-channel-type", help="Reply channel type for generated tasks.")
     parser.add_argument("--github-reply-channel-target", help="Reply channel target for generated tasks.")
     parser.add_argument(
@@ -629,11 +636,15 @@ def _parse_args() -> argparse.Namespace:
         help="Context ref to attach to generated tasks (repeatable).",
     )
     parser.add_argument("--github-policy-profile", help="Policy profile for generated tasks.")
-    parser.add_argument("--github-max-issues", type=_positive_int, help="Per-repo issue scan limit.")
+    parser.add_argument(
+        "--github-max-issues",
+        type=_positive_int,
+        help="Per-repo issue and pull request scan limit.",
+    )
     parser.add_argument(
         "--github-max-timeline-events",
         type=_positive_int,
-        help="Per-issue assigned-event scan limit.",
+        help="Per-item assigned-event and review scan limit.",
     )
     return parser.parse_args()
 
@@ -969,6 +980,18 @@ def _build_live_connectors_fail_open(
                         policy_profile=settings.policy_profile,
                         max_issues=settings.max_issues,
                         max_timeline_events=settings.max_timeline_events,
+                        checkpoint_store=GitHubAssignmentCheckpointStore(db_path),
+                        graphql_runner=default_graphql_runner,
+                    )
+                )
+                connectors.append(
+                    GitHubPullRequestReviewConnector(
+                        repository_patterns=settings.repositories,
+                        author_login=settings.assignee_login,
+                        context_refs=settings.context_refs,
+                        policy_profile=settings.policy_profile,
+                        max_pull_requests=settings.max_issues,
+                        max_reviews=settings.max_timeline_events,
                         checkpoint_store=GitHubAssignmentCheckpointStore(db_path),
                         graphql_runner=default_graphql_runner,
                     )
@@ -1418,9 +1441,9 @@ def _run_ingress_loop(
                     loop_count,
                 )
                 continue
-            if isinstance(connector, GitHubIssueAssignmentConnector):
-                github_scanned_events = connector.last_poll_scanned_events
-                github_new_events = connector.last_poll_new_events
+            if isinstance(connector, (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector)):
+                github_scanned_events += connector.last_poll_scanned_events
+                github_new_events += connector.last_poll_new_events
                 github_checkpoint = connector.last_poll_checkpoint_id
             for envelope in envelopes:
                 if store.seen(envelope.source, envelope.dedupe_key):
@@ -1441,7 +1464,7 @@ def _run_ingress_loop(
                 if is_internal_heartbeat_envelope(task_message.envelope):
                     heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
                 ingress_published += 1
-                if isinstance(connector, GitHubIssueAssignmentConnector):
+                if isinstance(connector, (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector)):
                     github_published += 1
 
         metrics.record_loop(

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from app.github_ingress_runtime import GitHubIssueAssignmentEvent
+from app.github_ingress_runtime import GitHubIssueAssignmentEvent, GitHubPullRequestReviewEvent
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.main_message_handler import _load_config, main
 from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
@@ -93,6 +93,14 @@ class MainGitHubIngressTests(unittest.TestCase):
                     "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
+                patch(
+                    "app.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
+                    side_effect=[[], []],
+                ),
+                patch(
+                    "app.connectors.github_pull_request_review_connector.expand_repository_patterns",
+                    return_value=["brokensbone/chatting"],
+                ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
                 patch(
                     "sys.argv",
@@ -172,6 +180,14 @@ class MainGitHubIngressTests(unittest.TestCase):
                     "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     return_value=[event],
                 ),
+                patch(
+                    "app.connectors.github_pull_request_review_connector.expand_repository_patterns",
+                    return_value=["brokensbone/chatting"],
+                ),
+                patch(
+                    "app.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
+                    return_value=[],
+                ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
                 patch(
                     "sys.argv",
@@ -197,6 +213,91 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
             self.assertEqual(len(published), 1)
             self.assertEqual(published[0][0], "chatting.tasks.v1")
+
+    def test_main_message_handler_publishes_pull_request_review_event_once_and_uses_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            broker = _FakeBroker()
+            review_event = GitHubPullRequestReviewEvent(
+                event_id="PRR_1",
+                event_created_at=datetime(2026, 3, 7, 12, 0, 0, tzinfo=timezone.utc),
+                repository_id="R_1",
+                repository_name_with_owner="brokensbone/chatting",
+                pull_request_id="PR_1",
+                pull_request_number=60,
+                pull_request_title="Add ingress from GitHub reviews",
+                pull_request_body="PR body",
+                pull_request_url="https://github.com/brokensbone/chatting/pull/60",
+                pull_request_author_login="BillyAcachofa",
+                review_author_login="brokensbone",
+                review_state="CHANGES_REQUESTED",
+                review_body="Please address the comments.",
+                review_url="https://github.com/brokensbone/chatting/pull/60#pullrequestreview-1",
+                review_comment_count=2,
+                closing_issue_refs=["#60 Add ingress from GitHub reviews"],
+            )
+
+            with (
+                patch(
+                    "app.main_message_handler.BBMBQueueAdapter",
+                    return_value=broker,
+                ),
+                patch(
+                    "app.main_message_handler._start_metrics_server",
+                    return_value=_FakeMetricsServer(),
+                ),
+                patch(
+                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
+                    side_effect=[[], []],
+                ),
+                patch(
+                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
+                    return_value=["brokensbone/chatting"],
+                ),
+                patch(
+                    "app.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
+                    side_effect=[[review_event], [review_event]],
+                ),
+                patch(
+                    "app.connectors.github_pull_request_review_connector.expand_repository_patterns",
+                    return_value=["brokensbone/chatting"],
+                ),
+                patch("app.main_message_handler._build_live_connectors", return_value=[]),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_message_handler.py",
+                        "--db-path",
+                        db_path,
+                        "--bbmb-address",
+                        "127.0.0.1:9876",
+                        "--github-repository",
+                        "brokensbone/chatting",
+                        "--github-assignee-login",
+                        "BillyAcachofa",
+                        "--max-loops",
+                        "2",
+                        "--poll-interval-seconds",
+                        "0.01",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            published = self._non_heartbeat_published(broker)
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(published), 1)
+            self.assertEqual(
+                published[0][1]["task_id"],
+                "task:github-review:brokensbone/chatting:60:PRR_1",
+            )
+            self.assertEqual(
+                published[0][1]["envelope"]["reply_channel"],
+                {
+                    "type": "github",
+                    "target": "https://github.com/brokensbone/chatting/pull/60",
+                },
+            )
 
     def test_main_message_handler_disables_misconfigured_github_ingress_and_keeps_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
