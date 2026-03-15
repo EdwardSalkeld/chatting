@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -42,9 +42,16 @@ from app.main import (
     _build_live_connectors,
     _build_telegram_sender,
     _enrich_telegram_envelope_with_memory,
+    _resolve_telegram_attachment_dir,
     _should_store_telegram_memory,
 )
-from app.message_handler_runtime import TaskLedgerRecord, TaskLedgerStore
+from app.message_handler_runtime import (
+    TaskLedgerRecord,
+    TaskLedgerStore,
+    TelegramAttachmentCleanupResult,
+    TelegramAttachmentStore,
+    cleanup_telegram_attachments,
+)
 from app.models import ConfigUpdateDecision, PolicyDecision, TaskEnvelope
 from app.state import SQLiteStateStore
 
@@ -82,6 +89,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "telegram_allowed_chat_ids",
         "telegram_allowed_channel_ids",
         "telegram_attachment_dir",
+        "telegram_attachment_cleanup_grace_seconds",
+        "telegram_attachment_max_age_seconds",
         "telegram_context_refs",
         "github_repositories",
         "github_assignee_login",
@@ -95,6 +104,8 @@ BBMB_EGRESS_PICKUP_WAIT_SECONDS = 5
 BBMB_EGRESS_DRAIN_WAIT_SECONDS = 0
 DEFAULT_METRICS_HOST = "127.0.0.1"
 DEFAULT_METRICS_PORT = 9464
+DEFAULT_TELEGRAM_ATTACHMENT_CLEANUP_GRACE_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_TELEGRAM_ATTACHMENT_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,13 @@ class GitHubIngressSettings:
     policy_profile: str
     max_issues: int
     max_timeline_events: int
+
+
+@dataclass(frozen=True)
+class TelegramAttachmentCleanupSettings:
+    attachment_root_dir: str
+    cleanup_grace_seconds: int
+    max_age_seconds: int
 
 
 @dataclass(frozen=True)
@@ -257,6 +275,10 @@ class MessageHandlerMetrics:
         self._github_scanned_events_total = 0
         self._github_new_events_total = 0
         self._github_published_total = 0
+        self._telegram_attachment_cleanup_deleted_total = 0
+        self._telegram_attachment_cleanup_missing_total = 0
+        self._telegram_attachment_cleanup_failed_total = 0
+        self._telegram_attachment_cleanup_reclaimed_bytes_total = 0
         self._egress_loops_total = 0
         self._last_loop_completed_at: datetime | None = None
         self._last_egress_loop_completed_at: datetime | None = None
@@ -269,6 +291,7 @@ class MessageHandlerMetrics:
         github_scanned_events: int,
         github_new_events: int,
         github_published: int,
+        telegram_attachment_cleanup: TelegramAttachmentCleanupResult | None,
         telemetry_snapshot: dict[str, float | int],
         completed_at: datetime | None = None,
     ) -> None:
@@ -279,6 +302,19 @@ class MessageHandlerMetrics:
             self._github_scanned_events_total += github_scanned_events
             self._github_new_events_total += github_new_events
             self._github_published_total += github_published
+            if telegram_attachment_cleanup is not None:
+                self._telegram_attachment_cleanup_deleted_total += (
+                    telegram_attachment_cleanup.deleted_count
+                )
+                self._telegram_attachment_cleanup_missing_total += (
+                    telegram_attachment_cleanup.missing_count
+                )
+                self._telegram_attachment_cleanup_failed_total += (
+                    telegram_attachment_cleanup.failed_count
+                )
+                self._telegram_attachment_cleanup_reclaimed_bytes_total += (
+                    telegram_attachment_cleanup.reclaimed_bytes
+                )
             self._last_loop_completed_at = loop_completed_at.astimezone(timezone.utc)
             self._egress_snapshot = dict(telemetry_snapshot)
 
@@ -315,6 +351,18 @@ class MessageHandlerMetrics:
                 "github_scanned_events_total": self._github_scanned_events_total,
                 "github_new_events_total": self._github_new_events_total,
                 "github_published_total": self._github_published_total,
+                "telegram_attachment_cleanup_deleted_total": (
+                    self._telegram_attachment_cleanup_deleted_total
+                ),
+                "telegram_attachment_cleanup_missing_total": (
+                    self._telegram_attachment_cleanup_missing_total
+                ),
+                "telegram_attachment_cleanup_failed_total": (
+                    self._telegram_attachment_cleanup_failed_total
+                ),
+                "telegram_attachment_cleanup_reclaimed_bytes_total": (
+                    self._telegram_attachment_cleanup_reclaimed_bytes_total
+                ),
                 "last_loop_completed_timestamp_seconds": round(last_ingress_loop_timestamp, 6),
                 "egress_loops_total": self._egress_loops_total,
                 "last_egress_loop_completed_timestamp_seconds": round(
@@ -375,6 +423,30 @@ def _render_prometheus_metrics(snapshot: Mapping[str, float | int]) -> str:
             "counter",
             "GitHub assignment events published as tasks.",
             "github_published_total",
+        ),
+        (
+            "chatting_message_handler_telegram_attachment_cleanup_deleted_total",
+            "counter",
+            "Telegram attachment files deleted by handler-managed cleanup.",
+            "telegram_attachment_cleanup_deleted_total",
+        ),
+        (
+            "chatting_message_handler_telegram_attachment_cleanup_missing_total",
+            "counter",
+            "Tracked Telegram attachment files already missing from disk during cleanup.",
+            "telegram_attachment_cleanup_missing_total",
+        ),
+        (
+            "chatting_message_handler_telegram_attachment_cleanup_failed_total",
+            "counter",
+            "Telegram attachment cleanup attempts that failed.",
+            "telegram_attachment_cleanup_failed_total",
+        ),
+        (
+            "chatting_message_handler_telegram_attachment_cleanup_reclaimed_bytes_total",
+            "counter",
+            "Bytes reclaimed by Telegram attachment cleanup.",
+            "telegram_attachment_cleanup_reclaimed_bytes_total",
         ),
         (
             "chatting_message_handler_last_loop_completed_timestamp_seconds",
@@ -592,6 +664,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--telegram-attachment-dir",
         help="Local directory for downloaded Telegram photo attachments.",
+    )
+    parser.add_argument(
+        "--telegram-attachment-cleanup-grace-seconds",
+        type=_positive_int,
+        help="Grace period after task completion before Telegram attachment cleanup.",
+    )
+    parser.add_argument(
+        "--telegram-attachment-max-age-seconds",
+        type=_positive_int,
+        help="Absolute max age before Telegram attachments are cleaned even without completion.",
     )
     parser.add_argument(
         "--telegram-allowed-chat-id",
@@ -829,6 +911,48 @@ def _resolve_github_ingress_settings(
     )
 
 
+def _resolve_telegram_attachment_cleanup_settings(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> TelegramAttachmentCleanupSettings | None:
+    cleanup_keys = {
+        "telegram_attachment_dir",
+        "telegram_attachment_cleanup_grace_seconds",
+        "telegram_attachment_max_age_seconds",
+    }
+    explicit_cleanup_configured = (
+        args.telegram_attachment_dir is not None
+        or args.telegram_attachment_cleanup_grace_seconds is not None
+        or args.telegram_attachment_max_age_seconds is not None
+        or any(key in config for key in cleanup_keys)
+    )
+    if not _is_connector_configured(args, config, connector="telegram") and not explicit_cleanup_configured:
+        return None
+
+    cleanup_grace_seconds = _resolve_positive_int(
+        args.telegram_attachment_cleanup_grace_seconds,
+        config.get("telegram_attachment_cleanup_grace_seconds"),
+        default_value=DEFAULT_TELEGRAM_ATTACHMENT_CLEANUP_GRACE_SECONDS,
+        setting_name="telegram_attachment_cleanup_grace_seconds",
+    )
+    max_age_seconds = _resolve_positive_int(
+        args.telegram_attachment_max_age_seconds,
+        config.get("telegram_attachment_max_age_seconds"),
+        default_value=DEFAULT_TELEGRAM_ATTACHMENT_MAX_AGE_SECONDS,
+        setting_name="telegram_attachment_max_age_seconds",
+    )
+    if max_age_seconds < cleanup_grace_seconds:
+        raise ValueError(
+            "telegram_attachment_max_age_seconds must be greater than or equal to "
+            "telegram_attachment_cleanup_grace_seconds"
+        )
+    return TelegramAttachmentCleanupSettings(
+        attachment_root_dir=_resolve_telegram_attachment_dir(args, config),
+        cleanup_grace_seconds=cleanup_grace_seconds,
+        max_age_seconds=max_age_seconds,
+    )
+
+
 def _is_connector_configured(args: argparse.Namespace, config: dict[str, object], *, connector: str) -> bool:
     if connector == "schedule":
         return args.schedule_file is not None or config.get("schedule_file") is not None
@@ -1062,6 +1186,8 @@ def _handle_egress_message(
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
     ack_callback: Callable[[str], None],
+    attachment_store: TelegramAttachmentStore | None = None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
@@ -1170,6 +1296,8 @@ def _handle_egress_message(
         task_id=egress_message.task_id,
         ledger=ledger,
         store=store,
+        attachment_store=attachment_store,
+        attachment_cleanup_settings=attachment_cleanup_settings,
         applier=applier,
         heartbeat_telemetry=heartbeat_telemetry,
         telemetry=telemetry,
@@ -1184,6 +1312,8 @@ def _drain_egress_queue(
     store: SQLiteStateStore,
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
+    attachment_store: TelegramAttachmentStore | None = None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> int:
@@ -1205,6 +1335,8 @@ def _drain_egress_queue(
             picked_payload=egress_picked.payload,
             ledger=ledger,
             store=store,
+            attachment_store=attachment_store,
+            attachment_cleanup_settings=attachment_cleanup_settings,
             allowed_egress_channels=allowed_egress_channels,
             applier=applier,
             ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
@@ -1267,6 +1399,8 @@ def _apply_completion_event(
     egress_message: EgressQueueMessage,
     ledger: TaskLedgerStore,
     store: SQLiteStateStore,
+    attachment_store: TelegramAttachmentStore | None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     telemetry: EgressTelemetryRollup | None,
 ) -> None:
     store.mark_dispatched_event_id(
@@ -1286,6 +1420,21 @@ def _apply_completion_event(
         envelope_id=egress_message.envelope_id,
         trace_id=egress_message.trace_id,
     )
+    if attachment_store is not None and attachment_cleanup_settings is not None:
+        eligible_after = datetime.now(timezone.utc) + timedelta(
+            seconds=attachment_cleanup_settings.cleanup_grace_seconds
+        )
+        tracked_count = attachment_store.mark_task_attachments_eligible(
+            task_id=egress_message.task_id,
+            eligible_after=eligible_after,
+        )
+        if tracked_count:
+            LOGGER.info(
+                "telegram_attachment_cleanup_eligible task_id=%s tracked_attachments=%s eligible_after=%s",
+                egress_message.task_id,
+                tracked_count,
+                _serialize_optional_datetime(eligible_after),
+            )
     LOGGER.info(
         "egress_completion_applied task_id=%s event_id=%s sequence=%s",
         egress_message.task_id,
@@ -1299,6 +1448,8 @@ def _flush_task_egress_in_sequence(
     task_id: str,
     ledger: TaskLedgerStore,
     store: SQLiteStateStore,
+    attachment_store: TelegramAttachmentStore | None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     applier: IntegratedApplier,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
@@ -1334,6 +1485,8 @@ def _flush_task_egress_in_sequence(
                 egress_message=egress_message,
                 ledger=ledger,
                 store=store,
+                attachment_store=attachment_store,
+                attachment_cleanup_settings=attachment_cleanup_settings,
                 telemetry=telemetry,
             )
             return
@@ -1408,6 +1561,8 @@ def _run_ingress_loop(
     broker: BBMBQueueAdapter,
     connectors: list[object],
     disabled_ingress_components: list[DisabledIngressComponent],
+    attachment_store: TelegramAttachmentStore | None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     heartbeat_telemetry: HeartbeatTelemetryRollup,
     metrics: MessageHandlerMetrics,
     poll_interval_seconds: float,
@@ -1430,6 +1585,7 @@ def _run_ingress_loop(
         github_new_events = 0
         github_published = 0
         github_checkpoint = "disabled"
+        attachment_cleanup_result: TelegramAttachmentCleanupResult | None = None
         for connector in connectors:
             connector_name = type(connector).__name__
             try:
@@ -1460,18 +1616,51 @@ def _run_ingress_loop(
                 )
                 broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
                 ledger.record_task(task_message)
+                if attachment_store is not None and attachment_cleanup_settings is not None:
+                    tracked_attachments = attachment_store.record_task_attachments(
+                        task_message=task_message,
+                        attachment_root_dir=attachment_cleanup_settings.attachment_root_dir,
+                    )
+                    if tracked_attachments:
+                        LOGGER.info(
+                            "telegram_attachment_tracked task_id=%s tracked_attachments=%s",
+                            task_id,
+                            tracked_attachments,
+                        )
                 store.mark_seen(envelope.source, envelope.dedupe_key)
                 if is_internal_heartbeat_envelope(task_message.envelope):
                     heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
                 ingress_published += 1
                 if isinstance(connector, (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector)):
                     github_published += 1
+        if attachment_store is not None and attachment_cleanup_settings is not None:
+            attachment_cleanup_result = cleanup_telegram_attachments(
+                attachment_store=attachment_store,
+                attachment_root_dir=attachment_cleanup_settings.attachment_root_dir,
+                completion_grace_period=timedelta(
+                    seconds=attachment_cleanup_settings.cleanup_grace_seconds
+                ),
+                max_attachment_age=timedelta(seconds=attachment_cleanup_settings.max_age_seconds),
+            )
+            if (
+                attachment_cleanup_result.deleted_count
+                or attachment_cleanup_result.missing_count
+                or attachment_cleanup_result.failed_count
+            ):
+                LOGGER.info(
+                    "telegram_attachment_cleanup deleted=%s missing=%s failed=%s reclaimed_bytes=%s",
+                    attachment_cleanup_result.deleted_count,
+                    attachment_cleanup_result.missing_count,
+                    attachment_cleanup_result.failed_count,
+                    attachment_cleanup_result.reclaimed_bytes,
+                )
 
         metrics.record_loop(
             ingress_published=ingress_published,
             github_scanned_events=github_scanned_events,
             github_new_events=github_new_events,
             github_published=github_published,
+            telegram_attachment_cleanup=attachment_cleanup_result,
             telemetry_snapshot=metrics.snapshot(),
         )
         heartbeat_snapshot = heartbeat_telemetry.snapshot()
@@ -1480,6 +1669,8 @@ def _run_ingress_loop(
             (
                 "ingress_loop_completed loop=%s ingress_published=%s "
                 "github_scanned_events=%s github_new_events=%s github_published=%s github_checkpoint=%s "
+                "telegram_attachment_cleanup_deleted=%s telegram_attachment_cleanup_missing=%s "
+                "telegram_attachment_cleanup_failed=%s telegram_attachment_cleanup_reclaimed_bytes=%s "
                 "heartbeat_sent_total=%s heartbeat_received_total=%s "
                 "heartbeat_latest_sent_at=%s heartbeat_latest_received_at=%s heartbeat_latest_latency_ms=%s "
                 "egress_received_total=%s egress_dispatched_total=%s egress_deduped_total=%s "
@@ -1494,6 +1685,10 @@ def _run_ingress_loop(
             github_new_events,
             github_published,
             github_checkpoint,
+            attachment_cleanup_result.deleted_count if attachment_cleanup_result is not None else 0,
+            attachment_cleanup_result.missing_count if attachment_cleanup_result is not None else 0,
+            attachment_cleanup_result.failed_count if attachment_cleanup_result is not None else 0,
+            attachment_cleanup_result.reclaimed_bytes if attachment_cleanup_result is not None else 0,
             heartbeat_snapshot["sent_total"],
             heartbeat_snapshot["received_total"],
             heartbeat_snapshot["latest_sent_at"],
@@ -1523,6 +1718,8 @@ def _run_egress_loop(
     stop_event: Event,
     ledger: TaskLedgerStore,
     store: SQLiteStateStore,
+    attachment_store: TelegramAttachmentStore | None,
+    attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     broker: BBMBQueueAdapter,
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
@@ -1538,6 +1735,8 @@ def _run_egress_loop(
             poll_timeout_seconds=timeout_seconds,
             ledger=ledger,
             store=store,
+            attachment_store=attachment_store,
+            attachment_cleanup_settings=attachment_cleanup_settings,
             allowed_egress_channels=allowed_egress_channels,
             applier=applier,
             heartbeat_telemetry=heartbeat_telemetry,
@@ -1598,9 +1797,11 @@ def main() -> int:
         setting_name="metrics_port",
     )
     allowed_egress_channels = _resolve_allowed_egress_channels(args, config)
+    attachment_cleanup_settings = _resolve_telegram_attachment_cleanup_settings(args, config)
 
     store = SQLiteStateStore(db_path)
     ledger = TaskLedgerStore(db_path)
+    attachment_store = TelegramAttachmentStore(db_path) if attachment_cleanup_settings is not None else None
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)
     broker.ensure_queue(EGRESS_QUEUE_NAME)
@@ -1647,6 +1848,8 @@ def main() -> int:
                     broker=broker,
                     connectors=connectors,
                     disabled_ingress_components=disabled_ingress_components,
+                    attachment_store=attachment_store,
+                    attachment_cleanup_settings=attachment_cleanup_settings,
                     heartbeat_telemetry=heartbeat_telemetry,
                     metrics=metrics,
                     poll_interval_seconds=poll_interval_seconds,
@@ -1662,6 +1865,8 @@ def main() -> int:
                     stop_event=stop_event,
                     ledger=ledger,
                     store=store,
+                    attachment_store=attachment_store,
+                    attachment_cleanup_settings=attachment_cleanup_settings,
                     broker=broker,
                     allowed_egress_channels=allowed_egress_channels,
                     applier=applier,
