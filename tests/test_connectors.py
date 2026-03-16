@@ -173,6 +173,16 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
                 context_refs=[],
             )
 
+    def test_cron_job_defaults_timezone_to_utc(self) -> None:
+        job = IntervalScheduleJob(
+            job_name="utc-default",
+            content="Run",
+            cron="0 8 * * *",
+            context_refs=[],
+        )
+
+        self.assertIsNone(job.timezone_name)
+
     def test_poll_emits_cron_job_in_configured_timezone(self) -> None:
         clock = _MutableClock(datetime(2026, 2, 28, 8, 0, tzinfo=timezone.utc))
         connector = IntervalScheduleConnector(
