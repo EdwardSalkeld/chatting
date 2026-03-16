@@ -38,8 +38,6 @@ class IntervalScheduleJob:
             raise ValueError("cron must be non-empty when provided")
         if self.cron is None and self.timezone_name is not None:
             raise ValueError("timezone is only supported when cron is provided")
-        if self.cron is not None and self.timezone_name is None:
-            raise ValueError("timezone is required when cron is provided")
         if self.timezone_name is not None:
             if not self.timezone_name.strip():
                 raise ValueError("timezone must be non-empty when provided")
