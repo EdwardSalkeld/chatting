@@ -32,6 +32,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "codex_command",
         "codex_working_dir",
         "db_path",
+        "max_parallel_lanes",
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
@@ -40,7 +41,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10
-DEFAULT_MAX_PARALLEL_LANES = 8
+DEFAULT_MAX_PARALLEL_LANES = 4
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--db-path", help="Path to worker SQLite state DB.")
     parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
+    parser.add_argument(
+        "--max-parallel-lanes",
+        type=_positive_int,
+        help="Maximum number of reply-channel lanes the worker can process concurrently.",
+    )
     parser.add_argument("--max-attempts", type=_positive_int, help="Maximum execution attempts per task.")
     parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke tests.")
     parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Queue pickup timeout seconds.")
@@ -362,6 +368,12 @@ def main() -> int:
         default_value=2,
         setting_name="max_attempts",
     )
+    max_parallel_lanes = _resolve_positive_int(
+        args.max_parallel_lanes,
+        config.get("max_parallel_lanes"),
+        default_value=DEFAULT_MAX_PARALLEL_LANES,
+        setting_name="max_parallel_lanes",
+    )
     max_loops = _resolve_positive_int(
         args.max_loops,
         config.get("max_loops"),
@@ -390,7 +402,7 @@ def main() -> int:
     policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
     executor = _build_executor(args, config)
     lane_executor = LaneSerialExecutor(
-        max_workers=DEFAULT_MAX_PARALLEL_LANES,
+        max_workers=max_parallel_lanes,
         handler=lambda picked_task, lane_key: _process_picked_task(
             picked_task=picked_task,
             lane_key=lane_key,
