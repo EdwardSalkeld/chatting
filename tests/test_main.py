@@ -223,7 +223,7 @@ class MainCliSplitOnlyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "timezone is only valid with cron"):
                 _load_schedule_jobs(str(schedule_path))
 
-    def test_load_schedule_jobs_requires_timezone_for_cron(self) -> None:
+    def test_load_schedule_jobs_defaults_timezone_for_cron(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             schedule_path = Path(tmpdir) / "schedule.json"
             schedule_path.write_text(
@@ -239,8 +239,10 @@ class MainCliSplitOnlyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "timezone must be a non-empty string"):
-                _load_schedule_jobs(str(schedule_path))
+            jobs = _load_schedule_jobs(str(schedule_path))
+
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0].timezone_name, "UTC")
 
 
 if __name__ == "__main__":
