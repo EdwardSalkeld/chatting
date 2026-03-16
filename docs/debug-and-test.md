@@ -1,38 +1,41 @@
 # Debug And Test Guide
 
+Run `uv sync` once before using the commands below.
+
 ## Fast test commands
 
 - Full suite:
 ```bash
-python3 -m unittest discover -s tests
+uv run python -m unittest discover -s tests
 ```
 - CI-equivalent command (same as GitHub Actions workflow):
 ```bash
-python3 -m unittest discover -s tests
+uv sync --locked
+uv run python -m unittest discover -s tests
 ```
 - Main flow tests:
 ```bash
-python3 -m unittest tests.test_main
+uv run python -m unittest tests.test_main
 ```
 - Connectors:
 ```bash
-python3 -m unittest tests.test_connectors
+uv run python -m unittest tests.test_connectors
 ```
 - Executor parser checks:
 ```bash
-python3 -m unittest tests.test_executor.ParseExecutionResultTests
+uv run python -m unittest tests.test_executor.ParseExecutionResultTests
 ```
 - State store checks:
 ```bash
-python3 -m unittest tests.test_sqlite_store tests.test_state_contract
+uv run python -m unittest tests.test_sqlite_store tests.test_state_contract
 ```
 - Split-mode runtime coverage:
 ```bash
-python3 -m unittest tests.test_worker_runtime tests.test_message_handler_runtime tests.test_main_reply
+uv run python -m unittest tests.test_worker_runtime tests.test_message_handler_runtime tests.test_main_reply
 ```
 - Split-mode smoke e2e:
 ```bash
-python3 -m unittest tests.test_split_mode_e2e -v
+uv run python -m unittest tests.test_split_mode_e2e -v
 ```
 This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
 
@@ -40,39 +43,39 @@ This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-ser
 
 - Message-handler runtime help:
 ```bash
-python3 -m app.main_message_handler --help
+uv run python -m app.main_message_handler --help
 ```
 - Worker runtime help:
 ```bash
-python3 -m app.main_worker --help
+uv run python -m app.main_worker --help
 ```
 - Immediate reply CLI help:
 ```bash
-python3 -m app.main_reply --help
+uv run python -m app.main_reply --help
 ```
 - Admin/query CLI help:
 ```bash
-python3 -m app.cli --help
+uv run python -m app.cli --help
 ```
 - List runs:
 ```bash
-python3 -m app.cli --db-path /tmp/chatting-state.db --list-runs --limit 50
+uv run python -m app.cli --db-path /tmp/chatting-state.db --list-runs --limit 50
 ```
 - List audit events:
 ```bash
-python3 -m app.cli --db-path /tmp/chatting-state.db --list-audit-events --limit 50
+uv run python -m app.cli --db-path /tmp/chatting-state.db --list-audit-events --limit 50
 ```
 - List dead letters:
 ```bash
-python3 -m app.cli --db-path /tmp/chatting-state.db --list-dead-letters --result-status pending
+uv run python -m app.cli --db-path /tmp/chatting-state.db --list-dead-letters --result-status pending
 ```
 - Replay dead letters with stub executor:
 ```bash
-python3 -m app.cli --db-path /tmp/chatting-state.db --replay-dead-letters --use-stub-executor
+uv run python -m app.cli --db-path /tmp/chatting-state.db --replay-dead-letters --use-stub-executor
 ```
 - List persisted metrics summary:
 ```bash
-python3 -m app.cli --db-path /tmp/chatting-state.db --list-metrics
+uv run python -m app.cli --db-path /tmp/chatting-state.db --list-metrics
 ```
 
 ## Common failures and fixes
@@ -112,4 +115,4 @@ Use these with DB queries to correlate outcomes.
 - Workflow file: `.github/workflows/ci.yml`
 - Triggers: push to `main`, and pull requests targeting `main`
 - Python version: `3.13`
-- CI downloads the latest BBMB release binary, verifies its published SHA256, and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.
+- CI installs `uv`, locks/syncs the project environment, downloads the latest BBMB release binary, verifies its published SHA256, and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.

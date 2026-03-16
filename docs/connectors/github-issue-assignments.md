@@ -6,7 +6,7 @@ GitHub assignment polling is implemented as a first-class connector inside the e
 message-handler loop:
 
 ```bash
-python3 -m app.main_message_handler --config /path/to/message-handler-runtime.json
+uv run python -m app.main_message_handler --config /path/to/message-handler-runtime.json
 ```
 
 When `github_repositories` is configured, the GitHub connector polls `gh api graphql` for
