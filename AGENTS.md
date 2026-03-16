@@ -1,5 +1,8 @@
 # Local Run Notes
 
+- If starting a new feature, check that you have current code before doing any implementation work.
+  Update from current `main` / current branch tip first so new work does not start from stale code.
+
 - Run all tests: `python3 -m unittest discover -s tests`
 - Run message-handler tests: `python3 -m unittest tests.test_message_handler_runtime tests.test_main_github_ingress`
 - Run worker tests: `python3 -m unittest tests.test_worker_runtime`

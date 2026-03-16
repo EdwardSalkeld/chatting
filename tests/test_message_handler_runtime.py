@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
 
+from app.applier import MessageDispatchError
 from app.main_message_handler import (
     EgressTelemetryRollup,
     HeartbeatTelemetryRollup,
@@ -12,6 +13,7 @@ from app.main_message_handler import (
     TelegramAttachmentCleanupSettings,
     _handle_egress_message,
     _prepare_ingress_envelope,
+    _resolve_error_email_recipient,
     _render_prometheus_metrics,
 )
 from app.broker import EgressQueueMessage, TaskQueueMessage
@@ -40,6 +42,27 @@ class _RecordingApplier:
             ],
             reason_codes=[],
         )
+
+
+@dataclass
+class _DispatchFailingApplier:
+    apply_calls: int = 0
+
+    def apply(self, decision, envelope=None):
+        del decision, envelope
+        self.apply_calls += 1
+        raise MessageDispatchError(
+            reason_code="telegram_dispatch_failed",
+            dispatched_messages=[],
+        )
+
+
+@dataclass
+class _RecordingAlertEmailSender:
+    sent: list[tuple[str, str, str | None]]
+
+    def send(self, target: str, body: str, *, subject: str | None = None) -> None:
+        self.sent.append((target, body, subject))
 
 
 class MessageHandlerRuntimeTests(unittest.TestCase):
@@ -658,6 +681,210 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                 )
             )
             self.assertEqual(store.list_dispatched_event_indices(run_id=task_message.task_id), [])
+
+    def test_handle_egress_message_drops_unsequenced_dispatch_failures_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_message = self._build_telegram_envelope(
+                envelope_id="telegram:1",
+                content="hello",
+            )
+            task_record = TaskQueueMessage.from_envelope(task_message, trace_id="trace:telegram:1")
+            ledger.record_task(task_record)
+            applier = _DispatchFailingApplier()
+            acked: list[str] = []
+            telemetry = EgressTelemetryRollup()
+
+            payload = EgressQueueMessage(
+                task_id=task_record.task_id,
+                envelope_id=task_record.envelope.id,
+                trace_id=task_record.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="telegram", target="12345", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:1:adhoc",
+                sequence=None,
+                event_kind="incremental",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            with self.assertLogs("app.main_message_handler", level="ERROR") as captured:
+                _handle_egress_message(
+                    picked_guid="guid-telegram-fail",
+                    picked_payload=payload,
+                    ledger=ledger,
+                    store=store,
+                    allowed_egress_channels={"telegram"},
+                    applier=applier,
+                    ack_callback=acked.append,
+                    telemetry=telemetry,
+                )
+
+            self.assertEqual(acked, ["guid-telegram-fail"])
+            self.assertEqual(applier.apply_calls, 1)
+            self.assertEqual(telemetry.dropped_total, 1)
+            self.assertFalse(
+                store.has_dispatched_event_id(
+                    task_id=task_record.task_id,
+                    event_id="evt:task:telegram:1:adhoc",
+                )
+            )
+            self.assertIn("egress_drop_dispatch_failed", captured.output[0])
+
+    def test_handle_egress_message_emails_dispatch_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_envelope = self._build_telegram_envelope(
+                envelope_id="telegram:alert",
+                content="hello",
+            )
+            task_message = TaskQueueMessage.from_envelope(task_envelope, trace_id="trace:telegram:alert")
+            ledger.record_task(task_message)
+            applier = _DispatchFailingApplier()
+            alert_sender = _RecordingAlertEmailSender(sent=[])
+            acked: list[str] = []
+
+            payload = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=1,
+                message=OutboundMessage(channel="telegram", target="12345", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:alert:adhoc",
+                sequence=None,
+                event_kind="incremental",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            _handle_egress_message(
+                picked_guid="guid-telegram-alert",
+                picked_payload=payload,
+                ledger=ledger,
+                store=store,
+                allowed_egress_channels={"telegram"},
+                applier=applier,
+                ack_callback=acked.append,
+                error_email_sender=alert_sender,
+                error_email_recipient="alerts@example.com",
+            )
+
+            self.assertEqual(acked, ["guid-telegram-alert"])
+            self.assertEqual(len(alert_sender.sent), 1)
+            recipient, body, subject = alert_sender.sent[0]
+            self.assertEqual(recipient, "alerts@example.com")
+            self.assertEqual(subject, "Chatting handler dispatch error: telegram_dispatch_failed")
+            self.assertIn("task_id: task:telegram:alert", body)
+            self.assertIn("event_id: evt:task:telegram:alert:adhoc", body)
+            self.assertIn("reason_code: telegram_dispatch_failed", body)
+
+    def test_handle_egress_message_continues_past_sequenced_dispatch_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "handler.db")
+            store = SQLiteStateStore(db_path)
+            ledger = TaskLedgerStore(db_path)
+            task_envelope = self._build_telegram_envelope(
+                envelope_id="telegram:2",
+                content="hello",
+            )
+            task_message = TaskQueueMessage.from_envelope(task_envelope, trace_id="trace:telegram:2")
+            ledger.record_task(task_message)
+            applier = _DispatchFailingApplier()
+            acked: list[str] = []
+            telemetry = EgressTelemetryRollup()
+
+            failed_message = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=0,
+                event_count=2,
+                message=OutboundMessage(channel="telegram", target="12345", body="reply"),
+                emitted_at=datetime(2026, 3, 6, 12, 1, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:2:0",
+                sequence=0,
+                event_kind="message",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+            completion_message = EgressQueueMessage(
+                task_id=task_message.task_id,
+                envelope_id=task_message.envelope.id,
+                trace_id=task_message.trace_id,
+                event_index=1,
+                event_count=2,
+                message=OutboundMessage(channel="internal", target="task", body="done"),
+                emitted_at=datetime(2026, 3, 6, 12, 2, tzinfo=timezone.utc),
+                event_id="evt:task:telegram:2:1",
+                sequence=1,
+                event_kind="completion",
+                message_type="chatting.egress.v2",
+            ).to_dict()
+
+            with self.assertLogs("app.main_message_handler", level="ERROR") as captured:
+                _handle_egress_message(
+                    picked_guid="guid-telegram-seq-fail",
+                    picked_payload=failed_message,
+                    ledger=ledger,
+                    store=store,
+                    allowed_egress_channels={"telegram"},
+                    applier=applier,
+                    ack_callback=acked.append,
+                    telemetry=telemetry,
+                )
+                _handle_egress_message(
+                    picked_guid="guid-telegram-seq-complete",
+                    picked_payload=completion_message,
+                    ledger=ledger,
+                    store=store,
+                    allowed_egress_channels={"telegram"},
+                    applier=applier,
+                    ack_callback=acked.append,
+                    telemetry=telemetry,
+                )
+
+            self.assertEqual(
+                acked,
+                ["guid-telegram-seq-fail", "guid-telegram-seq-complete"],
+            )
+            self.assertEqual(applier.apply_calls, 1)
+            self.assertEqual(telemetry.dropped_total, 1)
+            self.assertFalse(
+                store.has_dispatched_event_id(
+                    task_id=task_message.task_id,
+                    event_id="evt:task:telegram:2:0",
+                )
+            )
+            self.assertTrue(
+                store.has_dispatched_event_id(
+                    task_id=task_message.task_id,
+                    event_id="evt:task:telegram:2:1",
+                )
+            )
+            self.assertTrue(
+                ledger.is_task_completed(
+                    task_id=task_message.task_id,
+                    envelope_id=task_message.envelope.id,
+                )
+            )
+            self.assertIn("egress_drop_dispatch_failed", captured.output[0])
+
+    def test_resolve_error_email_recipient_prefers_explicit_value_then_smtp_username(self) -> None:
+        explicit_args = type("Args", (), {"error_email_to": "ops@example.com"})()
+        config = {"smtp_username": "smtp@example.com", "imap_username": "imap@example.com"}
+        self.assertEqual(_resolve_error_email_recipient(explicit_args, config), "ops@example.com")
+
+        default_args = type("Args", (), {"error_email_to": None})()
+        self.assertEqual(_resolve_error_email_recipient(default_args, config), "smtp@example.com")
+        self.assertEqual(
+            _resolve_error_email_recipient(default_args, {"imap_username": "imap@example.com"}),
+            "imap@example.com",
+        )
 
     def test_handle_egress_message_marks_outbox_event_acked(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
