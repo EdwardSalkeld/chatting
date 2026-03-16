@@ -76,6 +76,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
 ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
     {
         "content",
+        "cron",
         "context_refs",
         "interval_seconds",
         "job_name",
@@ -83,9 +84,10 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
         "reply_channel_target",
         "reply_channel_type",
         "start_at",
+        "timezone",
     }
 )
-REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "interval_seconds", "job_name"})
+REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "job_name"})
 TELEGRAM_MEMORY_TURN_LIMIT = 30
 LOGGER = logging.getLogger(__name__)
 
@@ -952,14 +954,39 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"schedule job at index {index} content must be a non-empty string")
 
-        interval_seconds = raw_job["interval_seconds"]
-        if not _is_int_like(interval_seconds):
+        cron = raw_job.get("cron")
+        if cron is not None and (not isinstance(cron, str) or not cron.strip()):
+            raise ValueError(f"schedule job at index {index} cron must be a non-empty string")
+
+        interval_seconds = raw_job.get("interval_seconds")
+        if cron is None:
+            if not _is_int_like(interval_seconds):
+                raise ValueError(
+                    f"schedule job at index {index} interval_seconds must be a positive integer"
+                )
+            if interval_seconds <= 0:
+                raise ValueError(
+                    f"schedule job at index {index} interval_seconds must be a positive integer"
+                )
+        elif interval_seconds is not None and _is_int_like(interval_seconds) and interval_seconds <= 0:
             raise ValueError(
                 f"schedule job at index {index} interval_seconds must be a positive integer"
             )
-        if interval_seconds <= 0:
+
+        timezone_name = raw_job.get("timezone")
+        if cron is not None:
+            if timezone_name is None:
+                timezone_name = "UTC"
+            elif not isinstance(timezone_name, str) or not timezone_name.strip():
+                raise ValueError(
+                    f"schedule job at index {index} timezone must be a non-empty string"
+                )
+        elif timezone_name is not None:
+            raise ValueError(f"schedule job at index {index} timezone is only valid with cron")
+
+        if interval_seconds is None and cron is None:
             raise ValueError(
-                f"schedule job at index {index} interval_seconds must be a positive integer"
+                f"schedule job at index {index} must define interval_seconds or cron"
             )
 
         raw_context_refs = raw_job.get("context_refs", [])
@@ -979,9 +1006,14 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             )
 
         raw_start_at = raw_job.get("start_at")
-        if raw_start_at is not None and not isinstance(raw_start_at, str):
-            raise ValueError(f"schedule job at index {index} start_at must be an RFC3339 string")
-        start_at = _parse_optional_rfc3339(raw_start_at) if raw_start_at is not None else None
+        if cron is None:
+            if raw_start_at is not None and not isinstance(raw_start_at, str):
+                raise ValueError(
+                    f"schedule job at index {index} start_at must be an RFC3339 string"
+                )
+            start_at = _parse_optional_rfc3339(raw_start_at) if raw_start_at is not None else None
+        else:
+            start_at = None
 
         reply_channel_type = raw_job.get("reply_channel_type")
         if reply_channel_type is not None and (
@@ -1006,8 +1038,10 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             IntervalScheduleJob(
                 job_name=job_name.strip(),
                 content=content.strip(),
-                interval_seconds=interval_seconds,
                 context_refs=list(raw_context_refs),
+                interval_seconds=interval_seconds if isinstance(interval_seconds, int) else None,
+                cron=cron.strip() if isinstance(cron, str) else None,
+                timezone_name=timezone_name.strip() if isinstance(timezone_name, str) else None,
                 policy_profile=policy_profile.strip(),
                 start_at=start_at,
                 reply_channel_type=reply_channel_type.strip()
