@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.cli import main as cli_main
-from app.main import main
+from app.main import _load_schedule_jobs, main
 from app.models import RunRecord
 from app.state import SQLiteStateStore
 
@@ -103,6 +103,144 @@ class MainCliSplitOnlyTests(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(payload["total_runs"], 1)
             self.assertEqual(payload["by_status"], {"success": 1})
+
+    def test_load_schedule_jobs_accepts_cron_timezone_and_interval_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "cron-job",
+                            "content": "Run cron job",
+                            "cron": "0 8 * * *",
+                            "timezone": "Europe/London",
+                            "interval_seconds": 86400,
+                        },
+                        {
+                            "job_name": "interval-job",
+                            "content": "Run interval job",
+                            "interval_seconds": 300,
+                            "start_at": "2026-03-07T00:00:00Z",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            jobs = _load_schedule_jobs(str(schedule_path))
+
+            self.assertEqual(len(jobs), 2)
+            self.assertEqual(jobs[0].cron, "0 8 * * *")
+            self.assertEqual(jobs[0].timezone_name, "Europe/London")
+            self.assertEqual(jobs[0].interval_seconds, 86400)
+            self.assertEqual(jobs[1].interval_seconds, 300)
+            self.assertEqual(jobs[1].cron, None)
+
+    def test_load_schedule_jobs_defaults_cron_timezone_to_utc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "cron-job",
+                            "content": "Run cron job",
+                            "cron": "0 8 * * *",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            jobs = _load_schedule_jobs(str(schedule_path))
+
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0].timezone_name, "UTC")
+
+    def test_load_schedule_jobs_ignores_interval_anchors_when_cron_is_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "cron-job",
+                            "content": "Run cron job",
+                            "cron": "0 8 * * *",
+                            "interval_seconds": "legacy-value",
+                            "start_at": 123,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            jobs = _load_schedule_jobs(str(schedule_path))
+
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0].cron, "0 8 * * *")
+            self.assertEqual(jobs[0].interval_seconds, None)
+            self.assertEqual(jobs[0].start_at, None)
+
+    def test_load_schedule_jobs_rejects_invalid_cron_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "cron-job",
+                            "content": "Run cron job",
+                            "cron": "0 8 * * *",
+                            "timezone": "Not/AZone",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "invalid timezone"):
+                _load_schedule_jobs(str(schedule_path))
+
+    def test_load_schedule_jobs_rejects_timezone_without_cron(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "interval-job",
+                            "content": "Run interval job",
+                            "interval_seconds": 60,
+                            "timezone": "UTC",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "timezone is only valid with cron"):
+                _load_schedule_jobs(str(schedule_path))
+
+    def test_load_schedule_jobs_requires_timezone_for_cron(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "cron-job",
+                            "content": "Run cron job",
+                            "cron": "0 8 * * *",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "timezone must be a non-empty string"):
+                _load_schedule_jobs(str(schedule_path))
 
 
 if __name__ == "__main__":

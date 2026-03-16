@@ -1,0 +1,16 @@
+[
+  {
+    "job_name": "heartbeat",
+    "content": "Run scheduled heartbeat",
+    "interval_seconds": 300,
+    "start_at": "2026-03-07T00:00:00Z"
+  },
+  {
+    "job_name": "london-morning",
+    "content": "Prepare the 8am London update",
+    "cron": "0 8 * * *",
+    "timezone": "Europe/London",
+    "reply_channel_type": "log",
+    "reply_channel_target": "london-morning"
+  }
+]
