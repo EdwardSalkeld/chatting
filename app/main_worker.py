@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
 import json
 import logging
 import os
@@ -10,6 +13,7 @@ import shlex
 import sys
 import tempfile
 import time
+from threading import Lock
 from pathlib import Path
 from typing import Mapping
 
@@ -17,7 +21,7 @@ from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, 
 from app.executor import CodexExecutor, Executor, StubExecutor
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
-from app.state import SQLiteStateStore
+from app.state import SQLiteStateStore, StateStore
 from app.worker_runtime import process_task_message
 
 WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
@@ -36,6 +40,96 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10
+DEFAULT_MAX_PARALLEL_LANES = 8
+
+
+@dataclass(frozen=True)
+class PickedTask:
+    guid: str
+    task_message: TaskQueueMessage
+
+
+@dataclass
+class _LaneState:
+    active_future: Future[None] | None = None
+    pending_tasks: deque[PickedTask] = field(default_factory=deque)
+
+
+class LaneSerialExecutor:
+    """Run tasks in parallel across lanes while serializing each lane."""
+
+    def __init__(
+        self,
+        *,
+        max_workers: int,
+        handler,
+    ) -> None:
+        if max_workers <= 0:
+            raise ValueError("max_workers must be positive")
+        self._handler = handler
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="chatting-worker")
+        self._lock = Lock()
+        self._lanes: dict[str, _LaneState] = {}
+
+    def submit(self, picked_task: PickedTask) -> None:
+        lane_key = _task_lane_key(picked_task.task_message)
+        with self._lock:
+            lane_state = self._lanes.setdefault(lane_key, _LaneState())
+            if lane_state.active_future is None:
+                lane_state.active_future = self._submit_locked(lane_key=lane_key, picked_task=picked_task)
+                pending_count = 0
+            else:
+                lane_state.pending_tasks.append(picked_task)
+                pending_count = len(lane_state.pending_tasks)
+        if pending_count:
+            LOGGER.info(
+                "worker_task_queued lane=%s task_id=%s pending=%s",
+                lane_key,
+                picked_task.task_message.task_id,
+                pending_count,
+            )
+
+    def wait_for_idle(self) -> None:
+        while True:
+            with self._lock:
+                busy = any(
+                    lane_state.active_future is not None or lane_state.pending_tasks
+                    for lane_state in self._lanes.values()
+                )
+            if not busy:
+                return
+            time.sleep(0.05)
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=True)
+
+    def _submit_locked(self, *, lane_key: str, picked_task: PickedTask) -> Future[None]:
+        future = self._executor.submit(self._run_task, lane_key, picked_task)
+        return future
+
+    def _run_task(self, lane_key: str, picked_task: PickedTask) -> None:
+        try:
+            self._handler(picked_task, lane_key)
+        finally:
+            self._complete_lane_task(lane_key)
+
+    def _complete_lane_task(self, lane_key: str) -> None:
+        next_task: PickedTask | None = None
+        remaining_count = 0
+        with self._lock:
+            lane_state = self._lanes[lane_key]
+            lane_state.active_future = None
+            if lane_state.pending_tasks:
+                next_task = lane_state.pending_tasks.popleft()
+                lane_state.active_future = self._submit_locked(lane_key=lane_key, picked_task=next_task)
+                remaining_count = len(lane_state.pending_tasks)
+        if next_task is not None:
+            LOGGER.info(
+                "worker_task_dequeued lane=%s task_id=%s remaining=%s",
+                lane_key,
+                next_task.task_message.task_id,
+                remaining_count,
+            )
 
 
 def _configure_logging() -> None:
@@ -194,6 +288,57 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
     return CodexExecutor(command=split_command, cwd=codex_working_dir)
 
 
+def _task_lane_key(task_message: TaskQueueMessage) -> str:
+    reply_channel_type = task_message.envelope.reply_channel.type.strip().lower()
+    if reply_channel_type:
+        return reply_channel_type
+    return task_message.envelope.source
+
+
+def _process_picked_task(
+    *,
+    picked_task: PickedTask,
+    lane_key: str,
+    store: StateStore,
+    broker: BBMBQueueAdapter,
+    router: RuleBasedRouter,
+    executor: Executor,
+    policy: AllowlistPolicyEngine,
+    max_attempts: int,
+) -> None:
+    try:
+        result = process_task_message(
+            store=store,
+            task_message=picked_task.task_message,
+            router=router,
+            executor_impl=executor,
+            policy=policy,
+            max_attempts=max_attempts,
+        )
+        for egress_message in result.egress_messages:
+            _publish_egress_with_outbox(
+                store=store,
+                broker=broker,
+                egress_message=egress_message,
+            )
+        broker.ack(TASK_QUEUE_NAME, picked_task.guid)
+        LOGGER.info(
+            "worker_processed lane=%s run_id=%s task_id=%s egress_messages=%s result_status=%s",
+            lane_key,
+            result.run_record.run_id,
+            picked_task.task_message.task_id,
+            len(result.egress_messages),
+            result.run_record.result_status,
+        )
+    except Exception:  # noqa: BLE001
+        LOGGER.exception(
+            "worker_processing_failed lane=%s guid=%s task_id=%s",
+            lane_key,
+            picked_task.guid,
+            picked_task.task_message.task_id,
+        )
+
+
 def main() -> int:
     _configure_logging()
     args = _parse_args()
@@ -244,55 +389,57 @@ def main() -> int:
     router = RuleBasedRouter()
     policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
     executor = _build_executor(args, config)
+    lane_executor = LaneSerialExecutor(
+        max_workers=DEFAULT_MAX_PARALLEL_LANES,
+        handler=lambda picked_task, lane_key: _process_picked_task(
+            picked_task=picked_task,
+            lane_key=lane_key,
+            store=store,
+            broker=broker,
+            router=router,
+            executor=executor,
+            policy=policy,
+            max_attempts=max_attempts,
+        ),
+    )
     replay_done = False
 
     loop_count = 0
-    while True:
-        loop_count += 1
-        if not replay_done:
-            _replay_egress_outbox(store=store, broker=broker)
-            replay_done = True
-        picked = broker.pickup_json(
-            TASK_QUEUE_NAME,
-            timeout_seconds=poll_timeout_seconds,
-            wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
-        )
-        if picked is None:
-            LOGGER.info("worker_loop_empty loop=%s", loop_count)
+    try:
+        while True:
+            loop_count += 1
+            if not replay_done:
+                _replay_egress_outbox(store=store, broker=broker)
+                replay_done = True
+            picked = broker.pickup_json(
+                TASK_QUEUE_NAME,
+                timeout_seconds=poll_timeout_seconds,
+                wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
+            )
+            if picked is None:
+                LOGGER.info("worker_loop_empty loop=%s", loop_count)
+                if max_loops and loop_count >= max_loops:
+                    break
+                time.sleep(sleep_seconds)
+                continue
+
+            try:
+                task_message = TaskQueueMessage.from_dict(picked.payload)
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("worker_pickup_invalid_payload guid=%s", picked.guid)
+            else:
+                lane_executor.submit(
+                    PickedTask(
+                        guid=picked.guid,
+                        task_message=task_message,
+                    )
+                )
+
             if max_loops and loop_count >= max_loops:
                 break
-            time.sleep(sleep_seconds)
-            continue
-
-        try:
-            task_message = TaskQueueMessage.from_dict(picked.payload)
-            result = process_task_message(
-                store=store,
-                task_message=task_message,
-                router=router,
-                executor_impl=executor,
-                policy=policy,
-                max_attempts=max_attempts,
-            )
-            for egress_message in result.egress_messages:
-                _publish_egress_with_outbox(
-                    store=store,
-                    broker=broker,
-                    egress_message=egress_message,
-                )
-            broker.ack(TASK_QUEUE_NAME, picked.guid)
-            LOGGER.info(
-                "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
-                result.run_record.run_id,
-                task_message.task_id,
-                len(result.egress_messages),
-                result.run_record.result_status,
-            )
-        except Exception:  # noqa: BLE001
-            LOGGER.exception("worker_processing_failed guid=%s", picked.guid)
-
-        if max_loops and loop_count >= max_loops:
-            break
+    finally:
+        lane_executor.wait_for_idle()
+        lane_executor.shutdown()
 
     return 0
 
