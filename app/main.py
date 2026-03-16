@@ -959,18 +959,25 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             raise ValueError(f"schedule job at index {index} cron must be a non-empty string")
 
         interval_seconds = raw_job.get("interval_seconds")
-        if interval_seconds is not None and not _is_int_like(interval_seconds):
-            raise ValueError(
-                f"schedule job at index {index} interval_seconds must be a positive integer"
-            )
-        if interval_seconds is not None and interval_seconds <= 0:
+        if cron is None:
+            if not _is_int_like(interval_seconds):
+                raise ValueError(
+                    f"schedule job at index {index} interval_seconds must be a positive integer"
+                )
+            if interval_seconds <= 0:
+                raise ValueError(
+                    f"schedule job at index {index} interval_seconds must be a positive integer"
+                )
+        elif interval_seconds is not None and _is_int_like(interval_seconds) and interval_seconds <= 0:
             raise ValueError(
                 f"schedule job at index {index} interval_seconds must be a positive integer"
             )
 
         timezone_name = raw_job.get("timezone")
         if cron is not None:
-            if not isinstance(timezone_name, str) or not timezone_name.strip():
+            if timezone_name is None:
+                timezone_name = "UTC"
+            elif not isinstance(timezone_name, str) or not timezone_name.strip():
                 raise ValueError(
                     f"schedule job at index {index} timezone must be a non-empty string"
                 )
