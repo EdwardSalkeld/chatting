@@ -18,21 +18,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      - name: Checkout BBMB
-        uses: actions/checkout@v4
-        with:
-          repository: EdwardSalkeld/bbmb
-          path: bbmb
-
-      - name: Build bbmb-server
+      - name: Download bbmb-server release
         run: |
-          cd bbmb/server
-          go build -o ../bbmb-server .
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
+          (
+            cd "${{ runner.temp }}"
+            sha256sum -c bbmb-server-linux-amd64.sha256
+          )
+          chmod +x "${{ runner.temp }}/bbmb-server-linux-amd64"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,5 +39,5 @@ jobs:
 
       - name: Run unit tests
         env:
-          CHATTING_BBMB_SERVER_BIN: ${{ github.workspace }}/bbmb/bbmb-server
+          CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
         run: python3 -m unittest discover -s tests

@@ -112,4 +112,4 @@ Use these with DB queries to correlate outcomes.
 - Workflow file: `.github/workflows/ci.yml`
 - Triggers: push to `main`, and pull requests targeting `main`
 - Python version: `3.13`
-- CI also builds `bbmb-server` and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.
+- CI downloads the latest BBMB release binary, verifies its published SHA256, and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.
