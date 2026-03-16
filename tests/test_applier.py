@@ -1,9 +1,12 @@
+import io
 import unittest
+import urllib.error
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.applier import (
     GitHubIssueCommentSender,
@@ -13,6 +16,7 @@ from app.applier import (
     SmtpEmailSender,
     TelegramMessageSender,
 )
+from app.applier.integrated import _default_http_post_json
 from app.models import (
     ActionProposal,
     AttachmentRef,
@@ -747,6 +751,31 @@ class TelegramMessageSenderTests(unittest.TestCase):
                         attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
                     ),
                 )
+
+    def test_default_http_post_json_logs_http_error_body(self) -> None:
+        http_error = urllib.error.HTTPError(
+            url="https://api.telegram.org/bottoken/sendMessage",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
+        )
+
+        with (
+            patch("app.applier.integrated.urllib.request.urlopen", side_effect=http_error),
+            self.assertLogs("app.applier.integrated", level="ERROR") as captured,
+            self.assertRaisesRegex(RuntimeError, "telegram_http_error"),
+        ):
+            _default_http_post_json(
+                "https://api.telegram.org/bottoken/sendMessage",
+                {"chat_id": "12345", "text": "hello"},
+                10.0,
+            )
+
+        self.assertEqual(len(captured.records), 1)
+        self.assertIn("status=400", captured.output[0])
+        self.assertIn("Bad Request", captured.output[0])
+        self.assertIn('chat not found', captured.output[0])
 
     def test_react_posts_set_message_reaction_request(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []

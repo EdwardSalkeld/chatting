@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -17,7 +18,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Callable, Mapping
 
-from app.applier import GitHubIssueCommentSender, IntegratedApplier
+from app.applier import GitHubIssueCommentSender, IntegratedApplier, MessageDispatchError
 from app.broker import (
     BBMBQueueAdapter,
     EGRESS_QUEUE_NAME,
@@ -83,6 +84,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "smtp_password_env",
         "smtp_from",
         "smtp_starttls",
+        "error_email_to",
         "telegram_enabled",
         "telegram_bot_token_env",
         "telegram_api_base_url",
@@ -658,6 +660,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--smtp-password-env", help="SMTP password env var name.")
     parser.add_argument("--smtp-from", help="SMTP from address.")
     parser.add_argument("--smtp-starttls", action="store_true", help="Use SMTP STARTTLS.")
+    parser.add_argument("--error-email-to", help="Email recipient for handler dispatch failures.")
     parser.add_argument("--telegram-enabled", action="store_true", help="Enable Telegram connector+sender.")
     parser.add_argument("--telegram-bot-token-env", help="Telegram token env var name.")
     parser.add_argument("--telegram-api-base-url", help="Telegram API base URL.")
@@ -751,6 +754,67 @@ def _load_config(config_path: str | None, environ: Mapping[str, str] | None = No
     if unknown_keys:
         raise ValueError("config contains unknown keys: " + ", ".join(unknown_keys))
     return payload
+
+
+def _resolve_error_email_recipient(args: argparse.Namespace, config: dict[str, object]) -> str | None:
+    if args.error_email_to is not None:
+        stripped = args.error_email_to.strip()
+        return stripped or None
+
+    configured = config.get("error_email_to")
+    if configured is not None:
+        if not isinstance(configured, str):
+            raise ValueError("config error_email_to must be a string")
+        stripped = configured.strip()
+        return stripped or None
+
+    for key in ("smtp_username", "imap_username"):
+        raw_value = config.get(key)
+        if isinstance(raw_value, str):
+            stripped = raw_value.strip()
+            if stripped:
+                return stripped
+    return None
+
+
+def _send_egress_dispatch_error_email(
+    *,
+    email_sender: object | None,
+    recipient: str | None,
+    egress_message: EgressQueueMessage,
+    error: MessageDispatchError,
+) -> None:
+    if email_sender is None or recipient is None:
+        return
+
+    subject = f"Chatting handler dispatch error: {error.reason_code}"
+    body = "\n".join(
+        [
+            "Message-handler egress dispatch failed.",
+            f"task_id: {egress_message.task_id}",
+            f"envelope_id: {egress_message.envelope_id}",
+            f"trace_id: {egress_message.trace_id}",
+            f"event_id: {egress_message.event_id}",
+            f"sequence: {egress_message.sequence}",
+            f"event_kind: {egress_message.event_kind}",
+            f"channel: {egress_message.message.channel}",
+            f"target: {egress_message.message.target}",
+            f"reason_code: {error.reason_code}",
+            "",
+            "Traceback:",
+            "".join(traceback.format_exception(error)).rstrip(),
+        ]
+    )
+    try:
+        email_sender.send(recipient, body, subject=subject)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception(
+            "egress_dispatch_error_email_failed task_id=%s event_id=%s reason=%s recipient=%s",
+            egress_message.task_id,
+            egress_message.event_id,
+            error.reason_code,
+            recipient,
+        )
 
 
 def _resolve_str(cli_value: str | None, config_value: object, *, default_value: str, setting_name: str) -> str:
@@ -1189,6 +1253,8 @@ def _handle_egress_message(
     ack_callback: Callable[[str], None],
     attachment_store: TelegramAttachmentStore | None = None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None = None,
+    error_email_sender: object | None = None,
+    error_email_recipient: str | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
@@ -1282,15 +1348,34 @@ def _handle_egress_message(
 
     if egress_message.sequence is None:
         _ack_and_mark_outbox(egress_message.event_id)
-        _dispatch_unsequenced_egress(
-            egress_message=egress_message,
-            ledger_record=ledger_record,
-            store=store,
-            attachment_store=attachment_store,
-            attachment_cleanup_settings=attachment_cleanup_settings,
-            applier=applier,
-            telemetry=telemetry,
-        )
+        try:
+            _dispatch_unsequenced_egress(
+                egress_message=egress_message,
+                ledger_record=ledger_record,
+                store=store,
+                attachment_store=attachment_store,
+                attachment_cleanup_settings=attachment_cleanup_settings,
+                applier=applier,
+                telemetry=telemetry,
+            )
+        except MessageDispatchError as error:
+            if telemetry is not None:
+                telemetry.record_dropped(reason="dispatch_failed")
+            LOGGER.exception(
+                "egress_drop_dispatch_failed task_id=%s event_id=%s sequence=%s event_kind=%s channel=%s reason=%s",
+                egress_message.task_id,
+                egress_message.event_id,
+                egress_message.sequence,
+                egress_message.event_kind,
+                egress_message.message.channel,
+                error.reason_code,
+            )
+            _send_egress_dispatch_error_email(
+                email_sender=error_email_sender,
+                recipient=error_email_recipient,
+                egress_message=egress_message,
+                error=error,
+            )
         return
 
     ledger.stage_egress_event(egress_message)
@@ -1302,6 +1387,8 @@ def _handle_egress_message(
         attachment_store=attachment_store,
         attachment_cleanup_settings=attachment_cleanup_settings,
         applier=applier,
+        error_email_sender=error_email_sender,
+        error_email_recipient=error_email_recipient,
         heartbeat_telemetry=heartbeat_telemetry,
         telemetry=telemetry,
     )
@@ -1317,6 +1404,8 @@ def _drain_egress_queue(
     applier: IntegratedApplier,
     attachment_store: TelegramAttachmentStore | None = None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None = None,
+    error_email_sender: object | None = None,
+    error_email_recipient: str | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> int:
@@ -1343,6 +1432,8 @@ def _drain_egress_queue(
             allowed_egress_channels=allowed_egress_channels,
             applier=applier,
             ack_callback=lambda guid: broker.ack(EGRESS_QUEUE_NAME, guid),
+            error_email_sender=error_email_sender,
+            error_email_recipient=error_email_recipient,
             heartbeat_telemetry=heartbeat_telemetry,
             telemetry=telemetry,
         )
@@ -1494,6 +1585,8 @@ def _flush_task_egress_in_sequence(
     attachment_store: TelegramAttachmentStore | None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     applier: IntegratedApplier,
+    error_email_sender: object | None = None,
+    error_email_recipient: str | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
 ) -> None:
@@ -1535,10 +1628,35 @@ def _flush_task_egress_in_sequence(
             return
 
         decision = _build_policy_decision_for_message(egress_message)
-        apply_result = applier.apply(
-            decision,
-            envelope=ledger_record.task_message.envelope,
-        )
+        try:
+            apply_result = applier.apply(
+                decision,
+                envelope=ledger_record.task_message.envelope,
+            )
+        except MessageDispatchError as error:
+            if telemetry is not None:
+                telemetry.record_dropped(reason="dispatch_failed")
+            ledger.mark_staged_event_dispatched(
+                task_id=task_id,
+                event_id=staged.event_id,
+                sequence=staged.sequence,
+            )
+            LOGGER.exception(
+                "egress_drop_dispatch_failed task_id=%s event_id=%s sequence=%s event_kind=%s channel=%s reason=%s",
+                egress_message.task_id,
+                egress_message.event_id,
+                egress_message.sequence,
+                egress_message.event_kind,
+                egress_message.message.channel,
+                error.reason_code,
+            )
+            _send_egress_dispatch_error_email(
+                email_sender=error_email_sender,
+                recipient=error_email_recipient,
+                egress_message=egress_message,
+                error=error,
+            )
+            continue
         _record_outbound_telegram_attachments(
             egress_message=egress_message,
             attachment_store=attachment_store,
@@ -1772,6 +1890,8 @@ def _run_egress_loop(
     broker: BBMBQueueAdapter,
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
+    error_email_sender: object | None,
+    error_email_recipient: str | None,
     heartbeat_telemetry: HeartbeatTelemetryRollup,
     metrics: MessageHandlerMetrics,
     poll_timeout_seconds: int,
@@ -1788,6 +1908,8 @@ def _run_egress_loop(
             attachment_cleanup_settings=attachment_cleanup_settings,
             allowed_egress_channels=allowed_egress_channels,
             applier=applier,
+            error_email_sender=error_email_sender,
+            error_email_recipient=error_email_recipient,
             heartbeat_telemetry=heartbeat_telemetry,
             telemetry=telemetry,
         )
@@ -1860,9 +1982,11 @@ def main() -> int:
         config,
         db_path=db_path,
     )
+    email_sender = _build_email_sender(args, config)
+    error_email_recipient = _resolve_error_email_recipient(args, config)
     applier = IntegratedApplier(
         base_dir=".",
-        email_sender=_build_email_sender(args, config),
+        email_sender=email_sender,
         telegram_sender=_build_telegram_sender(args, config),
         github_sender=_build_github_sender(),
     )
@@ -1919,6 +2043,8 @@ def main() -> int:
                     broker=broker,
                     allowed_egress_channels=allowed_egress_channels,
                     applier=applier,
+                    error_email_sender=email_sender,
+                    error_email_recipient=error_email_recipient,
                     heartbeat_telemetry=heartbeat_telemetry,
                     metrics=metrics,
                     poll_timeout_seconds=poll_timeout_seconds,

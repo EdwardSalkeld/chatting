@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision, TaskEnvelope
 
 LOGGER = logging.getLogger(__name__)
+_MAX_HTTP_ERROR_LOG_BODY_CHARS = 500
 
 
 class EmailSender(Protocol):
@@ -194,7 +195,7 @@ class TelegramMessageSender:
             if fallback_response.get("ok") is True:
                 return
 
-        raise RuntimeError("telegram_send_failed")
+        raise RuntimeError(_describe_telegram_response_error("telegram_send_failed", response))
 
     def react(self, target: str, message_id: int, emoji: str) -> None:
         if not target:
@@ -214,7 +215,7 @@ class TelegramMessageSender:
         response = client(url, payload, self.timeout_seconds)
         if response.get("ok") is True:
             return
-        raise RuntimeError("telegram_reaction_failed")
+        raise RuntimeError(_describe_telegram_response_error("telegram_reaction_failed", response))
 
 
 @dataclass(frozen=True)
@@ -542,8 +543,24 @@ def _default_http_post_json(
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        error_body = _read_http_error_body(error)
+        LOGGER.error(
+            "telegram_http_error status=%s reason=%s response_body=%s",
+            error.code,
+            error.reason,
+            _truncate_http_error_body_for_log(error_body),
+        )
+        raise RuntimeError(
+            _describe_telegram_http_error(
+                status_code=error.code,
+                reason=error.reason,
+                response_body=error_body,
+            )
+        ) from error
     except urllib.error.URLError as error:
-        raise RuntimeError("telegram_http_error") from error
+        LOGGER.error("telegram_http_error reason=%s", getattr(error, "reason", error))
+        raise RuntimeError(f"telegram_http_error reason={getattr(error, 'reason', error)}") from error
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as error:
@@ -661,6 +678,48 @@ def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
         return False
     normalized = description.lower()
     return "parse entities" in normalized
+
+
+def _read_http_error_body(error: urllib.error.HTTPError) -> str | None:
+    if error.fp is None:
+        return None
+    try:
+        raw_error_body = error.read()
+    except Exception:  # noqa: BLE001
+        return None
+    if not raw_error_body:
+        return None
+    return raw_error_body.decode("utf-8", errors="replace")
+
+
+def _truncate_http_error_body_for_log(body: str | None) -> str:
+    if body is None:
+        return "<empty>"
+    if len(body) <= _MAX_HTTP_ERROR_LOG_BODY_CHARS:
+        return body
+    return f"{body[:_MAX_HTTP_ERROR_LOG_BODY_CHARS]}...(truncated)"
+
+
+def _describe_telegram_http_error(
+    *,
+    status_code: int | None,
+    reason: str | None,
+    response_body: str | None,
+) -> str:
+    detail_parts = ["telegram_http_error"]
+    if status_code is not None:
+        detail_parts.append(f"status={status_code}")
+    if reason:
+        detail_parts.append(f"reason={reason}")
+    detail_parts.append(f"response_body={_truncate_http_error_body_for_log(response_body)}")
+    return " ".join(detail_parts)
+
+
+def _describe_telegram_response_error(prefix: str, response: dict[str, object]) -> str:
+    description = response.get("description")
+    if isinstance(description, str) and description.strip():
+        return f"{prefix} description={description}"
+    return prefix
 
 
 def _default_gh_command_runner(command: list[str]) -> object:
