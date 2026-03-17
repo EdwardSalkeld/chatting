@@ -1,0 +1,71 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1025:1025
+          - 1143:1143
+          - 8025:8025
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download bbmb-server
+        run: |
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
+          (
+            cd "${{ runner.temp }}"
+            sha256sum -c bbmb-server-linux-amd64.sha256
+          )
+          chmod +x "${{ runner.temp }}/bbmb-server-linux-amd64"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Wait for mailpit
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8025/api/v1/messages > /dev/null 2>&1; then
+              echo "Mailpit is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mailpit failed to start"
+          exit 1
+
+      - name: Run E2E tests
+        env:
+          CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
+          CHATTING_IMAP_PASSWORD: dummy
+          CHATTING_SMTP_PASSWORD: dummy
+        run: uv run python -m unittest tests.e2e.test_email_e2e -v
