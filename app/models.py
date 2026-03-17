@@ -117,7 +117,6 @@ class TaskEnvelope:
     content: str
     attachments: list[AttachmentRef]
     context_refs: list[str]
-    policy_profile: str
     reply_channel: ReplyChannel
     dedupe_key: str
     schema_version: str = SCHEMA_VERSION
@@ -129,7 +128,6 @@ class TaskEnvelope:
         _validate_required_string(self.id, field_name="id")
         _validate_required_string(self.content, field_name="content")
         _validate_required_string(self.dedupe_key, field_name="dedupe_key")
-        _validate_required_string(self.policy_profile, field_name="policy_profile")
         _validate_attachments(self.attachments)
         _validate_context_refs(self.context_refs)
         if self.received_at.tzinfo is None:
@@ -148,7 +146,6 @@ class TaskEnvelope:
                 for item in self.attachments
             ],
             "context_refs": self.context_refs,
-            "policy_profile": self.policy_profile,
             "reply_channel": {
                 "type": self.reply_channel.type,
                 "target": self.reply_channel.target,
@@ -169,7 +166,6 @@ class RoutedTask:
     workflow: str
     priority: Literal["low", "normal", "high"]
     execution_constraints: ExecutionConstraints
-    policy_profile: str
     event_time: datetime | None = None
     source: Literal["cron", "email", "im", "webhook", "internal"] | None = None
     actor: str | None = None
@@ -185,7 +181,6 @@ class RoutedTask:
         _validate_required_string(self.task_id, field_name="task_id")
         _validate_required_string(self.envelope_id, field_name="envelope_id")
         _validate_required_string(self.workflow, field_name="workflow")
-        _validate_required_string(self.policy_profile, field_name="policy_profile")
         if self.event_time is not None and self.event_time.tzinfo is None:
             raise ValueError("event_time must be timezone-aware")
         if self.source is not None and self.source not in SOURCE_TYPES:
@@ -210,7 +205,6 @@ class RoutedTask:
                 "timeout_seconds": self.execution_constraints.timeout_seconds,
                 "max_tokens": self.execution_constraints.max_tokens,
             },
-            "policy_profile": self.policy_profile,
         }
         if self.event_time is not None:
             payload["event_time"] = (
@@ -476,7 +470,6 @@ class RunRecord:
     envelope_id: str
     source: Literal["cron", "email", "im", "webhook", "internal"]
     workflow: str
-    policy_profile: str
     latency_ms: int
     result_status: str
     created_at: datetime
@@ -489,7 +482,6 @@ class RunRecord:
         if self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
         _validate_required_string(self.workflow, field_name="workflow")
-        _validate_required_string(self.policy_profile, field_name="policy_profile")
         if self.latency_ms < 0:
             raise ValueError("latency_ms must be non-negative")
         _validate_required_string(self.result_status, field_name="result_status")
@@ -503,7 +495,6 @@ class RunRecord:
             "envelope_id": self.envelope_id,
             "source": self.source,
             "workflow": self.workflow,
-            "policy_profile": self.policy_profile,
             "latency_ms": self.latency_ms,
             "result_status": self.result_status,
             "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -518,7 +509,6 @@ class AuditEvent:
     envelope_id: str
     source: Literal["cron", "email", "im", "webhook", "internal"]
     workflow: str
-    policy_profile: str
     result_status: str
     detail: dict[str, Any]
     created_at: datetime
@@ -531,7 +521,6 @@ class AuditEvent:
         if self.source not in SOURCE_TYPES:
             raise ValueError(f"source must be one of {SOURCE_TYPES}")
         _validate_required_string(self.workflow, field_name="workflow")
-        _validate_required_string(self.policy_profile, field_name="policy_profile")
         _validate_required_string(self.result_status, field_name="result_status")
         if self.created_at.tzinfo is None:
             raise ValueError("created_at must be timezone-aware")
@@ -543,7 +532,6 @@ class AuditEvent:
             "envelope_id": self.envelope_id,
             "source": self.source,
             "workflow": self.workflow,
-            "policy_profile": self.policy_profile,
             "result_status": self.result_status,
             "detail": self.detail,
             "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
