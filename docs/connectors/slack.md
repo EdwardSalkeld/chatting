@@ -16,7 +16,6 @@ Normalize Slack-style message payloads into canonical IM envelopes.
 
 - `fetch_messages`: callback returning list of message dicts
 - `context_refs` (optional)
-- `policy_profile` (default `default`)
 - `allowed_channel_ids` (optional)
 
 Expected payload fields:

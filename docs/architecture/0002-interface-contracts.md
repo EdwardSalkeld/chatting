@@ -61,7 +61,6 @@ Each run emits:
 - `envelope_id`
 - `source`
 - `workflow`
-- `policy_profile`
 - `latency_ms`
 - `result_status`
 

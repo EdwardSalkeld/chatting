@@ -15,7 +15,6 @@ In-memory email connector used in tests and fixture-style local runs.
 - `body`
 - `received_at` (timezone-aware datetime)
 - `context_refs`
-- `policy_profile` (default `default`)
 
 ## Output mapping
 

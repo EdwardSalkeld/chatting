@@ -3,8 +3,6 @@ from datetime import datetime, timezone
 
 from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.router import RuleBasedRouter
-
-
 class RuleBasedRouterTests(unittest.TestCase):
     def test_routes_email_to_respond_workflow_with_defaults(self) -> None:
         envelope = TaskEnvelope(
@@ -15,7 +13,6 @@ class RuleBasedRouterTests(unittest.TestCase):
             content="Subject: hello\n\nPlease summarize this thread.",
             attachments=[AttachmentRef(uri="file:///tmp/request.txt", name="request.txt")],
             context_refs=["repo:/home/edward/chatting"],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:msg_1",
         )
@@ -28,7 +25,6 @@ class RuleBasedRouterTests(unittest.TestCase):
         self.assertEqual(task.priority, "normal")
         self.assertEqual(task.execution_constraints.timeout_seconds, 1800)
         self.assertEqual(task.execution_constraints.max_tokens, 12000)
-        self.assertEqual(task.policy_profile, "default")
         self.assertEqual(task.event_time, envelope.received_at)
         self.assertEqual(task.source, "email")
         self.assertEqual(task.actor, "alice@example.com")
@@ -45,7 +41,6 @@ class RuleBasedRouterTests(unittest.TestCase):
             content="Run maintenance checks",
             attachments=[],
             context_refs=["repo:/home/edward/chatting"],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="log", target="daily"),
             dedupe_key="cron:daily:2026-02-27T00:00:00+00:00",
         )
@@ -66,7 +61,6 @@ class RuleBasedRouterTests(unittest.TestCase):
             content="Subject: URGENT\n\nNeed this done ASAP.",
             attachments=[],
             context_refs=[],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:msg_urgent",
         )
@@ -74,7 +68,5 @@ class RuleBasedRouterTests(unittest.TestCase):
         task = RuleBasedRouter().route(envelope)
 
         self.assertEqual(task.priority, "high")
-
-
 if __name__ == "__main__":
     unittest.main()

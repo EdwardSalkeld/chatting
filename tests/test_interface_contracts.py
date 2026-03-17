@@ -25,8 +25,6 @@ from app.policy import AllowlistPolicyEngine, PolicyEngine
 from app.queue import InMemoryQueueBackend, QueueBackend
 from app.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
-
-
 class InterfaceContractTests(unittest.TestCase):
     def test_connector_implementations_match_protocol(self) -> None:
         cron = FakeCronConnector(
@@ -130,7 +128,5 @@ class InterfaceContractTests(unittest.TestCase):
 
     def test_queue_backend_implementation_matches_protocol(self) -> None:
         self.assertIsInstance(InMemoryQueueBackend(), QueueBackend)
-
-
 if __name__ == "__main__":
     unittest.main()

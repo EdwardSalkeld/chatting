@@ -9,14 +9,10 @@ import unittest
 from pathlib import Path
 
 from app.state import SQLiteStateStore
-
-
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
         return probe.connect_ex((host, port)) == 0
-
-
 def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -24,8 +20,6 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
             return
         time.sleep(0.05)
     raise TimeoutError(f"timed out waiting for {host}:{port}")
-
-
 class SplitModeE2ETests(unittest.TestCase):
     def test_split_mode_roundtrip_with_real_bbmb_server_and_stub_executor(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
@@ -182,7 +176,5 @@ class SplitModeE2ETests(unittest.TestCase):
                     event_id=expected_event_id,
                 )
             )
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,6 @@ Each job supports:
 - `cron` (optional 5-field cron expression)
 - `timezone` (optional with `cron`, defaults to `UTC`; uses an IANA name such as `Europe/London`)
 - `context_refs` (optional list of non-empty strings)
-- `policy_profile` (optional, default `default`)
 - `start_at` (optional RFC3339 datetime for interval schedules)
 - `reply_channel_type` (optional non-empty string, requires `reply_channel_target`)
 - `reply_channel_target` (optional non-empty string, requires `reply_channel_type`)

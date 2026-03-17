@@ -4,8 +4,6 @@ import json
 import os
 import subprocess
 import sys
-
-
 def main():
     payload = sys.stdin.read()
     prompt_dir = os.environ.get("FAKE_CODEX_PROMPT_DIR", "")
@@ -41,7 +39,5 @@ def main():
         "errors": [],
     }
     json.dump(result, sys.stdout)
-
-
 if __name__ == "__main__":
     main()

@@ -8,8 +8,6 @@ from unittest.mock import patch
 from app.broker import TaskQueueMessage
 from app.main_worker import DEFAULT_MAX_PARALLEL_LANES, LaneSerialExecutor, PickedTask, _load_config, _parse_args, _task_lane_key
 from app.models import ReplyChannel, TaskEnvelope
-
-
 def _build_picked_task(*, envelope_id: str, source: str = "im", reply_channel_type: str) -> PickedTask:
     envelope = TaskEnvelope(
         id=envelope_id,
@@ -19,7 +17,6 @@ def _build_picked_task(*, envelope_id: str, source: str = "im", reply_channel_ty
         content=f"task for {reply_channel_type}",
         attachments=[],
         context_refs=[],
-        policy_profile="default",
         reply_channel=ReplyChannel(type=reply_channel_type, target="target"),
         dedupe_key=envelope_id,
     )
@@ -27,8 +24,6 @@ def _build_picked_task(*, envelope_id: str, source: str = "im", reply_channel_ty
         guid=f"guid:{envelope_id}",
         task_message=TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:{envelope_id}"),
     )
-
-
 class MainWorkerLaneTests(unittest.TestCase):
     def test_task_lane_key_uses_reply_channel_type(self) -> None:
         picked_task = _build_picked_task(envelope_id="telegram:1", source="im", reply_channel_type="telegram")
@@ -107,8 +102,6 @@ class MainWorkerLaneTests(unittest.TestCase):
             executor.shutdown()
 
         self.assertEqual(started_count, 2)
-
-
 class MainWorkerConfigTests(unittest.TestCase):
     def test_parse_args_accepts_max_parallel_lanes(self) -> None:
         with patch("sys.argv", ["app.main_worker", "--max-parallel-lanes", "3"]):
@@ -127,7 +120,5 @@ class MainWorkerConfigTests(unittest.TestCase):
 
     def test_default_max_parallel_lanes_matches_expected_lane_count_budget(self) -> None:
         self.assertEqual(DEFAULT_MAX_PARALLEL_LANES, 4)
-
-
 if __name__ == "__main__":
     unittest.main()

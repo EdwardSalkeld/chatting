@@ -11,14 +11,10 @@ import time
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
-
-
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
         return probe.connect_ex((host, port)) == 0
-
-
 def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -26,8 +22,6 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
             return
         time.sleep(0.05)
     raise TimeoutError(f"timed out waiting for {host}:{port}")
-
-
 def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str, *, port: int = 3025) -> None:
     msg = EmailMessage()
     msg["From"] = from_addr
@@ -44,8 +38,6 @@ def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str, *, p
             last_error = exc
             time.sleep(1)
     raise RuntimeError(f"failed to send email after retries: {last_error}")
-
-
 class EmailE2ETests(unittest.TestCase):
     def test_email_roundtrip_with_real_codex_executor_and_greenmail(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
@@ -272,7 +264,5 @@ class EmailE2ETests(unittest.TestCase):
             diag.append(f"\n--- {name} log (last 3000 chars) ---")
             diag.append(log_content[-3000:] if log_content else "(empty)")
         print("\n".join(diag), file=sys.stderr)
-
-
 if __name__ == "__main__":
     unittest.main()

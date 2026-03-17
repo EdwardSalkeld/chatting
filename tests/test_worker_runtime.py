@@ -17,15 +17,11 @@ from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore
 from app.worker_runtime import process_task_message
-
-
 @dataclass(frozen=True)
 class MultiMessageExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
-
-
 @dataclass(frozen=True)
 class WriteFileExecutor:
     def execute(self, task):
@@ -36,15 +32,11 @@ class WriteFileExecutor:
             requires_human_review=False,
             errors=[],
         )
-
-
 @dataclass(frozen=True)
 class AlwaysFailExecutor:
     def execute(self, task):
         del task
         raise RuntimeError("executor down")
-
-
 @dataclass(frozen=True)
 class IncrementalReplyExecutor:
     def execute(self, task):
@@ -55,22 +47,16 @@ class IncrementalReplyExecutor:
             requires_human_review=False,
             errors=[],
         )
-
-
 @dataclass(frozen=True)
 class NoMessageExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
-
-
 @dataclass(frozen=True)
 class FinalAliasExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
-
-
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(
@@ -81,7 +67,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             content="hello",
             attachments=[],
             context_refs=[],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:1",
         )

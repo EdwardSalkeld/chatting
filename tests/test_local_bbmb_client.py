@@ -2,17 +2,11 @@ import struct
 import unittest
 
 from app.broker.local_bbmb_client import BBMBError, Client, QueueEmptyError
-
-
 def _encode_string(value: str) -> bytes:
     encoded = value.encode("utf-8")
     return struct.pack(">I", len(encoded)) + encoded
-
-
 def _frame(command_type: int, payload: bytes) -> bytes:
     return struct.pack(">I", len(payload) + 1) + struct.pack("B", command_type) + payload
-
-
 class _FakeSocket:
     def __init__(self, responses: list[bytes]):
         self._responses = list(responses)
@@ -39,8 +33,6 @@ class _FakeSocket:
 
     def close(self) -> None:
         self.closed = True
-
-
 class LocalBBMBClientTests(unittest.TestCase):
     def test_ensure_queue_add_pickup_delete_round_trip(self) -> None:
         ensure_response = _frame(0x01, struct.pack("B", 0x00))
@@ -113,7 +105,5 @@ class LocalBBMBClientTests(unittest.TestCase):
         client = Client(address="127.0.0.1:9876", socket_factory=lambda: _FakeSocket([]))
         with self.assertRaises(BBMBError):
             client.ensure_queue("chatting.tasks.v1")
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -23,16 +23,12 @@ from app.github_ingress_runtime import (
     select_events_after_checkpoint,
 )
 from app.state import SQLiteStateStore
-
-
 @dataclass
 class _RecordingBroker:
     published: list[tuple[str, dict[str, object]]] = field(default_factory=list)
 
     def publish_json(self, queue_name: str, payload: dict[str, object]) -> None:
         self.published.append((queue_name, payload))
-
-
 class GitHubIngressRuntimeTests(unittest.TestCase):
     def test_fetch_assignment_events_for_repository_filters_by_assignee_login(self) -> None:
         payload = {
@@ -291,14 +287,12 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
                 store=store,
                 broker=broker,  # type: ignore[arg-type]
                 context_refs=["repo:/home/edward/chatting"],
-                policy_profile="default",
             )
             second = publish_assignment_events(
                 events=[event],
                 store=store,
                 broker=broker,  # type: ignore[arg-type]
                 context_refs=["repo:/home/edward/chatting"],
-                policy_profile="default",
             )
 
             self.assertEqual(first, 1)
@@ -441,7 +435,5 @@ class GitHubIngressRuntimeTests(unittest.TestCase):
         ):
             payload = default_graphql_runner("query { viewer { login } }", {})
         self.assertIn("data", payload)
-
-
 if __name__ == "__main__":
     unittest.main()

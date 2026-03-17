@@ -3,18 +3,12 @@ import unittest
 from dataclasses import dataclass
 
 from app.broker.bbmb_client import BBMBQueueAdapter, BrokerOperationError
-
-
 class QueueEmptyError(RuntimeError):
     pass
-
-
 @dataclass
 class _FakePickupResult:
     guid: str
     content: str
-
-
 class _FakeBBMBClient:
     def __init__(self, _address: str):
         self.queues: dict[str, list[_FakePickupResult]] = {}
@@ -48,8 +42,6 @@ class _FakeBBMBClient:
 
     def delete_message(self, queue_name: str, guid: str) -> None:
         self.deleted.append((queue_name, guid))
-
-
 class BBMBQueueAdapterTests(unittest.TestCase):
     def test_publish_pickup_ack_roundtrip(self) -> None:
         shared_client = _FakeBBMBClient("ignored")
@@ -123,7 +115,5 @@ class BBMBQueueAdapterTests(unittest.TestCase):
 
         adapter.pickup_json("chatting.tasks.v1", timeout_seconds=7, wait_seconds=3)
         self.assertEqual(recorded, {"timeout_seconds": 7, "wait_seconds": 3})
-
-
 if __name__ == "__main__":
     unittest.main()

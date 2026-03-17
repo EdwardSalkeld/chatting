@@ -118,7 +118,6 @@ An IMAP message from `alice@example.com` turns into a `chatting.task.v1` payload
     "content": "Subject: Please summarize\n\nSummarize the overnight logs.",
     "attachments": [],
     "context_refs": ["repo:/opt/chatting"],
-    "policy_profile": "default",
     "reply_channel": {
       "type": "email",
       "target": "alice@example.com"
@@ -217,7 +216,6 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
 - `context_ref` / `context_refs`
   Default context refs attached to some ingress sources.
 - `github_repositories`, `github_assignee_login`, `github_context_refs`,
-  `github_policy_profile`, `github_max_issues`, `github_max_timeline_events`
   Enable and shape GitHub assignment ingress.
 
 ### Message-handler egress and observability config

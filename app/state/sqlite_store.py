@@ -43,7 +43,6 @@ class SQLiteStateStore:
                     envelope_id TEXT NOT NULL,
                     source TEXT NOT NULL,
                     workflow TEXT NOT NULL,
-                    policy_profile TEXT NOT NULL,
                     latency_ms INTEGER NOT NULL,
                     result_status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -59,7 +58,6 @@ class SQLiteStateStore:
                     envelope_id TEXT NOT NULL,
                     source TEXT NOT NULL,
                     workflow TEXT NOT NULL,
-                    policy_profile TEXT NOT NULL,
                     result_status TEXT NOT NULL,
                     detail_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -217,20 +215,18 @@ class SQLiteStateStore:
                     envelope_id,
                     source,
                     workflow,
-                    policy_profile,
                     latency_ms,
                     result_status,
                     created_at,
                     schema_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["run_id"],
                     payload["envelope_id"],
                     payload["source"],
                     payload["workflow"],
-                    payload["policy_profile"],
                     payload["latency_ms"],
                     payload["result_status"],
                     payload["created_at"],
@@ -251,7 +247,6 @@ class SQLiteStateStore:
                 envelope_id=row["envelope_id"],
                 source=row["source"],
                 workflow=row["workflow"],
-                policy_profile=row["policy_profile"],
                 latency_ms=row["latency_ms"],
                 result_status=row["result_status"],
                 created_at=_parse_rfc3339_utc(row["created_at"]),
@@ -270,20 +265,18 @@ class SQLiteStateStore:
                     envelope_id,
                     source,
                     workflow,
-                    policy_profile,
                     result_status,
                     detail_json,
                     created_at,
                     schema_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["run_id"],
                     payload["envelope_id"],
                     payload["source"],
                     payload["workflow"],
-                    payload["policy_profile"],
                     payload["result_status"],
                     json.dumps(payload["detail"], sort_keys=True),
                     payload["created_at"],
@@ -304,7 +297,6 @@ class SQLiteStateStore:
                 envelope_id=row["envelope_id"],
                 source=row["source"],
                 workflow=row["workflow"],
-                policy_profile=row["policy_profile"],
                 result_status=row["result_status"],
                 detail=json.loads(row["detail_json"]),
                 created_at=_parse_rfc3339_utc(row["created_at"]),
@@ -650,7 +642,6 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
         content=str(payload["content"]),
         attachments=attachments,
         context_refs=context_refs,
-        policy_profile=str(payload["policy_profile"]),
         reply_channel=ReplyChannel(
             type=str(reply_channel["type"]),
             target=str(reply_channel["target"]),

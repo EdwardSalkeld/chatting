@@ -10,8 +10,6 @@ from app.cli import main as cli_main
 from app.main import _load_schedule_jobs, main
 from app.models import RunRecord
 from app.state import SQLiteStateStore
-
-
 class MainCliSplitOnlyTests(unittest.TestCase):
     def test_main_requires_split_mode_entrypoints_for_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -33,7 +31,6 @@ class MainCliSplitOnlyTests(unittest.TestCase):
                     envelope_id="env:1",
                     source="im",
                     workflow="test",
-                    policy_profile="default",
                     latency_ms=1,
                     result_status="success",
                     created_at=datetime(2026, 3, 7, 0, 0, tzinfo=timezone.utc),
@@ -85,7 +82,6 @@ class MainCliSplitOnlyTests(unittest.TestCase):
                     envelope_id="env:metrics:1",
                     source="im",
                     workflow="test",
-                    policy_profile="default",
                     latency_ms=25,
                     result_status="success",
                     created_at=datetime(2026, 3, 7, 0, 0, tzinfo=timezone.utc),
@@ -243,7 +239,5 @@ class MainCliSplitOnlyTests(unittest.TestCase):
 
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0].timezone_name, "UTC")
-
-
 if __name__ == "__main__":
     unittest.main()
