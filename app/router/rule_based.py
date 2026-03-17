@@ -39,7 +39,6 @@ class RuleBasedRouter:
                 timeout_seconds=timeout_seconds,
                 max_tokens=max_tokens,
             ),
-            policy_profile=envelope.policy_profile,
             event_time=envelope.received_at,
             source=envelope.source,
             actor=envelope.actor,

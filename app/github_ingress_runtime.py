@@ -219,7 +219,6 @@ class GitHubIssueAssignmentEvent:
         self,
         *,
         context_refs: list[str],
-        policy_profile: str,
     ) -> TaskEnvelope:
         labels_summary = ", ".join(self.labels) if self.labels else "(none)"
         actor = self.actor_login if self.actor_login else "unknown"
@@ -244,7 +243,6 @@ class GitHubIssueAssignmentEvent:
             content=content,
             attachments=[],
             context_refs=list(context_refs),
-            policy_profile=policy_profile,
             reply_channel=ReplyChannel(type="github", target=self.issue_url),
             dedupe_key=self.dedupe_key(),
         )
@@ -311,7 +309,6 @@ class GitHubPullRequestReviewEvent:
         self,
         *,
         context_refs: list[str],
-        policy_profile: str,
     ) -> TaskEnvelope:
         closing_issues_summary = ", ".join(self.closing_issue_refs) if self.closing_issue_refs else "(none linked)"
         review_body = self.review_body.strip() if self.review_body.strip() else "(empty)"
@@ -343,7 +340,6 @@ class GitHubPullRequestReviewEvent:
             content=content,
             attachments=[],
             context_refs=list(context_refs),
-            policy_profile=policy_profile,
             reply_channel=ReplyChannel(type="github", target=self.pull_request_url),
             dedupe_key=self.dedupe_key(),
         )
@@ -872,14 +868,12 @@ def publish_assignment_events(
     store: SQLiteStateStore,
     broker: BBMBQueueAdapter,
     context_refs: list[str],
-    policy_profile: str,
 ) -> int:
     """Publish assignment events as TaskQueueMessage payloads."""
     published_count = 0
     for event in events:
         envelope = event.to_task_envelope(
             context_refs=context_refs,
-            policy_profile=policy_profile,
         )
         if store.seen(envelope.source, envelope.dedupe_key):
             continue

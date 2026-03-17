@@ -137,10 +137,6 @@ class TaskQueueMessage:
                 _require_non_empty_string(item, field_name="envelope.context_refs[]")
                 for item in context_refs_payload
             ],
-            policy_profile=_require_non_empty_string(
-                envelope_payload.get("policy_profile"),
-                field_name="envelope.policy_profile",
-            ),
             reply_channel=ReplyChannel(
                 type=_require_non_empty_string(
                     reply_channel_payload.get("type"),

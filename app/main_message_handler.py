@@ -100,7 +100,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "github_repositories",
         "github_assignee_login",
         "github_context_refs",
-        "github_policy_profile",
         "github_max_issues",
         "github_max_timeline_events",
     }
@@ -118,7 +117,6 @@ class GitHubIngressSettings:
     repositories: list[str]
     assignee_login: str
     context_refs: list[str]
-    policy_profile: str
     max_issues: int
     max_timeline_events: int
 
@@ -723,7 +721,6 @@ def _parse_args() -> argparse.Namespace:
         default=[],
         help="Context ref to attach to generated tasks (repeatable).",
     )
-    parser.add_argument("--github-policy-profile", help="Policy profile for generated tasks.")
     parser.add_argument(
         "--github-max-issues",
         type=_positive_int,
@@ -957,12 +954,6 @@ def _resolve_github_ingress_settings(
         repositories=repositories,
         assignee_login=assignee_login,
         context_refs=_resolve_github_context_refs(args, config),
-        policy_profile=_resolve_str(
-            args.github_policy_profile,
-            config.get("github_policy_profile"),
-            default_value="default",
-            setting_name="github_policy_profile",
-        ).strip(),
         max_issues=_resolve_positive_int(
             args.github_max_issues,
             config.get("github_max_issues"),
@@ -1103,7 +1094,7 @@ def _build_live_connectors_fail_open(
                 "github_repository",
                 "github_assignee_login",
                 "github_context_ref",
-                "github_policy_profile",
+
                 "github_max_issues",
                 "github_max_timeline_events",
             ),
@@ -1111,7 +1102,7 @@ def _build_live_connectors_fail_open(
                 "github_repositories",
                 "github_assignee_login",
                 "github_context_refs",
-                "github_policy_profile",
+
                 "github_max_issues",
                 "github_max_timeline_events",
             ),
@@ -1140,7 +1131,7 @@ def _build_live_connectors_fail_open(
             "github_repository": [],
             "github_assignee_login": None,
             "github_context_ref": [],
-            "github_policy_profile": None,
+
             "github_max_issues": None,
             "github_max_timeline_events": None,
         }
@@ -1169,7 +1160,6 @@ def _build_live_connectors_fail_open(
                         repository_patterns=settings.repositories,
                         assignee_login=settings.assignee_login,
                         context_refs=settings.context_refs,
-                        policy_profile=settings.policy_profile,
                         max_issues=settings.max_issues,
                         max_timeline_events=settings.max_timeline_events,
                         checkpoint_store=GitHubAssignmentCheckpointStore(db_path),
@@ -1181,7 +1171,6 @@ def _build_live_connectors_fail_open(
                         repository_patterns=settings.repositories,
                         author_login=settings.assignee_login,
                         context_refs=settings.context_refs,
-                        policy_profile=settings.policy_profile,
                         max_pull_requests=settings.max_issues,
                         max_reviews=settings.max_timeline_events,
                         checkpoint_store=GitHubAssignmentCheckpointStore(db_path),
