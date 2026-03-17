@@ -95,7 +95,7 @@ class EmailE2ETests(unittest.TestCase):
                         "allowed_egress_channels": ["email", "log"],
                         "imap_host": "127.0.0.1",
                         "imap_port": 3143,
-                        "imap_username": "bot@chatting.local",
+                        "imap_username": "bot",
                         "imap_password_env": "CHATTING_IMAP_PASSWORD",
                         "imap_use_ssl": False,
                         "smtp_host": "127.0.0.1",
@@ -192,7 +192,7 @@ class EmailE2ETests(unittest.TestCase):
                     time.sleep(1)
 
                 if not prompt_file.exists():
-                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh, prompt_dir)
+                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh)
                     self.fail("prompt file never appeared - task never reached the executor")
 
                 # Now wait for the reply email to arrive back in GreenMail
@@ -204,7 +204,7 @@ class EmailE2ETests(unittest.TestCase):
                 while time.monotonic() < deadline:
                     try:
                         imap = imaplib.IMAP4("127.0.0.1", 3143)
-                        imap.login("sender@test.local", "dummy")
+                        imap.login("sender", "dummy")
                         imap.select("INBOX")
                         status, data = imap.search(None, "ALL")
                         if status == "OK" and data[0]:
@@ -217,7 +217,7 @@ class EmailE2ETests(unittest.TestCase):
                     time.sleep(1)
 
                 if not reply_found:
-                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh, prompt_dir)
+                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh)
                     self.fail("reply email not found in GreenMail within 30s")
 
                 # Validate the captured prompt
