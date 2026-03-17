@@ -34,8 +34,16 @@ def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str, *, p
     msg["To"] = to_addr
     msg["Subject"] = subject
     msg.set_content(body)
-    with smtplib.SMTP("127.0.0.1", port) as client:
-        client.send_message(msg)
+    last_error = None
+    for _ in range(10):
+        try:
+            with smtplib.SMTP("127.0.0.1", port, timeout=5) as client:
+                client.send_message(msg)
+            return
+        except (smtplib.SMTPServerDisconnected, ConnectionError, OSError) as exc:
+            last_error = exc
+            time.sleep(1)
+    raise RuntimeError(f"failed to send email after retries: {last_error}")
 
 
 class EmailE2ETests(unittest.TestCase):
@@ -50,9 +58,11 @@ class EmailE2ETests(unittest.TestCase):
         if _is_port_open("127.0.0.1", 9876):
             self.skipTest("127.0.0.1:9876 already in use")
 
-        # GreenMail IMAP must be running on 3143
+        # GreenMail IMAP (3143) and SMTP (3025) must be running
         if not _is_port_open("127.0.0.1", 3143):
             self.skipTest("GreenMail IMAP not available on 127.0.0.1:3143")
+        if not _is_port_open("127.0.0.1", 3025):
+            self.skipTest("GreenMail SMTP not available on 127.0.0.1:3025")
 
         repo_root = Path(__file__).resolve().parent.parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
