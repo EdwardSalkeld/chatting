@@ -47,7 +47,6 @@ class TelegramConnector:
         allowed_chat_ids: list[str] | None = None,
         allowed_channel_ids: list[str] | None = None,
         context_refs: list[str] | None = None,
-        policy_profile: str = "default",
         attachment_root_dir: str | None = None,
         request_timeout_seconds: float = 30.0,
         http_get_json: Callable[[str, float], TelegramGetUpdatesResponse] | None = None,
@@ -82,7 +81,6 @@ class TelegramConnector:
         self._allowed_chat_ids = set(allowed_chat_ids or [])
         self._allowed_channel_ids = set(allowed_channel_ids or [])
         self._context_refs = list(context_refs or [])
-        self._policy_profile = policy_profile
         self._attachment_root_dir = Path(
             attachment_root_dir or Path(tempfile.gettempdir()) / "chatting-telegram-attachments"
         )
@@ -222,7 +220,6 @@ class TelegramConnector:
             content=content,
             attachments=attachments,
             context_refs=self._context_refs,
-            policy_profile=self._policy_profile,
             reply_channel=ReplyChannel(
                 type="telegram",
                 target=chat_id_value,

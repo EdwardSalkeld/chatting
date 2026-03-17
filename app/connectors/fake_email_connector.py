@@ -18,7 +18,6 @@ class EmailMessage:
     body: str
     received_at: datetime
     context_refs: list[str]
-    policy_profile: str = "default"
 
 
 class FakeEmailConnector:
@@ -44,7 +43,6 @@ class FakeEmailConnector:
                     content=content,
                     attachments=[],
                     context_refs=message.context_refs,
-                    policy_profile=message.policy_profile,
                     reply_channel=ReplyChannel(type="email", target=message.from_address),
                     dedupe_key=event_id,
                 )

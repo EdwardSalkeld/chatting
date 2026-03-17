@@ -18,7 +18,6 @@ class WebhookEvent:
     received_at: datetime
     reply_target: str
     context_refs: list[str]
-    policy_profile: str = "default"
 
 
 class WebhookConnector:
@@ -45,7 +44,6 @@ class WebhookConnector:
                     content=event.content,
                     attachments=[],
                     context_refs=event.context_refs,
-                    policy_profile=event.policy_profile,
                     reply_channel=ReplyChannel(type="webhook", target=event.reply_target),
                     dedupe_key=f"webhook:{event.event_id}",
                 )
