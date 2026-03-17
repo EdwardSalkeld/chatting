@@ -1,0 +1,78 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      greenmail:
+        image: greenmail/standalone:2.1.2
+        env:
+          GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=bot:dummy@chatting.local,sender:dummy@test.local"
+        ports:
+          - 3025:3025
+          - 3143:3143
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download bbmb-server
+        run: |
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
+          (
+            cd "${{ runner.temp }}"
+            sha256sum -c bbmb-server-linux-amd64.sha256
+          )
+          chmod +x "${{ runner.temp }}/bbmb-server-linux-amd64"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Wait for GreenMail
+        run: |
+          echo "Waiting for IMAP (3143) and SMTP (3025)..."
+          for i in $(seq 1 60); do
+            imap_ok=false
+            smtp_ok=false
+            python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3143)); s.close()" 2>/dev/null && imap_ok=true
+            python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3025)); s.close()" 2>/dev/null && smtp_ok=true
+            if [ "$imap_ok" = true ] && [ "$smtp_ok" = true ]; then
+              echo "GreenMail is ready (IMAP + SMTP)"
+              exit 0
+            fi
+            echo "  attempt $i: imap=$imap_ok smtp=$smtp_ok"
+            sleep 2
+          done
+          echo "GreenMail failed to start"
+          exit 1
+
+      - name: Run E2E tests
+        env:
+          CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
+          CHATTING_IMAP_PASSWORD: dummy
+          CHATTING_SMTP_PASSWORD: dummy
+        run: uv run python -m unittest tests.e2e.test_email_e2e -v
