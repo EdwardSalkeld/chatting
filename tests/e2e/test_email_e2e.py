@@ -86,7 +86,7 @@ class EmailE2ETests(unittest.TestCase):
                         "bbmb_address": "127.0.0.1:9876",
                         "poll_interval_seconds": 0.5,
                         "poll_timeout_seconds": 2,
-                        "max_loops": 0,
+                        "max_loops": 200,
                         "allowed_egress_channels": ["email", "log"],
                         "imap_host": "127.0.0.1",
                         "imap_port": 1143,
@@ -111,7 +111,7 @@ class EmailE2ETests(unittest.TestCase):
                         "max_attempts": 2,
                         "poll_timeout_seconds": 2,
                         "sleep_seconds": 0.2,
-                        "max_loops": 0,
+                        "max_loops": 200,
                         "use_stub_executor": False,
                         "codex_command": f"{sys.executable} {fake_codex}",
                     }
@@ -193,9 +193,24 @@ class EmailE2ETests(unittest.TestCase):
                         break
                     time.sleep(1)
 
-                self.assertTrue(
-                    reply_found, "reply email not found in mailpit within 60s"
-                )
+                if not reply_found:
+                    # Dump diagnostics before failing
+                    diag = ["reply email not found in mailpit within 60s"]
+                    for name, proc in [("handler", handler_proc), ("worker", worker_proc)]:
+                        if proc is not None:
+                            rc = proc.poll()
+                            diag.append(f"\n--- {name} (rc={rc}) ---")
+                            if rc is not None:
+                                out, err = proc.communicate(timeout=5)
+                                diag.append(f"stdout:\n{out[-2000:]}")
+                                diag.append(f"stderr:\n{err[-2000:]}")
+                    try:
+                        diag.append(f"\nmailpit messages: {json.dumps(_mailpit_messages(), indent=2)[:3000]}")
+                    except Exception:
+                        pass
+                    prompt_file_diag = prompt_dir / "prompt.json"
+                    diag.append(f"\nprompt file exists: {prompt_file_diag.exists()}")
+                    self.fail("\n".join(diag))
 
                 prompt_file = prompt_dir / "prompt.json"
                 self.assertTrue(
