@@ -76,6 +76,9 @@ class EmailE2ETests(unittest.TestCase):
             prompt_dir = temp_root / "prompts"
             prompt_dir.mkdir()
 
+            handler_log = temp_root / "handler.log"
+            worker_log = temp_root / "worker.log"
+
             handler_config_path = temp_root / "handler.json"
             worker_config_path = temp_root / "worker.json"
 
@@ -124,6 +127,9 @@ class EmailE2ETests(unittest.TestCase):
             env["CHATTING_SMTP_PASSWORD"] = "dummy"
             env["FAKE_CODEX_PROMPT_DIR"] = str(prompt_dir)
 
+            handler_log_fh = open(handler_log, "w")
+            worker_log_fh = open(worker_log, "w")
+
             try:
                 server_proc = subprocess.Popen(
                     [str(server_bin)],
@@ -143,8 +149,8 @@ class EmailE2ETests(unittest.TestCase):
                         str(worker_config_path),
                     ],
                     cwd=repo_root,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=worker_log_fh,
+                    stderr=subprocess.STDOUT,
                     text=True,
                     env=env,
                 )
@@ -157,13 +163,12 @@ class EmailE2ETests(unittest.TestCase):
                         str(handler_config_path),
                     ],
                     cwd=repo_root,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=handler_log_fh,
+                    stderr=subprocess.STDOUT,
                     text=True,
                     env=env,
                 )
 
-                # Give processes a moment to start
                 time.sleep(1)
 
                 _send_test_email(
@@ -173,7 +178,6 @@ class EmailE2ETests(unittest.TestCase):
                     body="Please do the e2e test thing",
                 )
 
-                # Poll mailpit for a reply email (from bot to sender)
                 deadline = time.monotonic() + 60
                 reply_found = False
                 while time.monotonic() < deadline:
@@ -194,22 +198,28 @@ class EmailE2ETests(unittest.TestCase):
                     time.sleep(1)
 
                 if not reply_found:
-                    # Dump diagnostics before failing
+                    # Terminate processes so log files are flushed
+                    for proc in (handler_proc, worker_proc):
+                        if proc is not None and proc.poll() is None:
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait(timeout=5)
+                    handler_log_fh.close()
+                    worker_log_fh.close()
+
                     diag = ["reply email not found in mailpit within 60s"]
-                    for name, proc in [("handler", handler_proc), ("worker", worker_proc)]:
-                        if proc is not None:
-                            rc = proc.poll()
-                            diag.append(f"\n--- {name} (rc={rc}) ---")
-                            if rc is not None:
-                                out, err = proc.communicate(timeout=5)
-                                diag.append(f"stdout:\n{out[-2000:]}")
-                                diag.append(f"stderr:\n{err[-2000:]}")
+                    for name, log_path in [("handler", handler_log), ("worker", worker_log)]:
+                        log_content = log_path.read_text(encoding="utf-8")
+                        diag.append(f"\n--- {name} log (last 3000 chars) ---")
+                        diag.append(log_content[-3000:] if log_content else "(empty)")
                     try:
                         diag.append(f"\nmailpit messages: {json.dumps(_mailpit_messages(), indent=2)[:3000]}")
                     except Exception:
                         pass
-                    prompt_file_diag = prompt_dir / "prompt.json"
-                    diag.append(f"\nprompt file exists: {prompt_file_diag.exists()}")
+                    diag.append(f"\nprompt file exists: {(prompt_dir / 'prompt.json').exists()}")
                     self.fail("\n".join(diag))
 
                 prompt_file = prompt_dir / "prompt.json"
@@ -242,6 +252,8 @@ class EmailE2ETests(unittest.TestCase):
                         except subprocess.TimeoutExpired:
                             proc.kill()
                             proc.wait(timeout=5)
+                handler_log_fh.close() if not handler_log_fh.closed else None
+                worker_log_fh.close() if not worker_log_fh.closed else None
 
 
 if __name__ == "__main__":
