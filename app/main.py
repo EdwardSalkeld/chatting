@@ -47,6 +47,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "imap_password_env",
         "imap_port",
         "imap_search",
+        "imap_use_ssl",
         "imap_username",
         "max_attempts",
         "max_loops",
@@ -58,6 +59,7 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "smtp_password_env",
         "smtp_port",
         "smtp_starttls",
+        "smtp_use_ssl",
         "smtp_username",
         "telegram_allowed_chat_ids",
         "telegram_allowed_channel_ids",
@@ -738,6 +740,12 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
         if not password:
             raise ValueError(f"missing IMAP password env var: {imap_password_env}")
         context_refs = _resolve_context_refs(args.context_ref, config)
+        imap_use_ssl = _resolve_bool(
+            cli_value=None,
+            config_value=config.get("imap_use_ssl"),
+            default_value=True,
+            setting_name="imap_use_ssl",
+        )
         connectors.append(
             ImapEmailConnector(
                 host=imap_host,
@@ -761,6 +769,7 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
                     default_value="UNSEEN",
                     setting_name="imap_search",
                 ),
+                use_ssl=imap_use_ssl,
                 context_refs=context_refs,
             )
         )
@@ -852,6 +861,14 @@ def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> 
         setting_name="smtp_starttls",
     )
 
+    raw_smtp_use_ssl = config.get("smtp_use_ssl")
+    if raw_smtp_use_ssl is not None:
+        if not isinstance(raw_smtp_use_ssl, bool):
+            raise ValueError("smtp_use_ssl must be a boolean")
+        smtp_use_ssl = raw_smtp_use_ssl
+    else:
+        smtp_use_ssl = not smtp_starttls
+
     return SmtpEmailSender(
         host=smtp_host,
         port=_resolve_positive_int(
@@ -863,7 +880,7 @@ def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> 
         from_address=from_address,
         username=smtp_username,
         password=password,
-        use_ssl=not smtp_starttls,
+        use_ssl=smtp_use_ssl,
         starttls=smtp_starttls,
     )
 
