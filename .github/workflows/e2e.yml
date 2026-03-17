@@ -13,12 +13,13 @@ jobs:
     timeout-minutes: 15
 
     services:
-      mailpit:
-        image: axllent/mailpit:latest
+      greenmail:
+        image: greenmail/standalone:2.1.2
+        env:
+          GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.users=bot@chatting.local:dummy"
         ports:
-          - 1025:1025
-          - 1143:1143
-          - 8025:8025
+          - 3025:3025
+          - 3143:3143
 
     steps:
       - name: Checkout
@@ -51,16 +52,16 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Wait for mailpit
+      - name: Wait for GreenMail
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8025/api/v1/messages > /dev/null 2>&1; then
-              echo "Mailpit is ready"
+            if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',3143)); s.close()" 2>/dev/null; then
+              echo "GreenMail IMAP is ready"
               exit 0
             fi
             sleep 1
           done
-          echo "Mailpit failed to start"
+          echo "GreenMail failed to start"
           exit 1
 
       - name: Run E2E tests

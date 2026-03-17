@@ -1,4 +1,4 @@
-"""End-to-end email roundtrip test using Mailpit and a fake codex executor."""
+"""End-to-end email roundtrip test using GreenMail and a fake codex executor."""
 
 import json
 import os
@@ -11,7 +11,6 @@ import time
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -29,26 +28,18 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     raise TimeoutError(f"timed out waiting for {host}:{port}")
 
 
-def _mailpit_messages() -> list[dict]:
-    """Fetch messages from mailpit REST API."""
-    req = Request("http://127.0.0.1:8025/api/v1/messages")
-    with urlopen(req, timeout=5) as resp:
-        data = json.loads(resp.read())
-    return data.get("messages", [])
-
-
-def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str) -> None:
+def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str, *, port: int = 3025) -> None:
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to_addr
     msg["Subject"] = subject
     msg.set_content(body)
-    with smtplib.SMTP("127.0.0.1", 1025) as client:
+    with smtplib.SMTP("127.0.0.1", port) as client:
         client.send_message(msg)
 
 
 class EmailE2ETests(unittest.TestCase):
-    def test_email_roundtrip_with_real_codex_executor_and_mailpit(self) -> None:
+    def test_email_roundtrip_with_real_codex_executor_and_greenmail(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
         if not server_bin_raw:
             self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
@@ -59,8 +50,9 @@ class EmailE2ETests(unittest.TestCase):
         if _is_port_open("127.0.0.1", 9876):
             self.skipTest("127.0.0.1:9876 already in use")
 
-        if not _is_port_open("127.0.0.1", 8025):
-            self.skipTest("mailpit not available on 127.0.0.1:8025")
+        # GreenMail IMAP must be running on 3143
+        if not _is_port_open("127.0.0.1", 3143):
+            self.skipTest("GreenMail IMAP not available on 127.0.0.1:3143")
 
         repo_root = Path(__file__).resolve().parent.parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
@@ -92,12 +84,12 @@ class EmailE2ETests(unittest.TestCase):
                         "max_loops": 200,
                         "allowed_egress_channels": ["email", "log"],
                         "imap_host": "127.0.0.1",
-                        "imap_port": 1143,
+                        "imap_port": 3143,
                         "imap_username": "bot@chatting.local",
                         "imap_password_env": "CHATTING_IMAP_PASSWORD",
                         "imap_use_ssl": False,
                         "smtp_host": "127.0.0.1",
-                        "smtp_port": 1025,
+                        "smtp_port": 3025,
                         "smtp_from": "bot@chatting.local",
                         "smtp_starttls": False,
                         "smtp_use_ssl": False,
@@ -171,61 +163,54 @@ class EmailE2ETests(unittest.TestCase):
 
                 time.sleep(1)
 
+                # Send test email to GreenMail SMTP
                 _send_test_email(
                     from_addr="sender@test.local",
                     to_addr="bot@chatting.local",
                     subject="E2E test task",
                     body="Please do the e2e test thing",
+                    port=3025,
                 )
 
+                # Poll for prompt file - proves the full ingress path worked
+                # (email -> handler -> bbmb -> worker -> codex executor)
                 deadline = time.monotonic() + 60
-                reply_found = False
+                prompt_file = prompt_dir / "prompt.json"
                 while time.monotonic() < deadline:
-                    messages = _mailpit_messages()
-                    for msg in messages:
-                        to_addrs = [
-                            addr.get("Address", "") for addr in msg.get("To", [])
-                        ]
-                        from_addr = msg.get("From", {}).get("Address", "")
-                        if (
-                            from_addr == "bot@chatting.local"
-                            and "sender@test.local" in to_addrs
-                        ):
-                            reply_found = True
-                            break
-                    if reply_found:
+                    if prompt_file.exists():
                         break
                     time.sleep(1)
 
-                if not reply_found:
-                    # Terminate processes so log files are flushed
-                    for proc in (handler_proc, worker_proc):
-                        if proc is not None and proc.poll() is None:
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                proc.kill()
-                                proc.wait(timeout=5)
-                    handler_log_fh.close()
-                    worker_log_fh.close()
+                if not prompt_file.exists():
+                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh, prompt_dir)
+                    self.fail("prompt file never appeared - task never reached the executor")
 
-                    diag = ["reply email not found in mailpit within 60s"]
-                    for name, log_path in [("handler", handler_log), ("worker", worker_log)]:
-                        log_content = log_path.read_text(encoding="utf-8")
-                        diag.append(f"\n--- {name} log (last 3000 chars) ---")
-                        diag.append(log_content[-3000:] if log_content else "(empty)")
+                # Now wait for the reply email to arrive back in GreenMail
+                # Check via IMAP directly
+                import imaplib
+
+                reply_found = False
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
                     try:
-                        diag.append(f"\nmailpit messages: {json.dumps(_mailpit_messages(), indent=2)[:3000]}")
+                        imap = imaplib.IMAP4("127.0.0.1", 3143)
+                        imap.login("sender@test.local", "dummy")
+                        imap.select("INBOX")
+                        status, data = imap.search(None, "ALL")
+                        if status == "OK" and data[0]:
+                            reply_found = True
+                        imap.logout()
+                        if reply_found:
+                            break
                     except Exception:
                         pass
-                    diag.append(f"\nprompt file exists: {(prompt_dir / 'prompt.json').exists()}")
-                    self.fail("\n".join(diag))
+                    time.sleep(1)
 
-                prompt_file = prompt_dir / "prompt.json"
-                self.assertTrue(
-                    prompt_file.exists(), f"prompt dump not found at {prompt_file}"
-                )
+                if not reply_found:
+                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh, prompt_dir)
+                    self.fail("reply email not found in GreenMail within 30s")
+
+                # Validate the captured prompt
                 prompt = json.loads(prompt_file.read_text(encoding="utf-8"))
 
                 self.assertEqual(prompt["schema_version"], "1.0")
@@ -252,8 +237,31 @@ class EmailE2ETests(unittest.TestCase):
                         except subprocess.TimeoutExpired:
                             proc.kill()
                             proc.wait(timeout=5)
-                handler_log_fh.close() if not handler_log_fh.closed else None
-                worker_log_fh.close() if not worker_log_fh.closed else None
+                if not handler_log_fh.closed:
+                    handler_log_fh.close()
+                if not worker_log_fh.closed:
+                    worker_log_fh.close()
+
+    def _dump_diagnostics(self, handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh):
+        for proc in (handler_proc, worker_proc):
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+        if not handler_log_fh.closed:
+            handler_log_fh.close()
+        if not worker_log_fh.closed:
+            worker_log_fh.close()
+
+        diag = []
+        for name, log_path in [("handler", handler_log), ("worker", worker_log)]:
+            log_content = log_path.read_text(encoding="utf-8")
+            diag.append(f"\n--- {name} log (last 3000 chars) ---")
+            diag.append(log_content[-3000:] if log_content else "(empty)")
+        print("\n".join(diag), file=sys.stderr)
 
 
 if __name__ == "__main__":
