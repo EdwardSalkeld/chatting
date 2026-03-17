@@ -1,3 +1,15 @@
+[project]
+name = "chatting"
+version = "0.1.0"
+description = "Split-mode task orchestration for Codex-driven workflows."
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff>=0.15.5"]
+
 [tool.ruff]
 target-version = "py313"
 
+[tool.uv]
+package = false

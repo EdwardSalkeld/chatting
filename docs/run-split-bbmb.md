@@ -23,8 +23,8 @@ For a worked message example and the full message-handler <-> worker conversatio
 
 ## Topology
 
-- Host A (integration host): `python3 -m app.main_message_handler`
-- Host B (execution host): `python3 -m app.main_worker`
+- Host A (integration host): `uv run python -m app.main_message_handler`
+- Host B (execution host): `uv run python -m app.main_worker`
 - Host C (or A/B): `bbmb-server` on `:9876`
 
 All hosts must have network reachability to the BBMB TCP endpoint.
@@ -40,16 +40,17 @@ If BBMB is listening somewhere else, set `bbmb_address` in both runtime configs.
 ## 2) Configure message-handler
 
 ```bash
+uv sync
 cp configs/message-handler-runtime.example.json /tmp/message-handler.json
 # edit bbmb_address and connector settings
-python3 -m app.main_message_handler --config /tmp/message-handler.json
+uv run python -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
 Optional env-based config path:
 
 ```bash
 export CHATTING_MESSAGE_HANDLER_CONFIG_PATH=/tmp/message-handler.json
-python3 -m app.main_message_handler
+uv run python -m app.main_message_handler
 ```
 
 ## 3) Configure worker
@@ -57,7 +58,7 @@ python3 -m app.main_message_handler
 ```bash
 cp configs/worker-runtime.example.json /tmp/worker.json
 # edit bbmb_address and executor settings
-python3 -m app.main_worker --config /tmp/worker.json
+uv run python -m app.main_worker --config /tmp/worker.json
 ```
 
 If the service/user shell working directory is not where you want Codex to run, set
@@ -68,7 +69,7 @@ Optional env-based config path:
 
 ```bash
 export CHATTING_WORKER_CONFIG_PATH=/tmp/worker.json
-python3 -m app.main_worker
+uv run python -m app.main_worker
 ```
 
 ## 4) Security boundary expectations
@@ -85,7 +86,7 @@ python3 -m app.main_worker
 ```bash
 # edit message-handler config: github_repositories (owner/repo or owner/*)
 # optional: github_assignee_login (defaults to authenticated gh user)
-python3 -m app.main_message_handler --config /tmp/message-handler.json
+uv run python -m app.main_message_handler --config /tmp/message-handler.json
 ```
 
 `gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
@@ -117,7 +118,7 @@ path for both quick acknowledgements and final user-visible answers instead of r
 their stdout JSON:
 
 ```bash
-python3 -m app.main_reply task:email:53 \
+uv run python -m app.main_reply task:email:53 \
   --message "working on it" \
   --channel email \
   --target alice@example.com \
@@ -132,7 +133,7 @@ Notes:
 - Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
 
 ```bash
-python3 -m app.main_reply task:telegram:53 \
+uv run python -m app.main_reply task:telegram:53 \
   --channel telegram \
   --target 8605042448 \
   --telegram-reaction "👍" \
