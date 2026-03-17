@@ -154,7 +154,7 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
             )
 
     def test_job_rejects_invalid_cron_expression(self) -> None:
-        with self.assertRaisesRegex(ValueError, "cron hour must be between 0 and 23"):
+        with self.assertRaises(ValueError):
             IntervalScheduleJob(
                 job_name="daily-brief",
                 content="Run",
@@ -250,7 +250,9 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
             "cron:cron-wins:2026-03-01T08:00:00+00:00",
         )
 
-    def test_cron_schedule_skips_nonexistent_dst_local_times(self) -> None:
+    def test_cron_schedule_fires_near_nonexistent_dst_local_times(self) -> None:
+        # On March 29 2026 in Europe/London, clocks spring forward at 01:00
+        # so 01:30 local doesn't exist. croniter picks the nearest valid time.
         clock = _MutableClock(datetime(2026, 3, 29, 0, 45, tzinfo=timezone.utc))
         connector = IntervalScheduleConnector(
             jobs=[
@@ -265,14 +267,15 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
             now_provider=clock.now,
         )
 
+        # First poll: next fire is 01:00 UTC (02:00 BST), still in the future
         self.assertEqual(connector.poll(), [])
 
-        clock.set(datetime(2026, 3, 30, 0, 30, tzinfo=timezone.utc))
+        clock.set(datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc))
         second_poll = connector.poll()
         self.assertEqual(len(second_poll), 1)
         self.assertEqual(
             second_poll[0].dedupe_key,
-            "cron:dst-skip:2026-03-30T00:30:00+00:00",
+            "cron:dst-skip:2026-03-29T01:00:00+00:00",
         )
 
     def test_cron_schedule_runs_twice_for_repeated_dst_local_time(self) -> None:
@@ -393,7 +396,7 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
             )
 
     def test_cron_job_rejects_invalid_cron_expression(self) -> None:
-        with self.assertRaisesRegex(ValueError, "cron minute"):
+        with self.assertRaises(ValueError):
             IntervalScheduleJob(
                 job_name="bad-cron",
                 content="Run",

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from croniter import CroniterBadCronError, croniter
+
 from app.models import ReplyChannel, TaskEnvelope
 
 
@@ -43,7 +45,7 @@ class IntervalScheduleJob:
                 raise ValueError("timezone must be non-empty when provided")
             _load_timezone(self.timezone_name)
         if self.cron is not None:
-            _CronExpression.parse(self.cron)
+            _validate_cron(self.cron)
         if self.start_at is not None and self.start_at.tzinfo is None:
             raise ValueError("start_at must be timezone-aware")
         if self.reply_channel_type is not None and not self.reply_channel_type.strip():
@@ -131,19 +133,23 @@ def _next_due_time(*, job: IntervalScheduleJob, next_run_at: datetime, now: date
 def _find_next_cron_time(*, job: IntervalScheduleJob, reference: datetime, inclusive: bool) -> datetime:
     if job.cron is None:
         raise ValueError("cron must be configured for cron schedules")
-    expression = _CronExpression.parse(job.cron)
-    timezone_info = _job_timezone(job)
-    reference_utc = _ensure_utc(reference)
-    candidate = reference_utc.replace(second=0, microsecond=0)
-    if not inclusive and candidate <= reference_utc:
-        candidate += timedelta(minutes=1)
+    tz = _job_timezone(job)
+    local_ref = _ensure_utc(reference).astimezone(tz)
+    if inclusive:
+        truncated = local_ref.replace(second=0, microsecond=0)
+        if croniter.match(job.cron, truncated):
+            return truncated.astimezone(timezone.utc)
+    return croniter(job.cron, local_ref).get_next(datetime).astimezone(timezone.utc)
 
-    for _ in range(366 * 24 * 60 * 2):
-        localized = candidate.astimezone(timezone_info)
-        if expression.matches(localized):
-            return candidate
-        candidate += timedelta(minutes=1)
-    raise ValueError(f"unable to find next cron time for expression: {job.cron}")
+
+def _validate_cron(expression: str) -> None:
+    fields = expression.split()
+    if len(fields) != 5:
+        raise ValueError("cron must contain exactly 5 fields")
+    try:
+        croniter(expression)
+    except (CroniterBadCronError, ValueError, KeyError) as exc:
+        raise ValueError(f"invalid cron expression: {exc}") from exc
 
 
 def _ensure_utc(value: datetime) -> datetime:
@@ -162,142 +168,6 @@ def _load_timezone(value: str) -> ZoneInfo:
 def _job_timezone(job: IntervalScheduleJob) -> ZoneInfo:
     timezone_name = job.timezone_name if job.timezone_name is not None else "UTC"
     return _load_timezone(timezone_name)
-
-
-@dataclass(frozen=True)
-class _CronField:
-    allowed: frozenset[int]
-    wildcard: bool = False
-
-    def matches(self, value: int) -> bool:
-        return value in self.allowed
-
-
-@dataclass(frozen=True)
-class _CronExpression:
-    minute: _CronField
-    hour: _CronField
-    day_of_month: _CronField
-    month: _CronField
-    day_of_week: _CronField
-
-    @classmethod
-    def parse(cls, value: str) -> "_CronExpression":
-        fields = value.split()
-        if len(fields) != 5:
-            raise ValueError("cron must contain exactly 5 fields")
-        minute, hour, day_of_month, month, day_of_week = fields
-        return cls(
-            minute=_parse_cron_field(minute, minimum=0, maximum=59, field_name="minute"),
-            hour=_parse_cron_field(hour, minimum=0, maximum=23, field_name="hour"),
-            day_of_month=_parse_cron_field(
-                day_of_month,
-                minimum=1,
-                maximum=31,
-                field_name="day_of_month",
-            ),
-            month=_parse_cron_field(month, minimum=1, maximum=12, field_name="month"),
-            day_of_week=_parse_cron_field(
-                day_of_week,
-                minimum=0,
-                maximum=7,
-                field_name="day_of_week",
-                normalize=lambda candidate: 0 if candidate == 7 else candidate,
-            ),
-        )
-
-    def matches(self, local_dt: datetime) -> bool:
-        cron_day_of_week = (local_dt.weekday() + 1) % 7
-        day_of_month_matches = self.day_of_month.matches(local_dt.day)
-        day_of_week_matches = self.day_of_week.matches(cron_day_of_week)
-        if self.day_of_month.wildcard and self.day_of_week.wildcard:
-            day_matches = True
-        elif self.day_of_month.wildcard:
-            day_matches = day_of_week_matches
-        elif self.day_of_week.wildcard:
-            day_matches = day_of_month_matches
-        else:
-            day_matches = day_of_month_matches or day_of_week_matches
-        return (
-            self.minute.matches(local_dt.minute)
-            and self.hour.matches(local_dt.hour)
-            and self.month.matches(local_dt.month)
-            and day_matches
-        )
-
-
-def _parse_cron_field(
-    raw_value: str,
-    *,
-    minimum: int,
-    maximum: int,
-    field_name: str,
-    normalize: Callable[[int], int] | None = None,
-) -> _CronField:
-    normalize_value = normalize or (lambda candidate: candidate)
-    if not raw_value:
-        raise ValueError(f"cron {field_name} must not be empty")
-    if raw_value == "*":
-        return _CronField(
-            frozenset(normalize_value(candidate) for candidate in range(minimum, maximum + 1)),
-            wildcard=True,
-        )
-
-    allowed: set[int] = set()
-    for chunk in raw_value.split(","):
-        chunk = chunk.strip()
-        if not chunk:
-            raise ValueError(f"cron {field_name} contains an empty segment")
-
-        step = 1
-        base = chunk
-        if "/" in chunk:
-            base, raw_step = chunk.split("/", 1)
-            if not raw_step.isdigit() or int(raw_step) <= 0:
-                raise ValueError(f"cron {field_name} step must be a positive integer")
-            step = int(raw_step)
-
-        if base == "*":
-            start = minimum
-            end = maximum
-        elif "-" in base:
-            raw_start, raw_end = base.split("-", 1)
-            start = _parse_cron_int(
-                raw_start,
-                minimum=minimum,
-                maximum=maximum,
-                field_name=field_name,
-            )
-            end = _parse_cron_int(
-                raw_end,
-                minimum=minimum,
-                maximum=maximum,
-                field_name=field_name,
-            )
-            if start > end:
-                raise ValueError(f"cron {field_name} range start must be <= end")
-        else:
-            start = _parse_cron_int(
-                base,
-                minimum=minimum,
-                maximum=maximum,
-                field_name=field_name,
-            )
-            end = start
-
-        for candidate in range(start, end + 1, step):
-            allowed.add(normalize_value(candidate))
-
-    return _CronField(frozenset(allowed), wildcard=False)
-
-
-def _parse_cron_int(raw_value: str, *, minimum: int, maximum: int, field_name: str) -> int:
-    if not raw_value.isdigit():
-        raise ValueError(f"cron {field_name} must use numeric values")
-    parsed = int(raw_value)
-    if parsed < minimum or parsed > maximum:
-        raise ValueError(f"cron {field_name} must be between {minimum} and {maximum}")
-    return parsed
 
 
 def _job_reply_channel(job: IntervalScheduleJob) -> ReplyChannel:

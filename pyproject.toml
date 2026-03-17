@@ -3,7 +3,9 @@ name = "chatting"
 version = "0.1.0"
 description = "Split-mode task orchestration for Codex-driven workflows."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "croniter>=6.2.2",
+]
 
 [dependency-groups]
 dev = ["ruff>=0.15.5"]
