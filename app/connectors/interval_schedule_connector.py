@@ -134,24 +134,12 @@ def _find_next_cron_time(*, job: IntervalScheduleJob, reference: datetime, inclu
     if job.cron is None:
         raise ValueError("cron must be configured for cron schedules")
     tz = _job_timezone(job)
-    reference_utc = _ensure_utc(reference)
-    local_ref = reference_utc.astimezone(tz)
-    cron = croniter(job.cron, local_ref)
+    local_ref = _ensure_utc(reference).astimezone(tz)
     if inclusive:
-        candidate_local = local_ref.replace(second=0, microsecond=0)
-        if croniter.match(job.cron, candidate_local):
-            return candidate_local.astimezone(timezone.utc)
-    # croniter can return times that don't truly match in local time when DST
-    # creates nonexistent local hours, so verify each candidate by converting
-    # back to the target timezone and checking the time components directly.
-    parsed = _parse_cron_fields(job.cron)
-    for _ in range(366 * 24):
-        candidate_local = cron.get_next(datetime)
-        candidate_utc = candidate_local.astimezone(timezone.utc)
-        verified_local = candidate_utc.astimezone(tz)
-        if _matches_local(parsed, verified_local):
-            return candidate_utc
-    raise ValueError(f"unable to find next cron time for expression: {job.cron}")
+        truncated = local_ref.replace(second=0, microsecond=0)
+        if croniter.match(job.cron, truncated):
+            return truncated.astimezone(timezone.utc)
+    return croniter(job.cron, local_ref).get_next(datetime).astimezone(timezone.utc)
 
 
 def _validate_cron(expression: str) -> None:
@@ -180,56 +168,6 @@ def _load_timezone(value: str) -> ZoneInfo:
 def _job_timezone(job: IntervalScheduleJob) -> ZoneInfo:
     timezone_name = job.timezone_name if job.timezone_name is not None else "UTC"
     return _load_timezone(timezone_name)
-
-
-_FIELD_RANGES = [
-    range(0, 60),   # minute
-    range(0, 24),   # hour
-    range(1, 32),   # day of month
-    range(1, 13),   # month
-    range(0, 7),    # day of week
-]
-
-
-def _expand_cron_field(field_values: list, full_range: range) -> tuple[set[int], bool]:
-    """Expand a croniter field list into a set of ints and a wildcard flag."""
-    if field_values == ["*"]:
-        return set(full_range), True
-    return set(int(v) for v in field_values), False
-
-
-def _parse_cron_fields(expression: str) -> tuple[tuple[set[int], bool], ...]:
-    """Parse a 5-field cron expression via croniter into expanded sets with wildcard flags."""
-    c = croniter(expression)
-    return tuple(
-        _expand_cron_field(c.expanded[i], _FIELD_RANGES[i])
-        for i in range(5)
-    )
-
-
-def _matches_local(
-    parsed: tuple[tuple[set[int], bool], ...],
-    local_dt: datetime,
-) -> bool:
-    """Check if a local datetime matches the parsed cron fields."""
-    (minutes, _), (hours, _), (doms, dom_wild), (months, _), (dows, dow_wild) = parsed
-    if local_dt.minute not in minutes:
-        return False
-    if local_dt.hour not in hours:
-        return False
-    if local_dt.month not in months:
-        return False
-    # cron day-of-week: 0=Sunday. Python weekday(): 0=Monday.
-    cron_dow = (local_dt.weekday() + 1) % 7
-    dom_match = local_dt.day in doms
-    dow_match = cron_dow in dows
-    if dom_wild and dow_wild:
-        return True
-    if dom_wild:
-        return dow_match
-    if dow_wild:
-        return dom_match
-    return dom_match or dow_match
 
 
 def _job_reply_channel(job: IntervalScheduleJob) -> ReplyChannel:
