@@ -16,28 +16,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build BBMB image
-        run: docker build -f Dockerfile.bbmb -t bbmb:test .
+      - name: Build and start stack
+        run: docker compose -f docker-compose.e2e.yml up --build -d
 
-      - name: Extract bbmb-server binary
+      - name: Wait for services
         run: |
-          docker create --name bbmb-extract bbmb:test
-          docker cp bbmb-extract:/usr/local/bin/bbmb-server "${{ runner.temp }}/bbmb-server"
-          docker rm bbmb-extract
-          chmod +x "${{ runner.temp }}/bbmb-server"
-
-      - name: Build test image
-        run: docker build --target test -t chatting:test .
-
-      - name: Start GreenMail
-        run: |
-          docker run -d --name greenmail \
-            -p 3025:3025 -p 3143:3143 \
-            -e 'GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=bot:dummy@chatting.local,sender:dummy@test.local' \
-            greenmail/standalone:2.1.2
-
-      - name: Wait for GreenMail
-        run: |
+          echo "Waiting for GreenMail SMTP (3025) and IMAP (3143)..."
           for i in $(seq 1 60); do
             imap_ok=false
             smtp_ok=false
@@ -47,22 +31,22 @@ jobs:
               echo "GreenMail ready"
               exit 0
             fi
+            echo "  attempt $i: imap=$imap_ok smtp=$smtp_ok"
             sleep 2
           done
           echo "GreenMail failed to start"
           exit 1
 
-      - name: Run E2E tests
-        run: |
-          docker run --rm \
-            --network host \
-            -v "${{ runner.temp }}/bbmb-server:/usr/local/bin/bbmb-server:ro" \
-            -e CHATTING_BBMB_SERVER_BIN=/usr/local/bin/bbmb-server \
-            -e CHATTING_IMAP_PASSWORD=dummy \
-            -e CHATTING_SMTP_PASSWORD=dummy \
-            chatting:test \
-            unittest tests.e2e.test_email_e2e -v
+      - name: Wait for handler to start polling
+        run: sleep 5
 
-      - name: Cleanup
+      - name: Run E2E test
+        run: python3 tests/e2e/docker_e2e_test.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.e2e.yml logs --tail 50
+
+      - name: Teardown
         if: always()
-        run: docker rm -f greenmail || true
+        run: docker compose -f docker-compose.e2e.yml down -v
