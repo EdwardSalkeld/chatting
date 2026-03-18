@@ -1,0 +1,9 @@
+{
+  "db_path": "/data/worker.db",
+  "bbmb_address": "bbmb:9876",
+  "max_attempts": 2,
+  "poll_timeout_seconds": 20,
+  "sleep_seconds": 1.0,
+  "codex_command": "codex exec --json",
+  "codex_working_dir": "/workspace"
+}

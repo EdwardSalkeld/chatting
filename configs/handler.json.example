@@ -1,0 +1,21 @@
+{
+  "db_path": "/data/handler.db",
+  "bbmb_address": "bbmb:9876",
+  "poll_interval_seconds": 10.0,
+  "poll_timeout_seconds": 2,
+  "metrics_host": "0.0.0.0",
+  "metrics_port": 9464,
+  "allowed_egress_channels": ["email", "telegram", "github", "log"],
+  "imap_host": "imap.example.com",
+  "imap_port": 993,
+  "imap_username": "bot@example.com",
+  "imap_password_env": "CHATTING_IMAP_PASSWORD",
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 465,
+  "smtp_username": "bot@example.com",
+  "smtp_password_env": "CHATTING_SMTP_PASSWORD",
+  "smtp_from": "bot@example.com",
+  "telegram_enabled": false,
+  "telegram_bot_token_env": "CHATTING_TELEGRAM_BOT_TOKEN",
+  "telegram_attachment_dir": "/var/lib/chatting/telegram-attachments"
+}

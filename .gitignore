@@ -5,3 +5,7 @@ run-next-task-5x.sh
 # Local runtime/env config
 .env.live
 configs/*.local.json
+configs/handler.env
+configs/worker.env
+configs/handler.json
+configs/worker.json

@@ -1,0 +1,44 @@
+services:
+  bbmb:
+    build:
+      context: .
+      dockerfile: Dockerfile.bbmb
+    ports:
+      - "9876:9876"
+    restart: unless-stopped
+
+  handler:
+    build: .
+    command: ["app.main_message_handler"]
+    env_file: configs/handler.env
+    environment:
+      CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
+    volumes:
+      - ./configs:/config:ro
+      - handler-data:/data
+      - telegram-attachments:/var/lib/chatting/telegram-attachments
+    ports:
+      - "9464:9464"
+    depends_on:
+      - bbmb
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["app.main_worker"]
+    env_file: configs/worker.env
+    environment:
+      CHATTING_WORKER_CONFIG_PATH: /config/worker.json
+    volumes:
+      - ./configs:/config:ro
+      - worker-data:/data
+      - workspace:/workspace
+    depends_on:
+      - bbmb
+    restart: unless-stopped
+
+volumes:
+  handler-data:
+  worker-data:
+  telegram-attachments:
+  workspace:
