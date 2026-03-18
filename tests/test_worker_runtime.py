@@ -37,6 +37,25 @@ class AlwaysFailExecutor:
     def execute(self, task):
         del task
         raise RuntimeError("executor down")
+
+
+@dataclass(frozen=True)
+class CreditsFailExecutor:
+    def execute(self, task):
+        del task
+        raise RuntimeError("out of credits")
+
+
+@dataclass(frozen=True)
+class ExecutionErrorExecutor:
+    def execute(self, task):
+        del task
+        return ExecutionResult(
+            actions=[],
+            config_updates=[],
+            requires_human_review=False,
+            errors=["executor_exit_nonzero:1:insufficient credits"],
+        )
 @dataclass(frozen=True)
 class IncrementalReplyExecutor:
     def execute(self, task):
@@ -132,6 +151,47 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.run_record.result_status, "dead_letter")
             self.assertEqual(result.dead_lettered, True)
             self.assertEqual(store.list_dead_letters()[0].reason_codes, ["retry_exhausted"])
+
+    def test_process_task_message_emits_visible_credit_error_before_dead_letter_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=CreditsFailExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=1,
+            )
+
+            self.assertEqual(result.run_record.result_status, "dead_letter")
+            self.assertEqual(len(result.egress_messages), 2)
+            visible = result.egress_messages[0]
+            completion = result.egress_messages[1]
+            self.assertEqual(visible.event_kind, "message")
+            self.assertEqual(visible.message.channel, "email")
+            self.assertIn("ran out of credits or quota", visible.message.body)
+            self.assertEqual(completion.event_kind, "completion")
+            self.assertEqual(completion.sequence, 1)
+
+    def test_process_task_message_emits_visible_credit_error_for_execution_error_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                router=RuleBasedRouter(),
+                executor_impl=ExecutionErrorExecutor(),
+                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                max_attempts=1,
+            )
+
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertEqual(len(result.egress_messages), 2)
+            visible = result.egress_messages[0]
+            self.assertEqual(visible.event_kind, "message")
+            self.assertEqual(visible.message.target, "alice@example.com")
+            self.assertIn("ran out of credits or quota", visible.message.body)
 
     def test_process_task_message_emits_completion_even_when_executor_does_no_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
