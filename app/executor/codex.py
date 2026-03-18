@@ -33,6 +33,21 @@ _REQUIRED_TOP_LEVEL_KEYS = {
 _ALLOWED_ACTION_KEYS = {"type", "path", "content"}
 _ALLOWED_CONFIG_UPDATE_KEYS = {"path", "value"}
 
+EXECUTION_RESULT_JSON_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "string"},
+            "actions": {"type": "array"},
+            "config_updates": {"type": "array"},
+            "requires_human_review": {"type": "boolean"},
+            "errors": {"type": "array"},
+        },
+        "required": sorted(_REQUIRED_TOP_LEVEL_KEYS),
+    },
+    separators=(",", ":"),
+)
+
 
 @dataclass(frozen=True)
 class CodexExecutor:

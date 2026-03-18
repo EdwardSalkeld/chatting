@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Mapping
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
-from app.executor import CodexExecutor, Executor
+from app.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
@@ -29,6 +29,7 @@ LOGGER = logging.getLogger(__name__)
 ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     {
         "bbmb_address",
+        "claude_command",
         "codex_command",
         "codex_working_dir",
         "db_path",
@@ -170,10 +171,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke tests.")
     parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Queue pickup timeout seconds.")
     parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
-    parser.add_argument("--codex-command", help="Command used for Codex executor.")
+    parser.add_argument("--codex-command", help="Base Codex command (e.g. 'codex exec'). JSON args appended automatically.")
+    parser.add_argument("--claude-command", help="Base Claude command (e.g. 'claude'). Structured output args appended automatically.")
     parser.add_argument(
         "--codex-working-dir",
-        help="Working directory used only for launching Codex subprocesses.",
+        help="Working directory used only for launching executor subprocesses.",
     )
     return parser.parse_args()
 
@@ -262,21 +264,39 @@ def _resolve_bool(cli_value: bool, config_value: object, *, default_value: bool,
 
 
 def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
-    command = _resolve_str(
-        args.codex_command,
-        config.get("codex_command"),
-        default_value="codex exec --json",
-        setting_name="codex_command",
-    )
-    split_command = tuple(shlex.split(command))
-    if not split_command:
-        raise ValueError("codex_command must not be empty")
     codex_working_dir = _resolve_optional_str(
         args.codex_working_dir,
         config.get("codex_working_dir"),
         setting_name="codex_working_dir",
     )
-    return CodexExecutor(command=split_command, cwd=codex_working_dir)
+
+    # Prefer codex_command if set, fall back to claude_command
+    codex_raw = _resolve_optional_str(
+        args.codex_command,
+        config.get("codex_command"),
+        setting_name="codex_command",
+    )
+    claude_raw = _resolve_optional_str(
+        getattr(args, "claude_command", None),
+        config.get("claude_command"),
+        setting_name="claude_command",
+    )
+
+    if codex_raw:
+        command = tuple(shlex.split(codex_raw)) + ("--json",)
+    elif claude_raw:
+        command = tuple(shlex.split(claude_raw)) + (
+            "-p",
+            "--output-format", "json",
+            "--json-schema", EXECUTION_RESULT_JSON_SCHEMA,
+        )
+    else:
+        command = ("codex", "exec", "--json")
+
+    if not command:
+        raise ValueError("codex_command or claude_command must be configured")
+
+    return CodexExecutor(command=command, cwd=codex_working_dir)
 
 
 def _task_lane_key(task_message: TaskQueueMessage) -> str:
