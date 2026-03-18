@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Mapping
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
-from app.executor import CodexExecutor, Executor, StubExecutor
+from app.executor import CodexExecutor, Executor
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
@@ -37,7 +37,6 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "max_loops",
         "poll_timeout_seconds",
         "sleep_seconds",
-        "use_stub_executor",
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10
@@ -176,11 +175,6 @@ def _parse_args() -> argparse.Namespace:
         "--codex-working-dir",
         help="Working directory used only for launching Codex subprocesses.",
     )
-    parser.add_argument(
-        "--use-stub-executor",
-        action="store_true",
-        help="Use deterministic stub executor.",
-    )
     return parser.parse_args()
 
 
@@ -268,15 +262,6 @@ def _resolve_bool(cli_value: bool, config_value: object, *, default_value: bool,
 
 
 def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
-    use_stub_executor = _resolve_bool(
-        args.use_stub_executor,
-        config.get("use_stub_executor"),
-        default_value=False,
-        setting_name="use_stub_executor",
-    )
-    if use_stub_executor:
-        return StubExecutor()
-
     command = _resolve_str(
         args.codex_command,
         config.get("codex_command"),

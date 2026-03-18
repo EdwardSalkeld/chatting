@@ -49,29 +49,6 @@ class MainCliSplitOnlyTests(unittest.TestCase):
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["run_id"], "run:1")
 
-    def test_main_replay_dead_letters_supports_stub_executor(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "state.db"
-            stdout = io.StringIO()
-            with (
-                patch("sys.stdout", stdout),
-                patch(
-                    "sys.argv",
-                    [
-                        "app.main",
-                        "--db-path",
-                        str(db_path),
-                        "--replay-dead-letters",
-                        "--use-stub-executor",
-                    ],
-                ),
-            ):
-                result = main()
-
-            self.assertEqual(result, 0)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(payload, [])
-
     def test_cli_module_list_metrics_outputs_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"

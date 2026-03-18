@@ -71,7 +71,6 @@ Acceptance criteria:
 - Routed policy profiles map correctly to execution constraints
 
 Progress notes:
-- 2026-02-27: Added `app.executor.StubExecutor` for deterministic bootstrap execution results used by `app.main`; full Codex executor wrapper with timeout + structured output parsing remains open.
 - 2026-02-27: Implemented `app.executor.CodexExecutor` with subprocess timeout handling and strict JSON schema parsing via `parse_execution_result`, including unit tests for success, timeout, invalid output, and non-zero exit paths.
 - 2026-02-27: Tightened `parse_execution_result` schema checks to reject unknown nested keys in `messages`, `actions`, and `config_updates`, reducing output drift risk from executor responses.
 - 2026-02-27: Hardened `parse_execution_result` to require explicit top-level `schema_version` from Codex output instead of applying an implicit default; added parser coverage for missing-schema rejection to keep contract versioning strict.
@@ -86,8 +85,8 @@ Progress notes:
 - 2026-02-28: Hardened executor parser error-list validation to reject empty/whitespace-only entries in `errors`, keeping failure telemetry and audit records semantically useful.
 - 2026-02-28: Hardened config-update contract consistency by rejecting whitespace-only `ConfigUpdate.path` values at the model layer and adding parser regression coverage for missing `config_update.value`.
 - 2026-02-28: Added live runtime mode in `app.main` (`--run-live`) with long-lived connector polling, retry/DLQ handling, Codex command wiring, and CLI-configurable IMAP/schedule/SMTP integration parameters.
-- 2026-02-28: Extended `RoutedTask` context to include source/actor/content/reply-channel metadata and propagated it through routing + stub execution so email-origin tasks can produce dispatchable email responses in live mode.
-- 2026-02-28: Added live-mode operability guardrails and startup artifacts: `--use-stub-executor` smoke option, SMTP-required validation for IMAP mode, plus runnable docs and a scheduler JSON example.
+- 2026-02-28: Extended `RoutedTask` context to include source/actor/content/reply-channel metadata and propagated it through routing so email-origin tasks can produce dispatchable email responses in live mode.
+- 2026-02-28: Added live-mode operability guardrails: SMTP-required validation for IMAP mode, plus runnable docs and a scheduler JSON example.
 - 2026-02-28: Added JSON runtime config-file support (`--config`) for live-mode settings (DB path, scheduler/IMAP/SMTP/Codex wiring, loop controls), with CLI override precedence and test coverage.
 - 2026-02-28: Hardened top-level model contracts so `ExecutionResult.errors`, `PolicyDecision.reason_codes`, and `ApplyResult.reason_codes` reject empty/whitespace-only entries, with regression coverage in `tests.test_models`.
 - 2026-02-28: Hardened model-level required-string validation (including `ReplyChannel`, `TaskEnvelope`, `RoutedTask`, `OutboundMessage`, `ActionProposal`, `RunRecord`, `AuditEvent`) to reject whitespace-only values, and preserved executor parser-specific `write_file_*_required` error codes by validating action payloads before model construction.

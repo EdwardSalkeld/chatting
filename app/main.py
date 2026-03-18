@@ -28,7 +28,7 @@ from app.connectors import (
     IntervalScheduleJob,
     TelegramConnector,
 )
-from app.executor import CodexExecutor, Executor, StubExecutor
+from app.executor import CodexExecutor, Executor
 from app.models import AuditEvent, DeadLetterRecord, OutboundMessage, PolicyDecision, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
@@ -72,7 +72,6 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "telegram_enabled",
         "telegram_poll_timeout_seconds",
         "worker_count",
-        "use_stub_executor",
     }
 )
 ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
@@ -615,11 +614,6 @@ def _parse_args() -> argparse.Namespace:
         "--codex-command",
         help="Command used for Codex execution during replay-dead-letters.",
     )
-    parser.add_argument(
-        "--use-stub-executor",
-        action="store_true",
-        help="Use deterministic stub executor for replay-dead-letters.",
-    )
     return parser.parse_args()
 
 
@@ -912,14 +906,6 @@ def _build_telegram_sender(
 
 
 def _build_codex_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
-    use_stub_executor = _resolve_bool(
-        cli_value=args.use_stub_executor,
-        config_value=config.get("use_stub_executor"),
-        default_value=False,
-        setting_name="use_stub_executor",
-    )
-    if use_stub_executor:
-        return StubExecutor()
     codex_command = _resolve_str(
         cli_value=args.codex_command,
         config_value=config.get("codex_command"),
