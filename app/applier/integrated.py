@@ -551,6 +551,15 @@ def _default_http_post_json(
             error.reason,
             _truncate_http_error_body_for_log(error_body),
         )
+        if error_body:
+            try:
+                parsed_error = json.loads(error_body)
+            except json.JSONDecodeError:
+                parsed_error = None
+            if isinstance(parsed_error, dict):
+                # Preserve Telegram API JSON error payload so caller can inspect
+                # parse-mode failures and retry without formatting.
+                return parsed_error
         raise RuntimeError(
             _describe_telegram_http_error(
                 status_code=error.code,
@@ -593,6 +602,22 @@ def _default_http_post_multipart(
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        error_body = _read_http_error_body(error)
+        if error_body:
+            try:
+                parsed_error = json.loads(error_body)
+            except json.JSONDecodeError:
+                parsed_error = None
+            if isinstance(parsed_error, dict):
+                return parsed_error
+        raise RuntimeError(
+            _describe_telegram_http_error(
+                status_code=error.code,
+                reason=error.reason,
+                response_body=error_body,
+            )
+        ) from error
     except urllib.error.URLError as error:
         raise RuntimeError("telegram_http_error") from error
     try:
