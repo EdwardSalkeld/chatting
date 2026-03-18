@@ -1,12 +1,12 @@
-import io
+import threading
 import unittest
 import urllib.error
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from app.applier import (
     GitHubIssueCommentSender,
@@ -742,27 +742,36 @@ class TelegramMessageSenderTests(unittest.TestCase):
                 )
 
     def test_default_http_post_json_logs_http_error_body(self) -> None:
-        http_error = urllib.error.HTTPError(
-            url="https://api.telegram.org/bottoken/sendMessage",
-            code=400,
-            msg="Bad Request",
-            hdrs=None,
-            fp=io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
-        )
+        response_body = b'{"ok":false,"description":"Bad Request: chat not found"}'
 
-        def raise_http_error(*_args: object, **_kwargs: object) -> object:
-            raise http_error
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.send_response(400, "Bad Request")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response_body)))
+                self.end_headers()
+                self.wfile.write(response_body)
 
-        with (
-            patch("app.applier.integrated.urllib.request.urlopen", side_effect=raise_http_error),
-            self.assertLogs("app.applier.integrated", level="ERROR") as captured,
-            self.assertRaisesRegex(RuntimeError, "telegram_http_error"),
-        ):
-            _default_http_post_json(
-                "https://api.telegram.org/bottoken/sendMessage",
-                {"chat_id": "12345", "text": "hello"},
-                10.0,
-            )
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            with (
+                self.assertLogs("app.applier.integrated", level="ERROR") as captured,
+                self.assertRaisesRegex(RuntimeError, "telegram_http_error"),
+            ):
+                _default_http_post_json(
+                    f"http://127.0.0.1:{server.server_port}/sendMessage",
+                    {"chat_id": "12345", "text": "hello"},
+                    10.0,
+                )
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
 
         self.assertEqual(len(captured.records), 1)
         self.assertIn("status=400", captured.output[0])
