@@ -750,8 +750,11 @@ class TelegramMessageSenderTests(unittest.TestCase):
             fp=io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
         )
 
+        def raise_http_error(*_args: object, **_kwargs: object) -> object:
+            raise http_error
+
         with (
-            patch("app.applier.integrated.urllib.request.urlopen", side_effect=http_error),
+            patch("app.applier.integrated.urllib.request.urlopen", side_effect=raise_http_error),
             self.assertLogs("app.applier.integrated", level="ERROR") as captured,
             self.assertRaisesRegex(RuntimeError, "telegram_http_error"),
         ):
