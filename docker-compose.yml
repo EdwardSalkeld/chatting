@@ -5,6 +5,12 @@ services:
       dockerfile: Dockerfile.bbmb
     ports:
       - "9876:9876"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9877/metrics"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
 
   handler:
@@ -20,7 +26,8 @@ services:
     ports:
       - "9464:9464"
     depends_on:
-      - bbmb
+      bbmb:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -34,7 +41,8 @@ services:
       - worker-data:/data
       - workspace:/workspace
     depends_on:
-      - bbmb
+      bbmb:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

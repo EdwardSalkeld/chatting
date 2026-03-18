@@ -4,10 +4,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && rm -rf /var/lib/apt/lists/*
 
 ARG BBMB_VERSION=latest
-RUN curl -fsSL \
-      -o /usr/local/bin/bbmb-server \
-      "https://github.com/EdwardSalkeld/bbmb/releases/${BBMB_VERSION}/download/bbmb-server-linux-amd64" \
-    && chmod +x /usr/local/bin/bbmb-server
+RUN cd /tmp \
+    && curl -fsSL -o bbmb-server-linux-amd64 \
+       "https://github.com/EdwardSalkeld/bbmb/releases/${BBMB_VERSION}/download/bbmb-server-linux-amd64" \
+    && curl -fsSL -o bbmb-server-linux-amd64.sha256 \
+       "https://github.com/EdwardSalkeld/bbmb/releases/${BBMB_VERSION}/download/bbmb-server-linux-amd64.sha256" \
+    && sha256sum -c bbmb-server-linux-amd64.sha256 \
+    && mv bbmb-server-linux-amd64 /usr/local/bin/bbmb-server \
+    && chmod +x /usr/local/bin/bbmb-server \
+    && rm bbmb-server-linux-amd64.sha256
 
 EXPOSE 9876
+HEALTHCHECK --interval=5s --timeout=2s --retries=3 \
+    CMD curl -sf http://127.0.0.1:9877/metrics > /dev/null || exit 1
 ENTRYPOINT ["bbmb-server"]

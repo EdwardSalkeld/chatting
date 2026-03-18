@@ -1,0 +1,38 @@
+name: Docker CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Docker Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build BBMB image
+        run: docker build -f Dockerfile.bbmb -t bbmb:test .
+
+      - name: Extract bbmb-server binary
+        run: |
+          docker create --name bbmb-extract bbmb:test
+          docker cp bbmb-extract:/usr/local/bin/bbmb-server "${{ runner.temp }}/bbmb-server"
+          docker rm bbmb-extract
+          chmod +x "${{ runner.temp }}/bbmb-server"
+
+      - name: Build test image
+        run: docker build --target test -t chatting:test .
+
+      - name: Run unit tests
+        run: |
+          docker run --rm \
+            -v "${{ runner.temp }}/bbmb-server:/usr/local/bin/bbmb-server:ro" \
+            -e CHATTING_BBMB_SERVER_BIN=/usr/local/bin/bbmb-server \
+            chatting:test \
+            unittest discover -s tests

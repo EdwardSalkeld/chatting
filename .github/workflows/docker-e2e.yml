@@ -1,0 +1,68 @@
+name: Docker E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: Docker End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build BBMB image
+        run: docker build -f Dockerfile.bbmb -t bbmb:test .
+
+      - name: Extract bbmb-server binary
+        run: |
+          docker create --name bbmb-extract bbmb:test
+          docker cp bbmb-extract:/usr/local/bin/bbmb-server "${{ runner.temp }}/bbmb-server"
+          docker rm bbmb-extract
+          chmod +x "${{ runner.temp }}/bbmb-server"
+
+      - name: Build test image
+        run: docker build --target test -t chatting:test .
+
+      - name: Start GreenMail
+        run: |
+          docker run -d --name greenmail \
+            -p 3025:3025 -p 3143:3143 \
+            -e 'GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=bot:dummy@chatting.local,sender:dummy@test.local' \
+            greenmail/standalone:2.1.2
+
+      - name: Wait for GreenMail
+        run: |
+          for i in $(seq 1 60); do
+            imap_ok=false
+            smtp_ok=false
+            python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3143)); s.close()" 2>/dev/null && imap_ok=true
+            python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3025)); s.close()" 2>/dev/null && smtp_ok=true
+            if [ "$imap_ok" = true ] && [ "$smtp_ok" = true ]; then
+              echo "GreenMail ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "GreenMail failed to start"
+          exit 1
+
+      - name: Run E2E tests
+        run: |
+          docker run --rm \
+            --network host \
+            -v "${{ runner.temp }}/bbmb-server:/usr/local/bin/bbmb-server:ro" \
+            -e CHATTING_BBMB_SERVER_BIN=/usr/local/bin/bbmb-server \
+            -e CHATTING_IMAP_PASSWORD=dummy \
+            -e CHATTING_SMTP_PASSWORD=dummy \
+            chatting:test \
+            unittest tests.e2e.test_email_e2e -v
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f greenmail || true
