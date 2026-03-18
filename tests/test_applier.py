@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.applier import (
     GitHubIssueCommentSender,
@@ -15,7 +16,7 @@ from app.applier import (
     SmtpEmailSender,
     TelegramMessageSender,
 )
-from app.applier.integrated import _describe_telegram_http_error, _read_http_error_body
+from app.applier.integrated import _default_http_post_json
 from app.models import (
     ActionProposal,
     AttachmentRef,
@@ -640,6 +641,41 @@ class TelegramMessageSenderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "telegram_send_failed"):
             sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
 
+    def test_send_escapes_markdown_sensitive_text_before_first_send(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": {"message_id": 5}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send(
+            "12345",
+            OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body="Issue [81](x) and _beta_ *now* `code`",
+            ),
+        )
+
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(
+            seen_calls[0][1],
+            {
+                "chat_id": "12345",
+                "text": r"Issue \[81\]\(x\) and \_beta\_ \*now\* \`code\`",
+                "parse_mode": "Markdown",
+            },
+        )
+
     def test_send_photo_attachment_posts_multipart_with_caption(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], str, Path, float]] = []
 
@@ -720,6 +756,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
         self.assertEqual(seen_calls[0][1]["parse_mode"], "Markdown")
         self.assertNotIn("parse_mode", seen_calls[1][1])
         self.assertEqual(seen_calls[0][2], "document")
+        self.assertEqual(seen_calls[1][1]["caption"], "**menu**")
 
     def test_send_attachment_raises_when_telegram_response_not_ok(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -740,7 +777,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
                     ),
                 )
 
-    def test_describe_telegram_http_error_includes_http_error_body(self) -> None:
+    def test_default_http_post_json_returns_error_payload_and_logs_http_error_body(self) -> None:
         http_error = urllib.error.HTTPError(
             url="https://api.telegram.org/bottoken/sendMessage",
             code=400,
@@ -749,21 +786,24 @@ class TelegramMessageSenderTests(unittest.TestCase):
             fp=io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
         )
 
-        response_body = _read_http_error_body(http_error)
-        detail = _describe_telegram_http_error(
-            status_code=http_error.code,
-            reason=http_error.reason,
-            response_body=response_body,
-        )
+        with (
+            patch("app.applier.integrated.urllib.request.urlopen", side_effect=http_error),
+            self.assertLogs("app.applier.integrated", level="ERROR") as captured,
+        ):
+            response = _default_http_post_json(
+                "https://api.telegram.org/bottoken/sendMessage",
+                {"chat_id": "12345", "text": "hello"},
+                10.0,
+            )
 
         self.assertEqual(
-            response_body,
-            '{"ok":false,"description":"Bad Request: chat not found"}',
+            response,
+            {"ok": False, "description": "Bad Request: chat not found"},
         )
-        self.assertIn("telegram_http_error", detail)
-        self.assertIn("status=400", detail)
-        self.assertIn("reason=Bad Request", detail)
-        self.assertIn('chat not found', detail)
+        self.assertEqual(len(captured.records), 1)
+        self.assertIn("status=400", captured.output[0])
+        self.assertIn("Bad Request", captured.output[0])
+        self.assertIn('chat not found', captured.output[0])
 
     def test_react_posts_set_message_reaction_request(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []

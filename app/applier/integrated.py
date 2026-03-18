@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import smtplib
 import subprocess
+import html
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -157,7 +158,7 @@ class TelegramMessageSender:
         url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/{api_method}"
         payload: dict[str, object] = {"chat_id": target}
         if message.body is not None:
-            payload["caption"] = message.body
+            payload["caption"] = _normalize_telegram_text_for_parse_mode(message.body, self.parse_mode)
         if self.parse_mode is not None and message.body is not None:
             payload["parse_mode"] = self.parse_mode
 
@@ -169,6 +170,7 @@ class TelegramMessageSender:
         if self.parse_mode is not None and message.body is not None and _is_telegram_parse_mode_error(response):
             fallback_payload = dict(payload)
             fallback_payload.pop("parse_mode", None)
+            fallback_payload["caption"] = message.body
             fallback_response = client(url, fallback_payload, field_name, file_path, self.timeout_seconds)
             if fallback_response.get("ok") is True:
                 return
@@ -181,7 +183,10 @@ class TelegramMessageSender:
 
         client = self.http_post_json or _default_http_post_json
         url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/sendMessage"
-        payload: dict[str, object] = {"chat_id": target, "text": body}
+        payload: dict[str, object] = {
+            "chat_id": target,
+            "text": _normalize_telegram_text_for_parse_mode(body, self.parse_mode),
+        }
         if self.parse_mode is not None:
             payload["parse_mode"] = self.parse_mode
         response = client(url, payload, self.timeout_seconds)
@@ -551,6 +556,15 @@ def _default_http_post_json(
             error.reason,
             _truncate_http_error_body_for_log(error_body),
         )
+        if error_body:
+            try:
+                parsed_error = json.loads(error_body)
+            except json.JSONDecodeError:
+                parsed_error = None
+            if isinstance(parsed_error, dict):
+                # Preserve Telegram API JSON error payload so caller can inspect
+                # parse-mode failures and retry without formatting.
+                return parsed_error
         raise RuntimeError(
             _describe_telegram_http_error(
                 status_code=error.code,
@@ -593,6 +607,22 @@ def _default_http_post_multipart(
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        error_body = _read_http_error_body(error)
+        if error_body:
+            try:
+                parsed_error = json.loads(error_body)
+            except json.JSONDecodeError:
+                parsed_error = None
+            if isinstance(parsed_error, dict):
+                return parsed_error
+        raise RuntimeError(
+            _describe_telegram_http_error(
+                status_code=error.code,
+                reason=error.reason,
+                response_body=error_body,
+            )
+        ) from error
     except urllib.error.URLError as error:
         raise RuntimeError("telegram_http_error") from error
     try:
@@ -678,6 +708,38 @@ def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
         return False
     normalized = description.lower()
     return "parse entities" in normalized
+
+
+def _normalize_telegram_text_for_parse_mode(text: str, parse_mode: str | None) -> str:
+    if parse_mode is None:
+        return text
+    if parse_mode == "HTML":
+        return html.escape(text, quote=False)
+    if parse_mode == "MarkdownV2":
+        return _escape_telegram_markdown_v2(text)
+    if parse_mode == "Markdown":
+        return _escape_telegram_markdown(text)
+    return text
+
+
+def _escape_telegram_markdown(text: str) -> str:
+    return _escape_with_backslash_prefix(text, {"\\", "_", "*", "`", "[", "]", "(", ")"})
+
+
+def _escape_telegram_markdown_v2(text: str) -> str:
+    return _escape_with_backslash_prefix(
+        text,
+        {"\\", "_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"},
+    )
+
+
+def _escape_with_backslash_prefix(text: str, specials: set[str]) -> str:
+    escaped: list[str] = []
+    for character in text:
+        if character in specials:
+            escaped.append("\\")
+        escaped.append(character)
+    return "".join(escaped)
 
 
 def _read_http_error_body(error: urllib.error.HTTPError) -> str | None:
