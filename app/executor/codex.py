@@ -119,12 +119,16 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
 
 def _load_execution_payload(raw_output: str) -> Any:
     try:
-        return json.loads(raw_output)
+        parsed = json.loads(raw_output)
     except json.JSONDecodeError as error:
         recovered = _recover_last_json_object(raw_output)
         if recovered is None:
             raise ValueError(f"invalid_json:{error.msg}") from error
         return recovered
+    # Claude CLI wraps structured output under a "structured_output" key
+    if isinstance(parsed, dict) and "structured_output" in parsed:
+        return parsed["structured_output"]
+    return parsed
 
 
 def _recover_last_json_object(raw_output: str) -> dict[str, Any] | None:
