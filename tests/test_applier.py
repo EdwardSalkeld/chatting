@@ -777,7 +777,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
                     ),
                 )
 
-    def test_default_http_post_json_logs_http_error_body(self) -> None:
+    def test_default_http_post_json_returns_error_payload_and_logs_http_error_body(self) -> None:
         http_error = urllib.error.HTTPError(
             url="https://api.telegram.org/bottoken/sendMessage",
             code=400,
@@ -789,14 +789,17 @@ class TelegramMessageSenderTests(unittest.TestCase):
         with (
             patch("app.applier.integrated.urllib.request.urlopen", side_effect=http_error),
             self.assertLogs("app.applier.integrated", level="ERROR") as captured,
-            self.assertRaisesRegex(RuntimeError, "telegram_http_error"),
         ):
-            _default_http_post_json(
+            response = _default_http_post_json(
                 "https://api.telegram.org/bottoken/sendMessage",
                 {"chat_id": "12345", "text": "hello"},
                 10.0,
             )
 
+        self.assertEqual(
+            response,
+            {"ok": False, "description": "Bad Request: chat not found"},
+        )
         self.assertEqual(len(captured.records), 1)
         self.assertIn("status=400", captured.output[0])
         self.assertIn("Bad Request", captured.output[0])
