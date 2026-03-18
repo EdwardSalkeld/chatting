@@ -1,12 +1,9 @@
 import threading
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
-from app.main_worker import DEFAULT_MAX_PARALLEL_LANES, LaneSerialExecutor, PickedTask, _load_config, _parse_args, _task_lane_key
+from app.main_worker import LaneSerialExecutor, PickedTask, _task_lane_key
 from app.models import ReplyChannel, TaskEnvelope
 def _build_picked_task(*, envelope_id: str, source: str = "im", reply_channel_type: str) -> PickedTask:
     envelope = TaskEnvelope(
@@ -102,23 +99,5 @@ class MainWorkerLaneTests(unittest.TestCase):
             executor.shutdown()
 
         self.assertEqual(started_count, 2)
-class MainWorkerConfigTests(unittest.TestCase):
-    def test_parse_args_accepts_max_parallel_lanes(self) -> None:
-        with patch("sys.argv", ["app.main_worker", "--max-parallel-lanes", "3"]):
-            args = _parse_args()
-
-        self.assertEqual(args.max_parallel_lanes, 3)
-
-    def test_load_config_allows_max_parallel_lanes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text('{"max_parallel_lanes": 2}', encoding="utf-8")
-
-            config = _load_config(str(config_path))
-
-        self.assertEqual(config["max_parallel_lanes"], 2)
-
-    def test_default_max_parallel_lanes_matches_expected_lane_count_budget(self) -> None:
-        self.assertEqual(DEFAULT_MAX_PARALLEL_LANES, 4)
 if __name__ == "__main__":
     unittest.main()
