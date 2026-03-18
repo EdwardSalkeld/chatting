@@ -99,7 +99,6 @@ def process_task_message(
         envelope_id=envelope.id,
         source=envelope.source,
         workflow=task.workflow,
-        policy_profile=task.policy_profile,
         latency_ms=latency_ms,
         result_status=result_status,
         created_at=datetime.now(timezone.utc),
@@ -112,7 +111,6 @@ def process_task_message(
             envelope_id=run_record.envelope_id,
             source=run_record.source,
             workflow=run_record.workflow,
-            policy_profile=run_record.policy_profile,
             result_status=run_record.result_status,
             detail={
                 "trace_id": task_message.trace_id,
@@ -171,7 +169,6 @@ def _process_internal_heartbeat(
         envelope_id=task_message.envelope.id,
         source=task_message.envelope.source,
         workflow="internal_heartbeat",
-        policy_profile=task_message.envelope.policy_profile,
         latency_ms=max(int((worker_received_at - ping_emitted_at).total_seconds() * 1000), 0),
         result_status="success",
         created_at=worker_received_at,
@@ -183,7 +180,6 @@ def _process_internal_heartbeat(
             envelope_id=run_record.envelope_id,
             source=run_record.source,
             workflow=run_record.workflow,
-            policy_profile=run_record.policy_profile,
             result_status=run_record.result_status,
             detail={
                 "trace_id": task_message.trace_id,

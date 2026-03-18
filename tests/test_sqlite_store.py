@@ -7,8 +7,6 @@ from pathlib import Path
 from app.broker import EgressQueueMessage
 from app.models import AttachmentRef, AuditEvent, OutboundMessage, ReplyChannel, RunRecord, TaskEnvelope
 from app.state.sqlite_store import SQLiteStateStore
-
-
 class SQLiteStateStoreTests(unittest.TestCase):
     def test_seen_and_mark_seen_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -88,7 +86,6 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="cron",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 latency_ms=12,
                 result_status="success",
                 created_at=datetime(2026, 2, 27, 16, 10, tzinfo=timezone.utc),
@@ -107,7 +104,6 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="cron",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 result_status="success",
                 detail={"approved_action_count": 1, "reason_codes": []},
                 created_at=datetime(2026, 2, 27, 16, 10, tzinfo=timezone.utc),
@@ -129,7 +125,6 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 content="Please retry",
                 attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
                 context_refs=["repo:/home/edward/chatting"],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:dead-1",
             )
@@ -260,7 +255,5 @@ class SQLiteStateStoreTests(unittest.TestCase):
             store.mark_egress_outbox_event_acked(event_id="evt:task:email:1:0")
             replayable = store.list_replayable_egress_outbox_events()
             self.assertEqual(replayable, [])
-
-
 if __name__ == "__main__":
     unittest.main()

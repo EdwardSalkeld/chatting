@@ -6,8 +6,6 @@ from unittest.mock import patch
 
 from app.executor import CodexExecutor, parse_execution_result
 from app.models import AttachmentRef, ExecutionConstraints, ReplyChannel, RoutedTask
-
-
 def _task() -> RoutedTask:
     return RoutedTask(
         task_id="task_1",
@@ -15,7 +13,6 @@ def _task() -> RoutedTask:
         workflow="respond_and_optionally_edit",
         priority="normal",
         execution_constraints=ExecutionConstraints(timeout_seconds=7, max_tokens=1000),
-        policy_profile="default",
         event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
         source="email",
         actor="alice@example.com",
@@ -23,8 +20,6 @@ def _task() -> RoutedTask:
         attachments=[AttachmentRef(uri="file:///tmp/evidence.png", name="evidence.png")],
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
     )
-
-
 class ParseExecutionResultTests(unittest.TestCase):
     def test_parse_execution_result_accepts_valid_payload(self) -> None:
         payload = json.dumps(
@@ -396,8 +391,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             ValueError, "errors_items_must_be_non_empty_strings"
         ):
             parse_execution_result(payload)
-
-
 class CodexExecutorTests(unittest.TestCase):
     @patch("app.executor.codex.subprocess.run")
     def test_execute_returns_timeout_error_when_subprocess_times_out(self, run_mock) -> None:
@@ -486,7 +479,5 @@ class CodexExecutorTests(unittest.TestCase):
 
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/opt/chatting")
-
-
 if __name__ == "__main__":
     unittest.main()

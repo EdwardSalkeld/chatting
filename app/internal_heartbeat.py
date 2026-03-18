@@ -11,7 +11,6 @@ from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
 INTERNAL_SOURCE = "internal"
 INTERNAL_REPLY_CHANNEL_TYPE = "internal"
 INTERNAL_HEARTBEAT_TARGET = "heartbeat"
-INTERNAL_HEARTBEAT_POLICY_PROFILE = "default"
 
 
 def build_internal_heartbeat_envelope(*, sequence: int, now: datetime) -> TaskEnvelope:
@@ -25,7 +24,6 @@ def build_internal_heartbeat_envelope(*, sequence: int, now: datetime) -> TaskEn
         content="internal heartbeat ping",
         attachments=[],
         context_refs=[],
-        policy_profile=INTERNAL_HEARTBEAT_POLICY_PROFILE,
         reply_channel=ReplyChannel(
             type=INTERNAL_REPLY_CHANNEL_TYPE,
             target=INTERNAL_HEARTBEAT_TARGET,

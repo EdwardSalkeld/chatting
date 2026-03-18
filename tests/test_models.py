@@ -17,8 +17,6 @@ from app.models import (
     RoutedTask,
     TaskEnvelope,
 )
-
-
 class TaskEnvelopeTests(unittest.TestCase):
     def test_task_envelope_serializes_expected_shape(self) -> None:
         envelope = TaskEnvelope(
@@ -29,7 +27,6 @@ class TaskEnvelopeTests(unittest.TestCase):
             content="Please summarize and reply",
             attachments=[AttachmentRef(uri="s3://bucket/file.txt", name="file.txt")],
             context_refs=["repo:/home/edward/chatting"],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:provider_msg_id",
         )
@@ -45,7 +42,6 @@ class TaskEnvelopeTests(unittest.TestCase):
                 "content": "Please summarize and reply",
                 "attachments": [{"uri": "s3://bucket/file.txt", "name": "file.txt"}],
                 "context_refs": ["repo:/home/edward/chatting"],
-                "policy_profile": "default",
                 "reply_channel": {"type": "email", "target": "alice@example.com"},
                 "dedupe_key": "email:provider_msg_id",
             },
@@ -61,12 +57,9 @@ class TaskEnvelopeTests(unittest.TestCase):
                 content="hello",
                 attachments=[],
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="noop", target="stdout"),
                 dedupe_key="cron:job:daily",
             )
-
-
 class RoutedTaskTests(unittest.TestCase):
     def test_routed_task_serializes_expected_shape(self) -> None:
         task = RoutedTask(
@@ -75,7 +68,6 @@ class RoutedTaskTests(unittest.TestCase):
             workflow="respond_and_optionally_edit",
             priority="normal",
             execution_constraints=ExecutionConstraints(timeout_seconds=180, max_tokens=12000),
-            policy_profile="default",
             event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
             source="email",
             actor="alice@example.com",
@@ -96,7 +88,6 @@ class RoutedTaskTests(unittest.TestCase):
                     "timeout_seconds": 180,
                     "max_tokens": 12000,
                 },
-                "policy_profile": "default",
                 "event_time": "2026-02-27T16:00:00Z",
                 "source": "email",
                 "actor": "alice@example.com",
@@ -112,8 +103,6 @@ class RoutedTaskTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "max_tokens"):
             ExecutionConstraints(timeout_seconds=10, max_tokens=0)
-
-
 class ExecutionResultTests(unittest.TestCase):
     def test_execution_result_serializes_expected_shape(self) -> None:
         result = ExecutionResult(
@@ -213,14 +202,10 @@ class PolicyDecisionTests(unittest.TestCase):
     def test_action_requires_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "type is required"):
             ActionProposal(type="")
-
-
 class ConfigUpdateTests(unittest.TestCase):
     def test_config_update_rejects_whitespace_only_path(self) -> None:
         with self.assertRaisesRegex(ValueError, "path is required"):
             ConfigUpdate(path="   ", value=240)
-
-
 class RunRecordTests(unittest.TestCase):
     def test_run_record_serializes_expected_shape(self) -> None:
         record = RunRecord(
@@ -228,7 +213,6 @@ class RunRecordTests(unittest.TestCase):
             envelope_id="evt_123",
             source="email",
             workflow="respond_and_optionally_edit",
-            policy_profile="default",
             latency_ms=42,
             result_status="success",
             created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
@@ -242,7 +226,6 @@ class RunRecordTests(unittest.TestCase):
                 "envelope_id": "evt_123",
                 "source": "email",
                 "workflow": "respond_and_optionally_edit",
-                "policy_profile": "default",
                 "latency_ms": 42,
                 "result_status": "success",
                 "created_at": "2026-02-27T16:05:00Z",
@@ -256,13 +239,10 @@ class RunRecordTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="cron",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 latency_ms=0,
                 result_status="success",
                 created_at=datetime(2026, 2, 27, 16, 5),
             )
-
-
 class ApplyResultTests(unittest.TestCase):
     def test_apply_result_serializes_expected_shape(self) -> None:
         result = ApplyResult(
@@ -284,8 +264,6 @@ class ApplyResultTests(unittest.TestCase):
                 "reason_codes": ["noop_applier_skipped_actions"],
             },
         )
-
-
 class AuditEventTests(unittest.TestCase):
     def test_audit_event_serializes_expected_shape(self) -> None:
         event = AuditEvent(
@@ -293,7 +271,6 @@ class AuditEventTests(unittest.TestCase):
             envelope_id="evt_123",
             source="email",
             workflow="respond_and_optionally_edit",
-            policy_profile="default",
             result_status="success",
             detail={"approved_action_count": 1, "reason_codes": []},
             created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
@@ -307,7 +284,6 @@ class AuditEventTests(unittest.TestCase):
                 "envelope_id": "evt_123",
                 "source": "email",
                 "workflow": "respond_and_optionally_edit",
-                "policy_profile": "default",
                 "result_status": "success",
                 "detail": {"approved_action_count": 1, "reason_codes": []},
                 "created_at": "2026-02-27T16:05:00Z",
@@ -321,13 +297,10 @@ class AuditEventTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="cron",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 result_status="success",
                 detail={},
                 created_at=datetime(2026, 2, 27, 16, 5),
             )
-
-
 class SchemaVersionValidationTests(unittest.TestCase):
     def test_top_level_models_require_non_empty_schema_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema_version is required"):
@@ -339,7 +312,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 content="content",
                 attachments=[],
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:1",
                 schema_version="",
@@ -352,7 +324,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 workflow="respond_and_optionally_edit",
                 priority="normal",
                 execution_constraints=ExecutionConstraints(timeout_seconds=10, max_tokens=1000),
-                policy_profile="default",
                 schema_version="",
             )
 
@@ -390,7 +361,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="email",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 latency_ms=1,
                 result_status="success",
                 created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
@@ -403,7 +373,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="email",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 result_status="success",
                 detail={},
                 created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
@@ -420,7 +389,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 content="content",
                 attachments=[],
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:1",
                 schema_version="2.0",
@@ -434,8 +402,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 errors=[],
                 schema_version="2.0",
             )
-
-
 class StringListContractValidationTests(unittest.TestCase):
     def test_execution_result_rejects_blank_error_items(self) -> None:
         with self.assertRaisesRegex(ValueError, "errors items must be non-empty strings"):
@@ -464,8 +430,6 @@ class StringListContractValidationTests(unittest.TestCase):
                 dispatched_messages=[],
                 reason_codes=["   "],
             )
-
-
 class TypedCollectionContractValidationTests(unittest.TestCase):
     def test_execution_result_rejects_invalid_typed_collections(self) -> None:
         with self.assertRaisesRegex(ValueError, "actions items must be ActionProposal"):
@@ -564,8 +528,6 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 dispatched_messages=[object()],  # type: ignore[list-item]
                 reason_codes=[],
             )
-
-
 class RequiredStringContractValidationTests(unittest.TestCase):
     def test_attachment_ref_rejects_blank_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "uri is required"):
@@ -591,7 +553,6 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 content="   ",
                 attachments=[],
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:1",
             )
@@ -608,7 +569,6 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 content="content",
                 attachments=[],
                 context_refs=["repo:/home/edward/chatting", "   "],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:1",
             )
@@ -625,7 +585,6 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 content="content",
                 attachments=[object()],  # type: ignore[list-item]
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:1",
             )
@@ -644,12 +603,9 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 envelope_id="evt_1",
                 source="email",
                 workflow="respond_and_optionally_edit",
-                policy_profile="default",
                 latency_ms=1,
                 result_status="   ",
                 created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
             )
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -10,8 +10,6 @@ from app.broker import TaskQueueMessage
 from app.main_reply import main
 from app.message_handler_runtime import TaskLedgerStore
 from app.models import ReplyChannel, TaskEnvelope
-
-
 class _FakeBroker:
     def __init__(self, address: str):
         self.address = address
@@ -24,8 +22,6 @@ class _FakeBroker:
     def publish_json(self, queue_name: str, payload: dict[str, object]) -> str:
         self.published.append((queue_name, payload))
         return "guid-1"
-
-
 class MainReplyCliTests(unittest.TestCase):
     def test_main_reply_publishes_unsequenced_incremental_v2_payload(self) -> None:
         broker = _FakeBroker("127.0.0.1:9876")
@@ -159,7 +155,6 @@ class MainReplyCliTests(unittest.TestCase):
                 content="hello",
                 attachments=[],
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(
                     type="telegram",
                     target="8605042448",
@@ -193,7 +188,5 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         _, payload = broker.published[0]
         self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
-
-
 if __name__ == "__main__":
     unittest.main()

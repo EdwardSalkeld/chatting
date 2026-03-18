@@ -30,7 +30,6 @@ class GitHubIssueAssignmentConnector:
     assignee_login: str
     context_refs: list[str]
     checkpoint_store: GitHubAssignmentCheckpointStore
-    policy_profile: str = "default"
     max_issues: int = 25
     max_timeline_events: int = 10
     graphql_runner: Callable[[str, Mapping[str, object]], dict[str, object]] = default_graphql_runner
@@ -119,7 +118,6 @@ class GitHubIssueAssignmentConnector:
         return [
             event.to_task_envelope(
                 context_refs=self.context_refs,
-                policy_profile=self.policy_profile,
             )
             for event in new_events
         ]

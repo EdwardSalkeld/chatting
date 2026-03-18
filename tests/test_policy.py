@@ -2,8 +2,6 @@ import unittest
 
 from app.models import ActionProposal, ConfigUpdate, ExecutionResult
 from app.policy import AllowlistPolicyEngine
-
-
 class AllowlistPolicyEngineTests(unittest.TestCase):
     def test_blocks_disallowed_actions(self) -> None:
         result = ExecutionResult(
@@ -73,7 +71,5 @@ class AllowlistPolicyEngineTests(unittest.TestCase):
             decision.reason_codes,
             ["executor_requires_human_review", "executor_reported_errors"],
         )
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -26,8 +26,6 @@ from app.models import (
     ReplyChannel,
     TaskEnvelope,
 )
-
-
 class NoOpApplierTests(unittest.TestCase):
     def test_skips_approved_actions_and_dispatches_messages(self) -> None:
         decision = PolicyDecision(
@@ -60,16 +58,12 @@ class NoOpApplierTests(unittest.TestCase):
         result = NoOpApplier().apply(decision)
 
         self.assertEqual(result.reason_codes, ["policy_blocked_actions_present"])
-
-
 @dataclass
 class _RecordingEmailSender:
     sent: list[tuple[str, str, str | None]]
 
     def send(self, target: str, body: str, *, subject: str | None = None) -> None:
         self.sent.append((target, body, subject))
-
-
 class IntegratedApplierTests(unittest.TestCase):
     def test_apply_writes_files_and_dispatches_email_and_log_messages(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -511,7 +505,6 @@ class IntegratedApplierTests(unittest.TestCase):
                 content="Question",
                 attachments=[],
                 context_refs=["repo:/home/edward/chatting"],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="telegram", target="8605042448"),
                 dedupe_key="telegram:test",
             )
@@ -557,8 +550,6 @@ class IntegratedApplierTests(unittest.TestCase):
                 context.exception.dispatched_messages,
                 [OutboundMessage(channel="telegram", target="12345", body="👀")],
             )
-
-
 class SmtpEmailSenderTests(unittest.TestCase):
     def test_send_uses_smtp_client(self) -> None:
         client = _FakeSmtpClient()
@@ -580,8 +571,6 @@ class SmtpEmailSenderTests(unittest.TestCase):
         self.assertEqual(message["From"], "bot@example.com")
         self.assertEqual(message["Subject"], "Automation response")
         self.assertTrue(client.quit_called)
-
-
 class TelegramMessageSenderTests(unittest.TestCase):
     def test_send_posts_message_and_validates_ok_response(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
@@ -809,8 +798,6 @@ class TelegramMessageSenderTests(unittest.TestCase):
                 )
             ],
         )
-
-
 class GitHubIssueCommentSenderTests(unittest.TestCase):
     def test_send_uses_gh_cli_for_issue_url_target(self) -> None:
         seen_commands: list[list[str]] = []
@@ -878,8 +865,6 @@ class GitHubIssueCommentSenderTests(unittest.TestCase):
         sender = GitHubIssueCommentSender(command_runner=lambda _command: _Result())
         with self.assertRaisesRegex(RuntimeError, "github_issue_comment_failed"):
             sender.send("brokensbone/chatting#13", "hello")
-
-
 class _FakeSmtpClient:
     def __init__(self) -> None:
         self.login_args: tuple[str, str] | None = None
@@ -894,8 +879,6 @@ class _FakeSmtpClient:
 
     def quit(self) -> None:
         self.quit_called = True
-
-
 @dataclass
 class _RecordingTelegramSender:
     sent: list[tuple[str, OutboundMessage]]
@@ -906,8 +889,6 @@ class _RecordingTelegramSender:
 
     def react(self, target: str, message_id: int, emoji: str) -> None:
         self.reactions.append((target, message_id, emoji))
-
-
 class _FailingTelegramSender:
     def __init__(self) -> None:
         self._count = 0
@@ -916,16 +897,12 @@ class _FailingTelegramSender:
         self._count += 1
         if self._count == 2:
             raise RuntimeError("simulated dispatch failure")
-
-
 @dataclass
 class _RecordingGitHubSender:
     sent: list[tuple[str, str]]
 
     def send(self, target: str, body: str) -> None:
         self.sent.append((target, body))
-
-
 class _FailingGitHubSender:
     def __init__(self) -> None:
         self._count = 0
@@ -934,8 +911,6 @@ class _FailingGitHubSender:
         self._count += 1
         if self._count == 2:
             raise RuntimeError("simulated dispatch failure")
-
-
 def _email_envelope(*, subject: str, body: str):
     from app.models import ReplyChannel, TaskEnvelope
 
@@ -947,11 +922,8 @@ def _email_envelope(*, subject: str, body: str):
         content=f"Subject: {subject}\n\n{body}",
         attachments=[],
         context_refs=["repo:/home/edward/chatting"],
-        policy_profile="default",
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         dedupe_key="email:test",
     )
-
-
 if __name__ == "__main__":
     unittest.main()

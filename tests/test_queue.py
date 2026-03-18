@@ -3,8 +3,6 @@ from datetime import datetime, timezone
 
 from app.models import ReplyChannel, TaskEnvelope
 from app.queue import InMemoryQueueBackend
-
-
 class InMemoryQueueBackendTests(unittest.TestCase):
     def test_enqueue_dequeue_roundtrip(self) -> None:
         queue = InMemoryQueueBackend()
@@ -16,7 +14,6 @@ class InMemoryQueueBackendTests(unittest.TestCase):
             content="hello",
             attachments=[],
             context_refs=[],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:1",
         )
@@ -27,7 +24,5 @@ class InMemoryQueueBackendTests(unittest.TestCase):
         self.assertEqual(queue.dequeue(), envelope)
         self.assertEqual(queue.dequeue(), None)
         self.assertEqual(queue.size(), 0)
-
-
 if __name__ == "__main__":
     unittest.main()

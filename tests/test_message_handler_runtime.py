@@ -25,8 +25,6 @@ from app.message_handler_runtime import (
 )
 from app.models import ApplyResult, AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
-
-
 @dataclass
 class _RecordingApplier:
     apply_calls: int = 0
@@ -42,8 +40,6 @@ class _RecordingApplier:
             ],
             reason_codes=[],
         )
-
-
 @dataclass
 class _DispatchFailingApplier:
     apply_calls: int = 0
@@ -55,16 +51,12 @@ class _DispatchFailingApplier:
             reason_code="telegram_dispatch_failed",
             dispatched_messages=[],
         )
-
-
 @dataclass
 class _RecordingAlertEmailSender:
     sent: list[tuple[str, str, str | None]]
 
     def send(self, target: str, body: str, *, subject: str | None = None) -> None:
         self.sent.append((target, body, subject))
-
-
 class MessageHandlerRuntimeTests(unittest.TestCase):
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(
@@ -75,7 +67,6 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             content="hello",
             attachments=[],
             context_refs=[],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:1",
         )
@@ -99,7 +90,6 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             content="[photo attached]",
             attachments=[AttachmentRef(uri=attachment_uri, name="telegram-photo.jpg")],
             context_refs=[],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="telegram", target="12345"),
             dedupe_key="telegram:photo-1",
         )
@@ -114,7 +104,6 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             content=content,
             attachments=[],
             context_refs=[],
-            policy_profile="default",
             reply_channel=ReplyChannel(type="telegram", target=target),
             dedupe_key=envelope_id,
         )
@@ -986,8 +975,6 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             self.assertNotEqual(snapshot["latest_received_at"], "none")
             self.assertIsInstance(snapshot["latest_latency_ms"], int)
             self.assertGreaterEqual(snapshot["latest_latency_ms"], 0)
-
-
     def test_handle_egress_message_buffers_until_expected_sequence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "handler.db")
@@ -1352,7 +1339,5 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             "chatting_message_handler_egress_dispatch_latency_ms_avg 99.500000",
             rendered,
         )
-
-
 if __name__ == "__main__":
     unittest.main()

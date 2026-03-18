@@ -21,7 +21,6 @@ Drain queued webhook events into canonical webhook envelopes.
 - `received_at` (timezone-aware datetime)
 - `reply_target`
 - `context_refs`
-- `policy_profile` (default `default`)
 
 ## Output mapping
 

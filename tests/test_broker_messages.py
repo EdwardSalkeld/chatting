@@ -3,8 +3,6 @@ from datetime import datetime, timezone
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.models import AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
-
-
 class TaskQueueMessageTests(unittest.TestCase):
     def test_task_message_round_trip(self) -> None:
         envelope = TaskEnvelope(
@@ -15,7 +13,6 @@ class TaskQueueMessageTests(unittest.TestCase):
             content="hello",
             attachments=[AttachmentRef(uri="file://inbox/msg1.txt", name="msg1.txt")],
             context_refs=["repo:/home/edward/develop/chatting"],
-            policy_profile="default",
             reply_channel=ReplyChannel(
                 type="email",
                 target="alice@example.com",
@@ -36,8 +33,6 @@ class TaskQueueMessageTests(unittest.TestCase):
     def test_task_message_rejects_wrong_type(self) -> None:
         with self.assertRaises(ValueError):
             TaskQueueMessage.from_dict({"message_type": "chatting.egress.v1"})
-
-
 class EgressQueueMessageTests(unittest.TestCase):
     def test_egress_message_round_trip(self) -> None:
         message = EgressQueueMessage(
@@ -204,7 +199,5 @@ class EgressQueueMessageTests(unittest.TestCase):
                 event_kind="completion",
                 message_type="chatting.egress.v2",
             )
-
-
 if __name__ == "__main__":
     unittest.main()

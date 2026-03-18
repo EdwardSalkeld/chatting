@@ -18,12 +18,10 @@ class SlackConnector:
         *,
         fetch_messages: Callable[[], list[dict[str, object]]],
         context_refs: list[str] | None = None,
-        policy_profile: str = "default",
         allowed_channel_ids: list[str] | None = None,
     ) -> None:
         self._fetch_messages = fetch_messages
         self._context_refs = list(context_refs or [])
-        self._policy_profile = policy_profile
         self._allowed_channel_ids = set(allowed_channel_ids or [])
 
     def poll(self) -> list[TaskEnvelope]:
@@ -59,7 +57,6 @@ class SlackConnector:
             content=text.strip(),
             attachments=[],
             context_refs=self._context_refs,
-            policy_profile=self._policy_profile,
             reply_channel=ReplyChannel(type="slack", target=channel_id),
             dedupe_key=event_id,
         )

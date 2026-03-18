@@ -32,7 +32,6 @@
   "github_repositories": ["brokensbone/*"],
   "github_assignee_login": "BillyAcachofa",
   "github_context_refs": ["repo:/home/edward/chatting", "repo:/home/edward/bbmb"],
-  "github_policy_profile": "default",
   "github_max_issues": 25,
   "github_max_timeline_events": 10
 }

@@ -21,8 +21,6 @@ from app.connectors.telegram_connector import (
 from app.connectors.slack_connector import SlackConnector
 from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
 from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
-
-
 class FakeCronConnectorTests(unittest.TestCase):
     def test_poll_normalizes_cron_trigger_to_envelope(self) -> None:
         connector = FakeCronConnector(
@@ -61,8 +59,6 @@ class FakeCronConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
-
-
 class FakeEmailConnectorTests(unittest.TestCase):
     def test_poll_normalizes_email_to_envelope(self) -> None:
         connector = FakeEmailConnector(
@@ -108,8 +104,6 @@ class FakeEmailConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
-
-
 class IntervalScheduleConnectorTests(unittest.TestCase):
     def test_poll_emits_due_job_and_respects_interval(self) -> None:
         clock = _MutableClock(datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc))
@@ -404,8 +398,6 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
                 timezone_name="Europe/London",
                 context_refs=[],
             )
-
-
 class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
     def test_poll_normalizes_new_assignment_events_to_envelopes(self) -> None:
         responses = [
@@ -577,8 +569,6 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
                 for line in logs.output
             )
         )
-
-
 class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
     def test_poll_normalizes_new_review_events_to_envelopes(self) -> None:
         responses = [
@@ -762,8 +752,6 @@ class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
                 for line in logs.output
             )
         )
-
-
 class InternalHeartbeatConnectorTests(unittest.TestCase):
     def test_poll_emits_internal_heartbeat_with_unique_ids(self) -> None:
         current = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)
@@ -781,8 +769,6 @@ class InternalHeartbeatConnectorTests(unittest.TestCase):
         self.assertNotEqual(first[0].id, second[0].id)
         self.assertEqual(first[0].dedupe_key, first[0].id)
         self.assertEqual(second[0].dedupe_key, second[0].id)
-
-
 class ImapEmailConnectorTests(unittest.TestCase):
     def test_poll_normalizes_imap_messages_to_envelopes(self) -> None:
         raw_message = _build_raw_email(
@@ -839,8 +825,6 @@ class ImapEmailConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].received_at, fallback_now)
-
-
 class TelegramConnectorTests(unittest.TestCase):
     def test_poll_normalizes_supported_updates_and_advances_offset(self) -> None:
         responses = [
@@ -1115,8 +1099,6 @@ class TelegramConnectorTests(unittest.TestCase):
             self.assertEqual(len(envelopes), 1)
             self.assertEqual(envelopes[0].content, "[photo attached]")
             self.assertEqual(envelopes[0].attachments[0].name, "photo.jpg")
-
-
 class SlackConnectorTests(unittest.TestCase):
     def test_poll_normalizes_messages_to_im_envelopes(self) -> None:
         connector = SlackConnector(
@@ -1158,8 +1140,6 @@ class SlackConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].id, "slack:m-3")
-
-
 class WebhookConnectorTests(unittest.TestCase):
     def test_poll_drains_enqueued_webhook_events(self) -> None:
         connector = WebhookConnector()
@@ -1200,8 +1180,6 @@ class WebhookConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
-
-
 class _MutableClock:
     def __init__(self, current: datetime) -> None:
         self._current = current
@@ -1211,8 +1189,6 @@ class _MutableClock:
 
     def set(self, value: datetime) -> None:
         self._current = value
-
-
 class _FakeImapClient:
     def __init__(self, raw_messages_by_uid: dict[bytes, bytes]) -> None:
         self._raw_messages_by_uid = raw_messages_by_uid
@@ -1233,8 +1209,6 @@ class _FakeImapClient:
 
     def logout(self):
         return "BYE", [b"logged-out"]
-
-
 def _build_raw_email(*, sender: str, subject: str, body: str, date_value: str) -> bytes:
     parsed = ParsedEmailMessage()
     parsed["From"] = sender
@@ -1243,7 +1217,5 @@ def _build_raw_email(*, sender: str, subject: str, body: str, date_value: str) -
     parsed["Date"] = date_value
     parsed.set_content(body)
     return parsed.as_bytes()
-
-
 if __name__ == "__main__":
     unittest.main()

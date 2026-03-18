@@ -22,7 +22,6 @@ class IntervalScheduleJob:
     interval_seconds: int | None = None
     cron: str | None = None
     timezone_name: str | None = None
-    policy_profile: str = "default"
     start_at: datetime | None = None
     reply_channel_type: str | None = None
     reply_channel_target: str | None = None
@@ -97,7 +96,6 @@ class IntervalScheduleConnector:
                     content=job.content,
                     attachments=[],
                     context_refs=job.context_refs,
-                    policy_profile=job.policy_profile,
                     reply_channel=reply_channel,
                     dedupe_key=event_id,
                 )

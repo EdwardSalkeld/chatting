@@ -11,8 +11,6 @@ from app.github_ingress_runtime import GitHubIssueAssignmentEvent, GitHubPullReq
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.main_message_handler import _load_config, main
 from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
-
-
 @dataclass
 class _FakeBroker:
     ensured: list[str] = field(default_factory=list)
@@ -31,16 +29,12 @@ class _FakeBroker:
 
     def ack(self, queue_name: str, guid: str) -> None:
         self.acked.append((queue_name, guid))
-
-
 @dataclass
 class _FakeMetricsServer:
     shutdown_calls: int = 0
 
     def shutdown(self) -> None:
         self.shutdown_calls += 1
-
-
 class MainGitHubIngressTests(unittest.TestCase):
     def _non_heartbeat_published(self, broker: _FakeBroker) -> list[tuple[str, dict[str, object]]]:
         return [
@@ -536,7 +530,6 @@ class MainGitHubIngressTests(unittest.TestCase):
                 content="hello",
                 attachments=[],
                 context_refs=[],
-                policy_profile="default",
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:drain-1",
             )

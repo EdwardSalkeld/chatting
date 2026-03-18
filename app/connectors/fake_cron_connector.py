@@ -16,7 +16,6 @@ class CronTrigger:
     content: str
     scheduled_for: datetime
     context_refs: list[str]
-    policy_profile: str = "default"
 
 
 class FakeCronConnector:
@@ -41,7 +40,6 @@ class FakeCronConnector:
                     content=trigger.content,
                     attachments=[],
                     context_refs=trigger.context_refs,
-                    policy_profile=trigger.policy_profile,
                     reply_channel=ReplyChannel(type="log", target=trigger.job_name),
                     dedupe_key=event_id,
                 )

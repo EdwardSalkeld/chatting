@@ -69,7 +69,6 @@ Notes:
 - 2026-02-27: Post-milestone P0 hardening: tightened executor structured-output parsing to reject unknown nested keys in `messages`, `actions`, and `config_updates`.
 - 2026-02-27: Post-milestone P0 progress: added `AuditEvent` persistence and per-run audit logging in `app.main` to complete the remaining P0 backlog requirement.
 - 2026-02-27: Post-milestone P0 hardening: added `StateStore` protocol interface and conformance coverage for `SQLiteStateStore` to keep persistence behind an explicit contract.
-- 2026-02-27: Post-milestone P0 hardening: aligned bootstrap run logging with the observability contract by emitting run-level fields (`run_id`, `envelope_id`, `source`, `workflow`, `policy_profile`, `latency_ms`, `result_status`) and validating them in `tests.test_main`.
 - 2026-02-27: Post-milestone P0 hardening: required explicit `schema_version` in executor JSON parsing (`parse_execution_result`) so contract versioning is enforced rather than defaulted.
 - 2026-02-27: Post-milestone P0 hardening: marked connector/router/executor/policy/applier protocols as runtime-checkable and added interface conformance tests for default implementations.
 - 2026-02-27: Post-milestone P0 hardening: updated `StateStore` idempotency methods and SQLite schema to key dedupe on `(source, dedupe_key)`; added regression coverage for cross-source collisions and legacy idempotency-table migration.

@@ -82,7 +82,6 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
         "context_refs",
         "interval_seconds",
         "job_name",
-        "policy_profile",
         "reply_channel_target",
         "reply_channel_type",
         "start_at",
@@ -150,7 +149,6 @@ def _process_envelope(
             envelope_id=envelope.id,
             source=envelope.source,
             workflow="duplicate_skip",
-            policy_profile=envelope.policy_profile,
             latency_ms=0,
             result_status="duplicate_skipped",
             created_at=created_at,
@@ -162,7 +160,6 @@ def _process_envelope(
                 envelope_id=record.envelope_id,
                 source=record.source,
                 workflow=record.workflow,
-                policy_profile=record.policy_profile,
                 result_status=record.result_status,
                 detail={
                     "trace_id": trace_id,
@@ -185,13 +182,12 @@ def _process_envelope(
             )
             LOGGER.info(
                 "run_observed trace_id=%s run_id=%s envelope_id=%s source=%s workflow=%s "
-                "policy_profile=%s latency_ms=%s result_status=%s",
+                "latency_ms=%s result_status=%s",
                 trace_id,
                 record.run_id,
                 record.envelope_id,
                 record.source,
                 record.workflow,
-                record.policy_profile,
                 record.latency_ms,
                 record.result_status,
             )
@@ -348,7 +344,6 @@ def _process_envelope(
         envelope_id=envelope.id,
         source=envelope.source,
         workflow=task.workflow,
-        policy_profile=task.policy_profile,
         latency_ms=latency_ms,
         result_status=result_status,
         created_at=datetime.now(timezone.utc),
@@ -360,7 +355,6 @@ def _process_envelope(
             envelope_id=record.envelope_id,
             source=record.source,
             workflow=record.workflow,
-            policy_profile=record.policy_profile,
             result_status=record.result_status,
             detail={
                 "trace_id": trace_id,
@@ -436,13 +430,12 @@ def _process_envelope(
     if emit_logs:
         LOGGER.info(
             "run_observed trace_id=%s run_id=%s envelope_id=%s source=%s workflow=%s "
-            "policy_profile=%s latency_ms=%s result_status=%s",
+            "latency_ms=%s result_status=%s",
             trace_id,
             record.run_id,
             record.envelope_id,
             record.source,
             record.workflow,
-            record.policy_profile,
             record.latency_ms,
             record.result_status,
         )
@@ -563,7 +556,6 @@ def _enrich_telegram_envelope_with_memory(
         content="\n".join(lines),
         attachments=envelope.attachments,
         context_refs=envelope.context_refs,
-        policy_profile=envelope.policy_profile,
         reply_channel=envelope.reply_channel,
         dedupe_key=envelope.dedupe_key,
         schema_version=envelope.schema_version,
@@ -1016,12 +1008,6 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 f"schedule job at index {index} context_refs must be a list of non-empty strings"
             )
 
-        policy_profile = raw_job.get("policy_profile", "default")
-        if not isinstance(policy_profile, str) or not policy_profile.strip():
-            raise ValueError(
-                f"schedule job at index {index} policy_profile must be a non-empty string"
-            )
-
         raw_start_at = raw_job.get("start_at")
         if cron is None:
             if raw_start_at is not None and not isinstance(raw_start_at, str):
@@ -1059,7 +1045,6 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 interval_seconds=interval_seconds if isinstance(interval_seconds, int) else None,
                 cron=cron.strip() if isinstance(cron, str) else None,
                 timezone_name=timezone_name.strip() if isinstance(timezone_name, str) else None,
-                policy_profile=policy_profile.strip(),
                 start_at=start_at,
                 reply_channel_type=reply_channel_type.strip()
                 if isinstance(reply_channel_type, str)
