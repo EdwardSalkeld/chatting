@@ -641,6 +641,41 @@ class TelegramMessageSenderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "telegram_send_failed"):
             sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
 
+    def test_send_escapes_markdown_sensitive_text_before_first_send(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": {"message_id": 5}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send(
+            "12345",
+            OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body="Issue [81](x) and _beta_ *now* `code`",
+            ),
+        )
+
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(
+            seen_calls[0][1],
+            {
+                "chat_id": "12345",
+                "text": r"Issue \[81\]\(x\) and \_beta\_ \*now\* \`code\`",
+                "parse_mode": "Markdown",
+            },
+        )
+
     def test_send_photo_attachment_posts_multipart_with_caption(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], str, Path, float]] = []
 
@@ -721,6 +756,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
         self.assertEqual(seen_calls[0][1]["parse_mode"], "Markdown")
         self.assertNotIn("parse_mode", seen_calls[1][1])
         self.assertEqual(seen_calls[0][2], "document")
+        self.assertEqual(seen_calls[1][1]["caption"], "**menu**")
 
     def test_send_attachment_raises_when_telegram_response_not_ok(self) -> None:
         with TemporaryDirectory() as tmpdir:
