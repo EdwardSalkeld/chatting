@@ -28,7 +28,7 @@ from app.connectors import (
     IntervalScheduleJob,
     TelegramConnector,
 )
-from app.executor import CodexExecutor, Executor
+from app.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
 from app.models import AuditEvent, DeadLetterRecord, OutboundMessage, PolicyDecision, RunRecord, TaskEnvelope
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
@@ -38,6 +38,7 @@ CONFIG_PATH_ENV_VAR = "CHATTING_CONFIG_PATH"
 ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
     {
         "base_dir",
+        "claude_command",
         "codex_command",
         "context_ref",
         "context_refs",
@@ -906,15 +907,28 @@ def _build_telegram_sender(
 
 
 def _build_codex_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
-    codex_command = _resolve_str(
+    codex_raw = _resolve_optional_str(
         cli_value=args.codex_command,
         config_value=config.get("codex_command"),
-        default_value="codex exec --json",
         setting_name="codex_command",
     )
-    command = tuple(shlex.split(codex_command))
-    if not command:
-        raise ValueError("--codex-command must not be empty")
+    claude_raw = _resolve_optional_str(
+        cli_value=getattr(args, "claude_command", None),
+        config_value=config.get("claude_command"),
+        setting_name="claude_command",
+    )
+
+    if codex_raw:
+        command = tuple(shlex.split(codex_raw)) + ("--json",)
+    elif claude_raw:
+        command = tuple(shlex.split(claude_raw)) + (
+            "-p",
+            "--output-format", "json",
+            "--json-schema", EXECUTION_RESULT_JSON_SCHEMA,
+        )
+    else:
+        command = ("codex", "exec", "--json")
+
     return CodexExecutor(command=command)
 
 
