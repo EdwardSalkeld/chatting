@@ -1,10 +1,9 @@
-import threading
+import io
 import unittest
 import urllib.error
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -16,7 +15,7 @@ from app.applier import (
     SmtpEmailSender,
     TelegramMessageSender,
 )
-from app.applier.integrated import _default_http_post_json
+from app.applier.integrated import _describe_telegram_http_error, _read_http_error_body
 from app.models import (
     ActionProposal,
     AttachmentRef,
@@ -741,42 +740,30 @@ class TelegramMessageSenderTests(unittest.TestCase):
                     ),
                 )
 
-    def test_default_http_post_json_logs_http_error_body(self) -> None:
-        response_body = b'{"ok":false,"description":"Bad Request: chat not found"}'
+    def test_describe_telegram_http_error_includes_http_error_body(self) -> None:
+        http_error = urllib.error.HTTPError(
+            url="https://api.telegram.org/bottoken/sendMessage",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
+        )
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # noqa: N802
-                self.send_response(400, "Bad Request")
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(response_body)))
-                self.end_headers()
-                self.wfile.write(response_body)
+        response_body = _read_http_error_body(http_error)
+        detail = _describe_telegram_http_error(
+            status_code=http_error.code,
+            reason=http_error.reason,
+            response_body=response_body,
+        )
 
-            def log_message(self, format: str, *args: object) -> None:
-                return
-
-        server = HTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            with (
-                self.assertLogs("app.applier.integrated", level="ERROR") as captured,
-                self.assertRaisesRegex(RuntimeError, "telegram_http_error"),
-            ):
-                _default_http_post_json(
-                    f"http://127.0.0.1:{server.server_port}/sendMessage",
-                    {"chat_id": "12345", "text": "hello"},
-                    10.0,
-                )
-        finally:
-            server.shutdown()
-            thread.join()
-            server.server_close()
-
-        self.assertEqual(len(captured.records), 1)
-        self.assertIn("status=400", captured.output[0])
-        self.assertIn("Bad Request", captured.output[0])
-        self.assertIn('chat not found', captured.output[0])
+        self.assertEqual(
+            response_body,
+            '{"ok":false,"description":"Bad Request: chat not found"}',
+        )
+        self.assertIn("telegram_http_error", detail)
+        self.assertIn("status=400", detail)
+        self.assertIn("reason=Bad Request", detail)
+        self.assertIn('chat not found', detail)
 
     def test_react_posts_set_message_reaction_request(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
