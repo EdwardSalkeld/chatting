@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Split-mode task orchestration for Codex-driven workflows."
 requires-python = ">=3.13"
 dependencies = [
+    "anthropic>=0.85.0",
     "croniter>=6.2.2",
 ]
 
