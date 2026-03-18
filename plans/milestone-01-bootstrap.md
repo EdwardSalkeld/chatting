@@ -1,6 +1,7 @@
 # Milestone 01: Bootstrap Skeleton
 
 ## Goal
+Create a runnable Python skeleton that proves end-to-end control flow with fake connectors.
 
 ## Scope
 - Package layout and entrypoint
@@ -63,6 +64,7 @@ Notes:
 - 2026-02-27: Added `app.router.RuleBasedRouter` with deterministic routing rules for cron/email plus urgent-priority escalation.
 - 2026-02-27: Added `app.policy.AllowlistPolicyEngine` implementing baseline deny-by-default policy behavior, including sensitive config updates routed to pending review.
 - 2026-02-27: Added `app.applier.NoOpApplier` baseline with `ApplyResult` contract so policy-approved operations can be summarized without side effects during bootstrap.
+- 2026-02-27: Added runnable `app.main` bootstrap flow wired through fake connectors, rule-based router, allowlist policy, no-op applier, and SQLite run logging. The flow includes an intentional duplicate event skip and persists both `success` and `blocked_action` run outcomes.
 - 2026-02-27: Post-milestone P0 progress: added `app.executor.CodexExecutor` and strict structured-output parsing to advance Phase 2 executor requirements while preserving Milestone 01 bootstrap defaults.
 - 2026-02-27: Post-milestone P0 hardening: tightened executor structured-output parsing to reject unknown nested keys in `messages`, `actions`, and `config_updates`.
 - 2026-02-27: Post-milestone P0 progress: added `AuditEvent` persistence and per-run audit logging in `app.main` to complete the remaining P0 backlog requirement.
@@ -80,6 +82,7 @@ Notes:
 - 2026-02-28: Post-milestone P0 hardening: tightened executor required-string checks to reject whitespace-only values for `message.body`, `action.type`, `config_update.path`, and `write_file` path/content fields.
 - 2026-02-28: Post-milestone P0 hardening: tightened executor parsing so `errors` entries must be non-empty, non-whitespace strings.
 - 2026-02-28: Post-milestone integration progress: added live runtime mode in `app.main` (`--run-live`) plus IMAP/schedule connector wiring and SMTP dispatch wiring so the app can operate beyond fake bootstrap inputs.
+- 2026-02-28: Post-milestone integration hardening: added IMAP+SMTP startup validation and first-run operator artifacts (`docs/run-live.md`, sample schedule JSON).
 - 2026-02-28: Post-milestone integration hardening: added `--config` runtime JSON support and a full example config template so live runs no longer require long argument chains.
 - 2026-02-28: Post-milestone P0 hardening: enforced model-level non-empty string-list validation for `ExecutionResult.errors`, `PolicyDecision.reason_codes`, and `ApplyResult.reason_codes` to keep contract integrity consistent beyond executor parsing.
 - 2026-02-28: Post-milestone P0 hardening: aligned config-update strictness across layers by rejecting whitespace-only `ConfigUpdate.path` in model constructors and adding parser regression coverage for missing `config_update.value`.
