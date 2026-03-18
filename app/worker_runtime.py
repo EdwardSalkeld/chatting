@@ -83,6 +83,10 @@ def process_task_message(
             terminal_egress_messages = _build_completion_egress_messages(
                 task_message=task_message,
                 starting_sequence=0,
+                visible_error_body=_build_credit_exhausted_visible_error(
+                    execution_errors=execution_result.errors,
+                    last_error=None,
+                ),
             )
             egress_messages = terminal_egress_messages
             break
@@ -92,6 +96,14 @@ def process_task_message(
             if attempt == max_attempts:
                 reason_codes = ["retry_exhausted"]
                 result_status = "dead_letter"
+                egress_messages = _build_completion_egress_messages(
+                    task_message=task_message,
+                    starting_sequence=0,
+                    visible_error_body=_build_credit_exhausted_visible_error(
+                        execution_errors=[],
+                        last_error=last_error,
+                    ),
+                )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     run_record = RunRecord(
@@ -221,16 +233,67 @@ def _build_completion_egress_messages(
     *,
     task_message: TaskQueueMessage,
     starting_sequence: int,
+    visible_error_body: str | None = None,
 ) -> list[EgressQueueMessage]:
     emitted_at = datetime.now(timezone.utc)
-    return [
+    messages: list[EgressQueueMessage] = []
+    completion_sequence = starting_sequence
+    event_count = 1
+
+    if visible_error_body is not None:
+        event_count = 2
+        messages.append(
+            _build_visible_error_egress(
+                task_message=task_message,
+                sequence=starting_sequence,
+                event_count=event_count,
+                emitted_at=emitted_at,
+                body=visible_error_body,
+            )
+        )
+        completion_sequence += 1
+
+    messages.append(
         _build_completion_egress(
             task_message=task_message,
-            sequence=starting_sequence,
-            event_count=1,
+            sequence=completion_sequence,
+            event_count=event_count,
             emitted_at=emitted_at,
         )
-    ]
+    )
+    return messages
+
+
+def _build_visible_error_egress(
+    *,
+    task_message: TaskQueueMessage,
+    sequence: int,
+    event_count: int,
+    emitted_at: datetime,
+    body: str,
+) -> EgressQueueMessage:
+    return EgressQueueMessage(
+        task_id=task_message.task_id,
+        envelope_id=task_message.envelope.id,
+        trace_id=task_message.trace_id,
+        event_index=sequence,
+        event_count=event_count,
+        message=OutboundMessage(
+            channel=task_message.envelope.reply_channel.type,
+            target=task_message.envelope.reply_channel.target,
+            body=body,
+        ),
+        emitted_at=emitted_at,
+        event_id=_event_id_for_sequence(
+            task_id=task_message.task_id,
+            sequence=sequence,
+            event_kind="message",
+            dedupe_key="credits-exhausted",
+        ),
+        sequence=sequence,
+        event_kind="message",
+        message_type="chatting.egress.v2",
+    )
 
 def _build_completion_egress(
     *,
@@ -271,6 +334,35 @@ def _result_status(reason_codes: list[str]) -> str:
     if "retry_exhausted" in reason_codes:
         return "dead_letter"
     return "success"
+
+
+def _build_credit_exhausted_visible_error(
+    *,
+    execution_errors: list[str],
+    last_error: str | None,
+) -> str | None:
+    candidates = [*execution_errors]
+    if last_error is not None:
+        candidates.append(last_error)
+    for candidate in candidates:
+        if _looks_like_credit_exhaustion(candidate):
+            return "Codex ran out of credits or quota, so this task did not complete."
+    return None
+
+
+def _looks_like_credit_exhaustion(error: str) -> bool:
+    lowered = error.lower()
+    return any(
+        needle in lowered
+        for needle in (
+            "out of credits",
+            "ran out of credits",
+            "insufficient credits",
+            "credit balance",
+            "quota",
+            "usage limit",
+        )
+    )
 
 
 def _dedupe(values: list[str]) -> list[str]:
