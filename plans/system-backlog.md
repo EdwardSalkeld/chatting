@@ -17,7 +17,6 @@ Progress notes:
 - 2026-02-27: Added `app.router.RuleBasedRouter` baseline that produces contract-valid `RoutedTask` objects for cron and email envelopes, with unit tests.
 - 2026-02-27: Added `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, config update review buckets, and unit tests.
 - 2026-02-27: Added `app.applier.NoOpApplier` plus `ApplyResult` contract for bootstrap-safe apply summaries, with unit tests.
-- 2026-02-27: Added runnable `app.main` bootstrap orchestration with deterministic `StubExecutor` integration, duplicate skipping via SQLite idempotency checks, and persisted run statuses including `success` and `blocked_action`.
 - 2026-02-27: Added `app.executor.CodexExecutor` subprocess wrapper with per-task timeout enforcement plus strict JSON `ExecutionResult` parsing (`parse_execution_result`) that rejects unknown top-level fields and malformed schemas; covered with unit tests.
 - 2026-02-27: Hardened `ExecutionResult` parser strictness by rejecting unknown nested keys in message/action/config-update objects, tightening the P0 schema-drift mitigation.
 - 2026-02-27: Added typed `AuditEvent` contract plus `SQLiteStateStore` audit event persistence (`append_audit_event`/`list_audit_events`) and wired `app.main` to write one audit event per processed run with policy decision summary fields.
@@ -38,8 +37,6 @@ Progress notes:
 - 2026-02-28: Added integration-ready connector primitives for real sources: interval-based cron scheduling (`IntervalScheduleConnector`) and IMAP polling (`ImapEmailConnector`), with unit tests validating canonical envelope normalization.
 - 2026-02-28: Added integration-ready apply path via `IntegratedApplier` and `SmtpEmailSender` so approved `write_file` actions and outbound email/log messages can be executed beyond bootstrap no-op mode.
 - 2026-02-28: Added live worker execution mode in `app.main` with connector polling loop (`run_live`), CLI configuration for schedule/IMAP/SMTP/Codex wiring, and tests covering live flow and CLI branch selection.
-- 2026-02-28: Added reply-channel propagation in routed task context (router + models + stub executor) so email responses can target sender channels correctly during integrated live runs.
-- 2026-02-28: Added live-mode startup safety (`--imap-host` now requires SMTP config), smoke-path execution (`--use-stub-executor`), and runnable artifacts (`docs/run-live.md`, `configs/live-schedule.example.json`) to accelerate deployment validation.
 - 2026-02-28: Added live-mode JSON config ingestion (`--config`) plus template config (`configs/live-runtime.example.json`), reducing command-line verbosity while preserving CLI override behavior.
 - 2026-02-28: Hardened top-level model string-list contracts so `errors`/`reason_codes` entries must be non-empty, non-whitespace strings across `ExecutionResult`, `PolicyDecision`, and `ApplyResult`, closing a remaining schema-quality gap outside executor parsing.
 - 2026-02-28: Hardened model-level required-string contracts to reject whitespace-only values across key message/action/envelope/run/audit fields while keeping executor parser `write_file_path_required`/`write_file_content_required` error semantics stable.

@@ -109,7 +109,6 @@ class EmailE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 2,
                         "sleep_seconds": 0.2,
                         "max_loops": 200,
-                        "use_stub_executor": False,
                         "codex_command": f"{sys.executable} {fake_codex}",
                     }
                 ),

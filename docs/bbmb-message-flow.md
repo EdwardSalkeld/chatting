@@ -244,7 +244,6 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
   Retry budget before the task becomes a dead letter.
 - `max_parallel_lanes`
   Caps how many reply-channel lanes can run at once. Each lane is still serialized internally.
-- `use_stub_executor`
   Replaces the real executor path for testing/smoke runs.
 - `codex_command`, `codex_working_dir`
   Shape the real executor subprocess.

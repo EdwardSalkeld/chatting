@@ -7,5 +7,4 @@
   "max_loops": 1,
   "codex_command": "codex exec --json",
   "codex_working_dir": "/opt/chatting",
-  "use_stub_executor": true
 }

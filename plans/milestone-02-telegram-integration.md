@@ -99,7 +99,6 @@ Deliverables:
   - applier dispatch for telegram channel
   - main config validation/branch wiring
 - Integration-style test:
-  - mocked Telegram inbound + stub executor + telegram dispatch adapter
 - Smoke validation checklist in docs.
 
 Acceptance criteria:
@@ -143,7 +142,6 @@ Notes:
 
 ## Rollout Strategy
 1. Ship behind config flag (`telegram_enabled` false by default).
-2. Validate in single test chat with `--use-stub-executor`.
 3. Enable Codex executor after inbound/outbound reliability is validated.
 4. Keep rollout limited to private single-user chats; no broad scaling rollout is planned.
 

@@ -21,7 +21,7 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
         time.sleep(0.05)
     raise TimeoutError(f"timed out waiting for {host}:{port}")
 class SplitModeE2ETests(unittest.TestCase):
-    def test_split_mode_roundtrip_with_real_bbmb_server_and_stub_executor(self) -> None:
+    def test_split_mode_roundtrip_with_real_bbmb_server(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
         if not server_bin_raw:
             self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
@@ -34,6 +34,7 @@ class SplitModeE2ETests(unittest.TestCase):
             self.skipTest("127.0.0.1:9876 already in use")
 
         repo_root = Path(__file__).resolve().parent.parent
+        fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
         server_proc: subprocess.Popen[str] | None = None
         worker_proc: subprocess.Popen[str] | None = None
         handler_proc: subprocess.Popen[str] | None = None
@@ -82,7 +83,7 @@ class SplitModeE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
                         "max_loops": 20,
-                        "use_stub_executor": True,
+                        "codex_command": f"{sys.executable} {fake_codex}",
                     }
                 ),
                 encoding="utf-8",

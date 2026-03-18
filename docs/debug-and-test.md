@@ -69,9 +69,7 @@ uv run python -m app.cli --db-path /tmp/chatting-state.db --list-audit-events --
 ```bash
 uv run python -m app.cli --db-path /tmp/chatting-state.db --list-dead-letters --result-status pending
 ```
-- Replay dead letters with stub executor:
 ```bash
-uv run python -m app.cli --db-path /tmp/chatting-state.db --replay-dead-letters --use-stub-executor
 ```
 - List persisted metrics summary:
 ```bash
@@ -107,7 +105,6 @@ Use these with DB queries to correlate outcomes.
 
 1. Run one failing envelope intentionally (`AlwaysFailExecutor` path in tests is a good reference).
 2. Query runs + audit + dead letters.
-3. Replay dead letters with stub executor.
 4. Confirm replay result via `--list-runs` and dead-letter status via `--list-dead-letters`.
 
 ## CI notes
