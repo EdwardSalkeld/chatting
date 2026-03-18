@@ -1,0 +1,52 @@
+services:
+  bbmb:
+    build:
+      context: .
+      dockerfile: Dockerfile.bbmb
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9877/metrics"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  greenmail:
+    image: greenmail/standalone:2.1.2
+    environment:
+      GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=bot:dummy@chatting.local,sender:dummy@test.local"
+    ports:
+      - "3025:3025"
+      - "3143:3143"
+
+  handler:
+    build:
+      context: .
+      target: test
+    command: ["app.main_message_handler"]
+    environment:
+      CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
+      CHATTING_IMAP_PASSWORD: dummy
+    volumes:
+      - ./tests/e2e/configs:/config:ro
+      - handler-data:/data
+    depends_on:
+      bbmb:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: test
+    command: ["app.main_worker"]
+    environment:
+      CHATTING_WORKER_CONFIG_PATH: /config/worker.json
+    volumes:
+      - ./tests/e2e/configs:/config:ro
+      - worker-data:/data
+    depends_on:
+      bbmb:
+        condition: service_healthy
+
+volumes:
+  handler-data:
+  worker-data:

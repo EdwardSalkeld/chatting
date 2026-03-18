@@ -1,0 +1,26 @@
+name: Docker CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Docker Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build test image
+        run: docker build --target test -t chatting:test .
+
+      - name: Run unit tests
+        run: |
+          docker run --rm \
+            chatting:test \
+            unittest discover -s tests

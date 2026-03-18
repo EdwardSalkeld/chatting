@@ -1,0 +1,52 @@
+name: Docker E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: Docker End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build and start stack
+        run: docker compose -f docker-compose.e2e.yml up --build -d
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for GreenMail SMTP (3025) and IMAP (3143)..."
+          for i in $(seq 1 60); do
+            imap_ok=false
+            smtp_ok=false
+            python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3143)); s.close()" 2>/dev/null && imap_ok=true
+            python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3025)); s.close()" 2>/dev/null && smtp_ok=true
+            if [ "$imap_ok" = true ] && [ "$smtp_ok" = true ]; then
+              echo "GreenMail ready"
+              exit 0
+            fi
+            echo "  attempt $i: imap=$imap_ok smtp=$smtp_ok"
+            sleep 2
+          done
+          echo "GreenMail failed to start"
+          exit 1
+
+      - name: Wait for handler to start polling
+        run: sleep 5
+
+      - name: Run E2E test
+        run: python3 tests/e2e/docker_e2e_test.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.e2e.yml logs --tail 50
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v

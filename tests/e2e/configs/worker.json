@@ -1,0 +1,8 @@
+{
+  "db_path": "/data/worker.db",
+  "bbmb_address": "bbmb:9876",
+  "max_attempts": 2,
+  "poll_timeout_seconds": 2,
+  "sleep_seconds": 0.2,
+  "codex_command": "python3 /app/tests/e2e/fake_codex.py"
+}

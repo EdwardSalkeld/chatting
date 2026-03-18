@@ -1,0 +1,17 @@
+{
+  "db_path": "/data/handler.db",
+  "bbmb_address": "bbmb:9876",
+  "poll_interval_seconds": 0.5,
+  "poll_timeout_seconds": 2,
+  "allowed_egress_channels": ["email", "log"],
+  "imap_host": "greenmail",
+  "imap_port": 3143,
+  "imap_username": "bot",
+  "imap_password_env": "CHATTING_IMAP_PASSWORD",
+  "imap_use_ssl": false,
+  "smtp_host": "greenmail",
+  "smtp_port": 3025,
+  "smtp_from": "bot@chatting.local",
+  "smtp_starttls": false,
+  "smtp_use_ssl": false
+}
