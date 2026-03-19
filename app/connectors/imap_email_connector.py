@@ -5,7 +5,7 @@ from __future__ import annotations
 import imaplib
 from datetime import datetime, timezone
 from email import message_from_bytes, policy
-from email.message import EmailMessage, Message
+from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Callable, Sequence, cast
 

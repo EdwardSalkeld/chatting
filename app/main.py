@@ -962,17 +962,18 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
 
         raw_interval = raw_job.get("interval_seconds")
         interval_seconds: int | None = None
+        if isinstance(raw_interval, int) and not isinstance(raw_interval, bool):
+            interval_seconds = raw_interval
         if cron is None:
-            if not isinstance(raw_interval, int) or isinstance(raw_interval, bool):
+            if interval_seconds is None:
                 raise ValueError(
                     f"schedule job at index {index} interval_seconds must be a positive integer"
                 )
-            interval_seconds = raw_interval
             if interval_seconds <= 0:
                 raise ValueError(
                     f"schedule job at index {index} interval_seconds must be a positive integer"
                 )
-        elif isinstance(raw_interval, int) and not isinstance(raw_interval, bool) and raw_interval <= 0:
+        elif interval_seconds is not None and interval_seconds <= 0:
             raise ValueError(
                 f"schedule job at index {index} interval_seconds must be a positive integer"
             )

@@ -18,7 +18,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Callable, Mapping
 
-from app.applier import GitHubIssueCommentSender, IntegratedApplier, MessageDispatchError
+from app.applier import GitHubIssueCommentSender, IntegratedApplier, MessageDispatchError, SmtpEmailSender
 from app.broker import (
     BBMBQueueAdapter,
     EGRESS_QUEUE_NAME,
@@ -27,6 +27,7 @@ from app.broker import (
     TaskQueueMessage,
 )
 from app.connectors import (
+    Connector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
     InternalHeartbeatConnector,
@@ -778,7 +779,7 @@ def _resolve_error_email_recipient(args: argparse.Namespace, config: dict[str, o
 
 def _send_egress_dispatch_error_email(
     *,
-    email_sender: object | None,
+    email_sender: SmtpEmailSender | None,
     recipient: str | None,
     egress_message: EgressQueueMessage,
     error: MessageDispatchError,
@@ -1033,8 +1034,8 @@ def _build_live_connectors_fail_open(
     config: dict[str, object],
     *,
     db_path: str,
-) -> tuple[list[object], list[DisabledIngressComponent]]:
-    connectors: list[object] = [InternalHeartbeatConnector()]
+) -> tuple[list[Connector], list[DisabledIngressComponent]]:
+    connectors: list[Connector] = [InternalHeartbeatConnector()]
     disabled_components: list[DisabledIngressComponent] = []
 
     connector_args: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -1244,7 +1245,7 @@ def _handle_egress_message(
     ack_callback: Callable[[str], None],
     attachment_store: TelegramAttachmentStore | None = None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None = None,
-    error_email_sender: object | None = None,
+    error_email_sender: SmtpEmailSender | None = None,
     error_email_recipient: str | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
@@ -1395,7 +1396,7 @@ def _drain_egress_queue(
     applier: IntegratedApplier,
     attachment_store: TelegramAttachmentStore | None = None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None = None,
-    error_email_sender: object | None = None,
+    error_email_sender: SmtpEmailSender | None = None,
     error_email_recipient: str | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
@@ -1452,10 +1453,11 @@ def _dispatch_unsequenced_egress(
         attachment_cleanup_settings=attachment_cleanup_settings,
         dispatched_messages=apply_result.dispatched_messages,
     )
-    store.mark_dispatched_event_id(
-        task_id=egress_message.task_id,
-        event_id=egress_message.event_id,
-    )
+    if egress_message.event_id is not None:
+        store.mark_dispatched_event_id(
+            task_id=egress_message.task_id,
+            event_id=egress_message.event_id,
+        )
     dispatch_latency_ms = int(
         (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
     )
@@ -1469,6 +1471,8 @@ def _dispatch_unsequenced_egress(
             if message.channel != "telegram":
                 continue
             if message.target != ledger_record.task_message.envelope.reply_channel.target:
+                continue
+            if message.body is None:
                 continue
             store.append_conversation_turn(
                 channel="telegram",
@@ -1496,9 +1500,10 @@ def _apply_completion_event(
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     telemetry: EgressTelemetryRollup | None,
 ) -> None:
-    store.mark_dispatched_event_id(
-        task_id=egress_message.task_id,
-        event_id=egress_message.event_id,
+    if egress_message.event_id is not None:
+        store.mark_dispatched_event_id(
+            task_id=egress_message.task_id,
+            event_id=egress_message.event_id,
     )
     dispatch_latency_ms = int(
         (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
@@ -1576,7 +1581,7 @@ def _flush_task_egress_in_sequence(
     attachment_store: TelegramAttachmentStore | None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
     applier: IntegratedApplier,
-    error_email_sender: object | None = None,
+    error_email_sender: SmtpEmailSender | None = None,
     error_email_recipient: str | None = None,
     heartbeat_telemetry: HeartbeatTelemetryRollup | None = None,
     telemetry: EgressTelemetryRollup | None = None,
@@ -1717,7 +1722,7 @@ def _run_ingress_loop(
     store: SQLiteStateStore,
     ledger: TaskLedgerStore,
     broker: BBMBQueueAdapter,
-    connectors: list[object],
+    connectors: list[Connector],
     disabled_ingress_components: list[DisabledIngressComponent],
     attachment_store: TelegramAttachmentStore | None,
     attachment_cleanup_settings: TelegramAttachmentCleanupSettings | None,
@@ -1881,7 +1886,7 @@ def _run_egress_loop(
     broker: BBMBQueueAdapter,
     allowed_egress_channels: set[str],
     applier: IntegratedApplier,
-    error_email_sender: object | None,
+    error_email_sender: SmtpEmailSender | None,
     error_email_recipient: str | None,
     heartbeat_telemetry: HeartbeatTelemetryRollup,
     metrics: MessageHandlerMetrics,

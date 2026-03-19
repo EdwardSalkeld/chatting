@@ -263,12 +263,13 @@ class RoutedTask:
         if self.context:
             payload["context"] = [ref.to_dict() for ref in self.context]
         if self.reply_channel is not None:
-            payload["reply_channel"] = {
+            reply_channel_dict: dict[str, Any] = {
                 "type": self.reply_channel.type,
                 "target": self.reply_channel.target,
             }
             if self.reply_channel.metadata:
-                payload["reply_channel"]["metadata"] = self.reply_channel.metadata
+                reply_channel_dict["metadata"] = self.reply_channel.metadata
+            payload["reply_channel"] = reply_channel_dict
         return payload
 
 

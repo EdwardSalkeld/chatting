@@ -1203,8 +1203,8 @@ class _FakeImapClient:
         joined = b" ".join(sorted(self._raw_messages_by_uid.keys()))
         return "OK", [joined]
 
-    def fetch(self, uid: bytes, _payload: str):
-        raw_message = self._raw_messages_by_uid[uid]
+    def fetch(self, uid: str, _payload: str):
+        raw_message = self._raw_messages_by_uid[uid.encode("ascii")]
         return "OK", [(b"RFC822", raw_message)]
 
     def logout(self):

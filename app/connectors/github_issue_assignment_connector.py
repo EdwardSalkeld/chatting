@@ -97,7 +97,7 @@ class GitHubIssueAssignmentConnector:
             scanned_event_count += len(repository_events)
             events.extend(repository_events)
 
-        new_events = select_events_after_checkpoint(events, checkpoint=checkpoint)
+        new_events = select_events_after_checkpoint(events, checkpoint=checkpoint)  # pyright: ignore[reportArgumentType]
         object.__setattr__(self, "_last_poll_scanned_events", scanned_event_count)
         object.__setattr__(self, "_last_poll_new_events", len(new_events))
 
