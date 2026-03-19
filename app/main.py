@@ -960,17 +960,19 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
         if cron is not None and (not isinstance(cron, str) or not cron.strip()):
             raise ValueError(f"schedule job at index {index} cron must be a non-empty string")
 
-        interval_seconds = raw_job.get("interval_seconds")
+        raw_interval = raw_job.get("interval_seconds")
+        interval_seconds: int | None = None
         if cron is None:
-            if not _is_int_like(interval_seconds):
+            if not isinstance(raw_interval, int) or isinstance(raw_interval, bool):
                 raise ValueError(
                     f"schedule job at index {index} interval_seconds must be a positive integer"
                 )
+            interval_seconds = raw_interval
             if interval_seconds <= 0:
                 raise ValueError(
                     f"schedule job at index {index} interval_seconds must be a positive integer"
                 )
-        elif interval_seconds is not None and _is_int_like(interval_seconds) and interval_seconds <= 0:
+        elif isinstance(raw_interval, int) and not isinstance(raw_interval, bool) and raw_interval <= 0:
             raise ValueError(
                 f"schedule job at index {index} interval_seconds must be a positive integer"
             )
@@ -1135,7 +1137,7 @@ def _resolve_positive_int(
     if cli_value is not None:
         return cli_value
     candidate = config_value if config_value is not None else default_value
-    if not _is_int_like(candidate):
+    if not isinstance(candidate, int) or isinstance(candidate, bool):
         raise ValueError(f"config {setting_name} must be an integer")
     if candidate <= 0:
         raise ValueError(f"config {setting_name} must be positive")
@@ -1152,7 +1154,7 @@ def _resolve_optional_positive_int(
         return cli_value
     if config_value is None:
         return None
-    if not _is_int_like(config_value):
+    if not isinstance(config_value, int) or isinstance(config_value, bool):
         raise ValueError(f"config {setting_name} must be an integer")
     if config_value <= 0:
         raise ValueError(f"config {setting_name} must be positive")
@@ -1169,7 +1171,7 @@ def _resolve_positive_float(
     if cli_value is not None:
         return cli_value
     candidate = config_value if config_value is not None else default_value
-    if not _is_numeric_like(candidate):
+    if not isinstance(candidate, (int, float)) or isinstance(candidate, bool):
         raise ValueError(f"config {setting_name} must be numeric")
     parsed = float(candidate)
     if parsed <= 0:
@@ -1179,7 +1181,7 @@ def _resolve_positive_float(
 
 def _resolve_bool(
     *,
-    cli_value: bool,
+    cli_value: bool | None,
     config_value: object,
     default_value: bool,
     setting_name: str,
