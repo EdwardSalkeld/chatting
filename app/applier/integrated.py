@@ -15,13 +15,22 @@ import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision, TaskEnvelope
 
 LOGGER = logging.getLogger(__name__)
 _MAX_HTTP_ERROR_LOG_BODY_CHARS = 500
+
+
+class SmtpClient(Protocol):
+    """Minimal protocol for the SMTP client used by SmtpEmailSender."""
+
+    def starttls(self) -> Any: ...
+    def login(self, user: str, password: str) -> Any: ...
+    def send_message(self, msg: EmailMessage) -> Any: ...
+    def quit(self) -> Any: ...
 
 
 class EmailSender(Protocol):
@@ -72,7 +81,7 @@ class SmtpEmailSender:
     use_ssl: bool = True
     starttls: bool = False
     timeout_seconds: float = 10.0
-    smtp_client_factory: Callable[[str, int], object] | None = None
+    smtp_client_factory: Callable[[str, int], SmtpClient] | None = None
 
     def __post_init__(self) -> None:
         if not self.host:
@@ -106,7 +115,7 @@ class SmtpEmailSender:
             if hasattr(client, "quit"):
                 client.quit()
 
-    def _default_smtp_client_factory(self) -> Callable[[str, int], object]:
+    def _default_smtp_client_factory(self) -> Callable[[str, int], SmtpClient]:
         if self.use_ssl:
             return lambda host, port: smtplib.SMTP_SSL(
                 host,
@@ -195,7 +204,7 @@ class TelegramMessageSender:
 
         # Gracefully degrade to plain text when Telegram rejects formatting entities.
         if self.parse_mode is not None and _is_telegram_parse_mode_error(response):
-            plain_text_payload = {"chat_id": target, "text": body}
+            plain_text_payload: dict[str, object] = {"chat_id": target, "text": body}
             fallback_response = client(url, plain_text_payload, self.timeout_seconds)
             if fallback_response.get("ok") is True:
                 return
@@ -371,6 +380,8 @@ class IntegratedApplier:
                     reason_codes.append("github_dispatch_not_configured")
                     continue
                 try:
+                    if message.body is None:
+                        raise ValueError("github message body is required")
                     self.github_sender.send(dispatch_target, message.body)
                     dispatched_messages.append(normalized_message)
                 except Exception:  # noqa: BLE001
@@ -394,6 +405,8 @@ class IntegratedApplier:
                     reason_codes.append("telegram_dispatch_not_configured")
                     continue
                 try:
+                    if message.body is None:
+                        raise ValueError("telegram reaction emoji is required")
                     self.telegram_sender.react(
                         dispatch_target,
                         _resolve_telegram_reaction_message_id(message=message, envelope=envelope),
