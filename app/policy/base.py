@@ -13,6 +13,7 @@ class PolicyEngine(Protocol):
 
     def evaluate(self, result: ExecutionResult) -> PolicyDecision:
         """Gate actions/messages/config updates according to policy rules."""
+        ...
 
 
 __all__ = ["PolicyEngine"]

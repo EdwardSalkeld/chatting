@@ -13,6 +13,7 @@ class Applier(Protocol):
 
     def apply(self, decision: PolicyDecision, envelope: TaskEnvelope | None = None) -> ApplyResult:
         """Execute approved operations and return apply summary."""
+        ...
 
 
 __all__ = ["Applier"]

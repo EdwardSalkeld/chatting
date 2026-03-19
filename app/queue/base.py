@@ -16,9 +16,11 @@ class QueueBackend(Protocol):
 
     def dequeue(self) -> TaskEnvelope | None:
         """Pop one envelope from the queue, or None when empty."""
+        ...
 
     def size(self) -> int:
         """Return current queue size."""
+        ...
 
 
 __all__ = ["QueueBackend"]

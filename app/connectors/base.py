@@ -13,6 +13,7 @@ class Connector(Protocol):
 
     def poll(self) -> Iterable[TaskEnvelope]:
         """Fetch and normalize available source events."""
+        ...
 
 
 __all__ = ["Connector"]
