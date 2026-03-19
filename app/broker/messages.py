@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, cast
 
 from app.models import AttachmentRef, OutboundMessage, ReplyChannel, SCHEMA_VERSION, TaskEnvelope
+
+SourceType = Literal["cron", "email", "im", "webhook", "internal"]
 
 _TASK_MESSAGE_TYPE = "chatting.task.v1"
 _EGRESS_MESSAGE_TYPE_V2 = "chatting.egress.v2"
@@ -128,7 +130,7 @@ class TaskQueueMessage:
 
         envelope = TaskEnvelope(
             id=_require_non_empty_string(envelope_payload.get("id"), field_name="envelope.id"),
-            source=_require_non_empty_string(envelope_payload.get("source"), field_name="envelope.source"),
+            source=cast(SourceType, _require_non_empty_string(envelope_payload.get("source"), field_name="envelope.source")),
             received_at=_parse_utc_datetime(envelope_payload.get("received_at"), field_name="envelope.received_at"),
             actor=envelope_payload.get("actor"),
             content=_require_non_empty_string(envelope_payload.get("content"), field_name="envelope.content"),
@@ -260,7 +262,7 @@ class EgressQueueMessage:
             task_id=_require_non_empty_string(payload.get("task_id"), field_name="task_id"),
             envelope_id=_require_non_empty_string(payload.get("envelope_id"), field_name="envelope_id"),
             trace_id=_require_non_empty_string(payload.get("trace_id"), field_name="trace_id"),
-            event_index=sequence,
+            event_index=sequence if sequence is not None else 0,
             event_count=1,
             message=OutboundMessage(
                 channel=_require_non_empty_string(message_payload.get("channel"), field_name="message.channel"),

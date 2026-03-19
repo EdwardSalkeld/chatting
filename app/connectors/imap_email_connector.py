@@ -5,9 +5,9 @@ from __future__ import annotations
 import imaplib
 from datetime import datetime, timezone
 from email import message_from_bytes, policy
-from email.message import Message
+from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
-from typing import Callable
+from typing import Callable, Sequence, cast
 
 from app.models import ReplyChannel, TaskEnvelope
 
@@ -72,7 +72,7 @@ class ImapEmailConnector:
 
             uids = _parse_uid_list(search_data)
             for uid in uids:
-                status, fetch_data = client.fetch(uid, "(RFC822)")
+                status, fetch_data = client.fetch(uid.decode("ascii"), "(RFC822)")
                 if status != "OK":
                     continue
                 raw_message = _extract_message_bytes(fetch_data)
@@ -88,7 +88,7 @@ class ImapEmailConnector:
         return envelopes
 
     def _to_envelope(self, uid: bytes, raw_message: bytes) -> TaskEnvelope:
-        parsed = message_from_bytes(raw_message, policy=policy.default)
+        parsed = cast(EmailMessage, message_from_bytes(raw_message, policy=policy.default))
         from_header = parsed.get("From", "")
         _, from_address = parseaddr(from_header)
         target = from_address or self._username
@@ -126,7 +126,7 @@ def _parse_uid_list(search_data: list[bytes]) -> list[bytes]:
     return [token for token in first.split() if token]
 
 
-def _extract_message_bytes(fetch_data: list[object]) -> bytes | None:
+def _extract_message_bytes(fetch_data: Sequence[object]) -> bytes | None:
     for part in fetch_data:
         if not isinstance(part, tuple) or len(part) < 2:
             continue
@@ -136,7 +136,7 @@ def _extract_message_bytes(fetch_data: list[object]) -> bytes | None:
     return None
 
 
-def _extract_body_text(parsed: Message) -> str:
+def _extract_body_text(parsed: EmailMessage) -> str:
     if parsed.is_multipart():
         for part in parsed.walk():
             disposition = (part.get("Content-Disposition") or "").lower()

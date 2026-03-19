@@ -13,6 +13,7 @@ class Router(Protocol):
 
     def route(self, envelope: TaskEnvelope) -> RoutedTask:
         """Return a routed task derived from a canonical envelope."""
+        ...
 
 
 __all__ = ["Router"]

@@ -214,7 +214,7 @@ def _process_internal_heartbeat(
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": 0,
                 "egress_message_count": 2,
-                "heartbeat": json.loads(visible_egress_message.message.body),
+                "heartbeat": json.loads(visible_egress_message.message.body or "{}"),
             },
             created_at=run_record.created_at,
         )

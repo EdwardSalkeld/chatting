@@ -13,6 +13,7 @@ class Executor(Protocol):
 
     def execute(self, task: RoutedTask) -> ExecutionResult:
         """Run task logic and return actions/config/errors only."""
+        ...
 
 
 __all__ = ["Executor"]

@@ -7,6 +7,7 @@ import json
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, cast
 
 from app.broker import EgressQueueMessage
 from app.models import (
@@ -351,7 +352,9 @@ class SQLiteStateStore:
                 ),
             )
             connection.commit()
-            return int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("failed to retrieve dead letter ID after insert")
+            return cursor.lastrowid
 
     def list_dead_letters(self, *, status: str | None = None) -> list[DeadLetterRecord]:
         with closing(self._connect()) as connection:
@@ -636,9 +639,9 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
         attachments.append(AttachmentRef(uri=uri, name=name))
     return TaskEnvelope(
         id=str(payload["id"]),
-        source=str(payload["source"]),
+        source=cast(Literal["cron", "email", "im", "webhook", "internal"], str(payload["source"])),
         received_at=_parse_rfc3339_utc(str(payload["received_at"])),
-        actor=payload.get("actor") if isinstance(payload.get("actor"), str) else None,
+        actor=str(payload["actor"]) if isinstance(payload.get("actor"), str) else None,
         content=str(payload["content"]),
         attachments=attachments,
         context_refs=context_refs,
