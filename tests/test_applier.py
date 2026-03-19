@@ -20,7 +20,6 @@ from app.applier.integrated import _default_http_post_json
 from app.models import (
     ActionProposal,
     AttachmentRef,
-    ConfigUpdateDecision,
     OutboundMessage,
     PolicyDecision,
     ReplyChannel,
@@ -32,7 +31,6 @@ class NoOpApplierTests(unittest.TestCase):
             approved_actions=[ActionProposal(type="write_file", path="docs/notes.md")],
             blocked_actions=[],
             approved_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Done.")],
-            config_updates=ConfigUpdateDecision(),
             reason_codes=[],
         )
 
@@ -51,7 +49,6 @@ class NoOpApplierTests(unittest.TestCase):
             approved_actions=[],
             blocked_actions=[ActionProposal(type="run_shell", path="rm -rf /")],
             approved_messages=[],
-            config_updates=ConfigUpdateDecision(),
             reason_codes=["action_not_allowed"],
         )
 
@@ -85,7 +82,6 @@ class IntegratedApplierTests(unittest.TestCase):
                     ),
                     OutboundMessage(channel="log", target="ops", body="Applied."),
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -119,7 +115,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Here is the answer.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
             envelope = _email_envelope(
@@ -154,7 +149,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Subject: Re: Ice-cream\n\nGreat choice. Let's go classic.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
             envelope = _email_envelope(
@@ -185,7 +179,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Done via telegram.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -215,7 +208,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         metadata={"message_id": 321},
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -251,7 +243,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         attachment=AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -277,7 +268,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -300,7 +290,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         attachment=AttachmentRef(uri="file:///does/not/exist.pdf", name="missing.pdf"),
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -328,7 +317,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -345,7 +333,6 @@ class IntegratedApplierTests(unittest.TestCase):
                 ],
                 blocked_actions=[],
                 approved_messages=[],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -367,7 +354,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Done.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -388,7 +374,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Done.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -409,7 +394,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Done.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -431,7 +415,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Done via GitHub.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -462,7 +445,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="two",
                     ),
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -494,7 +476,6 @@ class IntegratedApplierTests(unittest.TestCase):
                         body="Answer from model.",
                     )
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
             envelope = TaskEnvelope(
@@ -538,7 +519,6 @@ class IntegratedApplierTests(unittest.TestCase):
                     OutboundMessage(channel="telegram", target="12345", body="👀"),
                     OutboundMessage(channel="telegram", target="12345", body="working"),
                 ],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 

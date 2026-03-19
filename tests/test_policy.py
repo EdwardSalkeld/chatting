@@ -1,7 +1,9 @@
 import unittest
 
-from app.models import ActionProposal, ConfigUpdate, ExecutionResult
+from app.models import ActionProposal, ExecutionResult
 from app.policy import AllowlistPolicyEngine
+
+
 class AllowlistPolicyEngineTests(unittest.TestCase):
     def test_blocks_disallowed_actions(self) -> None:
         result = ExecutionResult(
@@ -9,8 +11,6 @@ class AllowlistPolicyEngineTests(unittest.TestCase):
                 ActionProposal(type="write_file", path="docs/notes.md", content="hello"),
                 ActionProposal(type="run_shell", path="echo test"),
             ],
-            config_updates=[],
-            requires_human_review=False,
             errors=[],
         )
         engine = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
@@ -22,54 +22,17 @@ class AllowlistPolicyEngineTests(unittest.TestCase):
         self.assertEqual(decision.approved_messages, [])
         self.assertEqual(decision.reason_codes, ["action_not_allowed"])
 
-    def test_sorts_config_updates_into_approved_pending_and_rejected(self) -> None:
+    def test_reports_executor_errors_in_reason_codes(self) -> None:
         result = ExecutionResult(
             actions=[],
-            config_updates=[
-                ConfigUpdate(path="routing.default_timeout", value=240),
-                ConfigUpdate(path="secrets.api_key", value="new-secret"),
-                ConfigUpdate(path="routing.unknown", value=True),
-            ],
-            requires_human_review=False,
-            errors=[],
-        )
-        engine = AllowlistPolicyEngine(
-            allowed_config_paths=frozenset({"routing.default_timeout"})
-        )
-
-        decision = engine.evaluate(result)
-
-        self.assertEqual(
-            [update.path for update in decision.config_updates.approved],
-            ["routing.default_timeout"],
-        )
-        self.assertEqual(
-            [update.path for update in decision.config_updates.pending_review],
-            ["secrets.api_key"],
-        )
-        self.assertEqual(
-            [update.path for update in decision.config_updates.rejected],
-            ["routing.unknown"],
-        )
-        self.assertEqual(
-            decision.reason_codes,
-            ["config_update_requires_review", "config_update_not_allowed"],
-        )
-
-    def test_reports_executor_signals_in_reason_codes(self) -> None:
-        result = ExecutionResult(
-            actions=[],
-            config_updates=[],
-            requires_human_review=True,
             errors=["executor timeout"],
         )
         engine = AllowlistPolicyEngine()
 
         decision = engine.evaluate(result)
 
-        self.assertEqual(
-            decision.reason_codes,
-            ["executor_requires_human_review", "executor_reported_errors"],
-        )
+        self.assertEqual(decision.reason_codes, ["executor_reported_errors"])
+
+
 if __name__ == "__main__":
     unittest.main()

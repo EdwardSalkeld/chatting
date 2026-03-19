@@ -32,8 +32,6 @@ class ParseExecutionResultTests(unittest.TestCase):
                         "content": "hello",
                     }
                 ],
-                "config_updates": [{"path": "routing.default_timeout", "value": 240}],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -41,15 +39,12 @@ class ParseExecutionResultTests(unittest.TestCase):
         result = parse_execution_result(payload)
 
         self.assertEqual(result.to_dict()["actions"][0]["type"], "write_file")
-        self.assertEqual(result.to_dict()["config_updates"][0]["path"], "routing.default_timeout")
 
     def test_parse_execution_result_recovers_last_json_object_from_mixed_output(self) -> None:
         valid_payload = json.dumps(
             {
                 "schema_version": "1.0",
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -64,8 +59,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
                 "unexpected": "value",
             }
@@ -80,8 +73,6 @@ class ParseExecutionResultTests(unittest.TestCase):
                 "schema_version": "1.0",
                 "messages": [],
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -100,8 +91,6 @@ class ParseExecutionResultTests(unittest.TestCase):
                         "mode": "append",
                     }
                 ],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -114,8 +103,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"path": "docs/notes.md"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -128,8 +115,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "  "}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -142,8 +127,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "write_file", "content": "hello"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -156,8 +139,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "write_file", "path": "docs/notes.md"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -170,8 +151,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "write_file", "path": "", "content": "hello"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -186,8 +165,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "write_file", "path": "   ", "content": "hello"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -200,8 +177,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "write_file", "path": "docs/notes.md", "content": ""}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -216,8 +191,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "write_file", "path": "docs/notes.md", "content": "   "}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -230,8 +203,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "run_shell", "path": "echo hi"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -244,8 +215,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [{"type": "run_shell", "content": "echo hi"}],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -253,78 +222,10 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non_write_file_content_forbidden"):
             parse_execution_result(payload)
 
-    def test_parse_execution_result_rejects_unknown_config_update_keys(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "config_updates": [
-                    {
-                        "path": "routing.default_timeout",
-                        "value": 240,
-                        "source": "llm",
-                    }
-                ],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "unknown_config_update_keys"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_config_update_missing_required_path(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "config_updates": [{"value": 240}],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "config_update_path_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_config_update_path_with_only_whitespace(
-        self,
-    ) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "config_updates": [{"path": " ", "value": 240}],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "config_update_path_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_config_update_missing_required_value(
-        self,
-    ) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "config_updates": [{"path": "routing.default_timeout"}],
-                "requires_human_review": False,
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "config_update_value_required"):
-            parse_execution_result(payload)
-
     def test_parse_execution_result_rejects_missing_schema_version(self) -> None:
         payload = json.dumps(
             {
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -337,8 +238,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "",
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -351,8 +250,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "2.0",
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [],
             }
         )
@@ -365,8 +262,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": [""],
             }
         )
@@ -381,8 +276,6 @@ class ParseExecutionResultTests(unittest.TestCase):
             {
                 "schema_version": "1.0",
                 "actions": [],
-                "config_updates": [],
-                "requires_human_review": False,
                 "errors": ["   "],
             }
         )
@@ -425,8 +318,6 @@ class CodexExecutorTests(unittest.TestCase):
                 {
                     "schema_version": "1.0",
                     "actions": [],
-                    "config_updates": [],
-                    "requires_human_review": False,
                     "errors": [],
                 }
             ),
@@ -466,8 +357,6 @@ class CodexExecutorTests(unittest.TestCase):
                 {
                     "schema_version": "1.0",
                     "actions": [],
-                    "config_updates": [],
-                    "requires_human_review": False,
                     "errors": [],
                 }
             ),

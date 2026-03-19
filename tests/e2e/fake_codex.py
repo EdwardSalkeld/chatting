@@ -34,8 +34,6 @@ def main():
     result = {
         "schema_version": "1.0",
         "actions": [],
-        "config_updates": [],
-        "requires_human_review": False,
         "errors": [],
     }
     json.dump(result, sys.stdout)

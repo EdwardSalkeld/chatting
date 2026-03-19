@@ -72,25 +72,20 @@ Acceptance criteria:
 
 Progress notes:
 - 2026-02-27: Implemented `app.executor.CodexExecutor` with subprocess timeout handling and strict JSON schema parsing via `parse_execution_result`, including unit tests for success, timeout, invalid output, and non-zero exit paths.
-- 2026-02-27: Tightened `parse_execution_result` schema checks to reject unknown nested keys in `messages`, `actions`, and `config_updates`, reducing output drift risk from executor responses.
 - 2026-02-27: Hardened `parse_execution_result` to require explicit top-level `schema_version` from Codex output instead of applying an implicit default; added parser coverage for missing-schema rejection to keep contract versioning strict.
 - 2026-02-27: Hardened schema-version contract validation to reject empty `schema_version` values in top-level models and executor parsing, preventing invalid version metadata from entering state/audit records.
 - 2026-02-28: Added bounded retry handling in `app.main.run_bootstrap` (configurable `max_attempts`) so transient executor failures retry and exhausted attempts are recorded as `dead_letter` run outcomes with audit detail (`attempt_count`, `last_error`, `reason_codes=["retry_exhausted"]`).
 - 2026-02-28: Hardened schema-version compatibility to reject unsupported versions (currently only `1.0` is accepted) in top-level models and executor parsing, preventing silent cross-version contract drift.
 - 2026-02-28: Added bootstrap CLI retry control (`python -m app.main --max-attempts <N>`) with positive-integer validation and tests, so retry/DLQ behavior can be tuned without code edits.
-- 2026-02-28: Hardened executor nested required-field validation so missing `message.body`, `action.type`, and `config_update.path` fail with explicit `*_required` parser errors to reduce structured-output ambiguity.
 - 2026-02-28: Hardened executor action contract validation so `write_file` proposals must include non-empty `path` and `content`, with parser regression tests for missing/empty values.
 - 2026-02-28: Hardened executor action-shape validation so non-`write_file` actions cannot include `path` or `content`, preventing cross-action payload drift in structured outputs.
-- 2026-02-28: Hardened executor required-string parsing to reject whitespace-only `messages`/`actions`/`config_updates` fields and whitespace-only `write_file.path`/`write_file.content`, with parser regression coverage.
 - 2026-02-28: Hardened executor parser error-list validation to reject empty/whitespace-only entries in `errors`, keeping failure telemetry and audit records semantically useful.
-- 2026-02-28: Hardened config-update contract consistency by rejecting whitespace-only `ConfigUpdate.path` values at the model layer and adding parser regression coverage for missing `config_update.value`.
 - 2026-02-28: Added live runtime mode in `app.main` (`--run-live`) with long-lived connector polling, retry/DLQ handling, Codex command wiring, and CLI-configurable IMAP/schedule/SMTP integration parameters.
 - 2026-02-28: Extended `RoutedTask` context to include source/actor/content/reply-channel metadata and propagated it through routing so email-origin tasks can produce dispatchable email responses in live mode.
 - 2026-02-28: Added live-mode operability guardrails: SMTP-required validation for IMAP mode, plus runnable docs and a scheduler JSON example.
 - 2026-02-28: Added JSON runtime config-file support (`--config`) for live-mode settings (DB path, scheduler/IMAP/SMTP/Codex wiring, loop controls), with CLI override precedence and test coverage.
 - 2026-02-28: Hardened top-level model contracts so `ExecutionResult.errors`, `PolicyDecision.reason_codes`, and `ApplyResult.reason_codes` reject empty/whitespace-only entries, with regression coverage in `tests.test_models`.
 - 2026-02-28: Hardened model-level required-string validation (including `ReplyChannel`, `TaskEnvelope`, `RoutedTask`, `OutboundMessage`, `ActionProposal`, `RunRecord`, `AuditEvent`) to reject whitespace-only values, and preserved executor parser-specific `write_file_*_required` error codes by validating action payloads before model construction.
-- 2026-02-28: Hardened model typed-collection contracts so `ExecutionResult`, `ConfigUpdateDecision`, `PolicyDecision`, and `ApplyResult` reject invalid list item/object types at construction time; added regression coverage in `tests.test_models`.
 
 ## Phase 3: Policy + Apply
 Duration: 3-4 days
@@ -110,7 +105,6 @@ Progress notes:
 - 2026-02-27: Implemented `app.policy.AllowlistPolicyEngine` with deny-by-default action gating, sensitive config pending-review classification, and unit tests.
 - 2026-02-27: Implemented `app.applier.NoOpApplier` and `ApplyResult` contract baseline with unit tests to complete the milestone's applier stub requirement without side effects.
 - 2026-02-28: Added `app.applier.IntegratedApplier` + `SmtpEmailSender` for live `write_file` application and outbound email/log dispatch, including path-safety checks and unit coverage.
-- 2026-03-01: Added persisted human-approval workflow for sensitive config updates: pending-review proposals are written to SQLite and exposed via CLI query/decision commands (`--list-pending-approvals`, `--approve-pending-approval`, `--reject-pending-approval`).
 
 ## Phase 4: Reliability + Ops
 Duration: 2-4 days
@@ -129,12 +123,10 @@ Acceptance criteria:
 Progress notes:
 - 2026-02-27: Added per-run audit logging baseline via `AuditEvent` model and SQLite persistence; bootstrap flow now emits one audit event for each processed run with policy decision counts and reason codes.
 - 2026-02-28: Extended run audit-event detail to include apply-phase outcomes from `ApplyResult` (`applied_action_count`, `skipped_action_count`, `dispatched_message_count`, `apply_reason_codes`) so operators can correlate policy approvals with actual side effects.
-- 2026-02-28: Extended bootstrap/live audit-event detail with executor output summaries (`message_count`, `action_count`, `config_update_count`, `error_count`, `action_types`, `requires_human_review`) so run history captures execution-output shape alongside policy/apply outcomes.
 - 2026-03-01: Deepened run-audit fidelity in `app.main` by persisting full structured `execution_result`, `policy_decision`, and `apply_result` payload snapshots alongside existing summary counters, with regression coverage in `tests.test_main`.
 - 2026-03-01: Added read-only run-history querying in `app.main` (`--list-runs` with optional `--result-status` and `--limit`) so operators can inspect persisted SQLite run records without executing bootstrap/live processing.
 - 2026-03-01: Added read-only audit-event querying in `app.main` (`--list-audit-events` with optional `--result-status` and `--limit`) so operators can inspect persisted audit trails without executing bootstrap/live processing.
 - 2026-03-01: Added dead-letter queue persistence + replay tooling: `app.main` now stores dead-letter envelopes in SQLite and exposes read-only dead-letter query (`--list-dead-letters`) plus replay execution (`--replay-dead-letters`) modes.
-- 2026-03-01: Added config versioning/rollback primitives in SQLite plus operator commands (`--list-config-versions`, `--rollback-config-version`); approved pending config updates now materialize as versioned changes.
 - 2026-03-01: Added metrics reporting surfaces backed by run history (`--list-metrics`, plus `--serve-metrics` HTTP endpoints for `/metrics` JSON and `/dashboard` starter UI).
 
 ## Phase 5: Connector Expansion (Optional)

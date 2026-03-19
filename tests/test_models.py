@@ -6,8 +6,6 @@ from app.models import (
     AuditEvent,
     ApplyResult,
     AttachmentRef,
-    ConfigUpdate,
-    ConfigUpdateDecision,
     ExecutionResult,
     ExecutionConstraints,
     OutboundMessage,
@@ -107,8 +105,6 @@ class ExecutionResultTests(unittest.TestCase):
     def test_execution_result_serializes_expected_shape(self) -> None:
         result = ExecutionResult(
             actions=[ActionProposal(type="write_file", path="docs/notes.md", content="hello")],
-            config_updates=[ConfigUpdate(path="routing.default_timeout", value=240)],
-            requires_human_review=False,
             errors=[],
         )
 
@@ -119,8 +115,6 @@ class ExecutionResultTests(unittest.TestCase):
                 "actions": [
                     {"type": "write_file", "path": "docs/notes.md", "content": "hello"}
                 ],
-                "config_updates": [{"path": "routing.default_timeout", "value": 240}],
-                "requires_human_review": False,
                 "errors": [],
             },
         )
@@ -173,11 +167,6 @@ class PolicyDecisionTests(unittest.TestCase):
             approved_actions=[],
             blocked_actions=[ActionProposal(type="write_file", path="secrets.txt")],
             approved_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Blocked.")],
-            config_updates=ConfigUpdateDecision(
-                approved=[],
-                pending_review=[ConfigUpdate(path="routing.default_timeout", value=240)],
-                rejected=[],
-            ),
             reason_codes=["action_not_allowed"],
         )
 
@@ -190,11 +179,6 @@ class PolicyDecisionTests(unittest.TestCase):
                 "approved_messages": [
                     {"channel": "email", "target": "alice@example.com", "body": "Blocked."}
                 ],
-                "config_updates": {
-                    "approved": [],
-                    "pending_review": [{"path": "routing.default_timeout", "value": 240}],
-                    "rejected": [],
-                },
                 "reason_codes": ["action_not_allowed"],
             },
         )
@@ -202,10 +186,6 @@ class PolicyDecisionTests(unittest.TestCase):
     def test_action_requires_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "type is required"):
             ActionProposal(type="")
-class ConfigUpdateTests(unittest.TestCase):
-    def test_config_update_rejects_whitespace_only_path(self) -> None:
-        with self.assertRaisesRegex(ValueError, "path is required"):
-            ConfigUpdate(path="   ", value=240)
 class RunRecordTests(unittest.TestCase):
     def test_run_record_serializes_expected_shape(self) -> None:
         record = RunRecord(
@@ -330,8 +310,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema_version is required"):
             ExecutionResult(
                 actions=[],
-                config_updates=[],
-                requires_human_review=False,
                 errors=[],
                 schema_version="",
             )
@@ -341,7 +319,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 approved_actions=[],
                 blocked_actions=[],
                 approved_messages=[],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
                 schema_version="",
             )
@@ -397,8 +374,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
             ExecutionResult(
                 actions=[],
-                config_updates=[],
-                requires_human_review=False,
                 errors=[],
                 schema_version="2.0",
             )
@@ -407,8 +382,6 @@ class StringListContractValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "errors items must be non-empty strings"):
             ExecutionResult(
                 actions=[],
-                config_updates=[],
-                requires_human_review=False,
                 errors=["   "],
             )
 
@@ -418,7 +391,6 @@ class StringListContractValidationTests(unittest.TestCase):
                 approved_actions=[],
                 blocked_actions=[],
                 approved_messages=[],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[""],
             )
 
@@ -435,27 +407,7 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "actions items must be ActionProposal"):
             ExecutionResult(
                 actions=[object()],  # type: ignore[list-item]
-                config_updates=[],
-                requires_human_review=False,
                 errors=[],
-            )
-
-        with self.assertRaisesRegex(ValueError, "config_updates items must be ConfigUpdate"):
-            ExecutionResult(
-                actions=[],
-                config_updates=[object()],  # type: ignore[list-item]
-                requires_human_review=False,
-                errors=[],
-            )
-
-    def test_policy_decision_rejects_invalid_config_update_decision_type(self) -> None:
-        with self.assertRaisesRegex(ValueError, "config_updates must be ConfigUpdateDecision"):
-            PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[],
-                config_updates={},  # type: ignore[arg-type]
-                reason_codes=[],
             )
 
     def test_policy_decision_rejects_invalid_typed_action_and_message_lists(self) -> None:
@@ -466,7 +418,6 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 approved_actions=[object()],  # type: ignore[list-item]
                 blocked_actions=[],
                 approved_messages=[],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -477,7 +428,6 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 approved_actions=[],
                 blocked_actions=[object()],  # type: ignore[list-item]
                 approved_messages=[],
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
 
@@ -488,19 +438,8 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 approved_actions=[],
                 blocked_actions=[],
                 approved_messages=[object()],  # type: ignore[list-item]
-                config_updates=ConfigUpdateDecision(),
                 reason_codes=[],
             )
-
-    def test_config_update_decision_rejects_invalid_typed_lists(self) -> None:
-        with self.assertRaisesRegex(ValueError, "approved items must be ConfigUpdate"):
-            ConfigUpdateDecision(approved=[object()])  # type: ignore[list-item]
-
-        with self.assertRaisesRegex(ValueError, "pending_review items must be ConfigUpdate"):
-            ConfigUpdateDecision(pending_review=[object()])  # type: ignore[list-item]
-
-        with self.assertRaisesRegex(ValueError, "rejected items must be ConfigUpdate"):
-            ConfigUpdateDecision(rejected=[object()])  # type: ignore[list-item]
 
     def test_apply_result_rejects_invalid_typed_collections(self) -> None:
         with self.assertRaisesRegex(ValueError, "applied_actions items must be ActionProposal"):

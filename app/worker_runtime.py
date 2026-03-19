@@ -203,15 +203,12 @@ def _process_internal_heartbeat(
                 "last_error_stage": None,
                 "execution_result": {
                     "actions": [],
-                    "config_updates": [],
-                    "requires_human_review": False,
                     "errors": [],
                 },
                 "policy_decision": {
                     "approved_actions": [],
                     "blocked_actions": [],
                     "approved_messages": [visible_egress_message.message.to_dict()],
-                    "config_updates": {"approved": [], "pending_review": [], "rejected": []},
                     "reason_codes": ["internal_heartbeat"],
                 },
                 "incremental_reply_send_requested_count": 0,

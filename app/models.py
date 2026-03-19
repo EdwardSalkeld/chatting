@@ -294,30 +294,10 @@ class ActionProposal:
 
 
 @dataclass(frozen=True)
-class ConfigUpdate:
-    """Proposed or policy-reviewed config update."""
-
-    path: str
-    value: Any
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.path, str) or not self.path.strip():
-            raise ValueError("path is required")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "path": self.path,
-            "value": self.value,
-        }
-
-
-@dataclass(frozen=True)
 class ExecutionResult:
     """Structured output contract from executor."""
 
     actions: list[ActionProposal]
-    config_updates: list[ConfigUpdate]
-    requires_human_review: bool
     errors: list[str]
     schema_version: str = SCHEMA_VERSION
 
@@ -328,53 +308,13 @@ class ExecutionResult:
             field_name="actions",
             item_type=ActionProposal,
         )
-        _validate_typed_list(
-            self.config_updates,
-            field_name="config_updates",
-            item_type=ConfigUpdate,
-        )
         _validate_string_list(self.errors, field_name="errors")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "actions": [action.to_dict() for action in self.actions],
-            "config_updates": [update.to_dict() for update in self.config_updates],
-            "requires_human_review": self.requires_human_review,
             "errors": self.errors,
-        }
-
-
-@dataclass(frozen=True)
-class ConfigUpdateDecision:
-    """Policy categorization buckets for config update proposals."""
-
-    approved: list[ConfigUpdate] = field(default_factory=list)
-    pending_review: list[ConfigUpdate] = field(default_factory=list)
-    rejected: list[ConfigUpdate] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        _validate_typed_list(
-            self.approved,
-            field_name="approved",
-            item_type=ConfigUpdate,
-        )
-        _validate_typed_list(
-            self.pending_review,
-            field_name="pending_review",
-            item_type=ConfigUpdate,
-        )
-        _validate_typed_list(
-            self.rejected,
-            field_name="rejected",
-            item_type=ConfigUpdate,
-        )
-
-    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
-        return {
-            "approved": [update.to_dict() for update in self.approved],
-            "pending_review": [update.to_dict() for update in self.pending_review],
-            "rejected": [update.to_dict() for update in self.rejected],
         }
 
 
@@ -385,7 +325,6 @@ class PolicyDecision:
     approved_actions: list[ActionProposal]
     blocked_actions: list[ActionProposal]
     approved_messages: list[OutboundMessage]
-    config_updates: ConfigUpdateDecision
     reason_codes: list[str]
     schema_version: str = SCHEMA_VERSION
 
@@ -406,8 +345,6 @@ class PolicyDecision:
             field_name="approved_messages",
             item_type=OutboundMessage,
         )
-        if not isinstance(self.config_updates, ConfigUpdateDecision):
-            raise ValueError("config_updates must be ConfigUpdateDecision")
         _validate_string_list(self.reason_codes, field_name="reason_codes")
 
     def to_dict(self) -> dict[str, Any]:
@@ -416,7 +353,6 @@ class PolicyDecision:
             "approved_actions": [action.to_dict() for action in self.approved_actions],
             "blocked_actions": [action.to_dict() for action in self.blocked_actions],
             "approved_messages": [message.to_dict() for message in self.approved_messages],
-            "config_updates": self.config_updates.to_dict(),
             "reason_codes": self.reason_codes,
         }
 
