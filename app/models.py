@@ -170,7 +170,13 @@ class TaskEnvelope:
             raise ValueError("received_at must be timezone-aware")
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        reply_channel: dict[str, Any] = {
+            "type": self.reply_channel.type,
+            "target": self.reply_channel.target,
+        }
+        if self.reply_channel.metadata:
+            reply_channel["metadata"] = self.reply_channel.metadata
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "id": self.id,
             "source": self.source,
@@ -182,14 +188,9 @@ class TaskEnvelope:
                 for item in self.attachments
             ],
             "context_refs": self.context_refs,
-            "reply_channel": {
-                "type": self.reply_channel.type,
-                "target": self.reply_channel.target,
-            },
+            "reply_channel": reply_channel,
             "dedupe_key": self.dedupe_key,
         }
-        if self.reply_channel.metadata:
-            payload["reply_channel"]["metadata"] = self.reply_channel.metadata
         return payload
 
 
