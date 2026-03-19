@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Mapping
 
 from app.github_ingress_runtime import (
@@ -33,6 +33,10 @@ class GitHubIssueAssignmentConnector:
     max_issues: int = 25
     max_timeline_events: int = 10
     graphql_runner: Callable[[str, Mapping[str, object]], dict[str, object]] = default_graphql_runner
+    _pending_checkpoint: AssignmentCheckpoint | None = field(default=None, init=False, repr=False)
+    _last_poll_scanned_events: int = field(default=0, init=False, repr=False)
+    _last_poll_new_events: int = field(default=0, init=False, repr=False)
+    _last_poll_checkpoint_id: str = field(default="disabled", init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.repository_patterns:
@@ -43,10 +47,6 @@ class GitHubIssueAssignmentConnector:
             raise ValueError("max_issues must be positive")
         if self.max_timeline_events <= 0:
             raise ValueError("max_timeline_events must be positive")
-        object.__setattr__(self, "_pending_checkpoint", None)
-        object.__setattr__(self, "_last_poll_scanned_events", 0)
-        object.__setattr__(self, "_last_poll_new_events", 0)
-        object.__setattr__(self, "_last_poll_checkpoint_id", "disabled")
 
     @property
     def last_poll_scanned_events(self) -> int:

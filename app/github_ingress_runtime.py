@@ -9,7 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Mapping, Protocol, TypeVar
+from typing import Callable, Mapping, Protocol, Sequence, TypeVar
 
 from app.broker import TASK_QUEUE_NAME, BBMBQueueAdapter, TaskQueueMessage
 from app.models import ReplyChannel, TaskEnvelope
@@ -839,7 +839,7 @@ EventT = TypeVar("EventT", bound=_CheckpointedEvent)
 
 
 def select_events_after_checkpoint(
-    events: list[EventT],
+    events: Sequence[EventT],
     *,
     checkpoint: AssignmentCheckpoint | None,
 ) -> list[EventT]:
