@@ -41,6 +41,42 @@ def _validate_typed_list(values: list[Any], *, field_name: str, item_type: type[
             raise ValueError(f"{field_name} items must be {item_type.__name__}")
 
 
+SUPPORTED_CONTEXT_SCHEMES = ("repo",)
+
+
+@dataclass(frozen=True)
+class ContextRef:
+    """Parsed context reference with explicit scheme and path."""
+
+    type: str
+    path: str
+
+    def __post_init__(self) -> None:
+        if self.type not in SUPPORTED_CONTEXT_SCHEMES:
+            raise ValueError(f"unsupported context scheme: {self.type}")
+        if not self.path.startswith("/"):
+            raise ValueError(f"context path must be absolute: {self.path}")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"type": self.type, "path": self.path}
+
+
+def parse_context_ref(raw: str) -> ContextRef:
+    """Parse 'scheme:/path' into a ContextRef."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("context_refs items must be non-empty strings")
+    if ":" not in raw:
+        raise ValueError(f"context ref must use scheme:path format: {raw}")
+    scheme, path = raw.split(":", 1)
+    scheme = scheme.strip()
+    path = path.strip()
+    if not scheme:
+        raise ValueError(f"context ref scheme must not be empty: {raw}")
+    if not path:
+        raise ValueError(f"context ref path must not be empty: {raw}")
+    return ContextRef(type=scheme, path=path)
+
+
 def _validate_context_refs(values: list[str]) -> None:
     if not isinstance(values, list):
         raise ValueError("context_refs must be a list")
@@ -171,6 +207,7 @@ class RoutedTask:
     actor: str | None = None
     content: str | None = None
     attachments: list[AttachmentRef] = field(default_factory=list)
+    context: list[ContextRef] = field(default_factory=list)
     reply_channel: ReplyChannel | None = None
     schema_version: str = SCHEMA_VERSION
 
@@ -190,6 +227,7 @@ class RoutedTask:
         if self.content is not None:
             _validate_required_string(self.content, field_name="content")
         _validate_attachments(self.attachments)
+        _validate_typed_list(self.context, field_name="context", item_type=ContextRef)
         if self.reply_channel is not None:
             _validate_required_string(self.reply_channel.type, field_name="reply_channel.type")
             _validate_required_string(self.reply_channel.target, field_name="reply_channel.target")
@@ -221,6 +259,8 @@ class RoutedTask:
                 {"uri": item.uri, "name": item.name}
                 for item in self.attachments
             ]
+        if self.context:
+            payload["context"] = [ref.to_dict() for ref in self.context]
         if self.reply_channel is not None:
             payload["reply_channel"] = {
                 "type": self.reply_channel.type,

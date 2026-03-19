@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models import ExecutionConstraints, RoutedTask, TaskEnvelope
+from app.models import ExecutionConstraints, RoutedTask, TaskEnvelope, parse_context_ref
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,7 @@ class RuleBasedRouter:
             actor=envelope.actor,
             content=envelope.content,
             attachments=envelope.attachments,
+            context=[parse_context_ref(ref) for ref in envelope.context_refs],
             reply_channel=envelope.reply_channel,
         )
 
