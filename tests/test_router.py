@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
 from app.router import RuleBasedRouter
 class RuleBasedRouterTests(unittest.TestCase):
     def test_routes_email_to_respond_workflow_with_defaults(self) -> None:
@@ -13,6 +13,10 @@ class RuleBasedRouterTests(unittest.TestCase):
             content="Subject: hello\n\nPlease summarize this thread.",
             attachments=[AttachmentRef(uri="file:///tmp/request.txt", name="request.txt")],
             context_refs=["repo:/home/edward/chatting"],
+            prompt_context=PromptContext(
+                global_instructions=["Keep replies concise."],
+                reply_channel_instructions=["Use email formatting."],
+            ),
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:msg_1",
         )
@@ -30,6 +34,7 @@ class RuleBasedRouterTests(unittest.TestCase):
         self.assertEqual(task.actor, "alice@example.com")
         self.assertEqual(task.content, envelope.content)
         self.assertEqual(task.attachments, envelope.attachments)
+        self.assertEqual(task.prompt_context, envelope.prompt_context)
         self.assertEqual(task.reply_channel, envelope.reply_channel)
 
     def test_routes_cron_to_scheduled_automation_with_cron_constraints(self) -> None:

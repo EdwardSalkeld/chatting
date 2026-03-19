@@ -101,6 +101,11 @@ def _validate_attachments(values: list["AttachmentRef"]) -> None:
             raise ValueError("attachments items must be AttachmentRef")
 
 
+def _validate_prompt_context(value: "PromptContext") -> None:
+    if not isinstance(value, PromptContext):
+        raise ValueError("prompt_context must be PromptContext")
+
+
 @dataclass(frozen=True)
 class AttachmentRef:
     """Reference to an external attachment."""
@@ -126,6 +131,59 @@ class ReplyChannel:
         _validate_required_string(self.type, field_name="type")
         _validate_required_string(self.target, field_name="target")
         _validate_metadata_dict(self.metadata, field_name="metadata")
+
+
+@dataclass(frozen=True)
+class PromptContext:
+    """Structured instruction context that is separate from repo/file context."""
+
+    global_instructions: list[str] = field(default_factory=list)
+    source_instructions: list[str] = field(default_factory=list)
+    reply_channel_instructions: list[str] = field(default_factory=list)
+    task_instructions: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _validate_string_list(
+            self.global_instructions,
+            field_name="prompt_context.global_instructions",
+        )
+        _validate_string_list(
+            self.source_instructions,
+            field_name="prompt_context.source_instructions",
+        )
+        _validate_string_list(
+            self.reply_channel_instructions,
+            field_name="prompt_context.reply_channel_instructions",
+        )
+        _validate_string_list(
+            self.task_instructions,
+            field_name="prompt_context.task_instructions",
+        )
+
+    def assembled_instructions(self) -> list[str]:
+        return (
+            list(self.global_instructions)
+            + list(self.source_instructions)
+            + list(self.reply_channel_instructions)
+            + list(self.task_instructions)
+        )
+
+    def has_content(self) -> bool:
+        return bool(
+            self.global_instructions
+            or self.source_instructions
+            or self.reply_channel_instructions
+            or self.task_instructions
+        )
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {
+            "global_instructions": list(self.global_instructions),
+            "source_instructions": list(self.source_instructions),
+            "reply_channel_instructions": list(self.reply_channel_instructions),
+            "task_instructions": list(self.task_instructions),
+            "assembled_instructions": self.assembled_instructions(),
+        }
 
 
 @dataclass(frozen=True)
@@ -155,6 +213,7 @@ class TaskEnvelope:
     context_refs: list[str]
     reply_channel: ReplyChannel
     dedupe_key: str
+    prompt_context: PromptContext = field(default_factory=PromptContext)
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -166,6 +225,7 @@ class TaskEnvelope:
         _validate_required_string(self.dedupe_key, field_name="dedupe_key")
         _validate_attachments(self.attachments)
         _validate_context_refs(self.context_refs)
+        _validate_prompt_context(self.prompt_context)
         if self.received_at.tzinfo is None:
             raise ValueError("received_at must be timezone-aware")
 
@@ -191,6 +251,8 @@ class TaskEnvelope:
             "reply_channel": reply_channel,
             "dedupe_key": self.dedupe_key,
         }
+        if self.prompt_context.has_content():
+            payload["prompt_context"] = self.prompt_context.to_dict()
         return payload
 
 
@@ -209,6 +271,7 @@ class RoutedTask:
     content: str | None = None
     attachments: list[AttachmentRef] = field(default_factory=list)
     context: list[ContextRef] = field(default_factory=list)
+    prompt_context: PromptContext = field(default_factory=PromptContext)
     reply_channel: ReplyChannel | None = None
     schema_version: str = SCHEMA_VERSION
 
@@ -229,6 +292,7 @@ class RoutedTask:
             _validate_required_string(self.content, field_name="content")
         _validate_attachments(self.attachments)
         _validate_typed_list(self.context, field_name="context", item_type=ContextRef)
+        _validate_prompt_context(self.prompt_context)
         if self.reply_channel is not None:
             _validate_required_string(self.reply_channel.type, field_name="reply_channel.type")
             _validate_required_string(self.reply_channel.target, field_name="reply_channel.target")
@@ -262,6 +326,8 @@ class RoutedTask:
             ]
         if self.context:
             payload["context"] = [ref.to_dict() for ref in self.context]
+        if self.prompt_context.has_content():
+            payload["prompt_context"] = self.prompt_context.to_dict()
         if self.reply_channel is not None:
             reply_channel_dict: dict[str, Any] = {
                 "type": self.reply_channel.type,
@@ -563,4 +629,3 @@ class DeadLetterRecord:
             "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "replayed_run_id": self.replayed_run_id,
         }
-

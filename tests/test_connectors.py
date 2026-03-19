@@ -21,6 +21,7 @@ from app.connectors.telegram_connector import (
 from app.connectors.slack_connector import SlackConnector
 from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
 from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
+from app.models import PromptContext
 class FakeCronConnectorTests(unittest.TestCase):
     def test_poll_normalizes_cron_trigger_to_envelope(self) -> None:
         connector = FakeCronConnector(
@@ -135,6 +136,35 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
         self.assertEqual(
             second_poll[0].dedupe_key,
             "cron:heartbeat:2026-02-28T10:01:00+00:00",
+        )
+
+    def test_poll_merges_global_source_and_job_prompt_context(self) -> None:
+        clock = _MutableClock(datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc))
+        connector = IntervalScheduleConnector(
+            jobs=[
+                IntervalScheduleJob(
+                    job_name="heartbeat",
+                    content="Run scheduled heartbeat",
+                    interval_seconds=60,
+                    start_at=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+                    context_refs=[],
+                    prompt_context=["Include yesterday's failures first."],
+                )
+            ],
+            global_prompt_context=["Keep scheduled reports terse."],
+            source_prompt_context=["This is a scheduled automation task."],
+            now_provider=clock.now,
+        )
+
+        envelope = connector.poll()[0]
+
+        self.assertEqual(
+            envelope.prompt_context.assembled_instructions(),
+            [
+                "Keep scheduled reports terse.",
+                "This is a scheduled automation task.",
+                "Include yesterday's failures first.",
+            ],
         )
 
     def test_job_rejects_naive_start_at(self) -> None:
@@ -804,6 +834,36 @@ class ImapEmailConnectorTests(unittest.TestCase):
             datetime(2026, 2, 28, 10, 15, tzinfo=timezone.utc),
         )
 
+    def test_poll_attaches_prompt_context_to_email_envelope(self) -> None:
+        raw_message = _build_raw_email(
+            sender="alice@example.com",
+            subject="Please summarize",
+            body="Summarize this inbox thread.",
+            date_value="Sat, 28 Feb 2026 10:15:00 +0000",
+        )
+        fake_client = _FakeImapClient({b"101": raw_message})
+        connector = ImapEmailConnector(
+            host="imap.example.com",
+            username="bot@example.com",
+            password="secret",
+            imap_client_factory=lambda _host, _port: fake_client,
+            prompt_context=PromptContext(
+                global_instructions=["Keep replies concise."],
+                reply_channel_instructions=["Use a clear email subject line."],
+            ),
+            now_provider=lambda: datetime(2026, 2, 28, 10, 30, tzinfo=timezone.utc),
+        )
+
+        envelope = connector.poll()[0]
+
+        self.assertEqual(
+            envelope.prompt_context.assembled_instructions(),
+            [
+                "Keep replies concise.",
+                "Use a clear email subject line.",
+            ],
+        )
+
     def test_poll_falls_back_to_now_for_invalid_date_header(self) -> None:
         raw_message = _build_raw_email(
             sender="alice@example.com",
@@ -879,6 +939,41 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(second_poll, [])
         self.assertIn("timeout=20", seen_urls[0])
         self.assertIn("offset=1003", seen_urls[1])
+
+    def test_poll_attaches_prompt_context_to_telegram_envelope(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            allowed_chat_ids=["12345"],
+            prompt_context=PromptContext(
+                global_instructions=["Keep replies concise."],
+                reply_channel_instructions=["Write like a short Telegram chat reply."],
+            ),
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 1001,
+                        "message": {
+                            "message_id": 1,
+                            "date": 1772272800,
+                            "text": "hello from telegram",
+                            "chat": {"id": 12345},
+                            "from": {"id": 77, "username": "alice"},
+                        },
+                    }
+                ],
+            ),
+        )
+
+        envelope = connector.poll()[0]
+
+        self.assertEqual(
+            envelope.prompt_context.assembled_instructions(),
+            [
+                "Keep replies concise.",
+                "Write like a short Telegram chat reply.",
+            ],
+        )
 
     def test_poll_respects_allowed_chat_ids_and_skips_unsupported_payloads(self) -> None:
         connector = TelegramConnector(

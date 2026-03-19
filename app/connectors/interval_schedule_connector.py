@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import CroniterBadCronError, croniter
 
-from app.models import ReplyChannel, TaskEnvelope
+from app.models import PromptContext, ReplyChannel, TaskEnvelope
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class IntervalScheduleJob:
     job_name: str
     content: str
     context_refs: list[str]
+    prompt_context: list[str] = field(default_factory=list)
     interval_seconds: int | None = None
     cron: str | None = None
     timezone_name: str | None = None
@@ -31,6 +32,10 @@ class IntervalScheduleJob:
             raise ValueError("job_name is required")
         if not self.content:
             raise ValueError("content is required")
+        if not isinstance(self.prompt_context, list) or not all(
+            isinstance(item, str) and item.strip() for item in self.prompt_context
+        ):
+            raise ValueError("prompt_context must be a list of non-empty strings")
         if self.interval_seconds is None and self.cron is None:
             raise ValueError("interval_seconds or cron is required")
         if self.interval_seconds is not None and self.interval_seconds <= 0:
@@ -66,9 +71,13 @@ class IntervalScheduleConnector:
         self,
         jobs: list[IntervalScheduleJob],
         *,
+        global_prompt_context: list[str] | None = None,
+        source_prompt_context: list[str] | None = None,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._jobs = jobs
+        self._global_prompt_context = list(global_prompt_context or [])
+        self._source_prompt_context = list(source_prompt_context or [])
         self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._next_run_at_by_job: dict[str, datetime] = {}
 
@@ -98,6 +107,11 @@ class IntervalScheduleConnector:
                     context_refs=job.context_refs,
                     reply_channel=reply_channel,
                     dedupe_key=event_id,
+                    prompt_context=PromptContext(
+                        global_instructions=self._global_prompt_context,
+                        source_instructions=self._source_prompt_context,
+                        task_instructions=job.prompt_context,
+                    ),
                 )
             )
 

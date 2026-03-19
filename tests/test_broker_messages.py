@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.models import AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, OutboundMessage, PromptContext, ReplyChannel, TaskEnvelope
 class TaskQueueMessageTests(unittest.TestCase):
     def test_task_message_round_trip(self) -> None:
         envelope = TaskEnvelope(
@@ -19,6 +19,10 @@ class TaskQueueMessageTests(unittest.TestCase):
                 metadata={"thread_id": "abc"},
             ),
             dedupe_key="email:1",
+            prompt_context=PromptContext(
+                global_instructions=["Keep replies concise."],
+                reply_channel_instructions=["Use email formatting."],
+            ),
         )
 
         message = TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:1")
@@ -29,6 +33,10 @@ class TaskQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.envelope.id, envelope.id)
         self.assertEqual(parsed.envelope.attachments[0].uri, "file://inbox/msg1.txt")
         self.assertEqual(parsed.envelope.reply_channel.metadata, {"thread_id": "abc"})
+        self.assertEqual(
+            parsed.envelope.prompt_context.assembled_instructions(),
+            ["Keep replies concise.", "Use email formatting."],
+        )
 
     def test_task_message_rejects_wrong_type(self) -> None:
         with self.assertRaises(ValueError):

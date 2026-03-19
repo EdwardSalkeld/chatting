@@ -9,7 +9,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Callable, Sequence, cast
 
-from app.models import ReplyChannel, TaskEnvelope
+from app.models import PromptContext, ReplyChannel, TaskEnvelope
 
 
 class ImapEmailConnector:
@@ -27,6 +27,7 @@ class ImapEmailConnector:
         mailbox: str = "INBOX",
         search_criterion: str = "UNSEEN",
         context_refs: list[str] | None = None,
+        prompt_context: PromptContext | None = None,
         use_ssl: bool = True,
         imap_client_factory: Callable[[str, int], imaplib.IMAP4] | None = None,
         now_provider: Callable[[], datetime] | None = None,
@@ -51,6 +52,7 @@ class ImapEmailConnector:
         self._mailbox = mailbox
         self._search_criterion = search_criterion
         self._context_refs = context_refs or []
+        self._prompt_context = prompt_context or PromptContext()
         self._imap_client_factory = imap_client_factory or _default_imap_factory(use_ssl)
         self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
@@ -108,6 +110,7 @@ class ImapEmailConnector:
             context_refs=self._context_refs,
             reply_channel=ReplyChannel(type="email", target=target),
             dedupe_key=event_id,
+            prompt_context=self._prompt_context,
         )
 
 

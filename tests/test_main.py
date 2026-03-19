@@ -95,6 +95,7 @@ class MainCliSplitOnlyTests(unittest.TestCase):
                             "content": "Run interval job",
                             "interval_seconds": 300,
                             "start_at": "2026-03-07T00:00:00Z",
+                            "prompt_context": ["Mention overdue alerts first."],
                         },
                     ]
                 ),
@@ -109,6 +110,27 @@ class MainCliSplitOnlyTests(unittest.TestCase):
             self.assertEqual(jobs[0].interval_seconds, 86400)
             self.assertEqual(jobs[1].interval_seconds, 300)
             self.assertEqual(jobs[1].cron, None)
+            self.assertEqual(jobs[1].prompt_context, ["Mention overdue alerts first."])
+
+    def test_load_schedule_jobs_rejects_invalid_prompt_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schedule_path = Path(tmpdir) / "schedule.json"
+            schedule_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_name": "interval-job",
+                            "content": "Run interval job",
+                            "interval_seconds": 300,
+                            "prompt_context": [""],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "prompt_context must be a list of non-empty strings"):
+                _load_schedule_jobs(str(schedule_path))
 
     def test_load_schedule_jobs_defaults_cron_timezone_to_utc(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

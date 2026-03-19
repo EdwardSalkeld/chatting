@@ -9,6 +9,10 @@ Live scheduled-job connector that emits `cron`-source events from either fixed i
 ## Runtime config keys
 
 Configured via `schedule_file` JSON loaded by `app.main_message_handler`.
+Global schedule prompt guidance comes from message-handler config:
+- `prompt_context` (optional global prompt instructions)
+- `cron_prompt_context` (optional schedule-source prompt instructions)
+
 Each job supports:
 - `job_name` (required)
 - `content` (required)
@@ -16,6 +20,7 @@ Each job supports:
 - `cron` (optional 5-field cron expression)
 - `timezone` (optional with `cron`, defaults to `UTC`; uses an IANA name such as `Europe/London`)
 - `context_refs` (optional list of non-empty strings)
+- `prompt_context` (optional list of per-job prompt instructions)
 - `start_at` (optional RFC3339 datetime for interval schedules)
 - `reply_channel_type` (optional non-empty string, requires `reply_channel_target`)
 - `reply_channel_target` (optional non-empty string, requires `reply_channel_type`)
@@ -35,7 +40,8 @@ Interval:
   "job_name": "heartbeat",
   "content": "Run scheduled heartbeat",
   "interval_seconds": 300,
-  "start_at": "2026-03-07T00:00:00Z"
+  "start_at": "2026-03-07T00:00:00Z",
+  "prompt_context": ["Mention overdue alerts first."]
 }
 ```
 
@@ -74,6 +80,8 @@ Cron with an interval fallback left in place during migration. The cron schedule
 ## Notes
 
 - Startup validation is strict: unknown keys, missing keys, invalid types, blank fields, invalid cron expressions, invalid timezone names, and invalid `start_at` values are rejected.
+- Prompt guidance is assembled in this order before task content:
+  global `prompt_context`, then `cron_prompt_context`, then the job's own `prompt_context`.
 - `reply_channel_type` and `reply_channel_target` must be provided together.
 - Cron schedules are evaluated in the configured local timezone and emitted as UTC timestamps.
 - If `timezone` is omitted for a cron job, `UTC` is used.

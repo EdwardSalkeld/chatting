@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.executor import CodexExecutor, parse_execution_result
-from app.models import AttachmentRef, ExecutionConstraints, ReplyChannel, RoutedTask
+from app.models import AttachmentRef, ExecutionConstraints, PromptContext, ReplyChannel, RoutedTask
+
+
 def _task() -> RoutedTask:
     return RoutedTask(
         task_id="task_1",
@@ -18,6 +20,10 @@ def _task() -> RoutedTask:
         actor="alice@example.com",
         content="Subject: hello\\n\\nPlease summarize this thread.",
         attachments=[AttachmentRef(uri="file:///tmp/evidence.png", name="evidence.png")],
+        prompt_context=PromptContext(
+            global_instructions=["Keep replies concise."],
+            reply_channel_instructions=["Use a short email subject line."],
+        ),
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
     )
 class ParseExecutionResultTests(unittest.TestCase):
@@ -340,6 +346,19 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(
             payload["task"]["attachments"],
             [{"uri": "file:///tmp/evidence.png", "name": "evidence.png"}],
+        )
+        self.assertEqual(
+            payload["task"]["prompt_context"],
+            {
+                "global_instructions": ["Keep replies concise."],
+                "source_instructions": [],
+                "reply_channel_instructions": ["Use a short email subject line."],
+                "task_instructions": [],
+                "assembled_instructions": [
+                    "Keep replies concise.",
+                    "Use a short email subject line.",
+                ],
+            },
         )
         self.assertEqual(payload["current_time"], "2026-02-27T18:00:00Z")
         self.assertEqual(

@@ -70,6 +70,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "metrics_host",
         "metrics_port",
         "allowed_egress_channels",
+        "prompt_context",
         "schedule_file",
         "imap_host",
         "imap_port",
@@ -78,6 +79,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "imap_mailbox",
         "imap_search",
         "imap_use_ssl",
+        "email_prompt_context",
         "context_ref",
         "context_refs",
         "smtp_host",
@@ -97,12 +99,14 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "telegram_attachment_dir",
         "telegram_attachment_cleanup_grace_seconds",
         "telegram_attachment_max_age_seconds",
+        "telegram_prompt_context",
         "telegram_context_refs",
         "github_repositories",
         "github_assignee_login",
         "github_context_refs",
         "github_max_issues",
         "github_max_timeline_events",
+        "cron_prompt_context",
     }
 )
 BBMB_EGRESS_PICKUP_WAIT_SECONDS = 5
@@ -1041,7 +1045,7 @@ def _build_live_connectors_fail_open(
     connector_args: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         "schedule": (
             ("schedule_file",),
-            ("schedule_file",),
+            ("schedule_file", "prompt_context", "cron_prompt_context"),
         ),
         "imap": (
             (
@@ -1054,6 +1058,8 @@ def _build_live_connectors_fail_open(
                 "context_ref",
             ),
             (
+                "prompt_context",
+                "email_prompt_context",
                 "imap_host",
                 "imap_port",
                 "imap_username",
@@ -1085,6 +1091,8 @@ def _build_live_connectors_fail_open(
                 "telegram_attachment_dir",
                 "telegram_allowed_chat_ids",
                 "telegram_allowed_channel_ids",
+                "prompt_context",
+                "telegram_prompt_context",
                 "telegram_context_refs",
                 "context_ref",
                 "context_refs",

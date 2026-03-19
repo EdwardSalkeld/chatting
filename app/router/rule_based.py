@@ -45,6 +45,7 @@ class RuleBasedRouter:
             content=envelope.content,
             attachments=envelope.attachments,
             context=[parse_context_ref(ref) for ref in envelope.context_refs],
+            prompt_context=envelope.prompt_context,
             reply_channel=envelope.reply_channel,
         )
 

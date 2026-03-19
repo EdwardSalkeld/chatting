@@ -14,6 +14,7 @@ from app.models import (
     AttachmentRef,
     AuditEvent,
     DeadLetterRecord,
+    PromptContext,
     ReplyChannel,
     RunRecord,
     TaskEnvelope,
@@ -625,6 +626,9 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
     raw_attachments = payload.get("attachments", [])
     if not isinstance(raw_attachments, list):
         raise ValueError("invalid dead letter envelope payload")
+    raw_prompt_context = payload.get("prompt_context", {})
+    if not isinstance(raw_prompt_context, dict):
+        raise ValueError("invalid dead letter envelope payload")
     context_refs = [str(value) for value in raw_context_refs]
     attachments: list[AttachmentRef] = []
     for raw_attachment in raw_attachments:
@@ -653,5 +657,25 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
             else {},
         ),
         dedupe_key=str(payload["dedupe_key"]),
+        prompt_context=PromptContext(
+            global_instructions=_string_list_from_payload(
+                raw_prompt_context.get("global_instructions", [])
+            ),
+            source_instructions=_string_list_from_payload(
+                raw_prompt_context.get("source_instructions", [])
+            ),
+            reply_channel_instructions=_string_list_from_payload(
+                raw_prompt_context.get("reply_channel_instructions", [])
+            ),
+            task_instructions=_string_list_from_payload(
+                raw_prompt_context.get("task_instructions", [])
+            ),
+        ),
         schema_version=str(payload.get("schema_version", "1.0")),
     )
+
+
+def _string_list_from_payload(value: object) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("invalid dead letter envelope payload")
+    return [str(item) for item in value]
