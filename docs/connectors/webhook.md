@@ -6,7 +6,7 @@ Module: `app.connectors.webhook_connector`
 
 Drain queued webhook events into canonical webhook envelopes.
 
-## Current integration state
+## Integration state
 
 - Connector module is implemented and unit-tested.
 - It is not wired into the split-mode runtime CLI/config yet.

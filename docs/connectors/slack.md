@@ -6,7 +6,7 @@ Module: `app.connectors.slack_connector`
 
 Normalize Slack-style message payloads into canonical IM envelopes.
 
-## Current integration state
+## Integration state
 
 - Connector module is implemented and unit-tested.
 - It is not wired into the split-mode runtime CLI/config yet.
