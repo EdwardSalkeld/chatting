@@ -1,6 +1,6 @@
 # Running Split Mode With BBMB
 
-This mode runs `chatting` as a 3-part application:
+`chatting` runs as three services:
 - `message-handler` on the integration host (connectors + outbound dispatch)
 - `worker` on the execution host (routing + executor + policy)
 - `bbmb-server` in the middle (message bus)
@@ -128,7 +128,7 @@ uv run python -m app.main_reply task:email:53 \
 Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
 - These events are intentionally unsequenced and dispatch immediately at `message-handler`.
-- In the current contract, executor stdout is completion-only; visible replies belong here.
+- Executor stdout is completion-only; visible replies belong here.
 - `--event-id` can be supplied for stable idempotency across retries.
 - Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
 

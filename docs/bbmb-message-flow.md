@@ -19,7 +19,7 @@ Use it as the source of truth for:
 
 ## Queues
 
-There are currently two BBMB queues:
+There are two BBMB queues:
 
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
@@ -27,11 +27,11 @@ There are currently two BBMB queues:
 | `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for visible executor-published incrementals and internal completion |
 
 Important details:
-- Queue names are hardcoded today.
+- Queue names are hardcoded.
 - There is no separate BBMB retry queue, dead-letter queue, or approval queue.
 - Retries, dead letters, ingress dedupe state, the task ledger, and the worker egress outbox all
   live in SQLite, not in BBMB.
-- The current worker emits `chatting.egress.v2` payloads on `chatting.egress.v1`. The queue name is
+- The worker emits `chatting.egress.v2` payloads on `chatting.egress.v1`. The queue name is
   transport-level; the `message_type` inside the JSON is the payload contract version.
 - `message-handler` enforces this contract and rejects legacy `chatting.egress.v1` payload types.
 
@@ -62,7 +62,7 @@ Examples:
 it, runs policy, persists run and audit records, and always emits exactly one terminal
 `event_kind="completion"` egress message.
 
-Current worker behavior:
+Worker behavior:
 - the executor returns only completion metadata, actions, config updates, and errors
 - the executor must publish any visible reply itself with `app.main_reply`
 - terminal task closure uses `event_kind="completion"` and is internal-only

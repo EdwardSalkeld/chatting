@@ -40,9 +40,9 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - Offset is advanced as `highest_update_id + 1` each poll.
 - The message handler tracks downloaded Telegram attachments in its SQLite DB and only makes them cleanup-eligible after the task reaches terminal completion.
 - Cleanup uses a hybrid policy:
-  terminal tasks wait for `telegram_attachment_cleanup_grace_seconds`, while orphaned/dead-lettered attachments are still reclaimed once they exceed `telegram_attachment_max_age_seconds`.
+  terminal tasks wait for `telegram_attachment_cleanup_grace_seconds`, while orphaned/dead-lettered attachments are reclaimed once they exceed `telegram_attachment_max_age_seconds`.
 - Cleanup runs in the message-handler loop and logs tracked, eligible, deleted, missing, and failed attachment cleanup events.
-- In production, point `telegram_attachment_dir` at durable storage when workers need access beyond ingress, but expect the handler to reclaim old files automatically unless you increase the retention settings.
+- In production, point `telegram_attachment_dir` at durable storage when workers need access beyond ingress; the handler reclaims old files automatically unless you increase the retention settings.
 
 ## Outbound egress
 
@@ -57,7 +57,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
   - image MIME types go to `sendPhoto`
   - everything else goes to `sendDocument`
 - Attachment constraints:
-  - only local absolute `file://` paths are supported today
+  - only local absolute `file://` paths are supported
   - the referenced file must already exist on disk when dispatch runs
   - upload/API failures surface deterministic Telegram reason codes such as `telegram_attachment_missing` and `telegram_attachment_send_failed`
 - Outbound attachments under `telegram_attachment_dir` are tracked in the same cleanup ledger as inbound downloads and become cleanup-eligible after task completion.

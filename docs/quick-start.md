@@ -1,6 +1,6 @@
 # Quick Start
 
-This system now runs in split mode only:
+`chatting` runs as three services:
 - `message-handler`
 - `worker`
 - `bbmb-server`
@@ -74,6 +74,6 @@ uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-metri
 - For the queue-by-queue runtime conversation, payload examples, and config levers, see
   [BBMB Message Flow](bbmb-message-flow.md).
 - For full split-mode setup and operational details, see [Run Split Mode (BBMB)](run-split-bbmb.md).
-- `app.cli`/`app.main` no longer run bootstrap/live runtime execution.
+- `app.cli`/`app.main` are admin/query entrypoints only.
 - `app.cli` reads one SQLite database at a time. In split mode, point it at either the
   message-handler DB or the worker DB depending on what you want to inspect.
