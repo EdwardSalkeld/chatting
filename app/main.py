@@ -360,7 +360,6 @@ def _process_envelope(
                 "execution_summary": {
                     "message_count": execution_message_count,
                     "action_count": execution_action_count,
-                    "config_update_count": execution_config_update_count,
                     "error_count": execution_error_count,
                     "action_types": execution_action_types,
                 },
