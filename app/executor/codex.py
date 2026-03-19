@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 from app.models import (
     ActionProposal,
-    ConfigUpdate,
     ExecutionResult,
     RoutedTask,
     SCHEMA_VERSION,
@@ -19,19 +18,14 @@ from app.models import (
 _ALLOWED_TOP_LEVEL_KEYS = {
     "schema_version",
     "actions",
-    "config_updates",
-    "requires_human_review",
     "errors",
 }
 _REQUIRED_TOP_LEVEL_KEYS = {
     "schema_version",
     "actions",
-    "config_updates",
-    "requires_human_review",
     "errors",
 }
 _ALLOWED_ACTION_KEYS = {"type", "path", "content"}
-_ALLOWED_CONFIG_UPDATE_KEYS = {"path", "value"}
 
 EXECUTION_RESULT_JSON_SCHEMA = json.dumps(
     {
@@ -39,8 +33,6 @@ EXECUTION_RESULT_JSON_SCHEMA = json.dumps(
         "properties": {
             "schema_version": {"type": "string"},
             "actions": {"type": "array"},
-            "config_updates": {"type": "array"},
-            "requires_human_review": {"type": "boolean"},
             "errors": {"type": "array"},
         },
         "required": sorted(_REQUIRED_TOP_LEVEL_KEYS),
@@ -103,11 +95,6 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
         raise ValueError("missing_top_level_keys:" + ",".join(sorted(missing)))
 
     actions = _parse_actions(payload["actions"])
-    config_updates = _parse_config_updates(payload["config_updates"])
-
-    requires_human_review = payload["requires_human_review"]
-    if not isinstance(requires_human_review, bool):
-        raise ValueError("requires_human_review_must_be_bool")
 
     errors = payload["errors"]
     if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
@@ -125,8 +112,6 @@ def parse_execution_result(raw_output: str) -> ExecutionResult:
 
     return ExecutionResult(
         actions=actions,
-        config_updates=config_updates,
-        requires_human_review=requires_human_review,
         errors=errors,
         schema_version=schema_version,
     )
@@ -219,30 +204,6 @@ def _parse_actions(value: Any) -> list[ActionProposal]:
     return actions
 
 
-def _parse_config_updates(value: Any) -> list[ConfigUpdate]:
-    if not isinstance(value, list):
-        raise ValueError("config_updates_must_be_list")
-
-    updates: list[ConfigUpdate] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise ValueError("config_updates_items_must_be_objects")
-        unknown_keys = set(item) - _ALLOWED_CONFIG_UPDATE_KEYS
-        if unknown_keys:
-            raise ValueError(
-                "unknown_config_update_keys:" + ",".join(sorted(unknown_keys))
-            )
-        if "value" not in item:
-            raise ValueError("config_update_value_required")
-        updates.append(
-            ConfigUpdate(
-                path=_required_str(item, "path", "config_update"),
-                value=item["value"],
-            )
-        )
-    return updates
-
-
 def _required_str(payload: dict[str, Any], key: str, context: str) -> str:
     if key not in payload:
         raise ValueError(f"{context}_{key}_required")
@@ -286,8 +247,6 @@ def _validate_action_payload(
 def _error_result(error: str) -> ExecutionResult:
     return ExecutionResult(
         actions=[],
-        config_updates=[],
-        requires_human_review=False,
         errors=[error],
     )
 

@@ -54,7 +54,7 @@ from app.message_handler_runtime import (
     TelegramAttachmentStore,
     cleanup_telegram_attachments,
 )
-from app.models import ConfigUpdateDecision, OutboundMessage, PolicyDecision, TaskEnvelope
+from app.models import OutboundMessage, PolicyDecision, TaskEnvelope
 from app.state import SQLiteStateStore
 
 MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR = "CHATTING_MESSAGE_HANDLER_CONFIG_PATH"
@@ -1195,7 +1195,6 @@ def _build_policy_decision_for_message(egress_message: EgressQueueMessage) -> Po
         approved_actions=[],
         blocked_actions=[],
         approved_messages=[egress_message.message],
-        config_updates=ConfigUpdateDecision(),
         reason_codes=[],
     )
 
