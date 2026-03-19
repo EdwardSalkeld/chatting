@@ -8,6 +8,8 @@ Poll an IMAP mailbox and normalize messages to canonical email envelopes.
 
 ## Runtime config keys
 
+- `prompt_context` (optional global prompt instructions)
+- `email_prompt_context` (optional email-specific prompt instructions)
 - `imap_host`
 - `imap_port` (default `993`)
 - `imap_username`
@@ -26,5 +28,7 @@ Poll an IMAP mailbox and normalize messages to canonical email envelopes.
 
 ## Notes
 
+- Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
+  global `prompt_context`, then `email_prompt_context`, then the task content itself.
 - In live mode, `--smtp-host` is required if IMAP is enabled so replies can be dispatched.
 - Invalid/missing email date headers fall back to connector current UTC time.

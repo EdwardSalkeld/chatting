@@ -29,7 +29,15 @@ from app.connectors import (
     TelegramConnector,
 )
 from app.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
-from app.models import AuditEvent, DeadLetterRecord, OutboundMessage, PolicyDecision, RunRecord, TaskEnvelope
+from app.models import (
+    AuditEvent,
+    DeadLetterRecord,
+    OutboundMessage,
+    PolicyDecision,
+    PromptContext,
+    RunRecord,
+    TaskEnvelope,
+)
 from app.policy import AllowlistPolicyEngine
 from app.router import RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
@@ -53,7 +61,9 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "max_attempts",
         "max_loops",
         "poll_interval_seconds",
+        "prompt_context",
         "schedule_file",
+        "email_prompt_context",
         "error_notify_email",
         "smtp_from",
         "smtp_host",
@@ -69,9 +79,11 @@ ALLOWED_RUNTIME_CONFIG_KEYS = frozenset(
         "telegram_attachment_max_age_seconds",
         "telegram_api_base_url",
         "telegram_bot_token_env",
+        "telegram_prompt_context",
         "telegram_context_refs",
         "telegram_enabled",
         "telegram_poll_timeout_seconds",
+        "cron_prompt_context",
         "worker_count",
     }
 )
@@ -82,6 +94,7 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
         "context_refs",
         "interval_seconds",
         "job_name",
+        "prompt_context",
         "reply_channel_target",
         "reply_channel_type",
         "start_at",
@@ -551,6 +564,7 @@ def _enrich_telegram_envelope_with_memory(
         context_refs=envelope.context_refs,
         reply_channel=envelope.reply_channel,
         dedupe_key=envelope.dedupe_key,
+        prompt_context=envelope.prompt_context,
         schema_version=envelope.schema_version,
     )
 
@@ -687,6 +701,16 @@ def main() -> int:
 
 def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) -> list[Connector]:
     connectors: list[Connector] = []
+    global_prompt_context = _resolve_prompt_context_values(config, setting_name="prompt_context")
+    email_prompt_context = _resolve_prompt_context_values(
+        config,
+        setting_name="email_prompt_context",
+    )
+    telegram_prompt_context = _resolve_prompt_context_values(
+        config,
+        setting_name="telegram_prompt_context",
+    )
+    cron_prompt_context = _resolve_prompt_context_values(config, setting_name="cron_prompt_context")
 
     schedule_file = _resolve_optional_str(
         cli_value=args.schedule_file,
@@ -695,7 +719,13 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
     )
     if schedule_file:
         jobs = _load_schedule_jobs(schedule_file)
-        connectors.append(IntervalScheduleConnector(jobs=jobs))
+        connectors.append(
+            IntervalScheduleConnector(
+                jobs=jobs,
+                global_prompt_context=global_prompt_context,
+                source_prompt_context=cron_prompt_context,
+            )
+        )
 
     imap_host = _resolve_optional_str(
         cli_value=args.imap_host,
@@ -751,6 +781,10 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
                 ),
                 use_ssl=imap_use_ssl,
                 context_refs=context_refs,
+                prompt_context=PromptContext(
+                    global_instructions=global_prompt_context,
+                    reply_channel_instructions=email_prompt_context,
+                ),
             )
         )
 
@@ -789,6 +823,10 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
                 allowed_chat_ids=_resolve_telegram_allowed_chat_ids(args, config),
                 allowed_channel_ids=_resolve_telegram_allowed_channel_ids(args, config),
                 context_refs=telegram_context_refs,
+                prompt_context=PromptContext(
+                    global_instructions=global_prompt_context,
+                    reply_channel_instructions=telegram_prompt_context,
+                ),
                 attachment_root_dir=_resolve_telegram_attachment_dir(args, config),
             )
         )
@@ -1004,6 +1042,16 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 f"schedule job at index {index} context_refs must be a list of non-empty strings"
             )
 
+        raw_prompt_context = raw_job.get("prompt_context", [])
+        if not isinstance(raw_prompt_context, list):
+            raise ValueError(
+                f"schedule job at index {index} prompt_context must be a list of non-empty strings"
+            )
+        if not all(isinstance(item, str) and item.strip() for item in raw_prompt_context):
+            raise ValueError(
+                f"schedule job at index {index} prompt_context must be a list of non-empty strings"
+            )
+
         raw_start_at = raw_job.get("start_at")
         if cron is None:
             if raw_start_at is not None and not isinstance(raw_start_at, str):
@@ -1038,6 +1086,7 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 job_name=job_name.strip(),
                 content=content.strip(),
                 context_refs=list(raw_context_refs),
+                prompt_context=list(raw_prompt_context),
                 interval_seconds=interval_seconds if isinstance(interval_seconds, int) else None,
                 cron=cron.strip() if isinstance(cron, str) else None,
                 timezone_name=timezone_name.strip() if isinstance(timezone_name, str) else None,
@@ -1214,6 +1263,19 @@ def _resolve_context_refs(cli_values: list[str], config: dict[str, object]) -> l
     if any(not value.strip() for value in merged_values):
         raise ValueError("context_ref/context_refs entries must not be empty")
     return merged_values
+
+
+def _resolve_prompt_context_values(config: dict[str, object], *, setting_name: str) -> list[str]:
+    raw_values = config.get(setting_name, [])
+    if raw_values is None:
+        return []
+    if not isinstance(raw_values, list):
+        raise ValueError(f"config {setting_name} must be a list of strings")
+    if not all(isinstance(item, str) for item in raw_values):
+        raise ValueError(f"config {setting_name} must be a list of strings")
+    if any(not item.strip() for item in raw_values):
+        raise ValueError(f"config {setting_name} entries must not be empty")
+    return [item.strip() for item in raw_values]
 
 
 def _resolve_telegram_allowed_chat_ids(

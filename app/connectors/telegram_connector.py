@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ class TelegramConnector:
         allowed_chat_ids: list[str] | None = None,
         allowed_channel_ids: list[str] | None = None,
         context_refs: list[str] | None = None,
+        prompt_context: PromptContext | None = None,
         attachment_root_dir: str | None = None,
         request_timeout_seconds: float = 30.0,
         http_get_json: Callable[[str, float], TelegramGetUpdatesResponse] | None = None,
@@ -81,6 +82,7 @@ class TelegramConnector:
         self._allowed_chat_ids = set(allowed_chat_ids or [])
         self._allowed_channel_ids = set(allowed_channel_ids or [])
         self._context_refs = list(context_refs or [])
+        self._prompt_context = prompt_context or PromptContext()
         self._attachment_root_dir = Path(
             attachment_root_dir or Path(tempfile.gettempdir()) / "chatting-telegram-attachments"
         )
@@ -226,6 +228,7 @@ class TelegramConnector:
                 metadata={"message_id": message_id},
             ),
             dedupe_key=event_id,
+            prompt_context=self._prompt_context,
         )
 
     def _extract_attachments(

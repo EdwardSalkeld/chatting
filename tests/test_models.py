@@ -10,6 +10,7 @@ from app.models import (
     ExecutionConstraints,
     OutboundMessage,
     PolicyDecision,
+    PromptContext,
     ReplyChannel,
     RunRecord,
     RoutedTask,
@@ -27,6 +28,10 @@ class TaskEnvelopeTests(unittest.TestCase):
             context_refs=["repo:/home/edward/chatting"],
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
             dedupe_key="email:provider_msg_id",
+            prompt_context=PromptContext(
+                global_instructions=["Keep replies concise."],
+                reply_channel_instructions=["Use an email subject line."],
+            ),
         )
 
         self.assertEqual(
@@ -40,6 +45,16 @@ class TaskEnvelopeTests(unittest.TestCase):
                 "content": "Please summarize and reply",
                 "attachments": [{"uri": "s3://bucket/file.txt", "name": "file.txt"}],
                 "context_refs": ["repo:/home/edward/chatting"],
+                "prompt_context": {
+                    "global_instructions": ["Keep replies concise."],
+                    "source_instructions": [],
+                    "reply_channel_instructions": ["Use an email subject line."],
+                    "task_instructions": [],
+                    "assembled_instructions": [
+                        "Keep replies concise.",
+                        "Use an email subject line.",
+                    ],
+                },
                 "reply_channel": {"type": "email", "target": "alice@example.com"},
                 "dedupe_key": "email:provider_msg_id",
             },
@@ -58,6 +73,10 @@ class TaskEnvelopeTests(unittest.TestCase):
                 reply_channel=ReplyChannel(type="noop", target="stdout"),
                 dedupe_key="cron:job:daily",
             )
+
+    def test_prompt_context_rejects_blank_instruction(self) -> None:
+        with self.assertRaisesRegex(ValueError, "prompt_context.global_instructions"):
+            PromptContext(global_instructions=[" "])
 class RoutedTaskTests(unittest.TestCase):
     def test_routed_task_serializes_expected_shape(self) -> None:
         task = RoutedTask(
@@ -71,6 +90,10 @@ class RoutedTaskTests(unittest.TestCase):
             actor="alice@example.com",
             content="Please summarize and reply",
             attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
+            prompt_context=PromptContext(
+                global_instructions=["Keep replies concise."],
+                task_instructions=["This task is a customer follow-up."],
+            ),
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         )
 
@@ -91,6 +114,16 @@ class RoutedTaskTests(unittest.TestCase):
                 "actor": "alice@example.com",
                 "content": "Please summarize and reply",
                 "attachments": [{"uri": "file:///tmp/photo.jpg", "name": "photo.jpg"}],
+                "prompt_context": {
+                    "global_instructions": ["Keep replies concise."],
+                    "source_instructions": [],
+                    "reply_channel_instructions": [],
+                    "task_instructions": ["This task is a customer follow-up."],
+                    "assembled_instructions": [
+                        "Keep replies concise.",
+                        "This task is a customer follow-up.",
+                    ],
+                },
                 "reply_channel": {"type": "email", "target": "alice@example.com"},
             },
         )

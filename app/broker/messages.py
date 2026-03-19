@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-from app.models import AttachmentRef, OutboundMessage, ReplyChannel, SCHEMA_VERSION, TaskEnvelope
+from app.models import (
+    AttachmentRef,
+    OutboundMessage,
+    PromptContext,
+    ReplyChannel,
+    SCHEMA_VERSION,
+    TaskEnvelope,
+)
 
 SourceType = Literal["cron", "email", "im", "webhook", "internal"]
 
@@ -61,6 +68,37 @@ def _parse_optional_dict(value: object, *, field_name: str) -> dict[str, object]
     if not isinstance(value, dict):
         raise ValueError(f"{field_name} must be an object")
     return dict(value)
+
+
+def _parse_prompt_context_payload(value: object) -> PromptContext:
+    if value is None:
+        return PromptContext()
+    if not isinstance(value, dict):
+        raise ValueError("envelope.prompt_context must be an object")
+    return PromptContext(
+        global_instructions=_parse_prompt_context_list(
+            value.get("global_instructions", []),
+            field_name="envelope.prompt_context.global_instructions",
+        ),
+        source_instructions=_parse_prompt_context_list(
+            value.get("source_instructions", []),
+            field_name="envelope.prompt_context.source_instructions",
+        ),
+        reply_channel_instructions=_parse_prompt_context_list(
+            value.get("reply_channel_instructions", []),
+            field_name="envelope.prompt_context.reply_channel_instructions",
+        ),
+        task_instructions=_parse_prompt_context_list(
+            value.get("task_instructions", []),
+            field_name="envelope.prompt_context.task_instructions",
+        ),
+    )
+
+
+def _parse_prompt_context_list(value: object, *, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    return [_require_non_empty_string(item, field_name=field_name) for item in value]
 
 @dataclass(frozen=True)
 class TaskQueueMessage:
@@ -157,6 +195,7 @@ class TaskQueueMessage:
                 envelope_payload.get("dedupe_key"),
                 field_name="envelope.dedupe_key",
             ),
+            prompt_context=_parse_prompt_context_payload(envelope_payload.get("prompt_context")),
             schema_version=_require_non_empty_string(
                 envelope_payload.get("schema_version", SCHEMA_VERSION),
                 field_name="envelope.schema_version",

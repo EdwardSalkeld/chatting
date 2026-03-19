@@ -118,6 +118,16 @@ An IMAP message from `alice@example.com` turns into a `chatting.task.v1` payload
     "content": "Subject: Please summarize\n\nSummarize the overnight logs.",
     "attachments": [],
     "context_refs": ["repo:/opt/chatting"],
+    "prompt_context": {
+      "global_instructions": ["Keep replies brief and practical."],
+      "source_instructions": [],
+      "reply_channel_instructions": ["Use concise professional email tone and include a useful subject line."],
+      "task_instructions": [],
+      "assembled_instructions": [
+        "Keep replies brief and practical.",
+        "Use concise professional email tone and include a useful subject line."
+      ]
+    },
     "reply_channel": {
       "type": "email",
       "target": "alice@example.com"
@@ -207,12 +217,18 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
   Useful for smoke runs; not a normal production setting.
 - `schedule_file`
   Enables interval schedule ingress.
+- `prompt_context`
+  Global prompt guidance passed to supported ingress tasks.
 - `imap_host`, `imap_port`, `imap_username`, `imap_password_env`, `imap_mailbox`, `imap_search`
   Enable IMAP ingress.
+- `email_prompt_context`
+  Extra prompt guidance only for email replies.
 - `telegram_enabled`, `telegram_bot_token_env`, `telegram_api_base_url`,
   `telegram_poll_timeout_seconds`, `telegram_allowed_chat_ids`, `telegram_allowed_channel_ids`,
-  `telegram_context_refs`
+  `telegram_context_refs`, `telegram_prompt_context`
   Enable and scope Telegram ingress.
+- `cron_prompt_context`
+  Extra prompt guidance only for scheduled jobs.
 - `context_ref` / `context_refs`
   Default context refs attached to some ingress sources.
 - `github_repositories`, `github_assignee_login`, `github_context_refs`,
@@ -233,6 +249,13 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
   Control the Prometheus-style `/metrics` endpoint on the message-handler.
 
 ### Worker execution config
+
+Prompt context is inspectable in the task payload under `envelope.prompt_context`, with
+instructions assembled in this order before the task content itself:
+- global defaults from `prompt_context`
+- source-specific defaults such as `cron_prompt_context`
+- reply-channel-specific defaults such as `email_prompt_context` or `telegram_prompt_context`
+- task-specific overrides such as a schedule job's own `prompt_context`
 
 - `poll_timeout_seconds`
   How long the worker waits on `chatting.tasks.v1` before treating the queue as empty.

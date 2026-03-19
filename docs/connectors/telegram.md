@@ -8,6 +8,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 
 ## Runtime config keys
 
+- `prompt_context` (optional global prompt instructions)
 - `telegram_enabled` (bool)
 - `telegram_bot_token_env` (default `CHATTING_TELEGRAM_BOT_TOKEN`)
 - `telegram_api_base_url` (default `https://api.telegram.org`)
@@ -17,6 +18,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_attachment_max_age_seconds` (default `2592000`, or 30 days)
 - `telegram_allowed_chat_ids` (optional list)
 - `telegram_allowed_channel_ids` (optional list, required to ingest `channel_post`)
+- `telegram_prompt_context` (optional list)
 - `telegram_context_refs` (optional list)
 
 Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.).
@@ -33,6 +35,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 
 ## Notes
 
+- Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
+  global `prompt_context`, then `telegram_prompt_context`, then the task content itself.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
 - `channel_post` updates are ignored unless the channel ID is present in `telegram_allowed_channel_ids`.
