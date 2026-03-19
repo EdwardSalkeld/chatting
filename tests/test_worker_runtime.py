@@ -21,15 +21,13 @@ from app.worker_runtime import process_task_message
 class MultiMessageExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
+        return ExecutionResult(actions=[], errors=[])
 @dataclass(frozen=True)
 class WriteFileExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(
             actions=[ActionProposal(type="write_file", path="output.txt", content="hello")],
-            config_updates=[],
-            requires_human_review=False,
             errors=[],
         )
 @dataclass(frozen=True)
@@ -52,8 +50,6 @@ class ExecutionErrorExecutor:
         del task
         return ExecutionResult(
             actions=[],
-            config_updates=[],
-            requires_human_review=False,
             errors=["executor_exit_nonzero:1:insufficient credits"],
         )
 @dataclass(frozen=True)
@@ -62,20 +58,18 @@ class IncrementalReplyExecutor:
         del task
         return ExecutionResult(
             actions=[],
-            config_updates=[],
-            requires_human_review=False,
             errors=[],
         )
 @dataclass(frozen=True)
 class NoMessageExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
+        return ExecutionResult(actions=[], errors=[])
 @dataclass(frozen=True)
 class FinalAliasExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(actions=[], config_updates=[], requires_human_review=False, errors=[])
+        return ExecutionResult(actions=[], errors=[])
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(

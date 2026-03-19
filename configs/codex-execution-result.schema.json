@@ -18,19 +18,6 @@
         "additionalProperties": false
       }
     },
-    "config_updates": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "path": {"type": "string", "minLength": 1},
-          "value": {"type": "string"}
-        },
-        "required": ["path", "value"],
-        "additionalProperties": false
-      }
-    },
-    "requires_human_review": {"type": "boolean"},
     "errors": {
       "type": "array",
       "items": {"type": "string", "minLength": 1}
@@ -39,8 +26,6 @@
   "required": [
     "schema_version",
     "actions",
-    "config_updates",
-    "requires_human_review",
     "errors"
   ],
   "additionalProperties": false
