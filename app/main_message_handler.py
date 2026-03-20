@@ -115,6 +115,7 @@ DEFAULT_METRICS_HOST = "127.0.0.1"
 DEFAULT_METRICS_PORT = 9464
 DEFAULT_TELEGRAM_ATTACHMENT_CLEANUP_GRACE_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_TELEGRAM_ATTACHMENT_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+INGRESS_POLL_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,14 @@ class TelegramAttachmentCleanupSettings:
 class DisabledIngressComponent:
     component: str
     error: str
+
+
+@dataclass
+class IngressPollFailureLogState:
+    """Track per-connector exception log suppression windows."""
+
+    next_emit_at_monotonic: float
+    suppressed_repeats: int = 0
 
 
 @dataclass
@@ -575,16 +584,20 @@ def _start_metrics_server(
 ) -> MessageHandlerMetricsServer | None:
     class _MetricsHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            if self.path.split("?", maxsplit=1)[0] != "/metrics":
-                self.send_response(404)
+            try:
+                if self.path.split("?", maxsplit=1)[0] != "/metrics":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = _render_prometheus_metrics(metrics.snapshot()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                # Scrape clients can disconnect mid-response; avoid noisy tracebacks.
                 return
-            payload = _render_prometheus_metrics(metrics.snapshot()).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A003
             del format, args
@@ -604,6 +617,40 @@ def _start_metrics_server(
         server.server_address[1],
     )
     return MessageHandlerMetricsServer(server=server, thread=thread)
+
+
+def _log_ingress_poll_failure(
+    *,
+    connector_name: str,
+    loop_count: int,
+    state_by_connector: dict[str, IngressPollFailureLogState],
+    interval_seconds: float = INGRESS_POLL_FAILURE_LOG_INTERVAL_SECONDS,
+) -> None:
+    """Log connector poll exceptions with per-connector suppression."""
+
+    now = time.monotonic()
+    state = state_by_connector.get(connector_name)
+    if state is None or now >= state.next_emit_at_monotonic:
+        suppressed_repeats = 0 if state is None else state.suppressed_repeats
+        if suppressed_repeats:
+            LOGGER.exception(
+                "ingress_connector_poll_failed connector=%s loop=%s suppressed_repeats=%s",
+                connector_name,
+                loop_count,
+                suppressed_repeats,
+            )
+        else:
+            LOGGER.exception(
+                "ingress_connector_poll_failed connector=%s loop=%s",
+                connector_name,
+                loop_count,
+            )
+        state_by_connector[connector_name] = IngressPollFailureLogState(
+            next_emit_at_monotonic=now + interval_seconds
+        )
+        return
+
+    state.suppressed_repeats += 1
 
 
 def _configure_logging() -> None:
@@ -1740,6 +1787,7 @@ def _run_ingress_loop(
     max_loops: int,
 ) -> None:
     loop_count = 0
+    poll_failure_log_state_by_connector: dict[str, IngressPollFailureLogState] = {}
     while not stop_event.is_set():
         loop_count += 1
 
@@ -1762,10 +1810,10 @@ def _run_ingress_loop(
             try:
                 envelopes = connector.poll()
             except Exception:  # noqa: BLE001
-                LOGGER.exception(
-                    "ingress_connector_poll_failed connector=%s loop=%s",
-                    connector_name,
-                    loop_count,
+                _log_ingress_poll_failure(
+                    connector_name=connector_name,
+                    loop_count=loop_count,
+                    state_by_connector=poll_failure_log_state_by_connector,
                 )
                 continue
             if isinstance(connector, (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector)):
