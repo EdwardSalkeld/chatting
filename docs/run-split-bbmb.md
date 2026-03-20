@@ -141,3 +141,26 @@ uv run python -m app.main_reply task:telegram:53 \
 ```
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
+
+## 8) Docker worker CLI auth bootstrap
+
+When running with `docker-compose.yml`, the worker image includes both `codex` and `claude` CLIs.
+Auth is still external to the app and must be completed once interactively, then persisted in Docker
+volumes.
+
+The compose file mounts:
+- `codex-auth` -> `/root/.codex`
+- `claude-auth` -> `/root/.claude`
+
+One-time bootstrap:
+
+```bash
+docker compose run --rm worker codex login
+docker compose run --rm worker claude login
+```
+
+Then run the stack normally:
+
+```bash
+docker compose up -d
+```

@@ -40,6 +40,8 @@ services:
       - ./configs:/config:ro
       - worker-data:/data
       - workspace:/workspace
+      - codex-auth:/root/.codex
+      - claude-auth:/root/.claude
     depends_on:
       bbmb:
         condition: service_healthy
@@ -50,3 +52,5 @@ volumes:
   worker-data:
   telegram-attachments:
   workspace:
+  codex-auth:
+  claude-auth:
