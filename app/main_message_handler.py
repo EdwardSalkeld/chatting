@@ -18,7 +18,13 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Callable, Mapping
 
-from app.applier import GitHubIssueCommentSender, IntegratedApplier, MessageDispatchError, SmtpEmailSender
+from app.applier import (
+    GitHubIssueCommentSender,
+    IntegratedApplier,
+    MessageDispatchError,
+    SmtpEmailSender,
+    TelegramMessageSender,
+)
 from app.broker import (
     BBMBQueueAdapter,
     EGRESS_QUEUE_NAME,
@@ -30,7 +36,11 @@ from app.connectors import (
     Connector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
+    ImapEmailConnector,
     InternalHeartbeatConnector,
+    IntervalScheduleConnector,
+    IntervalScheduleJob,
+    TelegramConnector,
 )
 from app.github_ingress_runtime import (
     GitHubAssignmentCheckpointStore,
@@ -38,16 +48,6 @@ from app.github_ingress_runtime import (
     fetch_authenticated_viewer_login,
 )
 from app.internal_heartbeat import INTERNAL_HEARTBEAT_TARGET, is_internal_heartbeat_envelope
-from app.main import (
-    TELEGRAM_MEMORY_TURN_LIMIT,
-    _build_email_sender,
-    _build_live_connectors,
-    _build_telegram_sender,
-    _enrich_telegram_envelope_with_memory,
-    _message_content_for_telegram_memory,
-    _resolve_telegram_attachment_dir,
-    _should_store_telegram_memory,
-)
 from app.message_handler_runtime import (
     TaskLedgerRecord,
     TaskLedgerStore,
@@ -55,7 +55,7 @@ from app.message_handler_runtime import (
     TelegramAttachmentStore,
     cleanup_telegram_attachments,
 )
-from app.models import OutboundMessage, PolicyDecision, TaskEnvelope
+from app.models import OutboundMessage, PolicyDecision, PromptContext, TaskEnvelope
 from app.state import SQLiteStateStore
 
 MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR = "CHATTING_MESSAGE_HANDLER_CONFIG_PATH"
@@ -115,6 +115,22 @@ DEFAULT_METRICS_HOST = "127.0.0.1"
 DEFAULT_METRICS_PORT = 9464
 DEFAULT_TELEGRAM_ATTACHMENT_CLEANUP_GRACE_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_TELEGRAM_ATTACHMENT_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
+    {
+        "content",
+        "cron",
+        "context_refs",
+        "interval_seconds",
+        "job_name",
+        "prompt_context",
+        "reply_channel_target",
+        "reply_channel_type",
+        "start_at",
+        "timezone",
+    }
+)
+REQUIRED_SCHEDULE_JOB_KEYS = frozenset({"content", "job_name"})
+TELEGRAM_MEMORY_TURN_LIMIT = 30
 INGRESS_POLL_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 
 
@@ -828,6 +844,54 @@ def _resolve_error_email_recipient(args: argparse.Namespace, config: dict[str, o
     return None
 
 
+def _should_store_telegram_memory(envelope: TaskEnvelope) -> bool:
+    return envelope.reply_channel.type == "telegram"
+
+
+def _message_content_for_telegram_memory(message: OutboundMessage) -> str:
+    if message.body is not None:
+        return message.body
+    if message.attachment is None:
+        raise ValueError("telegram memory requires message body or attachment")
+    attachment_name = message.attachment.name
+    if attachment_name is None:
+        attachment_name = Path(message.attachment.uri).name or message.attachment.uri
+    return f"[Attachment sent: {attachment_name}]"
+
+
+def _enrich_telegram_envelope_with_memory(
+    *,
+    store: SQLiteStateStore,
+    envelope: TaskEnvelope,
+    turn_limit: int,
+) -> TaskEnvelope:
+    turns = store.list_recent_conversation_turns(
+        channel="telegram",
+        target=envelope.reply_channel.target,
+        limit=turn_limit,
+    )
+    if not turns:
+        return envelope
+
+    lines = ["Recent conversation context (oldest first):"]
+    for role, content in turns:
+        lines.append(f"{role}: {content}")
+    lines.extend(["", "Current user message:", envelope.content])
+    return TaskEnvelope(
+        id=envelope.id,
+        source=envelope.source,
+        received_at=envelope.received_at,
+        actor=envelope.actor,
+        content="\n".join(lines),
+        attachments=envelope.attachments,
+        context_refs=envelope.context_refs,
+        reply_channel=envelope.reply_channel,
+        dedupe_key=envelope.dedupe_key,
+        prompt_context=envelope.prompt_context,
+        schema_version=envelope.schema_version,
+    )
+
+
 def _send_egress_dispatch_error_email(
     *,
     email_sender: SmtpEmailSender | None,
@@ -880,6 +944,25 @@ def _resolve_str(cli_value: str | None, config_value: object, *, default_value: 
     return config_value
 
 
+def _resolve_optional_str(
+    cli_value: str | None,
+    config_value: object,
+    *,
+    setting_name: str,
+) -> str | None:
+    if cli_value is not None:
+        if not cli_value.strip():
+            raise ValueError(f"{setting_name} must not be empty")
+        return cli_value
+    if config_value is None:
+        return None
+    if not isinstance(config_value, str):
+        raise ValueError(f"config {setting_name} must be a string")
+    if not config_value.strip():
+        raise ValueError(f"config {setting_name} must not be empty")
+    return config_value
+
+
 def _resolve_positive_int(cli_value: int | None, config_value: object, *, default_value: int, setting_name: str) -> int:
     if cli_value is not None:
         return cli_value
@@ -908,6 +991,22 @@ def _resolve_positive_float(
     return parsed
 
 
+def _resolve_bool(
+    cli_value: bool | None,
+    config_value: object,
+    *,
+    default_value: bool,
+    setting_name: str,
+) -> bool:
+    if cli_value:
+        return True
+    if config_value is None:
+        return default_value
+    if not isinstance(config_value, bool):
+        raise ValueError(f"config {setting_name} must be a boolean")
+    return config_value
+
+
 def _resolve_allowed_egress_channels(args: argparse.Namespace, config: dict[str, object]) -> set[str]:
     config_values: list[str] = []
     raw_config_values = config.get("allowed_egress_channels")
@@ -934,6 +1033,39 @@ def _resolve_required_str(cli_value: str | None, config_value: object, *, settin
     if not resolved:
         raise ValueError(f"{setting_name} is required when github_repositories is configured")
     return resolved
+
+
+def _resolve_context_refs(args_values: list[str], config: dict[str, object]) -> list[str]:
+    raw_config_values = config.get("context_ref")
+    if raw_config_values is None:
+        raw_config_values = config.get("context_refs")
+
+    if raw_config_values is None:
+        config_values: list[str] = []
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config context_ref/context_refs must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config context_ref/context_refs must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args_values]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("context_ref/context_refs entries must not be empty")
+    return merged_values
+
+
+def _resolve_prompt_context_values(config: dict[str, object], *, setting_name: str) -> list[str]:
+    raw_values = config.get(setting_name, [])
+    if raw_values is None:
+        return []
+    if not isinstance(raw_values, list):
+        raise ValueError(f"config {setting_name} must be a list of strings")
+    if not all(isinstance(item, str) for item in raw_values):
+        raise ValueError(f"config {setting_name} must be a list of strings")
+    if any(not item.strip() for item in raw_values):
+        raise ValueError(f"config {setting_name} entries must not be empty")
+    return [item.strip() for item in raw_values]
 
 
 def _resolve_github_repositories(args: argparse.Namespace, config: dict[str, object]) -> list[str]:
@@ -975,6 +1107,85 @@ def _resolve_github_context_refs(args: argparse.Namespace, config: dict[str, obj
     if any(not item.strip() for item in context_refs):
         raise ValueError("github_context_ref entries must not be empty")
     return [item.strip() for item in context_refs]
+
+
+def _resolve_telegram_allowed_chat_ids(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str] | None:
+    raw_config_values = config.get("telegram_allowed_chat_ids")
+    config_values: list[str]
+    if raw_config_values is None:
+        config_values = []
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config telegram_allowed_chat_ids must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config telegram_allowed_chat_ids must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.telegram_allowed_chat_id]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("telegram_allowed_chat_id(s) entries must not be empty")
+    if not merged_values:
+        return None
+    return merged_values
+
+
+def _resolve_telegram_allowed_channel_ids(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str] | None:
+    raw_config_values = config.get("telegram_allowed_channel_ids")
+    config_values: list[str]
+    if raw_config_values is None:
+        config_values = []
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config telegram_allowed_channel_ids must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config telegram_allowed_channel_ids must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.telegram_allowed_channel_id]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("telegram_allowed_channel_id(s) entries must not be empty")
+    if not merged_values:
+        return None
+    return merged_values
+
+
+def _resolve_telegram_context_refs(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str]:
+    raw_config_values = config.get("telegram_context_refs")
+    config_values: list[str]
+    if raw_config_values is None:
+        config_values = _resolve_context_refs(args.context_ref, config)
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError("config telegram_context_refs must be a list of strings")
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError("config telegram_context_refs must be a list of strings")
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.telegram_context_ref]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("telegram_context_ref(s) entries must not be empty")
+    return merged_values
+
+
+def _resolve_telegram_attachment_dir(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> str:
+    return _resolve_str(
+        getattr(args, "telegram_attachment_dir", None),
+        config.get("telegram_attachment_dir"),
+        default_value=str(Path(tempfile.gettempdir()) / "chatting-telegram-attachments"),
+        setting_name="telegram_attachment_dir",
+    )
 
 
 def _resolve_github_ingress_settings(
@@ -1078,6 +1289,376 @@ def _is_connector_configured(args: argparse.Namespace, config: dict[str, object]
     if connector == "github":
         return bool(args.github_repository) or config.get("github_repositories") is not None
     raise ValueError(f"unsupported connector: {connector}")
+
+
+def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) -> list[Connector]:
+    connectors: list[Connector] = []
+    global_prompt_context = _resolve_prompt_context_values(config, setting_name="prompt_context")
+    email_prompt_context = _resolve_prompt_context_values(
+        config,
+        setting_name="email_prompt_context",
+    )
+    telegram_prompt_context = _resolve_prompt_context_values(
+        config,
+        setting_name="telegram_prompt_context",
+    )
+    cron_prompt_context = _resolve_prompt_context_values(config, setting_name="cron_prompt_context")
+
+    schedule_file = _resolve_optional_str(
+        args.schedule_file,
+        config.get("schedule_file"),
+        setting_name="schedule_file",
+    )
+    if schedule_file:
+        connectors.append(
+            IntervalScheduleConnector(
+                jobs=_load_schedule_jobs(schedule_file),
+                global_prompt_context=global_prompt_context,
+                source_prompt_context=cron_prompt_context,
+            )
+        )
+
+    imap_host = _resolve_optional_str(
+        args.imap_host,
+        config.get("imap_host"),
+        setting_name="imap_host",
+    )
+    if imap_host:
+        imap_username = _resolve_optional_str(
+            args.imap_username,
+            config.get("imap_username"),
+            setting_name="imap_username",
+        )
+        if not imap_username:
+            raise ValueError("--imap-username is required when --imap-host is set")
+        imap_password_env = _resolve_str(
+            args.imap_password_env,
+            config.get("imap_password_env"),
+            default_value="CHATTING_IMAP_PASSWORD",
+            setting_name="imap_password_env",
+        )
+        password = os.environ.get(imap_password_env, "")
+        if not password:
+            raise ValueError(f"missing IMAP password env var: {imap_password_env}")
+        connectors.append(
+            ImapEmailConnector(
+                host=imap_host,
+                port=_resolve_positive_int(
+                    args.imap_port,
+                    config.get("imap_port"),
+                    default_value=993,
+                    setting_name="imap_port",
+                ),
+                username=imap_username,
+                password=password,
+                mailbox=_resolve_str(
+                    args.imap_mailbox,
+                    config.get("imap_mailbox"),
+                    default_value="INBOX",
+                    setting_name="imap_mailbox",
+                ),
+                search_criterion=_resolve_str(
+                    args.imap_search,
+                    config.get("imap_search"),
+                    default_value="UNSEEN",
+                    setting_name="imap_search",
+                ),
+                use_ssl=_resolve_bool(
+                    None,
+                    config.get("imap_use_ssl"),
+                    default_value=True,
+                    setting_name="imap_use_ssl",
+                ),
+                context_refs=_resolve_context_refs(args.context_ref, config),
+                prompt_context=PromptContext(
+                    global_instructions=global_prompt_context,
+                    reply_channel_instructions=email_prompt_context,
+                ),
+            )
+        )
+
+    telegram_enabled = _resolve_bool(
+        args.telegram_enabled,
+        config.get("telegram_enabled"),
+        default_value=False,
+        setting_name="telegram_enabled",
+    )
+    if telegram_enabled:
+        telegram_bot_token_env = _resolve_str(
+            args.telegram_bot_token_env,
+            config.get("telegram_bot_token_env"),
+            default_value="CHATTING_TELEGRAM_BOT_TOKEN",
+            setting_name="telegram_bot_token_env",
+        )
+        bot_token = os.environ.get(telegram_bot_token_env, "")
+        if not bot_token:
+            raise ValueError(f"missing Telegram bot token env var: {telegram_bot_token_env}")
+        connectors.append(
+            TelegramConnector(
+                bot_token=bot_token,
+                api_base_url=_resolve_str(
+                    args.telegram_api_base_url,
+                    config.get("telegram_api_base_url"),
+                    default_value="https://api.telegram.org",
+                    setting_name="telegram_api_base_url",
+                ),
+                poll_timeout_seconds=_resolve_positive_int(
+                    args.telegram_poll_timeout_seconds,
+                    config.get("telegram_poll_timeout_seconds"),
+                    default_value=20,
+                    setting_name="telegram_poll_timeout_seconds",
+                ),
+                allowed_chat_ids=_resolve_telegram_allowed_chat_ids(args, config),
+                allowed_channel_ids=_resolve_telegram_allowed_channel_ids(args, config),
+                context_refs=_resolve_telegram_context_refs(args, config),
+                prompt_context=PromptContext(
+                    global_instructions=global_prompt_context,
+                    reply_channel_instructions=telegram_prompt_context,
+                ),
+                attachment_root_dir=_resolve_telegram_attachment_dir(args, config),
+            )
+        )
+
+    if not connectors:
+        raise ValueError(
+            "live mode requires at least one connector (--schedule-file and/or --imap-host)"
+        )
+    return connectors
+
+
+def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> SmtpEmailSender | None:
+    smtp_host = _resolve_optional_str(
+        args.smtp_host,
+        config.get("smtp_host"),
+        setting_name="smtp_host",
+    )
+    if not smtp_host:
+        return None
+
+    smtp_username = _resolve_optional_str(
+        args.smtp_username,
+        config.get("smtp_username"),
+        setting_name="smtp_username",
+    )
+    from_address = (
+        _resolve_optional_str(
+            args.smtp_from,
+            config.get("smtp_from"),
+            setting_name="smtp_from",
+        )
+        or smtp_username
+    )
+    if not from_address:
+        raise ValueError("--smtp-from or --smtp-username is required when --smtp-host is set")
+
+    password = None
+    if smtp_username:
+        smtp_password_env = _resolve_str(
+            args.smtp_password_env,
+            config.get("smtp_password_env"),
+            default_value="CHATTING_SMTP_PASSWORD",
+            setting_name="smtp_password_env",
+        )
+        password = os.environ.get(smtp_password_env, "")
+        if not password:
+            raise ValueError(f"missing SMTP password env var: {smtp_password_env}")
+
+    smtp_starttls = _resolve_bool(
+        args.smtp_starttls,
+        config.get("smtp_starttls"),
+        default_value=False,
+        setting_name="smtp_starttls",
+    )
+    raw_smtp_use_ssl = config.get("smtp_use_ssl")
+    if raw_smtp_use_ssl is not None:
+        if not isinstance(raw_smtp_use_ssl, bool):
+            raise ValueError("smtp_use_ssl must be a boolean")
+        smtp_use_ssl = raw_smtp_use_ssl
+    else:
+        smtp_use_ssl = not smtp_starttls
+
+    return SmtpEmailSender(
+        host=smtp_host,
+        port=_resolve_positive_int(
+            args.smtp_port,
+            config.get("smtp_port"),
+            default_value=465,
+            setting_name="smtp_port",
+        ),
+        from_address=from_address,
+        username=smtp_username,
+        password=password,
+        use_ssl=smtp_use_ssl,
+        starttls=smtp_starttls,
+    )
+
+
+def _build_telegram_sender(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> TelegramMessageSender | None:
+    telegram_enabled = _resolve_bool(
+        args.telegram_enabled,
+        config.get("telegram_enabled"),
+        default_value=False,
+        setting_name="telegram_enabled",
+    )
+    if not telegram_enabled:
+        return None
+
+    telegram_bot_token_env = _resolve_str(
+        args.telegram_bot_token_env,
+        config.get("telegram_bot_token_env"),
+        default_value="CHATTING_TELEGRAM_BOT_TOKEN",
+        setting_name="telegram_bot_token_env",
+    )
+    bot_token = os.environ.get(telegram_bot_token_env, "")
+    if not bot_token:
+        raise ValueError(f"missing Telegram bot token env var: {telegram_bot_token_env}")
+
+    return TelegramMessageSender(
+        bot_token=bot_token,
+        api_base_url=_resolve_str(
+            args.telegram_api_base_url,
+            config.get("telegram_api_base_url"),
+            default_value="https://api.telegram.org",
+            setting_name="telegram_api_base_url",
+        ),
+    )
+
+
+def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
+    payload = json.loads(Path(schedule_file).read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("schedule file must contain a JSON array")
+
+    jobs: list[IntervalScheduleJob] = []
+    for index, raw_job in enumerate(payload):
+        if not isinstance(raw_job, dict):
+            raise ValueError(f"schedule job at index {index} must be an object")
+        unknown_keys = sorted(set(raw_job.keys()) - ALLOWED_SCHEDULE_JOB_KEYS)
+        if unknown_keys:
+            raise ValueError(
+                f"schedule job at index {index} contains unknown keys: {', '.join(unknown_keys)}"
+            )
+
+        missing_keys = sorted(REQUIRED_SCHEDULE_JOB_KEYS - set(raw_job.keys()))
+        if missing_keys:
+            raise ValueError(
+                f"schedule job at index {index} is missing required keys: {', '.join(missing_keys)}"
+            )
+
+        job_name = raw_job["job_name"]
+        if not isinstance(job_name, str) or not job_name.strip():
+            raise ValueError(f"schedule job at index {index} job_name must be a non-empty string")
+        content = raw_job["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"schedule job at index {index} content must be a non-empty string")
+
+        cron = raw_job.get("cron")
+        if cron is not None and (not isinstance(cron, str) or not cron.strip()):
+            raise ValueError(f"schedule job at index {index} cron must be a non-empty string")
+
+        raw_interval = raw_job.get("interval_seconds")
+        interval_seconds: int | None = None
+        if isinstance(raw_interval, int) and not isinstance(raw_interval, bool):
+            interval_seconds = raw_interval
+        if cron is None:
+            if interval_seconds is None or interval_seconds <= 0:
+                raise ValueError(
+                    f"schedule job at index {index} interval_seconds must be a positive integer"
+                )
+        elif interval_seconds is not None and interval_seconds <= 0:
+            raise ValueError(
+                f"schedule job at index {index} interval_seconds must be a positive integer"
+            )
+
+        timezone_name = raw_job.get("timezone")
+        if cron is not None:
+            if timezone_name is None:
+                timezone_name = "UTC"
+            elif not isinstance(timezone_name, str) or not timezone_name.strip():
+                raise ValueError(
+                    f"schedule job at index {index} timezone must be a non-empty string"
+                )
+        elif timezone_name is not None:
+            raise ValueError(f"schedule job at index {index} timezone is only valid with cron")
+
+        if interval_seconds is None and cron is None:
+            raise ValueError(
+                f"schedule job at index {index} must define interval_seconds or cron"
+            )
+
+        raw_context_refs = raw_job.get("context_refs", [])
+        if not isinstance(raw_context_refs, list) or not all(
+            isinstance(item, str) and item.strip() for item in raw_context_refs
+        ):
+            raise ValueError(
+                f"schedule job at index {index} context_refs must be a list of non-empty strings"
+            )
+
+        raw_prompt_context = raw_job.get("prompt_context", [])
+        if not isinstance(raw_prompt_context, list) or not all(
+            isinstance(item, str) and item.strip() for item in raw_prompt_context
+        ):
+            raise ValueError(
+                f"schedule job at index {index} prompt_context must be a list of non-empty strings"
+            )
+
+        raw_start_at = raw_job.get("start_at")
+        if cron is None:
+            if raw_start_at is not None and not isinstance(raw_start_at, str):
+                raise ValueError(f"schedule job at index {index} start_at must be an RFC3339 string")
+            start_at = _parse_optional_rfc3339(raw_start_at) if raw_start_at is not None else None
+        else:
+            start_at = None
+
+        reply_channel_type = raw_job.get("reply_channel_type")
+        if reply_channel_type is not None and (
+            not isinstance(reply_channel_type, str) or not reply_channel_type.strip()
+        ):
+            raise ValueError(
+                f"schedule job at index {index} reply_channel_type must be a non-empty string"
+            )
+        reply_channel_target = raw_job.get("reply_channel_target")
+        if reply_channel_target is not None and (
+            not isinstance(reply_channel_target, str) or not reply_channel_target.strip()
+        ):
+            raise ValueError(
+                f"schedule job at index {index} reply_channel_target must be a non-empty string"
+            )
+        if (reply_channel_type is None) != (reply_channel_target is None):
+            raise ValueError(
+                f"schedule job at index {index} reply_channel_type and "
+                "reply_channel_target must be provided together"
+            )
+
+        jobs.append(
+            IntervalScheduleJob(
+                job_name=job_name.strip(),
+                content=content.strip(),
+                context_refs=list(raw_context_refs),
+                prompt_context=list(raw_prompt_context),
+                interval_seconds=interval_seconds if isinstance(interval_seconds, int) else None,
+                cron=cron.strip() if isinstance(cron, str) else None,
+                timezone_name=timezone_name.strip() if isinstance(timezone_name, str) else None,
+                start_at=start_at,
+                reply_channel_type=reply_channel_type.strip()
+                if isinstance(reply_channel_type, str)
+                else None,
+                reply_channel_target=reply_channel_target.strip()
+                if isinstance(reply_channel_target, str)
+                else None,
+            )
+        )
+    return jobs
+
+
+def _parse_optional_rfc3339(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("schedule job start_at must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 def _build_live_connectors_fail_open(

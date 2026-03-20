@@ -61,12 +61,12 @@ The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9
 
 ## 7) Query state and metrics
 
-`app.cli` is the preferred admin/query entrypoint. `app.main` remains as a compatibility alias.
+Query the SQLite state directly with `sqlite3`:
 
 ```bash
-uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-runs --limit 20
-uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20
-uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-metrics
+sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
+sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 20;"
+sqlite3 /tmp/chatting-message-handler.db "select result_status, count(*) from run_records group by result_status order by result_status;"
 ```
 
 ## Notes
@@ -74,6 +74,5 @@ uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-metri
 - For the queue-by-queue runtime conversation, payload examples, and config levers, see
   [BBMB Message Flow](bbmb-message-flow.md).
 - For full split-mode setup and operational details, see [Run Split Mode (BBMB)](run-split-bbmb.md).
-- `app.cli`/`app.main` are admin/query entrypoints only.
-- `app.cli` reads one SQLite database at a time. In split mode, point it at either the
-  message-handler DB or the worker DB depending on what you want to inspect.
+- In split mode, inspect either the message-handler DB or the worker DB depending on what you
+  want to inspect.

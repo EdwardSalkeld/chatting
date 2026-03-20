@@ -15,14 +15,12 @@
 - Split mode only:
   - `uv run python -m app.main_message_handler --config <message-handler.json>`
   - `uv run python -m app.main_worker --config <worker.json>`
-- `app.cli` is the preferred admin/query CLI (`--list-*`, dead-letter replay, metrics).
-- `app.main` remains available as a compatibility alias for the same admin/query CLI.
 
 ## Query Examples
 
-- List runs: `uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-runs --limit 20`
-- List audit events: `uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-audit-events --limit 20`
-- List metrics: `uv run python -m app.cli --db-path /tmp/chatting-message-handler.db --list-metrics`
+- List runs: `sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"`
+- List audit events: `sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 20;"`
+- List metrics: `sqlite3 /tmp/chatting-message-handler.db "select result_status, count(*) from run_records group by result_status order by result_status;"`
 
 ## GitHub Workflow
 
