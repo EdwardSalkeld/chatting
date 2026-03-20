@@ -53,25 +53,21 @@ uv run python -m app.main_worker --help
 ```bash
 uv run python -m app.main_reply --help
 ```
-- Admin/query CLI help:
+- Inspect recent runs:
 ```bash
-uv run python -m app.cli --help
+sqlite3 /tmp/chatting-state.db "select run_id, result_status, created_at from run_records order by created_at desc limit 50;"
 ```
-- List runs:
+- Inspect recent audit events:
 ```bash
-uv run python -m app.cli --db-path /tmp/chatting-state.db --list-runs --limit 50
+sqlite3 /tmp/chatting-state.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 50;"
 ```
-- List audit events:
+- Inspect pending dead letters:
 ```bash
-uv run python -m app.cli --db-path /tmp/chatting-state.db --list-audit-events --limit 50
+sqlite3 /tmp/chatting-state.db "select dead_letter_id, status, created_at from dead_letters where status = 'pending' order by created_at desc;"
 ```
-- List dead letters:
+- Inspect persisted metrics summary:
 ```bash
-uv run python -m app.cli --db-path /tmp/chatting-state.db --list-dead-letters --result-status pending
-```
-- List persisted metrics summary:
-```bash
-uv run python -m app.cli --db-path /tmp/chatting-state.db --list-metrics
+sqlite3 /tmp/chatting-state.db "select result_status, count(*), avg(latency_ms) from run_records group by result_status order by result_status;"
 ```
 
 ## Common failures and fixes
@@ -103,7 +99,7 @@ Use these with DB queries to correlate outcomes.
 
 1. Run one failing envelope intentionally (`AlwaysFailExecutor` path in tests is a good reference).
 2. Query runs + audit + dead letters.
-3. Confirm replay result via `--list-runs` and dead-letter status via `--list-dead-letters`.
+3. Confirm the replay result by re-querying `run_records`, `audit_events`, and `dead_letters`.
 
 ## CI notes
 
