@@ -1,4 +1,4 @@
-"""Fake email connector used by bootstrap flow and tests."""
+"""Fake email connector used by tests."""
 
 from __future__ import annotations
 
@@ -48,7 +48,6 @@ class FakeEmailConnector:
                 )
             )
         return envelopes
-
 
 
 def _ensure_utc(value: datetime) -> datetime:

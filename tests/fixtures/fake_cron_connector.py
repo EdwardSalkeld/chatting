@@ -1,4 +1,4 @@
-"""Fake cron connector used by bootstrap flow and tests."""
+"""Fake cron connector used by tests."""
 
 from __future__ import annotations
 
@@ -45,7 +45,6 @@ class FakeCronConnector:
                 )
             )
         return envelopes
-
 
 
 def _ensure_utc(value: datetime) -> datetime:
