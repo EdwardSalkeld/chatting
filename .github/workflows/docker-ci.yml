@@ -19,6 +19,11 @@ jobs:
       - name: Build test image
         run: docker build --target test -t chatting:test .
 
+      - name: Verify bundled CLIs
+        run: |
+          docker run --rm chatting:test codex --version
+          docker run --rm chatting:test claude --version
+
       - name: Run unit tests
         run: |
           docker run --rm \
