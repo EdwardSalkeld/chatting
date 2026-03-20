@@ -17,7 +17,6 @@ from app.main_message_handler import (
     _log_ingress_poll_failure,
     _prepare_ingress_envelope,
     _resolve_error_email_recipient,
-    _render_prometheus_metrics,
 )
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_egress, build_internal_heartbeat_envelope
@@ -28,6 +27,7 @@ from app.message_handler_runtime import (
 )
 from app.models import ApplyResult, AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
+from app.telemetry import _render_prometheus_metrics
 @dataclass
 class _RecordingApplier:
     apply_calls: int = 0
