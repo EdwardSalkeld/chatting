@@ -6,10 +6,6 @@ from pathlib import Path
 from app.applier import Applier, IntegratedApplier, NoOpApplier
 from app.connectors import (
     Connector,
-    CronTrigger,
-    EmailMessage,
-    FakeCronConnector,
-    FakeEmailConnector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
     InternalHeartbeatConnector,
@@ -24,6 +20,7 @@ from app.executor import CodexExecutor, Executor
 from app.policy import AllowlistPolicyEngine, PolicyEngine
 from app.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
+from tests.fixtures import CronTrigger, EmailMessage, FakeCronConnector, FakeEmailConnector
 class InterfaceContractTests(unittest.TestCase):
     def test_connector_implementations_match_protocol(self) -> None:
         cron = FakeCronConnector(

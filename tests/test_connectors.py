@@ -3,8 +3,6 @@ from datetime import datetime, timezone
 from email.message import EmailMessage as ParsedEmailMessage
 from tempfile import TemporaryDirectory
 
-from app.connectors.fake_cron_connector import CronTrigger, FakeCronConnector
-from app.connectors.fake_email_connector import EmailMessage, FakeEmailConnector
 from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
 from app.connectors.github_pull_request_review_connector import GitHubPullRequestReviewConnector
 from app.connectors.imap_email_connector import ImapEmailConnector
@@ -22,6 +20,7 @@ from app.connectors.slack_connector import SlackConnector
 from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
 from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
 from app.models import PromptContext
+from tests.fixtures import CronTrigger, EmailMessage, FakeCronConnector, FakeEmailConnector
 class FakeCronConnectorTests(unittest.TestCase):
     def test_poll_normalizes_cron_trigger_to_envelope(self) -> None:
         connector = FakeCronConnector(
