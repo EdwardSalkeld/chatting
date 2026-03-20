@@ -21,8 +21,8 @@ jobs:
 
       - name: Verify bundled CLIs
         run: |
-          docker run --rm chatting:test codex --version
-          docker run --rm chatting:test claude --version
+          docker run --rm --entrypoint codex chatting:test --version
+          docker run --rm --entrypoint claude chatting:test --version
 
       - name: Run unit tests
         run: |
