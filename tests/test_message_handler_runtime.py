@@ -4,14 +4,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
+from unittest.mock import patch
 
 from app.applier import MessageDispatchError
 from app.main_message_handler import (
     EgressTelemetryRollup,
     HeartbeatTelemetryRollup,
+    IngressPollFailureLogState,
     MessageHandlerMetrics,
     TelegramAttachmentCleanupSettings,
     _handle_egress_message,
+    _log_ingress_poll_failure,
     _prepare_ingress_envelope,
     _resolve_error_email_recipient,
     _render_prometheus_metrics,
@@ -873,6 +876,52 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             _resolve_error_email_recipient(default_args, {"imap_username": "imap@example.com"}),
             "imap@example.com",
+        )
+
+    def test_log_ingress_poll_failure_suppresses_repeated_tracebacks(self) -> None:
+        state: dict[str, IngressPollFailureLogState] = {}
+        with (
+            patch("app.main_message_handler.time.monotonic", side_effect=[10.0, 20.0, 30.0, 71.0]),
+            patch("app.main_message_handler.LOGGER.exception") as exception_logger,
+        ):
+            _log_ingress_poll_failure(
+                connector_name="TelegramConnector",
+                loop_count=1,
+                state_by_connector=state,
+                interval_seconds=60.0,
+            )
+            _log_ingress_poll_failure(
+                connector_name="TelegramConnector",
+                loop_count=2,
+                state_by_connector=state,
+                interval_seconds=60.0,
+            )
+            _log_ingress_poll_failure(
+                connector_name="TelegramConnector",
+                loop_count=3,
+                state_by_connector=state,
+                interval_seconds=60.0,
+            )
+            _log_ingress_poll_failure(
+                connector_name="TelegramConnector",
+                loop_count=4,
+                state_by_connector=state,
+                interval_seconds=60.0,
+            )
+
+        self.assertEqual(exception_logger.call_count, 2)
+        self.assertEqual(
+            exception_logger.call_args_list[0].args,
+            ("ingress_connector_poll_failed connector=%s loop=%s", "TelegramConnector", 1),
+        )
+        self.assertEqual(
+            exception_logger.call_args_list[1].args,
+            (
+                "ingress_connector_poll_failed connector=%s loop=%s suppressed_repeats=%s",
+                "TelegramConnector",
+                4,
+                2,
+            ),
         )
 
     def test_handle_egress_message_marks_outbox_event_acked(self) -> None:

@@ -2,6 +2,8 @@
 Description=Chatting Message Handler Service (Ingress + Egress)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -12,6 +14,12 @@ EnvironmentFile=/home/edward/chatting/configs/chatting-message-handler.env
 ExecStart=/usr/bin/python3 -m app.main_message_handler
 Restart=always
 RestartSec=5
+CPUAccounting=true
+MemoryAccounting=true
+TasksAccounting=true
+CPUQuota=80%
+MemoryMax=768M
+TasksMax=256
 TimeoutStopSec=20
 SyslogIdentifier=chatting-message-handler
 
