@@ -1,4 +1,8 @@
-"""Connectors package."""
+"""Compatibility package for handler connectors."""
+
+from pathlib import Path
+
+__path__.append(str(Path(__file__).resolve().parent.parent / "handler" / "connectors"))
 
 from app.connectors.base import Connector
 from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
