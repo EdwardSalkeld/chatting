@@ -6,7 +6,7 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from app.github_ingress_runtime import (
+from app.handler.github_ingress import (
     AssignmentCheckpoint,
     GitHubAssignmentCheckpointStore,
     GitHubIssueAssignmentEvent,

@@ -7,15 +7,15 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.executor import Executor
+from app.worker.executor import Executor
 from app.internal_heartbeat import (
     build_internal_completion_egress,
     build_internal_heartbeat_egress,
     is_internal_heartbeat_envelope,
 )
 from app.models import AuditEvent, OutboundMessage, RunRecord
-from app.policy import AllowlistPolicyEngine
-from app.router import RuleBasedRouter
+from app.worker.policy import AllowlistPolicyEngine
+from app.worker.router import RuleBasedRouter
 from app.state import StateStore
 
 

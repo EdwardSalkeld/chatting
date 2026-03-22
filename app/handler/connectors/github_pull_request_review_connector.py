@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
 
-from app.github_ingress_runtime import (
+from app.handler.github_ingress import (
     AssignmentCheckpoint,
     GitHubAssignmentCheckpointStore,
     GitHubPullRequestReviewEvent,

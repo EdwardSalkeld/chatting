@@ -1,7 +1,7 @@
 import unittest
 
 from app.models import ActionProposal, ExecutionResult
-from app.policy import AllowlistPolicyEngine
+from app.worker.policy import AllowlistPolicyEngine
 
 
 class AllowlistPolicyEngineTests(unittest.TestCase):

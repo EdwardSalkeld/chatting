@@ -1,7 +1,7 @@
-"""Applier package."""
+"""Handler appliers."""
 
-from app.applier.base import Applier
-from app.applier.integrated import (
+from app.handler.applier.base import Applier
+from app.handler.applier.integrated import (
     EmailSender,
     GitHubIssueCommentSender,
     GitHubSender,
@@ -11,7 +11,7 @@ from app.applier.integrated import (
     TelegramMessageSender,
     TelegramSender,
 )
-from app.applier.noop import NoOpApplier
+from app.handler.applier.noop import NoOpApplier
 
 __all__ = [
     "Applier",

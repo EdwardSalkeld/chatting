@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
 from app.main_reply import main
-from app.message_handler_runtime import TaskLedgerStore
+from app.handler.runtime import TaskLedgerStore
 from app.models import ReplyChannel, TaskEnvelope
+
+
 class _FakeBroker:
     def __init__(self, address: str):
         self.address = address
@@ -188,5 +190,40 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         _, payload = broker.published[0]
         self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
+
+    def test_main_reply_publishes_attachment_message(self) -> None:
+        broker = _FakeBroker("127.0.0.1:9876")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            attachment_path = Path(tmpdir) / "menu.pdf"
+            attachment_path.write_bytes(b"%PDF-1.4\n")
+            with (
+                patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "task:telegram:53",
+                        "--channel",
+                        "telegram",
+                        "--target",
+                        "8605042448",
+                        "--message",
+                        "This week's menu",
+                        "--attachment-path",
+                        str(attachment_path),
+                        "--attachment-name",
+                        "menu.pdf",
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        _, payload = broker.published[0]
+        self.assertEqual(payload["message"]["body"], "This week's menu")
+        self.assertEqual(payload["message"]["attachment"]["name"], "menu.pdf")
+        self.assertEqual(payload["message"]["attachment"]["uri"], attachment_path.as_uri())
+
+
 if __name__ == "__main__":
     unittest.main()

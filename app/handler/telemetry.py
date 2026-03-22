@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Lock, Thread
 from typing import Callable, Mapping
 
-from app.message_handler_runtime import TelegramAttachmentCleanupResult
+from app.handler.runtime import TelegramAttachmentCleanupResult
 
 LOGGER = logging.getLogger(__name__)
 

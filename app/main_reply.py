@@ -8,11 +8,12 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
-from app.message_handler_runtime import TaskLedgerStore
-from app.main_worker import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
-from app.models import OutboundMessage
+from app.handler.runtime import TaskLedgerStore
+from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
+from app.models import AttachmentRef, OutboundMessage
 
 
 def _parse_args() -> argparse.Namespace:
@@ -24,6 +25,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("task_id", help="Task identifier (for example: task:email:53).")
     parser.add_argument("--message", help="Reply body text.")
+    parser.add_argument("--attachment-path", help="Absolute path to a local file to send as an attachment.")
+    parser.add_argument("--attachment-name", help="Optional attachment filename override.")
     parser.add_argument("--channel", required=True, help="Outbound channel (for example: email, telegram, github).")
     parser.add_argument("--target", required=True, help="Outbound channel target.")
     parser.add_argument("--telegram-reaction", help="React to the Telegram source message instead of sending a text message.")
@@ -118,12 +121,35 @@ def _resolve_reply_message(args: argparse.Namespace, config: dict[str, object]) 
             metadata={"message_id": message_id},
         )
 
-    if args.message is None:
-        raise ValueError("message must not be empty")
-    body = args.message.strip()
-    if not body:
-        raise ValueError("message must not be empty")
-    return OutboundMessage(channel=args.channel, target=args.target, body=body)
+    attachment: AttachmentRef | None = None
+    if args.attachment_path is not None:
+        attachment_path = Path(args.attachment_path.strip())
+        if not attachment_path.is_absolute():
+            raise ValueError("attachment_path must be absolute")
+        if not attachment_path.is_file():
+            raise ValueError("attachment_path must point to an existing file")
+
+        attachment_name = None
+        if args.attachment_name is not None:
+            attachment_name = args.attachment_name.strip()
+            if not attachment_name:
+                raise ValueError("attachment_name must not be empty")
+
+        attachment = AttachmentRef(
+            uri=attachment_path.as_uri(),
+            name=attachment_name,
+        )
+
+    body: str | None = None
+    if args.message is not None:
+        body = args.message.strip()
+        if not body:
+            raise ValueError("message must not be empty")
+
+    if body is None and attachment is None:
+        raise ValueError("message or attachment is required")
+
+    return OutboundMessage(channel=args.channel, target=args.target, body=body, attachment=attachment)
 
 
 def main() -> int:

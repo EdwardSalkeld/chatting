@@ -3,22 +3,22 @@ from datetime import datetime, timezone
 from email.message import EmailMessage as ParsedEmailMessage
 from tempfile import TemporaryDirectory
 
-from app.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
-from app.connectors.github_pull_request_review_connector import GitHubPullRequestReviewConnector
-from app.connectors.imap_email_connector import ImapEmailConnector
-from app.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
-from app.connectors.interval_schedule_connector import (
+from app.handler.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
+from app.handler.connectors.github_pull_request_review_connector import GitHubPullRequestReviewConnector
+from app.handler.connectors.imap_email_connector import ImapEmailConnector
+from app.handler.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
+from app.handler.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
 )
-from app.connectors.telegram_connector import (
+from app.handler.connectors.telegram_connector import (
     TelegramFileMetadata,
     TelegramConnector,
     TelegramGetUpdatesResponse,
 )
-from app.connectors.slack_connector import SlackConnector
-from app.connectors.webhook_connector import WebhookConnector, WebhookEvent
-from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
+from app.handler.connectors.slack_connector import SlackConnector
+from app.handler.connectors.webhook_connector import WebhookConnector, WebhookEvent
+from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.models import PromptContext
 from tests.fixtures import CronTrigger, EmailMessage, FakeCronConnector, FakeEmailConnector
 class FakeCronConnectorTests(unittest.TestCase):
@@ -583,7 +583,7 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
             )
 
             with self.assertLogs(
-                "app.connectors.github_issue_assignment_connector",
+                "app.handler.connectors.github_issue_assignment_connector",
                 level="ERROR",
             ) as logs:
                 envelopes = connector.poll()
@@ -766,7 +766,7 @@ class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
             )
 
             with self.assertLogs(
-                "app.connectors.github_pull_request_review_connector",
+                "app.handler.connectors.github_pull_request_review_connector",
                 level="ERROR",
             ) as logs:
                 envelopes = connector.poll()
@@ -1089,7 +1089,7 @@ class TelegramConnectorTests(unittest.TestCase):
             ),
         )
 
-        with self.assertLogs("app.connectors.telegram_connector", level="INFO") as logs:
+        with self.assertLogs("app.handler.connectors.telegram_connector", level="INFO") as logs:
             envelopes = connector.poll()
 
         self.assertEqual(envelopes, [])

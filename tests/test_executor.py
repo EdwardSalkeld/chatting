@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from app.executor import CodexExecutor, parse_execution_result
+from app.worker.executor import CodexExecutor, parse_execution_result
 from app.models import AttachmentRef, ExecutionConstraints, PromptContext, ReplyChannel, RoutedTask
 
 
@@ -291,7 +291,7 @@ class ParseExecutionResultTests(unittest.TestCase):
         ):
             parse_execution_result(payload)
 class CodexExecutorTests(unittest.TestCase):
-    @patch("app.executor.codex.subprocess.run")
+    @patch("app.worker.executor.codex.subprocess.run")
     def test_execute_returns_timeout_error_when_subprocess_times_out(self, run_mock) -> None:
         run_mock.side_effect = subprocess.TimeoutExpired(cmd=["codex"], timeout=7)
         executor = CodexExecutor(command=("codex", "exec", "--json"))
@@ -301,7 +301,7 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(result.errors, ["executor_timeout"])
         self.assertEqual(result.actions, [])
 
-    @patch("app.executor.codex.subprocess.run")
+    @patch("app.worker.executor.codex.subprocess.run")
     def test_execute_returns_nonzero_exit_error(self, run_mock) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=["codex", "exec", "--json"],
@@ -315,7 +315,7 @@ class CodexExecutorTests(unittest.TestCase):
 
         self.assertEqual(result.errors, ["executor_exit_nonzero:2:fatal error"])
 
-    @patch("app.executor.codex.subprocess.run")
+    @patch("app.worker.executor.codex.subprocess.run")
     def test_execute_uses_task_timeout_and_parses_stdout(self, run_mock) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=["codex", "exec", "--json"],
@@ -367,7 +367,7 @@ class CodexExecutorTests(unittest.TestCase):
         )
         self.assertEqual(payload["reply_contract"]["executor_output_is_completion_only"], True)
 
-    @patch("app.executor.codex.subprocess.run")
+    @patch("app.worker.executor.codex.subprocess.run")
     def test_execute_passes_configured_working_directory(self, run_mock) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=["codex", "exec", "--json"],

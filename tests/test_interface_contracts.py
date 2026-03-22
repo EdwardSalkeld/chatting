@@ -3,8 +3,8 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.applier import Applier, IntegratedApplier, NoOpApplier
-from app.connectors import (
+from app.handler.applier import Applier, IntegratedApplier, NoOpApplier
+from app.handler.connectors import (
     Connector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
@@ -14,11 +14,11 @@ from app.connectors import (
     WebhookConnector,
     WebhookEvent,
 )
-from app.github_ingress_runtime import GitHubAssignmentCheckpointStore
-from app.connectors.telegram_connector import TelegramGetUpdatesResponse
-from app.executor import CodexExecutor, Executor
-from app.policy import AllowlistPolicyEngine, PolicyEngine
-from app.router import Router, RuleBasedRouter
+from app.handler.github_ingress import GitHubAssignmentCheckpointStore
+from app.handler.connectors.telegram_connector import TelegramGetUpdatesResponse
+from app.worker.executor import CodexExecutor, Executor
+from app.worker.policy import AllowlistPolicyEngine, PolicyEngine
+from app.worker.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 from tests.fixtures import CronTrigger, EmailMessage, FakeCronConnector, FakeEmailConnector
 class InterfaceContractTests(unittest.TestCase):
