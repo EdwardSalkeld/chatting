@@ -506,12 +506,15 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
 
             import sqlite3
 
-            with sqlite3.connect(db_path) as connection:
+            connection = sqlite3.connect(db_path)
+            try:
                 connection.execute(
                     "UPDATE telegram_attachment_ledger SET created_at = ? WHERE task_id = ?",
                     ("2026-02-01T00:00:00Z", task_message.task_id),
                 )
                 connection.commit()
+            finally:
+                connection.close()
 
             result = cleanup_telegram_attachments(
                 attachment_store=attachment_store,
