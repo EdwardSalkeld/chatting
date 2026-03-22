@@ -17,7 +17,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Callable, Mapping
 
-from app.applier import (
+from app.handler.applier import (
     GitHubIssueCommentSender,
     IntegratedApplier,
     MessageDispatchError,
@@ -31,7 +31,7 @@ from app.broker import (
     TASK_QUEUE_NAME,
     TaskQueueMessage,
 )
-from app.connectors import (
+from app.handler.connectors import (
     Connector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
@@ -41,13 +41,13 @@ from app.connectors import (
     IntervalScheduleJob,
     TelegramConnector,
 )
-from app.github_ingress_runtime import (
+from app.handler.github_ingress import (
     GitHubAssignmentCheckpointStore,
     default_graphql_runner,
     fetch_authenticated_viewer_login,
 )
 from app.internal_heartbeat import INTERNAL_HEARTBEAT_TARGET, is_internal_heartbeat_envelope
-from app.message_handler_runtime import (
+from app.handler.runtime import (
     TaskLedgerRecord,
     TaskLedgerStore,
     TelegramAttachmentCleanupResult,
@@ -56,7 +56,7 @@ from app.message_handler_runtime import (
 )
 from app.models import OutboundMessage, PolicyDecision, PromptContext, TaskEnvelope
 from app.state import SQLiteStateStore
-from app.telemetry import (
+from app.handler.telemetry import (
     EgressTelemetryRollup,
     HeartbeatTelemetryRollup,
     MessageHandlerMetrics,

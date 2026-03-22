@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Mapping
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
-from app.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
-from app.policy import AllowlistPolicyEngine
-from app.router import RuleBasedRouter
+from app.worker.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
+from app.worker.policy import AllowlistPolicyEngine
+from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
-from app.worker_runtime import process_task_message
+from app.worker.runtime import process_task_message
 
 WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
 LOGGER = logging.getLogger(__name__)

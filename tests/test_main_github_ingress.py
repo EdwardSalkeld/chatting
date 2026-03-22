@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from app.github_ingress_runtime import GitHubIssueAssignmentEvent, GitHubPullRequestReviewEvent
+from app.handler.github_ingress import GitHubIssueAssignmentEvent, GitHubPullRequestReviewEvent
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.main_message_handler import _load_config, _load_schedule_jobs, main
 from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
@@ -224,19 +224,19 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=_FakeMetricsServer(),
                 ),
                 patch(
-                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
+                    "app.handler.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     side_effect=[[event], [event]],
                 ),
                 patch(
-                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
+                    "app.handler.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch(
-                    "app.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
+                    "app.handler.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
                     side_effect=[[], []],
                 ),
                 patch(
-                    "app.connectors.github_pull_request_review_connector.expand_repository_patterns",
+                    "app.handler.connectors.github_pull_request_review_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
@@ -311,19 +311,19 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value="BillyAcachofa",
                 ),
                 patch(
-                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
+                    "app.handler.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch(
-                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
+                    "app.handler.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     return_value=[event],
                 ),
                 patch(
-                    "app.connectors.github_pull_request_review_connector.expand_repository_patterns",
+                    "app.handler.connectors.github_pull_request_review_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch(
-                    "app.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
+                    "app.handler.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
                     return_value=[],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),
@@ -385,19 +385,19 @@ class MainGitHubIngressTests(unittest.TestCase):
                     return_value=_FakeMetricsServer(),
                 ),
                 patch(
-                    "app.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
+                    "app.handler.connectors.github_issue_assignment_connector.fetch_assignment_events_for_repository",
                     side_effect=[[], []],
                 ),
                 patch(
-                    "app.connectors.github_issue_assignment_connector.expand_repository_patterns",
+                    "app.handler.connectors.github_issue_assignment_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch(
-                    "app.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
+                    "app.handler.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
                     side_effect=[[review_event], [review_event]],
                 ),
                 patch(
-                    "app.connectors.github_pull_request_review_connector.expand_repository_patterns",
+                    "app.handler.connectors.github_pull_request_review_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
                 patch("app.main_message_handler._build_live_connectors", return_value=[]),

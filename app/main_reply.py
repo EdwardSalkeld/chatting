@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
-from app.message_handler_runtime import TaskLedgerStore
+from app.handler.runtime import TaskLedgerStore
 from app.main_worker import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 from app.models import AttachmentRef, OutboundMessage
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 from unittest.mock import patch
 
-from app.applier import MessageDispatchError
+from app.handler.applier import MessageDispatchError
 from app.main_message_handler import (
     EgressTelemetryRollup,
     HeartbeatTelemetryRollup,
@@ -20,14 +20,14 @@ from app.main_message_handler import (
 )
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_egress, build_internal_heartbeat_envelope
-from app.message_handler_runtime import (
+from app.handler.runtime import (
     TaskLedgerStore,
     TelegramAttachmentStore,
     cleanup_telegram_attachments,
 )
 from app.models import ApplyResult, AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
-from app.telemetry import _render_prometheus_metrics
+from app.handler.telemetry import _render_prometheus_metrics
 @dataclass
 class _RecordingApplier:
     apply_calls: int = 0

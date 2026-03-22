@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from app.applier import (
+from app.handler.applier import (
     GitHubIssueCommentSender,
     IntegratedApplier,
     MessageDispatchError,
@@ -16,7 +16,7 @@ from app.applier import (
     SmtpEmailSender,
     TelegramMessageSender,
 )
-from app.applier.integrated import _default_http_post_json
+from app.handler.applier.integrated import _default_http_post_json
 from app.models import (
     ActionProposal,
     AttachmentRef,
@@ -767,8 +767,8 @@ class TelegramMessageSenderTests(unittest.TestCase):
         )
 
         with (
-            patch("app.applier.integrated.urllib.request.urlopen", side_effect=http_error),
-            self.assertLogs("app.applier.integrated", level="ERROR") as captured,
+            patch("app.handler.applier.integrated.urllib.request.urlopen", side_effect=http_error),
+            self.assertLogs("app.handler.applier.integrated", level="ERROR") as captured,
         ):
             response = _default_http_post_json(
                 "https://api.telegram.org/bottoken/sendMessage",

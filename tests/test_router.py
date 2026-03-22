@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
-from app.router import RuleBasedRouter
+from app.worker.router import RuleBasedRouter
 class RuleBasedRouterTests(unittest.TestCase):
     def test_routes_email_to_respond_workflow_with_defaults(self) -> None:
         envelope = TaskEnvelope(

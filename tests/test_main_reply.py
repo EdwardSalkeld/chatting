@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
 from app.main_reply import main
-from app.message_handler_runtime import TaskLedgerStore
+from app.handler.runtime import TaskLedgerStore
 from app.models import ReplyChannel, TaskEnvelope
 
 
