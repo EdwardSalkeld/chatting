@@ -149,8 +149,8 @@ Auth is still external to the app and must be completed once interactively, then
 volumes.
 
 The compose file mounts:
-- `codex-auth` -> `/root/.codex`
-- `claude-auth` -> `/root/.claude`
+- `codex-auth` -> `/home/chatting/.codex`
+- `claude-auth` -> `/home/chatting/.claude`
 
 One-time bootstrap:
 

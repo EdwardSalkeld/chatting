@@ -23,6 +23,7 @@ services:
       context: .
       target: test
     command: ["app.main_message_handler"]
+    user: "10001:10001"
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
       CHATTING_IMAP_PASSWORD: dummy
@@ -38,6 +39,7 @@ services:
       context: .
       target: test
     command: ["app.main_worker"]
+    user: "10001:10001"
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
     volumes:
