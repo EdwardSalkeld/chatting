@@ -31,6 +31,8 @@ CMD ["app.main_message_handler"]
 
 FROM base AS test
 
+USER root
 RUN uv sync --locked --no-install-project
 COPY tests/ tests/
 COPY configs/ configs/
+USER chatting:chatting
