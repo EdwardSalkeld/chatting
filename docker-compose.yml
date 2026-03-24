@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.bbmb
     ports:
       - "9876:9876"
+      - "9877:9877"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:9877/metrics"]
       interval: 5s
@@ -20,9 +21,10 @@ services:
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
     volumes:
-      - ./configs:/config:ro
+      - ./configs/handler:/config:ro
       - handler-data:/data
       - telegram-attachments:/var/lib/chatting/telegram-attachments
+      - gh-auth:/root/.config/gh
     ports:
       - "9464:9464"
     depends_on:
@@ -37,11 +39,12 @@ services:
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
     volumes:
-      - ./configs:/config:ro
+      - ./configs/worker:/config:ro
       - worker-data:/data
       - workspace:/workspace
       - codex-auth:/root/.codex
       - claude-auth:/root/.claude
+      - gh-auth:/root/.config/gh
     depends_on:
       bbmb:
         condition: service_healthy
@@ -54,3 +57,4 @@ volumes:
   workspace:
   codex-auth:
   claude-auth:
+  gh-auth:

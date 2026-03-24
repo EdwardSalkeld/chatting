@@ -3,7 +3,7 @@ FROM python:3.13-slim AS base
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates gh git \
     && npm install -g @openai/codex @anthropic-ai/claude-code \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*

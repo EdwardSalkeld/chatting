@@ -9,3 +9,5 @@ configs/handler.env
 configs/worker.env
 configs/handler.json
 configs/worker.json
+configs/handler/
+configs/worker/
