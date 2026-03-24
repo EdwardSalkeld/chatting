@@ -19,6 +19,8 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "schema_version",
     "actions",
     "errors",
+    "type",
+    "usage",
 }
 _REQUIRED_TOP_LEVEL_KEYS = {
     "schema_version",

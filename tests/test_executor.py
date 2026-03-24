@@ -73,6 +73,24 @@ class ParseExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown_top_level_keys"):
             parse_execution_result(payload)
 
+    def test_parse_execution_result_accepts_codex_metadata_fields(self) -> None:
+        payload = json.dumps(
+            {
+                "type": "result",
+                "schema_version": "1.0",
+                "actions": [],
+                "errors": [],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                },
+            }
+        )
+
+        result = parse_execution_result(payload)
+
+        self.assertEqual(result.to_dict()["errors"], [])
+
     def test_parse_execution_result_rejects_legacy_messages_field(self) -> None:
         payload = json.dumps(
             {
