@@ -24,6 +24,11 @@ RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uv", "run", "python", "-m", "app.main_message_handler"]
 
+FROM base AS prod
+RUN uv sync --locked
+RUN chmod -R a+rX /app
+RUN chmod -R a+rX /home/chatting
+
 FROM base AS test
 
 RUN uv sync --locked --no-install-project
