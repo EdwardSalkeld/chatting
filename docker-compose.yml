@@ -16,15 +16,19 @@ services:
 
   handler:
     build: .
-    command: ["app.main_message_handler"]
+    command: ["uv", "run", "python", "-m", "app.main_message_handler"]
     env_file: configs/handler.env
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
+      # Set PUID/PGID to your host user's UID/GID so the runtime user owns HOME.
+      # Override by exporting UID and GID in your shell before running docker compose.
+      PUID: "${UID:-1000}"
+      PGID: "${GID:-1000}"
     volumes:
       - ./configs/handler:/config:ro
       - handler-data:/data
       - telegram-attachments:/var/lib/chatting/telegram-attachments
-      - gh-auth:/root/.config/gh
+      - gh-auth:/home/chatting/.config/gh
     ports:
       - "9464:9464"
     depends_on:
@@ -34,17 +38,21 @@ services:
 
   worker:
     build: .
-    command: ["app.main_worker"]
+    command: ["uv", "run", "python", "-m", "app.main_worker"]
     env_file: configs/worker.env
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
+      # Set PUID/PGID to your host user's UID/GID so the runtime user owns HOME.
+      # Override by exporting UID and GID in your shell before running docker compose.
+      PUID: "${UID:-1000}"
+      PGID: "${GID:-1000}"
     volumes:
       - ./configs/worker:/config:ro
       - worker-data:/data
       - workspace:/workspace
-      - codex-auth:/root/.codex
-      - claude-auth:/root/.claude
-      - gh-auth:/root/.config/gh
+      - codex-auth:/home/chatting/.codex
+      - claude-auth:/home/chatting/.claude
+      - gh-auth:/home/chatting/.config/gh
     depends_on:
       bbmb:
         condition: service_healthy

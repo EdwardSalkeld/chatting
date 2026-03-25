@@ -22,7 +22,7 @@ services:
     build:
       context: .
       target: test
-    command: ["app.main_message_handler"]
+    command: ["uv", "run", "python", "-m", "app.main_message_handler"]
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
       CHATTING_IMAP_PASSWORD: dummy
@@ -37,7 +37,7 @@ services:
     build:
       context: .
       target: test
-    command: ["app.main_worker"]
+    command: ["uv", "run", "python", "-m", "app.main_worker"]
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
     volumes:
