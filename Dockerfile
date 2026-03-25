@@ -3,7 +3,7 @@ FROM python:3.13-slim AS base
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates gh git \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates gh git gosu \
     && npm install -g @openai/codex @anthropic-ai/claude-code \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
@@ -15,14 +15,18 @@ RUN uv sync --locked --no-dev --no-install-project
 
 COPY app/ app/
 
-ENTRYPOINT ["/app/.venv/bin/python", "-m"]
-CMD ["app.main_message_handler"]
+ENV HOME=/home/chatting
+RUN mkdir -p /home/chatting && chmod 755 /home/chatting
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uv", "run", "python", "-m", "app.main_message_handler"]
 
 FROM base AS prod
 RUN uv sync --locked
 RUN chmod -R a+rX /app
-RUN mkdir -p /home/chatting/.config
-ENV HOME=/home/chatting
 RUN chmod -R a+rX /home/chatting
 
 FROM base AS test

@@ -15,19 +15,23 @@ services:
     restart: unless-stopped
 
   handler:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
       target: prod
-    command: ["app.main_message_handler"]
+    command: ["uv", "run", "python", "-m", "app.main_message_handler"]
     env_file: configs/handler.env
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
+      # Set PUID/PGID to your host user's UID/GID so the runtime user owns HOME.
+      # Override by exporting UID and GID in your shell before running docker compose.
+      PUID: "${UID:-1000}"
+      PGID: "${GID:-1000}"
     volumes:
       - ./configs/handler:/config:ro
       - handler-data:/data
       - shared-temp:/tmp
-      - gh-auth:/root/.config/gh
+      - gh-auth:/home/chatting/.config/gh
     ports:
       - "9464:9464"
     depends_on:
@@ -40,12 +44,14 @@ services:
       context: .
       dockerfile: Dockerfile
       target: prod
-    user: "${LOCAL_UID}:${LOCAL_GID}"
-    command: ["app.main_worker"]
+    command: ["uv", "run", "python", "-m", "app.main_worker"]
     env_file: configs/worker.env
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
-      HOME: /home/chatting
+      # Set PUID/PGID to your host user's UID/GID so the runtime user owns HOME.
+      # Override by exporting UID and GID in your shell before running docker compose.
+      PUID: "${UID:-1000}"
+      PGID: "${GID:-1000}"
     volumes:
       - ./configs/worker:/config:ro
       - worker-data:/data
