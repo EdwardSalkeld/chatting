@@ -15,7 +15,10 @@ services:
     restart: unless-stopped
 
   handler:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      target: prod
     command: ["app.main_message_handler"]
     env_file: configs/handler.env
     environment:
@@ -23,7 +26,7 @@ services:
     volumes:
       - ./configs/handler:/config:ro
       - handler-data:/data
-      - telegram-attachments:/var/lib/chatting/telegram-attachments
+      - shared-temp:/tmp
       - gh-auth:/root/.config/gh
     ports:
       - "9464:9464"
@@ -33,18 +36,24 @@ services:
     restart: unless-stopped
 
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    user: "${LOCAL_UID}:${LOCAL_GID}"
     command: ["app.main_worker"]
     env_file: configs/worker.env
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
+      HOME: /home/chatting
     volumes:
       - ./configs/worker:/config:ro
       - worker-data:/data
-      - workspace:/workspace
-      - codex-auth:/root/.codex
-      - claude-auth:/root/.claude
-      - gh-auth:/root/.config/gh
+      - ${LOCAL_WORKSPACE}:/workspace
+      - shared-temp:/tmp
+      - codex-auth:/home/chatting/.codex
+      - claude-auth:/home/chatting/.claude
+      - gh-auth:/home/chatting/.config/gh
     depends_on:
       bbmb:
         condition: service_healthy
@@ -53,8 +62,7 @@ services:
 volumes:
   handler-data:
   worker-data:
-  telegram-attachments:
-  workspace:
+  shared-temp:
   codex-auth:
   claude-auth:
   gh-auth:

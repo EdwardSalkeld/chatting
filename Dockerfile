@@ -15,8 +15,15 @@ RUN uv sync --locked --no-dev --no-install-project
 
 COPY app/ app/
 
-ENTRYPOINT ["uv", "run", "python", "-m"]
+ENTRYPOINT ["/app/.venv/bin/python", "-m"]
 CMD ["app.main_message_handler"]
+
+FROM base AS prod
+RUN uv sync --locked
+RUN chmod -R a+rX /app
+RUN mkdir -p /home/chatting/.config
+ENV HOME=/home/chatting
+RUN chmod -R a+rX /home/chatting
 
 FROM base AS test
 
