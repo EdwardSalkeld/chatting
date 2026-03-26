@@ -22,7 +22,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uv", "run", "python", "-m", "app.main_message_handler"]
+CMD ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
 
 FROM base AS prod
 RUN uv sync --locked
