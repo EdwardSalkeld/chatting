@@ -22,7 +22,8 @@ services:
     build:
       context: .
       target: test
-    command: ["uv", "run", "python", "-m", "app.main_message_handler"]
+    entrypoint: ["/entrypoint.sh"]
+    command: ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
       CHATTING_IMAP_PASSWORD: dummy
@@ -37,7 +38,8 @@ services:
     build:
       context: .
       target: test
-    command: ["uv", "run", "python", "-m", "app.main_worker"]
+    entrypoint: ["/entrypoint.sh"]
+    command: ["/app/.venv/bin/python", "-m", "app.main_worker"]
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
     volumes:

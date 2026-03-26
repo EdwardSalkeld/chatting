@@ -19,7 +19,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: prod
-    command: ["uv", "run", "python", "-m", "app.main_message_handler"]
+    entrypoint: ["/entrypoint.sh"]
+    command: ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
     env_file: configs/handler.env
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
@@ -44,7 +45,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: prod
-    command: ["uv", "run", "python", "-m", "app.main_worker"]
+    entrypoint: ["/entrypoint.sh"]
+    command: ["/app/.venv/bin/python", "-m", "app.main_worker"]
     env_file: configs/worker.env
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
