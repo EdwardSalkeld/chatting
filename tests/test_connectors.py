@@ -1193,6 +1193,98 @@ class TelegramConnectorTests(unittest.TestCase):
             self.assertEqual(len(envelopes), 1)
             self.assertEqual(envelopes[0].content, "[photo attached]")
             self.assertEqual(envelopes[0].attachments[0].name, "photo.jpg")
+
+    def test_poll_accepts_location_only_message_and_includes_coordinates(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 4003,
+                        "message": {
+                            "message_id": 12,
+                            "date": 1772272800,
+                            "chat": {"id": 12345},
+                            "from": {"id": 77, "username": "alice"},
+                            "location": {
+                                "latitude": 53.800755,
+                                "longitude": -1.549077,
+                                "horizontal_accuracy": 14.5,
+                            },
+                        },
+                    }
+                ],
+            ),
+        )
+
+        envelope = connector.poll()[0]
+
+        self.assertEqual(
+            envelope.content,
+            "[location shared]\n"
+            "latitude: 53.800755\n"
+            "longitude: -1.549077\n"
+            "horizontal_accuracy: 14.5\n"
+            "map: https://maps.google.com/?q=53.800755,-1.549077",
+        )
+        self.assertEqual(
+            envelope.reply_channel.metadata,
+            {
+                "message_id": 12,
+                "location": {
+                    "latitude": 53.800755,
+                    "longitude": -1.549077,
+                    "horizontal_accuracy": 14.5,
+                    "map_url": "https://maps.google.com/?q=53.800755,-1.549077",
+                },
+            },
+        )
+
+    def test_poll_appends_location_details_to_text_messages(self) -> None:
+        connector = TelegramConnector(
+            bot_token="token",
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 4004,
+                        "message": {
+                            "message_id": 13,
+                            "date": 1772272800,
+                            "chat": {"id": 12345},
+                            "text": "Can you plot this?",
+                            "location": {
+                                "latitude": 51.507351,
+                                "longitude": -0.127758,
+                                "live_period": 300,
+                            },
+                        },
+                    }
+                ],
+            ),
+        )
+
+        envelope = connector.poll()[0]
+
+        self.assertEqual(
+            envelope.content,
+            "Can you plot this?\n\n"
+            "[location shared]\n"
+            "latitude: 51.507351\n"
+            "longitude: -0.127758\n"
+            "live_period: 300\n"
+            "map: https://maps.google.com/?q=51.507351,-0.127758",
+        )
+        self.assertEqual(
+            envelope.reply_channel.metadata["location"],
+            {
+                "latitude": 51.507351,
+                "longitude": -0.127758,
+                "live_period": 300,
+                "map_url": "https://maps.google.com/?q=51.507351,-0.127758",
+            },
+        )
 class SlackConnectorTests(unittest.TestCase):
     def test_poll_normalizes_messages_to_im_envelopes(self) -> None:
         connector = SlackConnector(
