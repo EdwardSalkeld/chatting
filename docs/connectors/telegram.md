@@ -29,8 +29,9 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `id` / `dedupe_key`: `telegram:<update_id>`
 - `reply_channel`: `telegram:<chat_id>`
 - `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
+- `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
 - `actor`: `<user_id>:<username>` when available
-- `content`: text body or photo caption (thread id is prefixed when present)
+- `content`: text body, photo caption, or a synthesized location block (thread id is prefixed when present)
 - `attachments`: downloaded photo stored as a local `file://` attachment when the update contains a photo
 
 ## Notes
@@ -39,6 +40,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
   global `prompt_context`, then `telegram_prompt_context`, then the task content itself.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
+- Location-only messages are accepted with synthesized content that includes latitude, longitude, and a map URL.
+- When a message includes both text and a Telegram `location`, the location block is appended to the text so the worker can reason over both in one prompt.
 - `channel_post` updates are ignored unless the channel ID is present in `telegram_allowed_channel_ids`.
 - Ignored `channel_post` updates log `update_id`, `channel_id`, and an explicit reason so new channel IDs can be copied from logs.
 - Offset is advanced as `highest_update_id + 1` each poll.
