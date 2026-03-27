@@ -202,7 +202,12 @@ class TelegramConnector:
         if not isinstance(message_id, int):
             return None
         attachments = self._extract_attachments(update_id=update_id, message_id=message_id, payload=payload)
-        content = _extract_content(payload, fallback_for_attachments=bool(attachments))
+        location_metadata = _extract_location_metadata(payload)
+        content = _extract_content(
+            payload,
+            fallback_for_attachments=bool(attachments),
+            location_metadata=location_metadata,
+        )
         if content is None:
             return None
         event_id = f"telegram:{update_id}"
@@ -213,6 +218,9 @@ class TelegramConnector:
         thread_id = payload.get("message_thread_id")
         if isinstance(thread_id, int):
             content = f"[thread_id={thread_id}] {content}"
+        reply_metadata: dict[str, object] = {"message_id": message_id}
+        if location_metadata is not None:
+            reply_metadata["location"] = location_metadata
 
         return TaskEnvelope(
             id=event_id,
@@ -225,7 +233,7 @@ class TelegramConnector:
             reply_channel=ReplyChannel(
                 type="telegram",
                 target=chat_id_value,
-                metadata={"message_id": message_id},
+                metadata=reply_metadata,
             ),
             dedupe_key=event_id,
             prompt_context=self._prompt_context,
@@ -311,14 +319,74 @@ def _extract_content(
     payload: dict[str, object],
     *,
     fallback_for_attachments: bool,
+    location_metadata: dict[str, object] | None,
 ) -> str | None:
+    text_content: str | None = None
     for field_name in ("text", "caption"):
         raw_value = payload.get(field_name)
         if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
+            text_content = raw_value.strip()
+            break
+    if location_metadata is not None:
+        location_block = _format_location_content(location_metadata)
+        if text_content is not None:
+            return f"{text_content}\n\n{location_block}"
+        return location_block
+    if text_content is not None:
+        return text_content
     if fallback_for_attachments:
         return "[photo attached]"
     return None
+
+
+def _extract_location_metadata(payload: dict[str, object]) -> dict[str, object] | None:
+    raw_location = payload.get("location")
+    if not isinstance(raw_location, dict):
+        return None
+    latitude = raw_location.get("latitude")
+    longitude = raw_location.get("longitude")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return None
+    normalized: dict[str, object] = {
+        "latitude": round(float(latitude), 6),
+        "longitude": round(float(longitude), 6),
+        "map_url": _build_location_map_url(latitude=float(latitude), longitude=float(longitude)),
+    }
+    for field_name in (
+        "horizontal_accuracy",
+        "live_period",
+        "heading",
+        "proximity_alert_radius",
+    ):
+        raw_value = raw_location.get(field_name)
+        if isinstance(raw_value, (int, float)):
+            normalized[field_name] = float(raw_value) if isinstance(raw_value, float) else raw_value
+    return normalized
+
+
+def _format_location_content(location_metadata: dict[str, object]) -> str:
+    latitude = location_metadata["latitude"]
+    longitude = location_metadata["longitude"]
+    lines = [
+        "[location shared]",
+        f"latitude: {latitude}",
+        f"longitude: {longitude}",
+    ]
+    for field_name in (
+        "horizontal_accuracy",
+        "live_period",
+        "heading",
+        "proximity_alert_radius",
+    ):
+        value = location_metadata.get(field_name)
+        if value is not None:
+            lines.append(f"{field_name}: {value}")
+    lines.append(f"map: {location_metadata['map_url']}")
+    return "\n".join(lines)
+
+
+def _build_location_map_url(*, latitude: float, longitude: float) -> str:
+    return f"https://maps.google.com/?q={latitude:.6f},{longitude:.6f}"
 
 
 def _select_best_photo(raw_photos: list[object]) -> dict[str, object] | None:
