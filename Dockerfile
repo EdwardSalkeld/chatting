@@ -7,49 +7,23 @@ ARG GO_ARCHIVE=go${GO_VERSION}.linux-amd64.tar.gz
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates gh git gosu ripgrep \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates curl gh git gosu ripgrep \
     && npm install -g @openai/codex @anthropic-ai/claude-code \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-RUN python - <<'PY'
-import hashlib
-import os
-import shutil
-import tarfile
-import urllib.request
-
-archive = os.environ["GO_ARCHIVE"]
-expected_sha256 = os.environ["GO_ARCHIVE_SHA256"]
-url = f"https://go.dev/dl/{archive}"
-download_path = f"/tmp/{archive}"
-
-with urllib.request.urlopen(url, timeout=60) as response, open(download_path, "wb") as destination:
-    shutil.copyfileobj(response, destination)
-
-digest = hashlib.sha256()
-with open(download_path, "rb") as archive_file:
-    for chunk in iter(lambda: archive_file.read(1024 * 1024), b""):
-        digest.update(chunk)
-
-if digest.hexdigest() != expected_sha256:
-    raise SystemExit("Go archive checksum mismatch")
-
-shutil.rmtree("/usr/local/go", ignore_errors=True)
-with tarfile.open(download_path, "r:gz") as tarball:
-    tarball.extractall("/usr/local")
-os.remove(download_path)
-
 # Debian login shells reset PATH, so link Go tools into /usr/local/bin as well.
-for binary_name in os.listdir("/usr/local/go/bin"):
-    source = f"/usr/local/go/bin/{binary_name}"
-    target = f"/usr/local/bin/{binary_name}"
-    if os.path.lexists(target):
-        os.remove(target)
-    os.symlink(source, target)
-PY
+RUN set -eux; \
+    archive_url="https://go.dev/dl/${GO_ARCHIVE}"; \
+    archive_path="/tmp/${GO_ARCHIVE}"; \
+    curl -fsSL "${archive_url}" -o "${archive_path}"; \
+    printf '%s  %s\n' "${GO_ARCHIVE_SHA256}" "${archive_path}" | sha256sum -c -; \
+    rm -rf /usr/local/go; \
+    tar -C /usr/local -xzf "${archive_path}"; \
+    rm -f "${archive_path}"; \
+    ln -sf /usr/local/go/bin/* /usr/local/bin/
 
 ENV PATH=/usr/local/go/bin:${PATH}
 
