@@ -41,6 +41,14 @@ shutil.rmtree("/usr/local/go", ignore_errors=True)
 with tarfile.open(download_path, "r:gz") as tarball:
     tarball.extractall("/usr/local")
 os.remove(download_path)
+
+# Debian login shells reset PATH, so link Go tools into /usr/local/bin as well.
+for binary_name in os.listdir("/usr/local/go/bin"):
+    source = f"/usr/local/go/bin/{binary_name}"
+    target = f"/usr/local/bin/{binary_name}"
+    if os.path.lexists(target):
+        os.remove(target)
+    os.symlink(source, target)
 PY
 
 ENV PATH=/usr/local/go/bin:${PATH}
