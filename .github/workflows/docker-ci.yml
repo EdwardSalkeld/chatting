@@ -23,6 +23,7 @@ jobs:
         run: |
           docker run --rm --entrypoint codex chatting:test --version
           docker run --rm --entrypoint claude chatting:test --version
+          docker run --rm chatting:test sh -lc 'rg --version && go version'
 
       - name: Run unit tests
         run: |
