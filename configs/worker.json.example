@@ -4,8 +4,6 @@
   "max_attempts": 2,
   "poll_timeout_seconds": 20,
   "sleep_seconds": 1.0,
-  "activity_host": "0.0.0.0",
-  "activity_port": 9465,
   "activity_history_limit": 100,
   "codex_command": "codex exec",
   "codex_working_dir": "/workspace"

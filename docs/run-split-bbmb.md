@@ -66,8 +66,8 @@ If the service/user shell working directory is not where you want Codex to run, 
 the Codex subprocess cwd without changing the worker service `WorkingDirectory`.
 
 The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
-with JSON at `/activity.json`. Use `activity_host`, `activity_port`, and
-`activity_history_limit` to change the bind or retention window.
+with JSON at `/activity.json`. The bind stays fixed at `9465`; use
+`activity_history_limit` to change the retention window.
 
 Optional env-based config path:
 

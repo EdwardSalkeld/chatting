@@ -16,6 +16,7 @@ from app.models import (
 from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
+from app.worker.activity import WorkerActivityMonitor
 from app.worker.runtime import process_task_message
 @dataclass(frozen=True)
 class MultiMessageExecutor:
@@ -71,6 +72,9 @@ class FinalAliasExecutor:
         del task
         return ExecutionResult(actions=[], errors=[])
 class WorkerRuntimeTests(unittest.TestCase):
+    def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
+        return WorkerActivityMonitor(store=store, history_limit=10)
+
     def _build_task_message(self) -> TaskQueueMessage:
         envelope = TaskEnvelope(
             id="email:1",
@@ -104,6 +108,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=MultiMessageExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "success")
@@ -121,6 +126,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=WriteFileExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "success")
@@ -140,6 +146,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=AlwaysFailExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "dead_letter")
@@ -156,6 +163,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=CreditsFailExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=1,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "dead_letter")
@@ -178,6 +186,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=ExecutionErrorExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=1,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "execution_error")
@@ -197,6 +206,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=IncrementalReplyExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "success")
@@ -216,6 +226,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=IncrementalReplyExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(len(result.egress_messages), 1)
@@ -233,6 +244,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=AlwaysFailExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "success")
@@ -261,6 +273,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 executor_impl=NoMessageExecutor(),
                 policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
                 max_attempts=2,
+                activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "success")

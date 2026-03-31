@@ -16,6 +16,9 @@ from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.state import SQLiteStateStore
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_ACTIVITY_HOST = "0.0.0.0"
+DEFAULT_ACTIVITY_PORT = 9465
+DEFAULT_ACTIVITY_HISTORY_LIMIT = 100
 
 
 @dataclass(frozen=True)
@@ -36,7 +39,7 @@ class WorkerActivityMonitor:
         self,
         *,
         store: SQLiteStateStore,
-        history_limit: int = 100,
+        history_limit: int = DEFAULT_ACTIVITY_HISTORY_LIMIT,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         if history_limit <= 0:

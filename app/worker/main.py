@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Mapping
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
-from app.worker.activity import WorkerActivityMonitor, WorkerActivityServer, start_worker_activity_server
+from app.worker.activity import (
+    DEFAULT_ACTIVITY_HISTORY_LIMIT,
+    DEFAULT_ACTIVITY_HOST,
+    DEFAULT_ACTIVITY_PORT,
+    WorkerActivityMonitor,
+    WorkerActivityServer,
+    start_worker_activity_server,
+)
 from app.worker.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
 from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
@@ -31,8 +38,6 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "codex_working_dir",
         "db_path",
         "activity_history_limit",
-        "activity_host",
-        "activity_port",
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
@@ -77,8 +82,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
     parser.add_argument("--codex-command", help="Base Codex command (e.g. 'codex exec'). JSON args appended automatically.")
     parser.add_argument("--claude-command", help="Base Claude command (e.g. 'claude'). Structured output args appended automatically.")
-    parser.add_argument("--activity-host", help="Worker activity UI bind host.")
-    parser.add_argument("--activity-port", type=_positive_int, help="Worker activity UI bind port.")
     parser.add_argument(
         "--activity-history-limit",
         type=_positive_int,
@@ -251,22 +254,10 @@ def main() -> int:
         default_value=1.0,
         setting_name="sleep_seconds",
     )
-    activity_host = _resolve_str(
-        args.activity_host,
-        config.get("activity_host"),
-        default_value="127.0.0.1",
-        setting_name="activity_host",
-    )
-    activity_port = _resolve_positive_int(
-        args.activity_port,
-        config.get("activity_port"),
-        default_value=9465,
-        setting_name="activity_port",
-    )
     activity_history_limit = _resolve_positive_int(
         args.activity_history_limit,
         config.get("activity_history_limit"),
-        default_value=100,
+        default_value=DEFAULT_ACTIVITY_HISTORY_LIMIT,
         setting_name="activity_history_limit",
     )
 
@@ -275,9 +266,9 @@ def main() -> int:
         store=store,
         history_limit=activity_history_limit,
     )
-    activity_server: WorkerActivityServer | None = start_worker_activity_server(
-        host=activity_host,
-        port=activity_port,
+    activity_server: WorkerActivityServer = start_worker_activity_server(
+        host=DEFAULT_ACTIVITY_HOST,
+        port=DEFAULT_ACTIVITY_PORT,
         monitor=activity_monitor,
     )
     broker = BBMBQueueAdapter(address=bbmb_address)
@@ -346,8 +337,7 @@ def main() -> int:
                 break
         return 0
     finally:
-        if activity_server is not None:
-            activity_server.shutdown()
+        activity_server.shutdown()
 
 
 def _publish_egress_with_outbox(
@@ -355,25 +345,24 @@ def _publish_egress_with_outbox(
     store: SQLiteStateStore,
     broker: BBMBQueueAdapter,
     egress_message: EgressQueueMessage,
-    activity_monitor: WorkerActivityMonitor | None = None,
+    activity_monitor: WorkerActivityMonitor,
 ) -> None:
     store.queue_egress_outbox_event(egress_message)
     broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
     if egress_message.event_id is None:
         return
     store.mark_egress_outbox_event_published(event_id=egress_message.event_id)
-    if activity_monitor is not None:
-        activity_monitor.record_egress(
-            egress_message=egress_message,
-            publish_source="worker",
-        )
+    activity_monitor.record_egress(
+        egress_message=egress_message,
+        publish_source="worker",
+    )
 
 
 def _replay_egress_outbox(
     *,
     store: SQLiteStateStore,
     broker: BBMBQueueAdapter,
-    activity_monitor: WorkerActivityMonitor | None = None,
+    activity_monitor: WorkerActivityMonitor,
 ) -> None:
     replayable = store.list_replayable_egress_outbox_events()
     if not replayable:
@@ -383,11 +372,10 @@ def _replay_egress_outbox(
         if message.event_id is None:
             continue
         store.mark_egress_outbox_event_published(event_id=message.event_id)
-        if activity_monitor is not None:
-            activity_monitor.record_egress(
-                egress_message=message,
-                publish_source="outbox_replay",
-            )
+        activity_monitor.record_egress(
+            egress_message=message,
+            publish_source="outbox_replay",
+        )
     LOGGER.info("worker_egress_outbox_replayed count=%s", len(replayable))
 
 
