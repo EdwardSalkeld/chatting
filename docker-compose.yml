@@ -38,6 +38,8 @@ services:
     depends_on:
       bbmb:
         condition: service_healthy
+    ports:
+      - "9465:9465"
     restart: unless-stopped
 
   worker:

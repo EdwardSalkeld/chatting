@@ -6,6 +6,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor
 from app.internal_heartbeat import (
@@ -17,6 +18,9 @@ from app.models import AuditEvent, OutboundMessage, RunRecord
 from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
 from app.state import StateStore
+
+if TYPE_CHECKING:
+    from app.worker.activity import WorkerActivityMonitor
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,7 @@ def process_task_message(
     executor_impl: Executor,
     policy: AllowlistPolicyEngine,
     max_attempts: int,
+    activity_monitor: WorkerActivityMonitor | None = None,
 ) -> WorkerProcessResult:
     """Process one task message and persist run/audit records."""
     if max_attempts <= 0:
@@ -66,6 +71,12 @@ def process_task_message(
 
         error_stage = "executor"
         try:
+            if activity_monitor is not None:
+                activity_monitor.record_executor_started(
+                    task_message=task_message,
+                    attempt=attempt,
+                    workflow=task.workflow,
+                )
             execution_result = executor_impl.execute(task)
             execution_payload = execution_result.to_dict()
 
@@ -93,6 +104,13 @@ def process_task_message(
         except Exception as exc:  # noqa: BLE001
             last_error = f"{type(exc).__name__}: {exc}"
             last_error_stage = error_stage
+            if activity_monitor is not None:
+                activity_monitor.record_executor_failure(
+                    task_message=task_message,
+                    attempt=attempt,
+                    workflow=task.workflow,
+                    error=last_error,
+                )
             if attempt == max_attempts:
                 reason_codes = ["retry_exhausted"]
                 result_status = "dead_letter"
@@ -152,6 +170,17 @@ def process_task_message(
             attempt_count=attempt_count,
         )
         dead_lettered = True
+
+    if activity_monitor is not None:
+        activity_monitor.record_executor_finished(
+            task_message=task_message,
+            run_id=run_record.run_id,
+            workflow=task.workflow,
+            result_status=run_record.result_status,
+            attempt_count=attempt_count,
+            reason_codes=reason_codes,
+            latency_ms=latency_ms,
+        )
 
     return WorkerProcessResult(
         run_record=run_record,
