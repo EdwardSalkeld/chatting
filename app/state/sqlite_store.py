@@ -130,6 +130,23 @@ class SQLiteStateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS worker_activity_events (
+                    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at TEXT NOT NULL,
+                    task_id TEXT,
+                    envelope_id TEXT,
+                    run_id TEXT,
+                    source TEXT,
+                    workflow TEXT,
+                    phase TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    detail_json TEXT NOT NULL,
+                    is_internal INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
             connection.commit()
 
     def _drop_legacy_admin_tables(self, connection: sqlite3.Connection) -> None:
@@ -609,6 +626,103 @@ class SQLiteStateStore:
             ).fetchall()
         return [EgressQueueMessage.from_dict(json.loads(row["payload_json"])) for row in rows]
 
+    def append_worker_activity(
+        self,
+        *,
+        occurred_at: datetime,
+        phase: str,
+        summary: str,
+        detail: dict[str, object],
+        task_id: str | None = None,
+        envelope_id: str | None = None,
+        run_id: str | None = None,
+        source: str | None = None,
+        workflow: str | None = None,
+        is_internal: bool = False,
+    ) -> None:
+        if not phase:
+            raise ValueError("phase is required")
+        if not summary:
+            raise ValueError("summary is required")
+        payload = _json_safe_dict(detail)
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_activity_events (
+                    occurred_at,
+                    task_id,
+                    envelope_id,
+                    run_id,
+                    source,
+                    workflow,
+                    phase,
+                    summary,
+                    detail_json,
+                    is_internal
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    occurred_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    task_id,
+                    envelope_id,
+                    run_id,
+                    source,
+                    workflow,
+                    phase,
+                    summary,
+                    json.dumps(payload, sort_keys=True),
+                    1 if is_internal else 0,
+                ),
+            )
+            connection.commit()
+
+    def list_recent_worker_activity(
+        self,
+        *,
+        limit: int,
+        include_internal: bool = False,
+    ) -> list[dict[str, object]]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with closing(self._connect()) as connection:
+            if include_internal:
+                rows = connection.execute(
+                    """
+                    SELECT occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                    FROM worker_activity_events
+                    ORDER BY activity_id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                    FROM worker_activity_events
+                    WHERE is_internal = 0
+                    ORDER BY activity_id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [
+            {
+                "occurred_at": row["occurred_at"],
+                "task_id": row["task_id"],
+                "envelope_id": row["envelope_id"],
+                "run_id": row["run_id"],
+                "source": row["source"],
+                "workflow": row["workflow"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "detail": json.loads(row["detail_json"]),
+                "is_internal": bool(row["is_internal"]),
+            }
+            for row in rows
+        ]
+
 
 def _parse_rfc3339_utc(value: str) -> datetime:
     if value.endswith("Z"):
@@ -679,3 +793,7 @@ def _string_list_from_payload(value: object) -> list[str]:
     if not isinstance(value, list):
         raise ValueError("invalid dead letter envelope payload")
     return [str(item) for item in value]
+
+
+def _json_safe_dict(value: dict[str, object]) -> dict[str, object]:
+    return json.loads(json.dumps(value, sort_keys=True))

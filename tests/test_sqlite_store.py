@@ -255,5 +255,37 @@ class SQLiteStateStoreTests(unittest.TestCase):
             store.mark_egress_outbox_event_acked(event_id="evt:task:email:1:0")
             replayable = store.list_replayable_egress_outbox_events()
             self.assertEqual(replayable, [])
+
+    def test_worker_activity_roundtrip_and_internal_filtering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+
+            store.append_worker_activity(
+                occurred_at=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+                task_id="task:email:1",
+                envelope_id="email:1",
+                phase="task_received",
+                summary="email task received",
+                detail={"reply_channel": "email"},
+            )
+            store.append_worker_activity(
+                occurred_at=datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc),
+                task_id="task:internal:heartbeat:1",
+                envelope_id="internal:heartbeat:1",
+                phase="egress_message",
+                summary="heartbeat pong",
+                detail={"channel": "log"},
+                is_internal=True,
+            )
+
+            visible = store.list_recent_worker_activity(limit=10)
+            self.assertEqual(len(visible), 1)
+            self.assertEqual(visible[0]["phase"], "task_received")
+
+            all_events = store.list_recent_worker_activity(limit=10, include_internal=True)
+            self.assertEqual(len(all_events), 2)
+            self.assertEqual(all_events[0]["phase"], "egress_message")
+            self.assertEqual(all_events[1]["phase"], "task_received")
 if __name__ == "__main__":
     unittest.main()

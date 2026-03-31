@@ -14,6 +14,14 @@ from pathlib import Path
 from typing import Mapping
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
+from app.worker.activity import (
+    DEFAULT_ACTIVITY_HISTORY_LIMIT,
+    DEFAULT_ACTIVITY_HOST,
+    DEFAULT_ACTIVITY_PORT,
+    WorkerActivityMonitor,
+    WorkerActivityServer,
+    start_worker_activity_server,
+)
 from app.worker.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
 from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
@@ -29,6 +37,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "codex_command",
         "codex_working_dir",
         "db_path",
+        "activity_history_limit",
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
@@ -73,6 +82,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
     parser.add_argument("--codex-command", help="Base Codex command (e.g. 'codex exec'). JSON args appended automatically.")
     parser.add_argument("--claude-command", help="Base Claude command (e.g. 'claude'). Structured output args appended automatically.")
+    parser.add_argument(
+        "--activity-history-limit",
+        type=_positive_int,
+        help="Maximum recent worker activity events to show in the UI.",
+    )
     parser.add_argument(
         "--codex-working-dir",
         help="Working directory used only for launching executor subprocesses.",
@@ -240,8 +254,23 @@ def main() -> int:
         default_value=1.0,
         setting_name="sleep_seconds",
     )
+    activity_history_limit = _resolve_positive_int(
+        args.activity_history_limit,
+        config.get("activity_history_limit"),
+        default_value=DEFAULT_ACTIVITY_HISTORY_LIMIT,
+        setting_name="activity_history_limit",
+    )
 
     store = SQLiteStateStore(db_path)
+    activity_monitor = WorkerActivityMonitor(
+        store=store,
+        history_limit=activity_history_limit,
+    )
+    activity_server: WorkerActivityServer = start_worker_activity_server(
+        host=DEFAULT_ACTIVITY_HOST,
+        port=DEFAULT_ACTIVITY_PORT,
+        monitor=activity_monitor,
+    )
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)
     broker.ensure_queue(EGRESS_QUEUE_NAME)
@@ -251,55 +280,64 @@ def main() -> int:
     executor = _build_executor(args, config)
     replay_done = False
 
-    loop_count = 0
-    while True:
-        loop_count += 1
-        if not replay_done:
-            _replay_egress_outbox(store=store, broker=broker)
-            replay_done = True
-        picked = broker.pickup_json(
-            TASK_QUEUE_NAME,
-            timeout_seconds=poll_timeout_seconds,
-            wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
-        )
-        if picked is None:
-            LOGGER.info("worker_loop_empty loop=%s", loop_count)
-            if max_loops and loop_count >= max_loops:
-                break
-            time.sleep(sleep_seconds)
-            continue
-
-        try:
-            task_message = TaskQueueMessage.from_dict(picked.payload)
-            result = process_task_message(
-                store=store,
-                task_message=task_message,
-                router=router,
-                executor_impl=executor,
-                policy=policy,
-                max_attempts=max_attempts,
-            )
-            for egress_message in result.egress_messages:
-                _publish_egress_with_outbox(
+    try:
+        loop_count = 0
+        while True:
+            loop_count += 1
+            if not replay_done:
+                _replay_egress_outbox(
                     store=store,
                     broker=broker,
-                    egress_message=egress_message,
+                    activity_monitor=activity_monitor,
                 )
-            broker.ack(TASK_QUEUE_NAME, picked.guid)
-            LOGGER.info(
-                "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
-                result.run_record.run_id,
-                task_message.task_id,
-                len(result.egress_messages),
-                result.run_record.result_status,
+                replay_done = True
+            picked = broker.pickup_json(
+                TASK_QUEUE_NAME,
+                timeout_seconds=poll_timeout_seconds,
+                wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
             )
-        except Exception:  # noqa: BLE001
-            LOGGER.exception("worker_processing_failed guid=%s", picked.guid)
+            if picked is None:
+                LOGGER.info("worker_loop_empty loop=%s", loop_count)
+                if max_loops and loop_count >= max_loops:
+                    break
+                time.sleep(sleep_seconds)
+                continue
 
-        if max_loops and loop_count >= max_loops:
-            break
+            try:
+                task_message = TaskQueueMessage.from_dict(picked.payload)
+                activity_monitor.record_task_received(task_message=task_message)
+                result = process_task_message(
+                    store=store,
+                    task_message=task_message,
+                    router=router,
+                    executor_impl=executor,
+                    policy=policy,
+                    max_attempts=max_attempts,
+                    activity_monitor=activity_monitor,
+                )
+                for egress_message in result.egress_messages:
+                    _publish_egress_with_outbox(
+                        store=store,
+                        broker=broker,
+                        egress_message=egress_message,
+                        activity_monitor=activity_monitor,
+                    )
+                broker.ack(TASK_QUEUE_NAME, picked.guid)
+                LOGGER.info(
+                    "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
+                    result.run_record.run_id,
+                    task_message.task_id,
+                    len(result.egress_messages),
+                    result.run_record.result_status,
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("worker_processing_failed guid=%s", picked.guid)
 
-    return 0
+            if max_loops and loop_count >= max_loops:
+                break
+        return 0
+    finally:
+        activity_server.shutdown()
 
 
 def _publish_egress_with_outbox(
@@ -307,18 +345,24 @@ def _publish_egress_with_outbox(
     store: SQLiteStateStore,
     broker: BBMBQueueAdapter,
     egress_message: EgressQueueMessage,
+    activity_monitor: WorkerActivityMonitor,
 ) -> None:
     store.queue_egress_outbox_event(egress_message)
     broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
     if egress_message.event_id is None:
         return
     store.mark_egress_outbox_event_published(event_id=egress_message.event_id)
+    activity_monitor.record_egress(
+        egress_message=egress_message,
+        publish_source="worker",
+    )
 
 
 def _replay_egress_outbox(
     *,
     store: SQLiteStateStore,
     broker: BBMBQueueAdapter,
+    activity_monitor: WorkerActivityMonitor,
 ) -> None:
     replayable = store.list_replayable_egress_outbox_events()
     if not replayable:
@@ -328,6 +372,10 @@ def _replay_egress_outbox(
         if message.event_id is None:
             continue
         store.mark_egress_outbox_event_published(event_id=message.event_id)
+        activity_monitor.record_egress(
+            egress_message=message,
+            publish_source="outbox_replay",
+        )
     LOGGER.info("worker_egress_outbox_replayed count=%s", len(replayable))
 
 

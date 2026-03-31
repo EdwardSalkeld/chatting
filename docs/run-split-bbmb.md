@@ -65,6 +65,10 @@ If the service/user shell working directory is not where you want Codex to run, 
 `codex_working_dir` in worker config (or pass `--codex-working-dir`) to control only
 the Codex subprocess cwd without changing the worker service `WorkingDirectory`.
 
+The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
+with JSON at `/activity.json`. The bind stays fixed at `9465`; use
+`activity_history_limit` to change the retention window.
+
 Optional env-based config path:
 
 ```bash
@@ -164,3 +168,5 @@ Then run the stack normally:
 ```bash
 docker compose up -d
 ```
+
+The compose stack publishes the worker activity UI on `9465`.

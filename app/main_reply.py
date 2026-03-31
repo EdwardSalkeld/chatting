@@ -14,6 +14,7 @@ from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
 from app.handler.runtime import TaskLedgerStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 from app.models import AttachmentRef, OutboundMessage
+from app.state import SQLiteStateStore
 
 
 def _parse_args() -> argparse.Namespace:
@@ -168,6 +169,7 @@ def main() -> int:
     event_id = _resolve_event_id(args.task_id, args.event_id)
 
     outbound_message = _resolve_reply_message(args, config)
+    db_path = _resolve_optional_db_path(config)
 
     egress_message = EgressQueueMessage(
         task_id=args.task_id,
@@ -186,6 +188,27 @@ def main() -> int:
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(EGRESS_QUEUE_NAME)
     guid = broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
+    if db_path is not None:
+        SQLiteStateStore(db_path).append_worker_activity(
+            occurred_at=egress_message.emitted_at,
+            task_id=egress_message.task_id,
+            envelope_id=egress_message.envelope_id,
+            phase=f"egress_{egress_message.event_kind}",
+            summary=f"{egress_message.event_kind} egress to {egress_message.message.channel}",
+            detail={
+                "channel": egress_message.message.channel,
+                "target": egress_message.message.target,
+                "body": egress_message.message.body,
+                "event_id": egress_message.event_id,
+                "event_kind": egress_message.event_kind,
+                "event_count": egress_message.event_count,
+                "event_index": egress_message.event_index,
+                "message_type": egress_message.message_type,
+                "publish_source": "main_reply",
+                "sequence": egress_message.sequence,
+            },
+            is_internal=egress_message.message.channel in {"internal", "log"},
+        )
 
     print(
         json.dumps(
@@ -202,6 +225,15 @@ def main() -> int:
         )
     )
     return 0
+
+
+def _resolve_optional_db_path(config: dict[str, object]) -> str | None:
+    raw_db_path = config.get("db_path")
+    if raw_db_path is None:
+        return None
+    if not isinstance(raw_db_path, str) or not raw_db_path.strip():
+        raise ValueError("config db_path must be a non-empty string")
+    return raw_db_path
 
 
 if __name__ == "__main__":

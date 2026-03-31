@@ -58,10 +58,11 @@ uv run python -m app.main_worker --config /tmp/worker.json
 Or use the provided systemd unit templates in `deploy/systemd/`.
 
 The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics` by default. You can override the bind host and port with `metrics_host` and `metrics_port` in the message-handler config or the matching CLI flags.
+The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at `http://127.0.0.1:9465/activity.json`. The bind stays fixed at `9465`; use `activity_history_limit` in worker config if you want a different retention window.
 
 ## 7) Query state and metrics
 
-Query the SQLite state directly with `sqlite3`:
+Use the worker page for a quick operator view, or query SQLite directly when you need deeper history:
 
 ```bash
 sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
