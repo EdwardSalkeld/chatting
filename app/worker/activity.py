@@ -413,16 +413,18 @@ def _render_html(
     .note, .muted {{ color: var(--muted); }}
     a {{ color: var(--accent); }}
     code, pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
-    .layout {{ display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 18px; align-items: start; }}
-    .list-panel {{ padding: 0; overflow: hidden; }}
+    .layout {{ display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 18px; align-items: stretch; }}
+    .list-panel {{ padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 72vh; max-height: calc(100vh - 180px); }}
     .list-header {{ padding: 18px 18px 0; }}
-    .activity-list {{ list-style: none; margin: 0; padding: 12px; display: grid; gap: 10px; max-height: 70vh; overflow: auto; }}
+    .activity-list {{ list-style: none; margin: 0; padding: 12px; display: grid; gap: 10px; flex: 1 1 auto; min-height: 0; overflow: auto; }}
     .activity-item {{ border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.65); padding: 0; }}
     .activity-item button {{ width: 100%; text-align: left; background: transparent; border: none; padding: 14px; font: inherit; color: inherit; cursor: pointer; }}
     .activity-item.selected {{ border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }}
     .activity-kicker {{ display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }}
     .activity-summary {{ font-size: 17px; margin: 6px 0; }}
-    .activity-message {{ color: var(--muted); white-space: pre-wrap; word-break: break-word; }}
+    .activity-meta {{ display: grid; gap: 6px; font-size: 13px; color: var(--muted); }}
+    .activity-meta-row {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+    .meta-chip {{ display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; background: rgba(184, 92, 56, 0.08); }}
     .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-bottom: 16px; }}
     .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
     .detail-block dd {{ margin: 4px 0 0; }}
@@ -433,7 +435,7 @@ def _render_html(
     @media (max-width: 900px) {{
       main {{ padding: 16px; }}
       .layout {{ grid-template-columns: 1fr; }}
-      .activity-list {{ max-height: none; }}
+      .list-panel {{ min-height: 0; max-height: none; }}
       .detail-grid {{ grid-template-columns: 1fr; }}
     }}
   </style>
@@ -517,6 +519,14 @@ def _render_html(
           return null;
         }}
 
+        function listMetaEntries(item) {{
+          return [
+            ["task", item && item.task_id ? item.task_id : null],
+            ["source", item && item.source ? item.source : null],
+            ["workflow", item && item.workflow ? item.workflow : null],
+          ].filter(([, value]) => value);
+        }}
+
         function detailWithoutMessage(detail) {{
           if (!detail || typeof detail !== "object") {{
             return detail;
@@ -580,10 +590,12 @@ def _render_html(
           listElement.innerHTML = currentActivity
             .map((item) => {{
               const id = eventId(item);
-              const message = messageText(item);
-              const preview = message
-                ? escapeHtml(message)
-                : '<span class="muted">No message text</span>';
+              const metaMarkup = listMetaEntries(item)
+                .map(
+                  ([label, value]) =>
+                    `<span class="meta-chip"><strong>${{escapeHtml(label)}}:</strong> ${{escapeHtml(value)}}</span>`
+                )
+                .join("");
               const selectedClass = id === selectedId ? " selected" : "";
               return `
                 <li class="activity-item${{selectedClass}}" data-event-id="${{escapeHtml(id)}}">
@@ -595,7 +607,9 @@ def _render_html(
                       <span>${{escapeHtml(item.phase || "")}}</span>
                     </div>
                     <div class="activity-summary">${{escapeHtml(item.summary || "")}}</div>
-                    <div class="activity-message">${{preview}}</div>
+                    <div class="activity-meta">
+                      <div class="activity-meta-row">${{metaMarkup || '<span class="muted">No event metadata</span>'}}</div>
+                    </div>
                   </button>
                 </li>`;
             }})
@@ -763,11 +777,13 @@ def _render_activity_list(activity: list[object]) -> str:
         assert isinstance(item, dict)
         event_id = _event_id(item)
         occurred_at = str(item.get("occurred_at", ""))
-        message = _message_text(item)
-        preview = (
-            html.escape(message)
-            if message is not None
-            else "<span class='muted'>No message text</span>"
+        meta_entries = _list_meta_entries(item)
+        empty_meta_markup = "<span class='muted'>No event metadata</span>"
+        meta_markup = "".join(
+            "<span class='meta-chip'>"
+            f"<strong>{html.escape(label)}:</strong> {html.escape(value)}"
+            "</span>"
+            for label, value in meta_entries
         )
         items.append(
             "<li class='activity-item' "
@@ -778,7 +794,11 @@ def _render_activity_list(activity: list[object]) -> str:
             f"<span>{html.escape(str(item.get('phase', '')))}</span>"
             "</div>"
             f"<div class='activity-summary'>{html.escape(str(item.get('summary', '')))}</div>"
-            f"<div class='activity-message'>{preview}</div>"
+            "<div class='activity-meta'>"
+            "<div class='activity-meta-row'>"
+            f"{meta_markup or empty_meta_markup}"
+            "</div>"
+            "</div>"
             "</button>"
             "</li>"
         )
@@ -840,6 +860,15 @@ def _render_detail_panel(item: object) -> str:
         f"<pre><code>{detail_json}</code></pre>"
         "</div>"
     )
+
+
+def _list_meta_entries(item: dict[str, object]) -> list[tuple[str, str]]:
+    entries = [
+        ("task", str(item.get("task_id", ""))),
+        ("source", str(item.get("source", ""))),
+        ("workflow", str(item.get("workflow", ""))),
+    ]
+    return [(label, value) for label, value in entries if value]
 
 
 def _event_id(item: dict[str, object]) -> str:
