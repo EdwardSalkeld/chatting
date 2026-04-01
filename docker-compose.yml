@@ -21,7 +21,7 @@ services:
       target: prod
     entrypoint: ["/entrypoint.sh"]
     command: ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
-    env_file: configs/handler.env
+    env_file: configs/handler/handler.env
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
       # Set PUID/PGID to your host user's UID/GID so the runtime user owns HOME.
@@ -47,7 +47,7 @@ services:
       target: prod
     entrypoint: ["/entrypoint.sh"]
     command: ["/app/.venv/bin/python", "-m", "app.main_worker"]
-    env_file: configs/worker.env
+    env_file: configs/worker/worker.env
     environment:
       CHATTING_WORKER_CONFIG_PATH: /config/worker.json
       # Set PUID/PGID to your host user's UID/GID so the runtime user owns HOME.
