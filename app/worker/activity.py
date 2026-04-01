@@ -63,9 +63,11 @@ class WorkerActivityMonitor:
             envelope_id=envelope.id,
             source=envelope.source,
             workflow=None,
+            occurred_at=envelope.received_at,
             is_internal=envelope.source == "internal",
             detail={
                 "actor": envelope.actor,
+                "content": envelope.content,
                 "reply_channel": envelope.reply_channel.type,
                 "reply_target": envelope.reply_channel.target,
             },
@@ -260,6 +262,7 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             include_internal = _bool_query_flag(parsed.query, "include_internal")
+            auto_refresh = not _bool_query_flag(parsed.query, "refresh_off")
             if parsed.path == "/activity.json":
                 payload = monitor.snapshot(include_internal=include_internal)
                 body = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -271,7 +274,11 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
                 return
             if parsed.path == "/":
                 snapshot = monitor.snapshot(include_internal=include_internal)
-                body = _render_html(snapshot=snapshot).encode("utf-8")
+                body = _render_html(
+                    snapshot=snapshot,
+                    include_internal=include_internal,
+                    auto_refresh=auto_refresh,
+                ).encode("utf-8")
                 self._write_response(
                     status_code=200,
                     content_type="text/html; charset=utf-8",
@@ -303,7 +310,12 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
     return Handler
 
 
-def _render_html(*, snapshot: dict[str, object]) -> str:
+def _render_html(
+    *,
+    snapshot: dict[str, object],
+    include_internal: bool,
+    auto_refresh: bool,
+) -> str:
     current_executor = snapshot["current_executor"]
     activity = snapshot["recent_activity"]
     assert isinstance(current_executor, dict)
@@ -317,24 +329,35 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
     for key in ("task_id", "envelope_id", "workflow", "attempt", "pid", "started_at"):
         value = current_executor.get(key)
         if value is not None:
+            if key.endswith("_at"):
+                value = _friendly_timestamp(value)
             state_lines.append(f"<strong>{html.escape(key)}:</strong> {html.escape(str(value))}")
 
     rows = []
     for item in activity:
         assert isinstance(item, dict)
         detail = item.get("detail")
-        detail_json = html.escape(json.dumps(detail, sort_keys=True))
+        detail_json = html.escape(json.dumps(_detail_without_message(detail), sort_keys=True))
+        message_text = _message_text(item)
+        message_html = (
+            f"<div class='message'>{html.escape(message_text)}</div>"
+            if message_text is not None
+            else "<span class='muted'>-</span>"
+        )
+        occurred_at = str(item.get("occurred_at", ""))
+        friendly_occurred_at = _friendly_timestamp(occurred_at)
         rows.append(
             "<tr>"
-            f"<td>{html.escape(str(item.get('occurred_at', '')))}</td>"
+            f"<td title='{html.escape(occurred_at)}'>{html.escape(friendly_occurred_at)}</td>"
             f"<td>{html.escape(str(item.get('phase', '')))}</td>"
             f"<td>{html.escape(str(item.get('task_id', '')))}</td>"
             f"<td>{html.escape(str(item.get('summary', '')))}</td>"
+            f"<td>{message_html}</td>"
             f"<td><code>{detail_json}</code></td>"
             "</tr>"
         )
     if not rows:
-        rows.append("<tr><td colspan='5'>No recent worker activity.</td></tr>")
+        rows.append("<tr><td colspan='6'>No recent worker activity.</td></tr>")
 
     showing_note = ""
     if snapshot.get("history_truncated"):
@@ -343,17 +366,37 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
             "Older local history has been pruned from this view.</p>"
         )
 
-    include_internal = bool(snapshot.get("include_internal"))
-    toggle_href = "/?include_internal=1" if not include_internal else "/"
+    query_parts: list[str] = []
+    if include_internal:
+        query_parts.append("include_internal=1")
+    if not auto_refresh:
+        query_parts.append("refresh_off=1")
+
+    toggle_query_parts = list(query_parts)
+    if include_internal:
+        toggle_query_parts.remove("include_internal=1")
+    else:
+        toggle_query_parts.append("include_internal=1")
+
+    refresh_query_parts = list(query_parts)
+    if auto_refresh:
+        refresh_query_parts.append("refresh_off=1")
+    else:
+        refresh_query_parts.remove("refresh_off=1")
+
+    toggle_href = "/" if not toggle_query_parts else f"/?{'&'.join(toggle_query_parts)}"
     toggle_label = "show internal traffic" if not include_internal else "hide internal traffic"
+    refresh_href = "/" if not refresh_query_parts else f"/?{'&'.join(refresh_query_parts)}"
+    refresh_label = "pause refresh" if auto_refresh else "resume refresh"
+    refresh_note = "Auto-refresh every 5s." if auto_refresh else "Auto-refresh paused."
+    refresh_meta_tag = '  <meta http-equiv="refresh" content="5">\n' if auto_refresh else ""
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>Chatting Worker Activity</title>
-  <meta http-equiv="refresh" content="5">
-  <style>
+{refresh_meta_tag}  <style>
     :root {{
       color-scheme: light;
       --bg: #f4efe6;
@@ -373,6 +416,7 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
     th, td {{ text-align: left; vertical-align: top; padding: 10px 8px; border-top: 1px solid var(--border); }}
     th {{ border-top: none; }}
     code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
+    .message {{ white-space: pre-wrap; word-break: break-word; max-width: 34ch; }}
   </style>
 </head>
 <body>
@@ -380,6 +424,7 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
     <div class="panel">
       <h1>Worker Now</h1>
       <p>{"<br>".join(state_lines)}</p>
+      <p class="muted">{html.escape(refresh_note)} <a href="{refresh_href}">{refresh_label}</a></p>
       <p class="muted"><a href="/activity.json{'?include_internal=1' if include_internal else ''}">JSON</a> · <a href="{toggle_href}">{toggle_label}</a></p>
     </div>
     <div class="panel">
@@ -387,7 +432,7 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
       {showing_note}
       <table>
         <thead>
-          <tr><th>When</th><th>Phase</th><th>Task</th><th>Summary</th><th>Detail</th></tr>
+          <tr><th>When</th><th>Phase</th><th>Task</th><th>Summary</th><th>Message</th><th>Detail</th></tr>
         </thead>
         <tbody>
           {"".join(rows)}
@@ -408,3 +453,36 @@ def _bool_query_flag(query: str, name: str) -> bool:
 
 def _isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _friendly_timestamp(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        return str(value)
+    try:
+        parsed = _parse_timestamp(value)
+    except ValueError:
+        return value
+    return parsed.strftime("%a %d %b %Y %H:%M:%S UTC")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value).astimezone(timezone.utc)
+
+
+def _message_text(item: dict[str, object]) -> str | None:
+    detail = item.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    for key in ("content", "body"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _detail_without_message(detail: object) -> object:
+    if not isinstance(detail, dict):
+        return detail
+    return {key: value for key, value in detail.items() if key not in {"body", "content"}}
