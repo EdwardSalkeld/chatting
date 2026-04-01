@@ -77,11 +77,17 @@ class WorkerActivityTests(unittest.TestCase):
             self.assertEqual(snapshot["current_executor"]["active"], False)
             self.assertEqual(snapshot["recent_activity"][0]["phase"], "task_finished")
             self.assertEqual(snapshot["recent_activity"][1]["phase"], "egress_incremental")
+            self.assertEqual(snapshot["recent_activity"][-1]["detail"]["content"], "hello")
+            self.assertEqual(snapshot["recent_activity"][-1]["occurred_at"], "2026-03-31T12:00:00Z")
 
     def test_activity_http_server_serves_json_and_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            monitor = WorkerActivityMonitor(store=store, history_limit=5)
+            monitor = WorkerActivityMonitor(
+                store=store,
+                history_limit=5,
+                now_fn=lambda: datetime(2026, 3, 31, 12, 5, tzinfo=timezone.utc),
+            )
             task_message = self._build_task_message()
             monitor.record_task_received(task_message=task_message)
             monitor.record_executor_started(
@@ -102,6 +108,9 @@ class WorkerActivityTests(unittest.TestCase):
                     html_body = response.read().decode("utf-8")
                 self.assertIn("Worker Now", html_body)
                 self.assertIn("task_received", html_body)
+                self.assertIn("hello", html_body)
+                self.assertIn("Tue 31 Mar 2026 12:00:00 UTC", html_body)
+                self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
             finally:
                 server.shutdown()
 
