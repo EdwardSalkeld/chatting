@@ -78,6 +78,20 @@ def process_task_message(
             )
             execution_result = executor_impl.execute(task)
             execution_payload = execution_result.to_dict()
+            if execution_result.stdout:
+                activity_monitor.record_executor_output(
+                    task_message=task_message,
+                    workflow=task.workflow,
+                    stream="stdout",
+                    content=execution_result.stdout,
+                )
+            if execution_result.stderr:
+                activity_monitor.record_executor_output(
+                    task_message=task_message,
+                    workflow=task.workflow,
+                    stream="stderr",
+                    content=execution_result.stderr,
+                )
 
             error_stage = "policy"
             decision = policy.evaluate(execution_result)
@@ -207,7 +221,9 @@ def _process_internal_heartbeat(
         envelope_id=task_message.envelope.id,
         source=task_message.envelope.source,
         workflow="internal_heartbeat",
-        latency_ms=max(int((worker_received_at - ping_emitted_at).total_seconds() * 1000), 0),
+        latency_ms=max(
+            int((worker_received_at - ping_emitted_at).total_seconds() * 1000), 0
+        ),
         result_status="success",
         created_at=worker_received_at,
     )
@@ -317,6 +333,7 @@ def _build_visible_error_egress(
         event_kind="message",
         message_type="chatting.egress.v2",
     )
+
 
 def _build_completion_egress(
     *,

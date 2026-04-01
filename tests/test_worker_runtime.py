@@ -18,19 +18,29 @@ from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
 from app.worker.runtime import process_task_message
+
+
 @dataclass(frozen=True)
 class MultiMessageExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(actions=[], errors=[])
+        return ExecutionResult(
+            actions=[], errors=[], stdout="executor stdout", stderr="executor stderr"
+        )
+
+
 @dataclass(frozen=True)
 class WriteFileExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(
-            actions=[ActionProposal(type="write_file", path="output.txt", content="hello")],
+            actions=[
+                ActionProposal(type="write_file", path="output.txt", content="hello")
+            ],
             errors=[],
         )
+
+
 @dataclass(frozen=True)
 class AlwaysFailExecutor:
     def execute(self, task):
@@ -53,6 +63,8 @@ class ExecutionErrorExecutor:
             actions=[],
             errors=["executor_exit_nonzero:1:insufficient credits"],
         )
+
+
 @dataclass(frozen=True)
 class IncrementalReplyExecutor:
     def execute(self, task):
@@ -61,16 +73,22 @@ class IncrementalReplyExecutor:
             actions=[],
             errors=[],
         )
+
+
 @dataclass(frozen=True)
 class NoMessageExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(actions=[], errors=[])
+
+
 @dataclass(frozen=True)
 class FinalAliasExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(actions=[], errors=[])
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
@@ -98,7 +116,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             trace_id="trace:internal:heartbeat:1",
         )
 
-    def test_process_task_message_emits_completion_only_for_successful_task(self) -> None:
+    def test_process_task_message_emits_completion_only_for_successful_task(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -106,7 +126,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=MultiMessageExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -115,6 +137,18 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(len(result.egress_messages), 1)
             self.assertEqual(result.egress_messages[0].event_kind, "completion")
             self.assertEqual(result.egress_messages[0].message.channel, "internal")
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["execution_result"]["stdout"], "executor stdout"
+            )
+            self.assertEqual(
+                audit_event.detail["execution_result"]["stderr"], "executor stderr"
+            )
+            activity = store.list_recent_worker_activity(
+                limit=10, include_internal=True
+            )
+            self.assertEqual(activity[1]["phase"], "executor_stderr")
+            self.assertEqual(activity[2]["phase"], "executor_stdout")
 
     def test_process_task_message_marks_dropped_actions_reason_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -124,7 +158,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=WriteFileExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -144,16 +180,22 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=AlwaysFailExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
 
             self.assertEqual(result.run_record.result_status, "dead_letter")
             self.assertEqual(result.dead_lettered, True)
-            self.assertEqual(store.list_dead_letters()[0].reason_codes, ["retry_exhausted"])
+            self.assertEqual(
+                store.list_dead_letters()[0].reason_codes, ["retry_exhausted"]
+            )
 
-    def test_process_task_message_emits_visible_credit_error_before_dead_letter_completion(self) -> None:
+    def test_process_task_message_emits_visible_credit_error_before_dead_letter_completion(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -161,7 +203,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=CreditsFailExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=1,
                 activity_monitor=self._build_monitor(store),
             )
@@ -176,7 +220,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(completion.event_kind, "completion")
             self.assertEqual(completion.sequence, 1)
 
-    def test_process_task_message_emits_visible_credit_error_for_execution_error_result(self) -> None:
+    def test_process_task_message_emits_visible_credit_error_for_execution_error_result(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -184,7 +230,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=ExecutionErrorExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=1,
                 activity_monitor=self._build_monitor(store),
             )
@@ -196,7 +244,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(visible.message.target, "alice@example.com")
             self.assertIn("ran out of credits or quota", visible.message.body)
 
-    def test_process_task_message_emits_completion_even_when_executor_does_no_actions(self) -> None:
+    def test_process_task_message_emits_completion_even_when_executor_does_no_actions(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -204,7 +254,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=IncrementalReplyExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -213,10 +265,16 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(len(result.egress_messages), 1)
             self.assertEqual(result.egress_messages[0].event_kind, "completion")
             audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.detail["incremental_reply_send_requested_count"], 0)
-            self.assertEqual(audit_event.detail["incremental_reply_send_published_count"], 0)
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_requested_count"], 0
+            )
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_published_count"], 0
+            )
 
-    def test_process_task_message_ignores_incremental_reply_policy_when_executor_returns_completion_only(self) -> None:
+    def test_process_task_message_ignores_incremental_reply_policy_when_executor_returns_completion_only(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -224,7 +282,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=IncrementalReplyExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -232,9 +292,13 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(len(result.egress_messages), 1)
             self.assertEqual(result.egress_messages[0].event_kind, "completion")
             audit_event = store.list_audit_events()[0]
-            self.assertNotIn("incremental_reply_send_not_allowed", audit_event.detail["reason_codes"])
+            self.assertNotIn(
+                "incremental_reply_send_not_allowed", audit_event.detail["reason_codes"]
+            )
 
-    def test_process_task_message_handles_internal_heartbeat_without_executor(self) -> None:
+    def test_process_task_message_handles_internal_heartbeat_without_executor(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -242,7 +306,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_internal_heartbeat_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=AlwaysFailExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -256,14 +322,19 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(visible_egress_message.event_kind, "message")
             self.assertEqual(visible_egress_message.message.channel, "log")
             self.assertEqual(visible_egress_message.message.target, "heartbeat")
-            self.assertEqual(json.loads(visible_egress_message.message.body)["kind"], "heartbeat_pong")
+            self.assertEqual(
+                json.loads(visible_egress_message.message.body)["kind"],
+                "heartbeat_pong",
+            )
             self.assertEqual(completion_egress_message.event_kind, "completion")
             audit_event = store.list_audit_events()[0]
             self.assertEqual(audit_event.workflow, "internal_heartbeat")
             self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
             self.assertEqual(audit_event.detail["heartbeat"]["kind"], "heartbeat_pong")
 
-    def test_process_task_message_emits_internal_completion_when_no_visible_messages(self) -> None:
+    def test_process_task_message_emits_internal_completion_when_no_visible_messages(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
@@ -271,7 +342,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=NoMessageExecutor(),
-                policy=AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"})),
+                policy=AllowlistPolicyEngine(
+                    allowed_action_types=frozenset({"write_file"})
+                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -283,6 +356,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(terminal.message.channel, "internal")
             self.assertEqual(terminal.message.target, "task")
             self.assertEqual(terminal.sequence, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

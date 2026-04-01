@@ -13,7 +13,13 @@ import time
 from pathlib import Path
 from typing import Mapping
 
-from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage, TASK_QUEUE_NAME, TaskQueueMessage
+from app.broker import (
+    BBMBQueueAdapter,
+    EGRESS_QUEUE_NAME,
+    EgressQueueMessage,
+    TASK_QUEUE_NAME,
+    TaskQueueMessage,
+)
 from app.worker.activity import (
     DEFAULT_ACTIVITY_HISTORY_LIMIT,
     DEFAULT_ACTIVITY_HOST,
@@ -22,7 +28,7 @@ from app.worker.activity import (
     WorkerActivityServer,
     start_worker_activity_server,
 )
-from app.worker.executor import EXECUTION_RESULT_JSON_SCHEMA, CodexExecutor, Executor
+from app.worker.executor import CodexExecutor, Executor
 from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
@@ -76,12 +82,30 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--db-path", help="Path to worker SQLite state DB.")
     parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
-    parser.add_argument("--max-attempts", type=_positive_int, help="Maximum execution attempts per task.")
-    parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke tests.")
-    parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Queue pickup timeout seconds.")
-    parser.add_argument("--sleep-seconds", type=_positive_float, help="Sleep duration after empty pickup.")
-    parser.add_argument("--codex-command", help="Base Codex command (e.g. 'codex exec'). JSON args appended automatically.")
-    parser.add_argument("--claude-command", help="Base Claude command (e.g. 'claude'). Structured output args appended automatically.")
+    parser.add_argument(
+        "--max-attempts",
+        type=_positive_int,
+        help="Maximum execution attempts per task.",
+    )
+    parser.add_argument(
+        "--max-loops", type=_positive_int, help="Optional loop limit for smoke tests."
+    )
+    parser.add_argument(
+        "--poll-timeout-seconds",
+        type=_positive_int,
+        help="Queue pickup timeout seconds.",
+    )
+    parser.add_argument(
+        "--sleep-seconds",
+        type=_positive_float,
+        help="Sleep duration after empty pickup.",
+    )
+    parser.add_argument(
+        "--codex-command", help="Executor command to launch for Codex runs."
+    )
+    parser.add_argument(
+        "--claude-command", help="Executor command to launch for Claude runs."
+    )
     parser.add_argument(
         "--activity-history-limit",
         type=_positive_int,
@@ -94,7 +118,9 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_config(config_path: str | None, environ: Mapping[str, str] | None = None) -> dict[str, object]:
+def _load_config(
+    config_path: str | None, environ: Mapping[str, str] | None = None
+) -> dict[str, object]:
     env = os.environ if environ is None else environ
     path = config_path
     if path is None:
@@ -115,7 +141,13 @@ def _load_config(config_path: str | None, environ: Mapping[str, str] | None = No
     return payload
 
 
-def _resolve_str(cli_value: str | None, config_value: object, *, default_value: str, setting_name: str) -> str:
+def _resolve_str(
+    cli_value: str | None,
+    config_value: object,
+    *,
+    default_value: str,
+    setting_name: str,
+) -> str:
     if cli_value is not None:
         if not cli_value.strip():
             raise ValueError(f"{setting_name} must not be empty")
@@ -127,7 +159,9 @@ def _resolve_str(cli_value: str | None, config_value: object, *, default_value: 
     return config_value
 
 
-def _resolve_optional_str(cli_value: str | None, config_value: object, *, setting_name: str) -> str | None:
+def _resolve_optional_str(
+    cli_value: str | None, config_value: object, *, setting_name: str
+) -> str | None:
     if cli_value is not None:
         if not cli_value.strip():
             raise ValueError(f"{setting_name} must not be empty")
@@ -139,12 +173,22 @@ def _resolve_optional_str(cli_value: str | None, config_value: object, *, settin
     return config_value
 
 
-def _resolve_positive_int(cli_value: int | None, config_value: object, *, default_value: int, setting_name: str) -> int:
+def _resolve_positive_int(
+    cli_value: int | None,
+    config_value: object,
+    *,
+    default_value: int,
+    setting_name: str,
+) -> int:
     if cli_value is not None:
         return cli_value
     if config_value is None:
         return default_value
-    if not isinstance(config_value, int) or isinstance(config_value, bool) or config_value <= 0:
+    if (
+        not isinstance(config_value, int)
+        or isinstance(config_value, bool)
+        or config_value <= 0
+    ):
         raise ValueError(f"config {setting_name} must be a positive integer")
     return config_value
 
@@ -167,7 +211,9 @@ def _resolve_positive_float(
     return parsed
 
 
-def _resolve_bool(cli_value: bool, config_value: object, *, default_value: bool, setting_name: str) -> bool:
+def _resolve_bool(
+    cli_value: bool, config_value: object, *, default_value: bool, setting_name: str
+) -> bool:
     if cli_value:
         return True
     if config_value is None:
@@ -197,13 +243,9 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
     )
 
     if codex_raw:
-        command = tuple(shlex.split(codex_raw)) + ("--json",)
+        command = tuple(shlex.split(codex_raw))
     elif claude_raw:
-        command = tuple(shlex.split(claude_raw)) + (
-            "-p",
-            "--output-format", "json",
-            "--json-schema", EXECUTION_RESULT_JSON_SCHEMA,
-        )
+        command = tuple(shlex.split(claude_raw))
     else:
         command = ("codex", "exec", "--json")
 

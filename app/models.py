@@ -33,7 +33,9 @@ def _validate_required_string(value: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} is required")
 
 
-def _validate_typed_list(values: list[Any], *, field_name: str, item_type: type[Any]) -> None:
+def _validate_typed_list(
+    values: list[Any], *, field_name: str, item_type: type[Any]
+) -> None:
     if not isinstance(values, list):
         raise ValueError(f"{field_name} must be a list")
     for item in values:
@@ -240,12 +242,13 @@ class TaskEnvelope:
             "schema_version": self.schema_version,
             "id": self.id,
             "source": self.source,
-            "received_at": self.received_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "received_at": self.received_at.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "actor": self.actor,
             "content": self.content,
             "attachments": [
-                {"uri": item.uri, "name": item.name}
-                for item in self.attachments
+                {"uri": item.uri, "name": item.name} for item in self.attachments
             ],
             "context_refs": self.context_refs,
             "reply_channel": reply_channel,
@@ -294,8 +297,12 @@ class RoutedTask:
         _validate_typed_list(self.context, field_name="context", item_type=ContextRef)
         _validate_prompt_context(self.prompt_context)
         if self.reply_channel is not None:
-            _validate_required_string(self.reply_channel.type, field_name="reply_channel.type")
-            _validate_required_string(self.reply_channel.target, field_name="reply_channel.target")
+            _validate_required_string(
+                self.reply_channel.type, field_name="reply_channel.type"
+            )
+            _validate_required_string(
+                self.reply_channel.target, field_name="reply_channel.target"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -311,7 +318,9 @@ class RoutedTask:
         }
         if self.event_time is not None:
             payload["event_time"] = (
-                self.event_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                self.event_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
             )
         if self.source is not None:
             payload["source"] = self.source
@@ -321,8 +330,7 @@ class RoutedTask:
             payload["content"] = self.content
         if self.attachments:
             payload["attachments"] = [
-                {"uri": item.uri, "name": item.name}
-                for item in self.attachments
+                {"uri": item.uri, "name": item.name} for item in self.attachments
             ]
         if self.context:
             payload["context"] = [ref.to_dict() for ref in self.context]
@@ -354,7 +362,9 @@ class OutboundMessage:
         _validate_required_string(self.target, field_name="target")
         if self.body is not None:
             _validate_required_string(self.body, field_name="body")
-        if self.attachment is not None and not isinstance(self.attachment, AttachmentRef):
+        if self.attachment is not None and not isinstance(
+            self.attachment, AttachmentRef
+        ):
             raise ValueError("attachment must be AttachmentRef")
         if self.body is None and self.attachment is None:
             raise ValueError("body or attachment is required")
@@ -403,10 +413,12 @@ class ActionProposal:
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    """Structured output contract from executor."""
+    """Executor outcome plus captured transcript streams."""
 
     actions: list[ActionProposal]
     errors: list[str]
+    stdout: str | None = None
+    stderr: str | None = None
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -417,13 +429,22 @@ class ExecutionResult:
             item_type=ActionProposal,
         )
         _validate_string_list(self.errors, field_name="errors")
+        if self.stdout is not None and not isinstance(self.stdout, str):
+            raise ValueError("stdout must be a string")
+        if self.stderr is not None and not isinstance(self.stderr, str):
+            raise ValueError("stderr must be a string")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "actions": [action.to_dict() for action in self.actions],
             "errors": self.errors,
         }
+        if self.stdout is not None:
+            payload["stdout"] = self.stdout
+        if self.stderr is not None:
+            payload["stderr"] = self.stderr
+        return payload
 
 
 @dataclass(frozen=True)
@@ -460,7 +481,9 @@ class PolicyDecision:
             "schema_version": self.schema_version,
             "approved_actions": [action.to_dict() for action in self.approved_actions],
             "blocked_actions": [action.to_dict() for action in self.blocked_actions],
-            "approved_messages": [message.to_dict() for message in self.approved_messages],
+            "approved_messages": [
+                message.to_dict() for message in self.approved_messages
+            ],
             "reason_codes": self.reason_codes,
         }
 
@@ -541,7 +564,9 @@ class RunRecord:
             "workflow": self.workflow,
             "latency_ms": self.latency_ms,
             "result_status": self.result_status,
-            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "created_at": self.created_at.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
         }
 
 
@@ -578,7 +603,9 @@ class AuditEvent:
             "workflow": self.workflow,
             "result_status": self.result_status,
             "detail": self.detail,
-            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "created_at": self.created_at.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
         }
 
 
@@ -612,7 +639,9 @@ class DeadLetterRecord:
         if self.status not in {"pending", "replayed"}:
             raise ValueError("status must be pending or replayed")
         if self.replayed_run_id is not None:
-            _validate_required_string(self.replayed_run_id, field_name="replayed_run_id")
+            _validate_required_string(
+                self.replayed_run_id, field_name="replayed_run_id"
+            )
         if self.created_at.tzinfo is None:
             raise ValueError("created_at must be timezone-aware")
 
@@ -626,6 +655,8 @@ class DeadLetterRecord:
             "last_error": self.last_error,
             "attempt_count": self.attempt_count,
             "status": self.status,
-            "created_at": self.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "created_at": self.created_at.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "replayed_run_id": self.replayed_run_id,
         }
