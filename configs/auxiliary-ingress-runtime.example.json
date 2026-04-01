@@ -1,0 +1,6 @@
+{
+    "bbmb_address": "127.0.0.1:9876",
+    "listen_host": "127.0.0.1",
+    "listen_port": 9481,
+    "ingress_routes": ["generic-post:12334", "new-service:secret-two"],
+}

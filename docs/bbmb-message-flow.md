@@ -19,16 +19,16 @@ Use it as the source of truth for:
 
 ## Queues
 
-There are three BBMB queues:
+There are three BBMB queue roles:
 
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
-| `chatting.auxiliary-ingress.v1` | `auxiliary-ingress` | `message-handler` | Carries raw JSON webhook bodies as `chatting.auxiliary_ingress.v1` payloads |
+| `generic-post` or any configured auxiliary ingress queue | `auxiliary-ingress` | `message-handler` | Carries raw JSON webhook bodies as `chatting.auxiliary_ingress.v1` payloads |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
 | `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for visible executor-published incrementals and internal completion |
 
 Important details:
-- Queue names are hardcoded.
+- Task and egress queue names are hardcoded; auxiliary ingress queue names are configured per route.
 - There is no separate BBMB retry queue, dead-letter queue, or approval queue.
 - Retries, dead letters, ingress dedupe state, the task ledger, and the worker egress outbox all
   live in SQLite, not in BBMB.

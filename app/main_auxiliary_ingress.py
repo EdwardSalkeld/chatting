@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from typing import Mapping
 
 from app.broker import (
     AUXILIARY_INGRESS_QUEUE_NAME,
@@ -15,7 +18,18 @@ from app.broker import (
     BBMBQueueAdapter,
 )
 
+MAIN_AUXILIARY_INGRESS_CONFIG_PATH_ENV_VAR = "CHATTING_AUXILIARY_INGRESS_CONFIG_PATH"
 LOGGER = logging.getLogger("app.main_auxiliary_ingress")
+_ALLOWED_CONFIG_KEYS = frozenset(
+    {
+        "bbmb_address",
+        "listen_host",
+        "listen_port",
+        "generic_post_path",
+        "queue_name",
+        "ingress_routes",
+    }
+)
 
 
 def _configure_logging() -> None:
@@ -39,6 +53,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the auxiliary ingress HTTP listener."
     )
+    parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--bbmb-address", help="BBMB address host:port.")
     parser.add_argument("--listen-host", default="127.0.0.1", help="HTTP bind host.")
     parser.add_argument(
@@ -46,7 +61,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--generic-post-path",
-        required=True,
         help="Exact secret path that accepts JSON POST bodies.",
     )
     parser.add_argument(
@@ -54,16 +68,106 @@ def _parse_args() -> argparse.Namespace:
         default=AUXILIARY_INGRESS_QUEUE_NAME,
         help="BBMB queue name for auxiliary ingress payloads.",
     )
+    parser.add_argument(
+        "--ingress-route",
+        action="append",
+        default=[],
+        help="Ingress route in the form queue_name:path_token or queue_name:/path.",
+    )
     return parser.parse_args()
 
 
 def _normalize_path(value: str) -> str:
     stripped = value.strip()
+    if not stripped:
+        raise ValueError("path must not be empty")
     if not stripped.startswith("/"):
-        raise ValueError("generic_post_path must start with /")
+        stripped = "/" + stripped
     if stripped == "/":
-        raise ValueError("generic_post_path must not be /")
+        raise ValueError("path must not be /")
     return stripped.rstrip("/") or stripped
+
+
+def _load_config(
+    config_path: str | None, environ: Mapping[str, str] | None = None
+) -> dict[str, object]:
+    env = os.environ if environ is None else environ
+    path = config_path
+    if path is None:
+        raw = env.get(MAIN_AUXILIARY_INGRESS_CONFIG_PATH_ENV_VAR)
+        if raw is not None:
+            if not raw.strip():
+                raise ValueError(
+                    f"{MAIN_AUXILIARY_INGRESS_CONFIG_PATH_ENV_VAR} must not be empty"
+                )
+            path = raw
+    if not path:
+        return {}
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("config file must contain a JSON object")
+    unknown_keys = sorted(set(payload.keys()) - _ALLOWED_CONFIG_KEYS)
+    if unknown_keys:
+        raise ValueError("config contains unknown keys: " + ", ".join(unknown_keys))
+    return payload
+
+
+def _parse_ingress_route(raw_value: str) -> tuple[str, str]:
+    raw = raw_value.strip()
+    if not raw:
+        raise ValueError("ingress route must not be empty")
+    queue_name, separator, path_value = raw.partition(":")
+    if not separator:
+        raise ValueError("ingress route must be queue_name:path")
+    queue_name = queue_name.strip()
+    if not queue_name:
+        raise ValueError("ingress route queue_name must not be empty")
+    return queue_name, _normalize_path(path_value)
+
+
+def _resolve_ingress_routes(
+    args: argparse.Namespace, config: dict[str, object]
+) -> dict[str, str]:
+    route_specs: list[tuple[str, str]] = []
+    raw_config_routes = config.get("ingress_routes")
+    if raw_config_routes is not None:
+        if not isinstance(raw_config_routes, list) or not all(
+            isinstance(item, str) for item in raw_config_routes
+        ):
+            raise ValueError("config ingress_routes must be a list of strings")
+        route_specs.extend(_parse_ingress_route(item) for item in raw_config_routes)
+
+    route_specs.extend(_parse_ingress_route(item) for item in args.ingress_route)
+
+    legacy_path = config.get("generic_post_path")
+    if legacy_path is None:
+        legacy_path = args.generic_post_path
+    legacy_queue_name = config.get("queue_name")
+    if legacy_queue_name is None:
+        legacy_queue_name = args.queue_name
+    if legacy_path is not None:
+        if legacy_queue_name is not None and not isinstance(legacy_queue_name, str):
+            raise ValueError("config queue_name must be a string")
+        route_specs.append(
+            (
+                (legacy_queue_name or AUXILIARY_INGRESS_QUEUE_NAME).strip(),
+                _normalize_path(str(legacy_path)),
+            )
+        )
+
+    if not route_specs:
+        raise ValueError("at least one ingress route must be configured")
+
+    queue_by_path: dict[str, str] = {}
+    seen_queues: set[str] = set()
+    for queue_name, path in route_specs:
+        if queue_name in seen_queues:
+            raise ValueError(f"duplicate ingress route queue_name: {queue_name}")
+        if path in queue_by_path:
+            raise ValueError(f"duplicate ingress route path: {path}")
+        seen_queues.add(queue_name)
+        queue_by_path[path] = queue_name
+    return queue_by_path
 
 
 def _read_json_body(handler: BaseHTTPRequestHandler) -> object:
@@ -98,8 +202,7 @@ def _publish_body(
 def _build_handler(
     *,
     broker: BBMBQueueAdapter,
-    queue_name: str,
-    generic_post_path: str,
+    queue_by_path: dict[str, str],
 ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
@@ -108,7 +211,8 @@ def _build_handler(
             except ValueError:
                 self.send_error(404)
                 return
-            if request_path != generic_post_path:
+            queue_name = queue_by_path.get(request_path)
+            if queue_name is None:
                 self.send_error(404)
                 return
             try:
@@ -148,22 +252,42 @@ def _build_handler(
 def main() -> int:
     _configure_logging()
     args = _parse_args()
-    broker = BBMBQueueAdapter(address=args.bbmb_address or "127.0.0.1:9876")
-    broker.ensure_queue(args.queue_name)
+    config = _load_config(args.config)
+    queue_by_path = _resolve_ingress_routes(args, config)
+    bbmb_address = args.bbmb_address or config.get("bbmb_address") or "127.0.0.1:9876"
+    if not isinstance(bbmb_address, str):
+        raise ValueError("config bbmb_address must be a string")
+    listen_host = args.listen_host
+    if "listen_host" in config and args.listen_host == "127.0.0.1":
+        configured_listen_host = config["listen_host"]
+        if not isinstance(configured_listen_host, str):
+            raise ValueError("config listen_host must be a string")
+        listen_host = configured_listen_host
+    listen_port = args.listen_port
+    if "listen_port" in config and args.listen_port == 9481:
+        configured_listen_port = config["listen_port"]
+        if not isinstance(configured_listen_port, int) or configured_listen_port <= 0:
+            raise ValueError("config listen_port must be a positive integer")
+        listen_port = configured_listen_port
+
+    broker = BBMBQueueAdapter(address=bbmb_address)
+    for queue_name in queue_by_path.values():
+        broker.ensure_queue(queue_name)
     server = HTTPServer(
-        (args.listen_host, args.listen_port),
+        (listen_host, listen_port),
         _build_handler(
             broker=broker,
-            queue_name=args.queue_name,
-            generic_post_path=_normalize_path(args.generic_post_path),
+            queue_by_path=queue_by_path,
         ),
     )
     LOGGER.info(
-        "auxiliary_ingress_listening host=%s port=%s path=%s queue=%s",
-        args.listen_host,
-        args.listen_port,
-        args.generic_post_path,
-        args.queue_name,
+        "auxiliary_ingress_listening host=%s port=%s routes=%s",
+        listen_host,
+        listen_port,
+        ",".join(
+            f"{path}->{queue_name}"
+            for path, queue_name in sorted(queue_by_path.items())
+        ),
     )
     try:
         server.serve_forever()

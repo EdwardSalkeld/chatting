@@ -1,9 +1,19 @@
 import io
 import json
+import tempfile
 import unittest
+from argparse import Namespace
 from datetime import datetime, timezone
+from pathlib import Path
 
-from app.main_auxiliary_ingress import _build_handler, _normalize_path, _publish_body
+from app.main_auxiliary_ingress import (
+    _build_handler,
+    _load_config,
+    _normalize_path,
+    _parse_ingress_route,
+    _publish_body,
+    _resolve_ingress_routes,
+)
 
 
 class _RecordingBroker:
@@ -40,8 +50,7 @@ class MainAuxiliaryIngressTests(unittest.TestCase):
         broker = _RecordingBroker()
         handler_cls = _build_handler(
             broker=broker,  # type: ignore[arg-type]
-            queue_name="chatting.auxiliary-ingress.v1",
-            generic_post_path="/secret-path",
+            queue_by_path={"/secret-path": "chatting.auxiliary-ingress.v1"},
         )
 
         handler = handler_cls.__new__(handler_cls)
@@ -69,8 +78,7 @@ class MainAuxiliaryIngressTests(unittest.TestCase):
         broker = _RecordingBroker()
         handler_cls = _build_handler(
             broker=broker,  # type: ignore[arg-type]
-            queue_name="chatting.auxiliary-ingress.v1",
-            generic_post_path="/secret-path",
+            queue_by_path={"/secret-path": "chatting.auxiliary-ingress.v1"},
         )
 
         handler = handler_cls.__new__(handler_cls)
@@ -90,3 +98,39 @@ class MainAuxiliaryIngressTests(unittest.TestCase):
 
         self.assertEqual(responses, [(400, "request body must be valid JSON")])
         self.assertEqual(broker.published, [])
+
+    def test_parse_ingress_route_accepts_secret_suffix_without_slash(self) -> None:
+        self.assertEqual(
+            _parse_ingress_route("generic-post:12334"),
+            ("generic-post", "/12334"),
+        )
+
+    def test_resolve_ingress_routes_prefers_dynamic_config(self) -> None:
+        routes = _resolve_ingress_routes(
+            Namespace(
+                ingress_route=[],
+                generic_post_path=None,
+                queue_name="chatting.auxiliary-ingress.v1",
+            ),
+            {"ingress_routes": ["generic-post:12334", "new-service:/secret-two"]},
+        )
+
+        self.assertEqual(
+            routes,
+            {
+                "/12334": "generic-post",
+                "/secret-two": "new-service",
+            },
+        )
+
+    def test_load_config_accepts_ingress_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "auxiliary-ingress.json"
+            config_path.write_text(
+                json.dumps({"ingress_routes": ["generic-post:12334"]}),
+                encoding="utf-8",
+            )
+
+            payload = _load_config(str(config_path))
+
+        self.assertEqual(payload, {"ingress_routes": ["generic-post:12334"]})

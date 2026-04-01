@@ -10,8 +10,8 @@ GitHub assignment polling is part of `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
-Queues are hardcoded:
-- `chatting.auxiliary-ingress.v1`
+Queues:
+- auxiliary ingress uses one configured queue per route
 - `chatting.tasks.v1`
 - `chatting.egress.v1`
 
@@ -59,6 +59,7 @@ uv run python -m app.main_message_handler
 Optional auxiliary ingress connector settings in message-handler config:
 - `auxiliary_ingress_enabled`
 - `auxiliary_ingress_queue`
+- `auxiliary_ingress_routes`
 - `auxiliary_ingress_context_refs`
 
 ## 3) Configure worker
@@ -89,11 +90,24 @@ uv run python -m app.main_worker
 ```bash
 uv run python -m app.main_auxiliary_ingress \
   --bbmb-address 127.0.0.1:9876 \
-  --generic-post-path /very-secret-path
+  --ingress-route generic-post:very-secret-path
 ```
 
-This service accepts JSON `POST` requests on the exact configured path and publishes only the
-parsed JSON body into `chatting.auxiliary-ingress.v1`.
+This service accepts JSON `POST` requests on any configured secret path and publishes only the
+parsed JSON body into the configured queue for that route.
+
+Example config-driven setup:
+
+```json
+{
+  "bbmb_address": "127.0.0.1:9876",
+  "ingress_routes": ["generic-post:12334", "new-service:secret-two"]
+}
+```
+
+With that config, auxiliary ingress listens on `/12334` and `/secret-two`, and publishes those
+JSON bodies to `generic-post` and `new-service` respectively. To make the handler poll those same
+queues, add `auxiliary_ingress_routes` with the same values to the message-handler config.
 
 ## 4) Security boundary expectations
 
