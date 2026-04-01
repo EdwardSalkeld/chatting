@@ -262,6 +262,7 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             include_internal = _bool_query_flag(parsed.query, "include_internal")
+            auto_refresh = not _bool_query_flag(parsed.query, "refresh_off")
             if parsed.path == "/activity.json":
                 payload = monitor.snapshot(include_internal=include_internal)
                 body = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -273,7 +274,11 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
                 return
             if parsed.path == "/":
                 snapshot = monitor.snapshot(include_internal=include_internal)
-                body = _render_html(snapshot=snapshot).encode("utf-8")
+                body = _render_html(
+                    snapshot=snapshot,
+                    include_internal=include_internal,
+                    auto_refresh=auto_refresh,
+                ).encode("utf-8")
                 self._write_response(
                     status_code=200,
                     content_type="text/html; charset=utf-8",
@@ -305,7 +310,12 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
     return Handler
 
 
-def _render_html(*, snapshot: dict[str, object]) -> str:
+def _render_html(
+    *,
+    snapshot: dict[str, object],
+    include_internal: bool,
+    auto_refresh: bool,
+) -> str:
     current_executor = snapshot["current_executor"]
     activity = snapshot["recent_activity"]
     assert isinstance(current_executor, dict)
@@ -356,17 +366,37 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
             "Older local history has been pruned from this view.</p>"
         )
 
-    include_internal = bool(snapshot.get("include_internal"))
-    toggle_href = "/?include_internal=1" if not include_internal else "/"
+    query_parts: list[str] = []
+    if include_internal:
+        query_parts.append("include_internal=1")
+    if not auto_refresh:
+        query_parts.append("refresh_off=1")
+
+    toggle_query_parts = list(query_parts)
+    if include_internal:
+        toggle_query_parts.remove("include_internal=1")
+    else:
+        toggle_query_parts.append("include_internal=1")
+
+    refresh_query_parts = list(query_parts)
+    if auto_refresh:
+        refresh_query_parts.append("refresh_off=1")
+    else:
+        refresh_query_parts.remove("refresh_off=1")
+
+    toggle_href = "/" if not toggle_query_parts else f"/?{'&'.join(toggle_query_parts)}"
     toggle_label = "show internal traffic" if not include_internal else "hide internal traffic"
+    refresh_href = "/" if not refresh_query_parts else f"/?{'&'.join(refresh_query_parts)}"
+    refresh_label = "pause refresh" if auto_refresh else "resume refresh"
+    refresh_note = "Auto-refresh every 5s." if auto_refresh else "Auto-refresh paused."
+    refresh_meta_tag = '  <meta http-equiv="refresh" content="5">\n' if auto_refresh else ""
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>Chatting Worker Activity</title>
-  <meta http-equiv="refresh" content="5">
-  <style>
+{refresh_meta_tag}  <style>
     :root {{
       color-scheme: light;
       --bg: #f4efe6;
@@ -394,6 +424,7 @@ def _render_html(*, snapshot: dict[str, object]) -> str:
     <div class="panel">
       <h1>Worker Now</h1>
       <p>{"<br>".join(state_lines)}</p>
+      <p class="muted">{html.escape(refresh_note)} <a href="{refresh_href}">{refresh_label}</a></p>
       <p class="muted"><a href="/activity.json{'?include_internal=1' if include_internal else ''}">JSON</a> · <a href="{toggle_href}">{toggle_label}</a></p>
     </div>
     <div class="panel">

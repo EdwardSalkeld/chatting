@@ -111,6 +111,14 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("hello", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:00:00 UTC", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
+                self.assertIn("pause refresh", html_body)
+                self.assertIn('http-equiv="refresh"', html_body)
+
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/?refresh_off=1") as response:
+                    paused_html_body = response.read().decode("utf-8")
+                self.assertIn("resume refresh", paused_html_body)
+                self.assertIn("Auto-refresh paused.", paused_html_body)
+                self.assertNotIn('http-equiv="refresh"', paused_html_body)
             finally:
                 server.shutdown()
 
