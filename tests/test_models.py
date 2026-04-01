@@ -16,6 +16,8 @@ from app.models import (
     RoutedTask,
     TaskEnvelope,
 )
+
+
 class TaskEnvelopeTests(unittest.TestCase):
     def test_task_envelope_serializes_expected_shape(self) -> None:
         envelope = TaskEnvelope(
@@ -77,6 +79,8 @@ class TaskEnvelopeTests(unittest.TestCase):
     def test_prompt_context_rejects_blank_instruction(self) -> None:
         with self.assertRaisesRegex(ValueError, "prompt_context.global_instructions"):
             PromptContext(global_instructions=[" "])
+
+
 class RoutedTaskTests(unittest.TestCase):
     def test_routed_task_serializes_expected_shape(self) -> None:
         task = RoutedTask(
@@ -84,7 +88,9 @@ class RoutedTaskTests(unittest.TestCase):
             envelope_id="evt_123",
             workflow="respond_and_optionally_edit",
             priority="normal",
-            execution_constraints=ExecutionConstraints(timeout_seconds=180, max_tokens=12000),
+            execution_constraints=ExecutionConstraints(
+                timeout_seconds=180, max_tokens=12000
+            ),
             event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
             source="email",
             actor="alice@example.com",
@@ -134,11 +140,17 @@ class RoutedTaskTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "max_tokens"):
             ExecutionConstraints(timeout_seconds=10, max_tokens=0)
+
+
 class ExecutionResultTests(unittest.TestCase):
     def test_execution_result_serializes_expected_shape(self) -> None:
         result = ExecutionResult(
-            actions=[ActionProposal(type="write_file", path="docs/notes.md", content="hello")],
+            actions=[
+                ActionProposal(type="write_file", path="docs/notes.md", content="hello")
+            ],
             errors=[],
+            stdout="executor stdout",
+            stderr="executor stderr",
         )
 
         self.assertEqual(
@@ -149,6 +161,8 @@ class ExecutionResultTests(unittest.TestCase):
                     {"type": "write_file", "path": "docs/notes.md", "content": "hello"}
                 ],
                 "errors": [],
+                "stdout": "executor stdout",
+                "stderr": "executor stderr",
             },
         )
 
@@ -194,12 +208,17 @@ class ExecutionResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "body or attachment is required"):
             OutboundMessage(channel="telegram", target="12345", body=None)
 
+
 class PolicyDecisionTests(unittest.TestCase):
     def test_policy_decision_serializes_expected_shape(self) -> None:
         decision = PolicyDecision(
             approved_actions=[],
             blocked_actions=[ActionProposal(type="write_file", path="secrets.txt")],
-            approved_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Blocked.")],
+            approved_messages=[
+                OutboundMessage(
+                    channel="email", target="alice@example.com", body="Blocked."
+                )
+            ],
             reason_codes=["action_not_allowed"],
         )
 
@@ -210,7 +229,11 @@ class PolicyDecisionTests(unittest.TestCase):
                 "approved_actions": [],
                 "blocked_actions": [{"type": "write_file", "path": "secrets.txt"}],
                 "approved_messages": [
-                    {"channel": "email", "target": "alice@example.com", "body": "Blocked."}
+                    {
+                        "channel": "email",
+                        "target": "alice@example.com",
+                        "body": "Blocked.",
+                    }
                 ],
                 "reason_codes": ["action_not_allowed"],
             },
@@ -219,6 +242,8 @@ class PolicyDecisionTests(unittest.TestCase):
     def test_action_requires_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "type is required"):
             ActionProposal(type="")
+
+
 class RunRecordTests(unittest.TestCase):
     def test_run_record_serializes_expected_shape(self) -> None:
         record = RunRecord(
@@ -256,12 +281,18 @@ class RunRecordTests(unittest.TestCase):
                 result_status="success",
                 created_at=datetime(2026, 2, 27, 16, 5),
             )
+
+
 class ApplyResultTests(unittest.TestCase):
     def test_apply_result_serializes_expected_shape(self) -> None:
         result = ApplyResult(
             applied_actions=[],
             skipped_actions=[ActionProposal(type="write_file", path="docs/notes.md")],
-            dispatched_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Done.")],
+            dispatched_messages=[
+                OutboundMessage(
+                    channel="email", target="alice@example.com", body="Done."
+                )
+            ],
             reason_codes=["noop_applier_skipped_actions"],
         )
 
@@ -277,6 +308,8 @@ class ApplyResultTests(unittest.TestCase):
                 "reason_codes": ["noop_applier_skipped_actions"],
             },
         )
+
+
 class AuditEventTests(unittest.TestCase):
     def test_audit_event_serializes_expected_shape(self) -> None:
         event = AuditEvent(
@@ -314,6 +347,8 @@ class AuditEventTests(unittest.TestCase):
                 detail={},
                 created_at=datetime(2026, 2, 27, 16, 5),
             )
+
+
 class SchemaVersionValidationTests(unittest.TestCase):
     def test_top_level_models_require_non_empty_schema_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema_version is required"):
@@ -336,7 +371,9 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 envelope_id="evt_1",
                 workflow="respond_and_optionally_edit",
                 priority="normal",
-                execution_constraints=ExecutionConstraints(timeout_seconds=10, max_tokens=1000),
+                execution_constraints=ExecutionConstraints(
+                    timeout_seconds=10, max_tokens=1000
+                ),
                 schema_version="",
             )
 
@@ -410,16 +447,37 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 errors=[],
                 schema_version="2.0",
             )
+
+
 class StringListContractValidationTests(unittest.TestCase):
     def test_execution_result_rejects_blank_error_items(self) -> None:
-        with self.assertRaisesRegex(ValueError, "errors items must be non-empty strings"):
+        with self.assertRaisesRegex(
+            ValueError, "errors items must be non-empty strings"
+        ):
             ExecutionResult(
                 actions=[],
                 errors=["   "],
             )
 
+    def test_execution_result_rejects_non_string_transcript_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "stdout must be a string"):
+            ExecutionResult(
+                actions=[],
+                errors=[],
+                stdout=object(),  # type: ignore[arg-type]
+            )
+
+        with self.assertRaisesRegex(ValueError, "stderr must be a string"):
+            ExecutionResult(
+                actions=[],
+                errors=[],
+                stderr=object(),  # type: ignore[arg-type]
+            )
+
     def test_policy_decision_rejects_blank_reason_codes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "reason_codes items must be non-empty strings"):
+        with self.assertRaisesRegex(
+            ValueError, "reason_codes items must be non-empty strings"
+        ):
             PolicyDecision(
                 approved_actions=[],
                 blocked_actions=[],
@@ -428,13 +486,17 @@ class StringListContractValidationTests(unittest.TestCase):
             )
 
     def test_apply_result_rejects_blank_reason_codes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "reason_codes items must be non-empty strings"):
+        with self.assertRaisesRegex(
+            ValueError, "reason_codes items must be non-empty strings"
+        ):
             ApplyResult(
                 applied_actions=[],
                 skipped_actions=[],
                 dispatched_messages=[],
                 reason_codes=["   "],
             )
+
+
 class TypedCollectionContractValidationTests(unittest.TestCase):
     def test_execution_result_rejects_invalid_typed_collections(self) -> None:
         with self.assertRaisesRegex(ValueError, "actions items must be ActionProposal"):
@@ -443,7 +505,9 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 errors=[],
             )
 
-    def test_policy_decision_rejects_invalid_typed_action_and_message_lists(self) -> None:
+    def test_policy_decision_rejects_invalid_typed_action_and_message_lists(
+        self,
+    ) -> None:
         with self.assertRaisesRegex(
             ValueError, "approved_actions items must be ActionProposal"
         ):
@@ -475,7 +539,9 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
             )
 
     def test_apply_result_rejects_invalid_typed_collections(self) -> None:
-        with self.assertRaisesRegex(ValueError, "applied_actions items must be ActionProposal"):
+        with self.assertRaisesRegex(
+            ValueError, "applied_actions items must be ActionProposal"
+        ):
             ApplyResult(
                 applied_actions=[object()],  # type: ignore[list-item]
                 skipped_actions=[],
@@ -483,7 +549,9 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 reason_codes=[],
             )
 
-        with self.assertRaisesRegex(ValueError, "skipped_actions items must be ActionProposal"):
+        with self.assertRaisesRegex(
+            ValueError, "skipped_actions items must be ActionProposal"
+        ):
             ApplyResult(
                 applied_actions=[],
                 skipped_actions=[object()],  # type: ignore[list-item]
@@ -500,6 +568,8 @@ class TypedCollectionContractValidationTests(unittest.TestCase):
                 dispatched_messages=[object()],  # type: ignore[list-item]
                 reason_codes=[],
             )
+
+
 class RequiredStringContractValidationTests(unittest.TestCase):
     def test_attachment_ref_rejects_blank_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "uri is required"):
@@ -579,5 +649,7 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 result_status="   ",
                 created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
             )
+
+
 if __name__ == "__main__":
     unittest.main()

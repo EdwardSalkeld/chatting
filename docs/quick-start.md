@@ -11,7 +11,7 @@
 - `uv`
 - Access to a shell
 - `bbmb-server` available
-- Optional: Codex CLI if you want real executor mode (`codex exec --json`)
+- Optional: Codex CLI if you want real executor mode (`codex exec --json` is the default transcript-friendly launch)
 
 ## 1) Clone and enter repo
 

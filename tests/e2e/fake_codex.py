@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Fake codex executor that captures the prompt and sends a reply via main_reply."""
+
 import json
 import os
 import subprocess
 import sys
+
+
 def main():
     payload = sys.stdin.read()
     prompt_dir = os.environ.get("FAKE_CODEX_PROMPT_DIR", "")
@@ -22,20 +25,22 @@ def main():
 
     subprocess.run(
         [
-            sys.executable, "-m", "app.main_reply",
+            sys.executable,
+            "-m",
+            "app.main_reply",
             task_id,
-            "--message", "E2E fake codex reply",
-            "--channel", channel,
-            "--target", target,
+            "--message",
+            "E2E fake codex reply",
+            "--channel",
+            channel,
+            "--target",
+            target,
         ],
         check=True,
     )
 
-    result = {
-        "schema_version": "1.0",
-        "actions": [],
-        "errors": [],
-    }
-    json.dump(result, sys.stdout)
+    print("fake codex transcript", file=sys.stdout)
+
+
 if __name__ == "__main__":
     main()

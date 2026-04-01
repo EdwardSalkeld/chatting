@@ -34,7 +34,7 @@ Completion is internal-only:
 ## Rules
 
 1. A successful task emits exactly one `completion` event.
-2. The executor must not return visible replies in its structured JSON output.
+2. The executor must not return visible replies in stdout/stderr transcript output.
 3. Any visible reply must be sent by the executor itself, typically with `python3 -m app.main_reply`.
 4. If a task emits no visible replies, completion alone closes it.
 5. `incremental` is the visible reply path for both intermediate and final executor-published text.
@@ -52,5 +52,5 @@ Benefits:
 Tradeoffs:
 
 - `worker` and `message-handler` must both understand `completion`
-- executor prompts must be explicit that visible replies belong in `app.main_reply`, not stdout JSON
+- executor prompts must be explicit that visible replies belong in `app.main_reply`, not stdout/stderr
 - older terminology around `final`/`incremental` needs cleanup

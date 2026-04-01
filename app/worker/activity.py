@@ -148,6 +148,26 @@ class WorkerActivityMonitor:
             },
         )
 
+    def record_executor_output(
+        self,
+        *,
+        task_message: TaskQueueMessage,
+        workflow: str,
+        stream: str,
+        content: str,
+    ) -> None:
+        envelope = task_message.envelope
+        self._append(
+            phase=f"executor_{stream}",
+            summary=f"executor {stream}",
+            task_id=task_message.task_id,
+            envelope_id=envelope.id,
+            source=envelope.source,
+            workflow=workflow,
+            is_internal=envelope.source == "internal",
+            detail={"stream": stream, "content": content},
+        )
+
     def record_executor_failure(
         self,
         *,
@@ -175,7 +195,9 @@ class WorkerActivityMonitor:
         publish_source: str,
     ) -> None:
         phase = f"egress_{egress_message.event_kind}"
-        summary = f"{egress_message.event_kind} egress to {egress_message.message.channel}"
+        summary = (
+            f"{egress_message.event_kind} egress to {egress_message.message.channel}"
+        )
         self._append(
             phase=phase,
             summary=summary,
@@ -251,7 +273,9 @@ def start_worker_activity_server(
     monitor: WorkerActivityMonitor,
 ) -> WorkerActivityServer:
     server = HTTPServer((host, port), _build_handler(monitor))
-    thread = Thread(target=server.serve_forever, name="worker-activity-server", daemon=True)
+    thread = Thread(
+        target=server.serve_forever, name="worker-activity-server", daemon=True
+    )
     thread.start()
     LOGGER.info("worker_activity_server_started host=%s port=%s", host, port)
     return WorkerActivityServer(server=server, thread=thread)
@@ -331,13 +355,17 @@ def _render_html(
         if value is not None:
             if key.endswith("_at"):
                 value = _friendly_timestamp(value)
-            state_lines.append(f"<strong>{html.escape(key)}:</strong> {html.escape(str(value))}")
+            state_lines.append(
+                f"<strong>{html.escape(key)}:</strong> {html.escape(str(value))}"
+            )
 
     rows = []
     for item in activity:
         assert isinstance(item, dict)
         detail = item.get("detail")
-        detail_json = html.escape(json.dumps(_detail_without_message(detail), sort_keys=True))
+        detail_json = html.escape(
+            json.dumps(_detail_without_message(detail), sort_keys=True)
+        )
         message_text = _message_text(item)
         message_html = (
             f"<div class='message'>{html.escape(message_text)}</div>"
@@ -385,11 +413,17 @@ def _render_html(
         refresh_query_parts.remove("refresh_off=1")
 
     toggle_href = "/" if not toggle_query_parts else f"/?{'&'.join(toggle_query_parts)}"
-    toggle_label = "show internal traffic" if not include_internal else "hide internal traffic"
-    refresh_href = "/" if not refresh_query_parts else f"/?{'&'.join(refresh_query_parts)}"
+    toggle_label = (
+        "show internal traffic" if not include_internal else "hide internal traffic"
+    )
+    refresh_href = (
+        "/" if not refresh_query_parts else f"/?{'&'.join(refresh_query_parts)}"
+    )
     refresh_label = "pause refresh" if auto_refresh else "resume refresh"
     refresh_note = "Auto-refresh every 5s." if auto_refresh else "Auto-refresh paused."
-    refresh_meta_tag = '  <meta http-equiv="refresh" content="5">\n' if auto_refresh else ""
+    refresh_meta_tag = (
+        '  <meta http-equiv="refresh" content="5">\n' if auto_refresh else ""
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -425,7 +459,7 @@ def _render_html(
       <h1>Worker Now</h1>
       <p>{"<br>".join(state_lines)}</p>
       <p class="muted">{html.escape(refresh_note)} <a href="{refresh_href}">{refresh_label}</a></p>
-      <p class="muted"><a href="/activity.json{'?include_internal=1' if include_internal else ''}">JSON</a> · <a href="{toggle_href}">{toggle_label}</a></p>
+      <p class="muted"><a href="/activity.json{"?include_internal=1" if include_internal else ""}">JSON</a> · <a href="{toggle_href}">{toggle_label}</a></p>
     </div>
     <div class="panel">
       <h2>Recent Activity</h2>
@@ -485,4 +519,6 @@ def _message_text(item: dict[str, object]) -> str | None:
 def _detail_without_message(detail: object) -> object:
     if not isinstance(detail, dict):
         return detail
-    return {key: value for key, value in detail.items() if key not in {"body", "content"}}
+    return {
+        key: value for key, value in detail.items() if key not in {"body", "content"}
+    }

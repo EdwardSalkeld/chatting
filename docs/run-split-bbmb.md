@@ -119,7 +119,7 @@ sudo systemctl enable --now chatting-worker.service
 
 Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
 path for both quick acknowledgements and final user-visible answers instead of returning replies in
-their stdout JSON:
+their stdout/stderr transcript:
 
 ```bash
 uv run python -m app.main_reply task:email:53 \
@@ -132,7 +132,7 @@ uv run python -m app.main_reply task:email:53 \
 Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
 - These events are intentionally unsequenced and dispatch immediately at `message-handler`.
-- Executor stdout is completion-only; visible replies belong here.
+- Executor stdout/stderr are treated as operator transcript and audit detail, not user-visible reply transport.
 - `--event-id` can be supplied for stable idempotency across retries.
 - Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
 

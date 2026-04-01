@@ -9,10 +9,10 @@ from app.models import ExecutionResult, RoutedTask
 
 @runtime_checkable
 class Executor(Protocol):
-    """Execute a routed task and return completion-only structured results."""
+    """Execute a routed task and return completion status plus transcript."""
 
     def execute(self, task: RoutedTask) -> ExecutionResult:
-        """Run task logic and return actions/config/errors only."""
+        """Run task logic and return any errors plus captured stdout/stderr."""
         ...
 
 

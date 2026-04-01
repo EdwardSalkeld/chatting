@@ -38,10 +38,18 @@ class WorkerActivityTests(unittest.TestCase):
                 attempt=1,
                 workflow="respond_and_optionally_edit",
             )
+            monitor.record_executor_output(
+                task_message=task_message,
+                workflow="respond_and_optionally_edit",
+                stream="stdout",
+                content="codex transcript line",
+            )
 
             running_snapshot = monitor.snapshot()
             self.assertEqual(running_snapshot["current_executor"]["active"], True)
-            self.assertEqual(running_snapshot["current_executor"]["task_id"], task_message.task_id)
+            self.assertEqual(
+                running_snapshot["current_executor"]["task_id"], task_message.task_id
+            )
 
             monitor.record_egress(
                 egress_message=EgressQueueMessage(
@@ -76,9 +84,20 @@ class WorkerActivityTests(unittest.TestCase):
             snapshot = monitor.snapshot()
             self.assertEqual(snapshot["current_executor"]["active"], False)
             self.assertEqual(snapshot["recent_activity"][0]["phase"], "task_finished")
-            self.assertEqual(snapshot["recent_activity"][1]["phase"], "egress_incremental")
-            self.assertEqual(snapshot["recent_activity"][-1]["detail"]["content"], "hello")
-            self.assertEqual(snapshot["recent_activity"][-1]["occurred_at"], "2026-03-31T12:00:00Z")
+            self.assertEqual(
+                snapshot["recent_activity"][1]["phase"], "egress_incremental"
+            )
+            self.assertEqual(snapshot["recent_activity"][2]["phase"], "executor_stdout")
+            self.assertEqual(
+                snapshot["recent_activity"][2]["detail"]["content"],
+                "codex transcript line",
+            )
+            self.assertEqual(
+                snapshot["recent_activity"][-1]["detail"]["content"], "hello"
+            )
+            self.assertEqual(
+                snapshot["recent_activity"][-1]["occurred_at"], "2026-03-31T12:00:00Z"
+            )
 
     def test_activity_http_server_serves_json_and_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -95,26 +114,41 @@ class WorkerActivityTests(unittest.TestCase):
                 attempt=1,
                 workflow="respond_and_optionally_edit",
             )
+            monitor.record_executor_output(
+                task_message=task_message,
+                workflow="respond_and_optionally_edit",
+                stream="stderr",
+                content="warning line",
+            )
 
-            server = start_worker_activity_server(host="127.0.0.1", port=0, monitor=monitor)
+            server = start_worker_activity_server(
+                host="127.0.0.1", port=0, monitor=monitor
+            )
             port = server.server.server_address[1]
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/activity.json") as response:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/activity.json"
+                ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(payload["current_executor"]["active"], True)
-                self.assertEqual(payload["recent_activity"][0]["phase"], "executor_started")
+                self.assertEqual(
+                    payload["recent_activity"][0]["phase"], "executor_stderr"
+                )
 
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
                     html_body = response.read().decode("utf-8")
                 self.assertIn("Worker Now", html_body)
                 self.assertIn("task_received", html_body)
                 self.assertIn("hello", html_body)
+                self.assertIn("warning line", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:00:00 UTC", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
                 self.assertIn("pause refresh", html_body)
                 self.assertIn('http-equiv="refresh"', html_body)
 
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/?refresh_off=1") as response:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/?refresh_off=1"
+                ) as response:
                     paused_html_body = response.read().decode("utf-8")
                 self.assertIn("resume refresh", paused_html_body)
                 self.assertIn("Auto-refresh paused.", paused_html_body)

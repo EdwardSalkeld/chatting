@@ -4,8 +4,14 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from app.worker.executor import CodexExecutor, parse_execution_result
-from app.models import AttachmentRef, ExecutionConstraints, PromptContext, ReplyChannel, RoutedTask
+from app.models import (
+    AttachmentRef,
+    ExecutionConstraints,
+    PromptContext,
+    ReplyChannel,
+    RoutedTask,
+)
+from app.worker.executor import CodexExecutor
 
 
 def _task() -> RoutedTask:
@@ -19,298 +25,22 @@ def _task() -> RoutedTask:
         source="email",
         actor="alice@example.com",
         content="Subject: hello\\n\\nPlease summarize this thread.",
-        attachments=[AttachmentRef(uri="file:///tmp/evidence.png", name="evidence.png")],
+        attachments=[
+            AttachmentRef(uri="file:///tmp/evidence.png", name="evidence.png")
+        ],
         prompt_context=PromptContext(
             global_instructions=["Keep replies concise."],
             reply_channel_instructions=["Use a short email subject line."],
         ),
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
     )
-class ParseExecutionResultTests(unittest.TestCase):
-    def test_parse_execution_result_accepts_valid_payload(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [
-                    {
-                        "type": "write_file",
-                        "path": "docs/notes.md",
-                        "content": "hello",
-                    }
-                ],
-                "errors": [],
-            }
-        )
 
-        result = parse_execution_result(payload)
 
-        self.assertEqual(result.to_dict()["actions"][0]["type"], "write_file")
-
-    def test_parse_execution_result_recovers_last_json_object_from_mixed_output(self) -> None:
-        valid_payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "errors": [],
-            }
-        )
-        mixed_output = "starting codex\n" + valid_payload + "\ncompleted\n"
-
-        result = parse_execution_result(mixed_output)
-
-        self.assertEqual(result.to_dict()["actions"], [])
-
-    def test_parse_execution_result_rejects_unknown_top_level_keys(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "errors": [],
-                "unexpected": "value",
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "unknown_top_level_keys"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_accepts_codex_metadata_fields(self) -> None:
-        payload = json.dumps(
-            {
-                "type": "result",
-                "schema_version": "1.0",
-                "actions": [],
-                "errors": [],
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 5,
-                },
-            }
-        )
-
-        result = parse_execution_result(payload)
-
-        self.assertEqual(result.to_dict()["errors"], [])
-
-    def test_parse_execution_result_rejects_legacy_messages_field(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "messages": [],
-                "actions": [],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "unknown_top_level_keys:messages"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_unknown_action_keys(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [
-                    {
-                        "type": "write_file",
-                        "path": "docs/notes.md",
-                        "mode": "append",
-                    }
-                ],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "unknown_action_keys"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_action_missing_required_field(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"path": "docs/notes.md"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "action_type_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_action_type_with_only_whitespace(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "  "}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "action_type_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_write_file_action_missing_path(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "write_file", "content": "hello"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "write_file_path_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_write_file_action_missing_content(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "write_file", "path": "docs/notes.md"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "write_file_content_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_write_file_action_with_empty_path(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "write_file", "path": "", "content": "hello"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "write_file_path_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_write_file_action_with_whitespace_path(
-        self,
-    ) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "write_file", "path": "   ", "content": "hello"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "write_file_path_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_write_file_action_with_empty_content(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "write_file", "path": "docs/notes.md", "content": ""}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "write_file_content_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_write_file_action_with_whitespace_content(
-        self,
-    ) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "write_file", "path": "docs/notes.md", "content": "   "}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "write_file_content_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_non_write_file_action_with_path(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "run_shell", "path": "echo hi"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "non_write_file_path_forbidden"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_non_write_file_action_with_content(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [{"type": "run_shell", "content": "echo hi"}],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "non_write_file_content_forbidden"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_missing_schema_version(self) -> None:
-        payload = json.dumps(
-            {
-                "actions": [],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "missing_top_level_keys:schema_version"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_blank_schema_version(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "",
-                "actions": [],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "schema_version_required"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_unsupported_schema_version(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "2.0",
-                "actions": [],
-                "errors": [],
-            }
-        )
-
-        with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_error_item_with_empty_string(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "errors": [""],
-            }
-        )
-
-        with self.assertRaisesRegex(
-            ValueError, "errors_items_must_be_non_empty_strings"
-        ):
-            parse_execution_result(payload)
-
-    def test_parse_execution_result_rejects_error_item_with_only_whitespace(self) -> None:
-        payload = json.dumps(
-            {
-                "schema_version": "1.0",
-                "actions": [],
-                "errors": ["   "],
-            }
-        )
-
-        with self.assertRaisesRegex(
-            ValueError, "errors_items_must_be_non_empty_strings"
-        ):
-            parse_execution_result(payload)
 class CodexExecutorTests(unittest.TestCase):
     @patch("app.worker.executor.codex.subprocess.run")
-    def test_execute_returns_timeout_error_when_subprocess_times_out(self, run_mock) -> None:
+    def test_execute_returns_timeout_error_when_subprocess_times_out(
+        self, run_mock
+    ) -> None:
         run_mock.side_effect = subprocess.TimeoutExpired(cmd=["codex"], timeout=7)
         executor = CodexExecutor(command=("codex", "exec", "--json"))
 
@@ -318,13 +48,17 @@ class CodexExecutorTests(unittest.TestCase):
 
         self.assertEqual(result.errors, ["executor_timeout"])
         self.assertEqual(result.actions, [])
+        self.assertIsNone(result.stdout)
+        self.assertIsNone(result.stderr)
 
     @patch("app.worker.executor.codex.subprocess.run")
-    def test_execute_returns_nonzero_exit_error(self, run_mock) -> None:
+    def test_execute_returns_nonzero_exit_error_and_captures_streams(
+        self, run_mock
+    ) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=["codex", "exec", "--json"],
             returncode=2,
-            stdout="",
+            stdout="operator trace",
             stderr="fatal error",
         )
         executor = CodexExecutor(command=("codex", "exec", "--json"))
@@ -332,20 +66,16 @@ class CodexExecutorTests(unittest.TestCase):
         result = executor.execute(_task())
 
         self.assertEqual(result.errors, ["executor_exit_nonzero:2:fatal error"])
+        self.assertEqual(result.stdout, "operator trace")
+        self.assertEqual(result.stderr, "fatal error")
 
     @patch("app.worker.executor.codex.subprocess.run")
-    def test_execute_uses_task_timeout_and_parses_stdout(self, run_mock) -> None:
+    def test_execute_uses_task_timeout_and_captures_transcript(self, run_mock) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=["codex", "exec", "--json"],
             returncode=0,
-            stdout=json.dumps(
-                {
-                    "schema_version": "1.0",
-                    "actions": [],
-                    "errors": [],
-                }
-            ),
-            stderr="",
+            stdout='{"type":"message","text":"thinking"}\n',
+            stderr="warning stream",
         )
         executor = CodexExecutor(
             command=("codex", "exec", "--json"),
@@ -357,8 +87,13 @@ class CodexExecutorTests(unittest.TestCase):
 
         self.assertEqual(result.errors, [])
         self.assertEqual(result.actions, [])
+        self.assertEqual(result.stdout, '{"type":"message","text":"thinking"}\n')
+        self.assertEqual(result.stderr, "warning stream")
         run_mock.assert_called_once()
-        self.assertEqual(run_mock.call_args.kwargs["timeout"], task.execution_constraints.timeout_seconds)
+        self.assertEqual(
+            run_mock.call_args.kwargs["timeout"],
+            task.execution_constraints.timeout_seconds,
+        )
         payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(payload["task"]["event_time"], "2026-02-27T16:00:00Z")
         self.assertEqual(
@@ -383,27 +118,31 @@ class CodexExecutorTests(unittest.TestCase):
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -m app.main_reply",
         )
-        self.assertEqual(payload["reply_contract"]["executor_output_is_completion_only"], True)
+        self.assertEqual(
+            payload["reply_contract"]["executor_exit_status_drives_completion"], True
+        )
+        self.assertEqual(
+            payload["reply_contract"]["executor_stdout_stderr_are_operator_transcript"],
+            True,
+        )
 
     @patch("app.worker.executor.codex.subprocess.run")
     def test_execute_passes_configured_working_directory(self, run_mock) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=["codex", "exec", "--json"],
             returncode=0,
-            stdout=json.dumps(
-                {
-                    "schema_version": "1.0",
-                    "actions": [],
-                    "errors": [],
-                }
-            ),
+            stdout="ok",
             stderr="",
         )
-        executor = CodexExecutor(command=("codex", "exec", "--json"), cwd="/opt/chatting")
+        executor = CodexExecutor(
+            command=("codex", "exec", "--json"), cwd="/opt/chatting"
+        )
 
         executor.execute(_task())
 
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/opt/chatting")
+
+
 if __name__ == "__main__":
     unittest.main()
