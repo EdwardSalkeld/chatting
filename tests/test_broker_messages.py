@@ -1,8 +1,20 @@
 import unittest
 from datetime import datetime, timezone
 
-from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.models import AttachmentRef, OutboundMessage, PromptContext, ReplyChannel, TaskEnvelope
+from app.broker import (
+    AuxiliaryIngressQueueMessage,
+    EgressQueueMessage,
+    TaskQueueMessage,
+)
+from app.models import (
+    AttachmentRef,
+    OutboundMessage,
+    PromptContext,
+    ReplyChannel,
+    TaskEnvelope,
+)
+
+
 class TaskQueueMessageTests(unittest.TestCase):
     def test_task_message_round_trip(self) -> None:
         envelope = TaskEnvelope(
@@ -41,6 +53,8 @@ class TaskQueueMessageTests(unittest.TestCase):
     def test_task_message_rejects_wrong_type(self) -> None:
         with self.assertRaises(ValueError):
             TaskQueueMessage.from_dict({"message_type": "chatting.egress.v1"})
+
+
 class EgressQueueMessageTests(unittest.TestCase):
     def test_egress_message_round_trip(self) -> None:
         message = EgressQueueMessage(
@@ -80,7 +94,9 @@ class EgressQueueMessageTests(unittest.TestCase):
             trace_id="trace:email:2",
             event_index=0,
             event_count=1,
-            message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+            message=OutboundMessage(
+                channel="email", target="alice@example.com", body="hello"
+            ),
             emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
             event_id="evt:task:email:2:1",
             sequence=1,
@@ -132,7 +148,9 @@ class EgressQueueMessageTests(unittest.TestCase):
                 trace_id="trace:email:1",
                 event_index=0,
                 event_count=1,
-                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                message=OutboundMessage(
+                    channel="email", target="alice@example.com", body="hello"
+                ),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
@@ -148,7 +166,9 @@ class EgressQueueMessageTests(unittest.TestCase):
                 trace_id="trace:email:2",
                 event_index=0,
                 event_count=1,
-                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                message=OutboundMessage(
+                    channel="email", target="alice@example.com", body="hello"
+                ),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 sequence=0,
                 event_kind="message",
@@ -162,7 +182,9 @@ class EgressQueueMessageTests(unittest.TestCase):
             trace_id="trace:email:2",
             event_index=0,
             event_count=1,
-            message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+            message=OutboundMessage(
+                channel="email", target="alice@example.com", body="hello"
+            ),
             emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
             event_id="evt:task:email:2:adhoc",
             sequence=None,
@@ -184,7 +206,9 @@ class EgressQueueMessageTests(unittest.TestCase):
                 trace_id="trace:email:2",
                 event_index=0,
                 event_count=1,
-                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                message=OutboundMessage(
+                    channel="email", target="alice@example.com", body="hello"
+                ),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:2:message",
                 sequence=None,
@@ -207,5 +231,26 @@ class EgressQueueMessageTests(unittest.TestCase):
                 event_kind="completion",
                 message_type="chatting.egress.v2",
             )
+
+
+class AuxiliaryIngressQueueMessageTests(unittest.TestCase):
+    def test_auxiliary_ingress_message_round_trip(self) -> None:
+        message = AuxiliaryIngressQueueMessage(
+            event_id="aux:1",
+            received_at=datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc),
+            body={"hello": ["world", 1, True, None]},
+        )
+
+        parsed = AuxiliaryIngressQueueMessage.from_dict(message.to_dict())
+
+        self.assertEqual(parsed.event_id, "aux:1")
+        self.assertEqual(parsed.received_at, message.received_at)
+        self.assertEqual(parsed.body, {"hello": ["world", 1, True, None]})
+
+    def test_auxiliary_ingress_message_rejects_wrong_type(self) -> None:
+        with self.assertRaises(ValueError):
+            AuxiliaryIngressQueueMessage.from_dict({"message_type": "chatting.task.v1"})
+
+
 if __name__ == "__main__":
     unittest.main()

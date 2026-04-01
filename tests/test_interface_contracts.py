@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.handler.applier import Applier, IntegratedApplier, NoOpApplier
 from app.handler.connectors import (
+    AuxiliaryIngressConnector,
     Connector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
@@ -20,7 +21,14 @@ from app.worker.executor import CodexExecutor, Executor
 from app.worker.policy import AllowlistPolicyEngine, PolicyEngine
 from app.worker.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
-from tests.fixtures import CronTrigger, EmailMessage, FakeCronConnector, FakeEmailConnector
+from tests.fixtures import (
+    CronTrigger,
+    EmailMessage,
+    FakeCronConnector,
+    FakeEmailConnector,
+)
+
+
 class InterfaceContractTests(unittest.TestCase):
     def test_connector_implementations_match_protocol(self) -> None:
         cron = FakeCronConnector(
@@ -64,8 +72,12 @@ class InterfaceContractTests(unittest.TestCase):
                     repository_patterns=["brokensbone/chatting"],
                     assignee_login="BillyAcachofa",
                     context_refs=[],
-                    checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
-                    graphql_runner=lambda _query, _variables: {"data": {"repository": None}},
+                    checkpoint_store=GitHubAssignmentCheckpointStore(
+                        f"{tmpdir}/state.db"
+                    ),
+                    graphql_runner=lambda _query, _variables: {
+                        "data": {"repository": None}
+                    },
                 ),
                 Connector,
             )
@@ -74,15 +86,21 @@ class InterfaceContractTests(unittest.TestCase):
                     repository_patterns=["brokensbone/chatting"],
                     author_login="BillyAcachofa",
                     context_refs=[],
-                    checkpoint_store=GitHubAssignmentCheckpointStore(f"{tmpdir}/state.db"),
-                    graphql_runner=lambda _query, _variables: {"data": {"repository": None}},
+                    checkpoint_store=GitHubAssignmentCheckpointStore(
+                        f"{tmpdir}/state.db"
+                    ),
+                    graphql_runner=lambda _query, _variables: {
+                        "data": {"repository": None}
+                    },
                 ),
                 Connector,
             )
         self.assertIsInstance(
             TelegramConnector(
                 bot_token="token",
-                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(ok=True, result=[]),
+                http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                    ok=True, result=[]
+                ),
             ),
             Connector,
         )
@@ -98,6 +116,24 @@ class InterfaceContractTests(unittest.TestCase):
                         context_refs=[],
                     )
                 ]
+            ),
+            Connector,
+        )
+
+        class _AuxiliaryIngressBroker:
+            def pickup_json(
+                self, queue_name: str, timeout_seconds: int, wait_seconds: int
+            ):
+                del queue_name, timeout_seconds, wait_seconds
+                return None
+
+            def ack(self, queue_name: str, guid: str) -> None:
+                del queue_name, guid
+
+        self.assertIsInstance(
+            AuxiliaryIngressConnector(
+                broker=_AuxiliaryIngressBroker(),  # type: ignore[arg-type]
+                queue_name="chatting.ingress.github.generic-post.v1",
             ),
             Connector,
         )
@@ -120,6 +156,7 @@ class InterfaceContractTests(unittest.TestCase):
             db_path = str(Path(tmpdir) / "state.db")
             store = SQLiteStateStore(db_path)
             self.assertIsInstance(store, StateStore)
+
 
 if __name__ == "__main__":
     unittest.main()

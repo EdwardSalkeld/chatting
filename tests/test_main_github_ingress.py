@@ -1,3 +1,4 @@
+import argparse
 import json
 import tempfile
 import unittest
@@ -7,10 +8,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from app.handler.github_ingress import GitHubIssueAssignmentEvent, GitHubPullRequestReviewEvent
+from app.handler.github_ingress import (
+    GitHubIssueAssignmentEvent,
+    GitHubPullRequestReviewEvent,
+)
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.main_message_handler import _load_config, _load_schedule_jobs, main
+from app.handler.connectors.auxiliary_ingress_connector import AuxiliaryIngressConnector
+from app.main_message_handler import (
+    _build_live_connectors,
+    _load_config,
+    _load_schedule_jobs,
+    main,
+)
 from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
+
+
 @dataclass
 class _FakeBroker:
     ensured: list[str] = field(default_factory=list)
@@ -29,14 +41,20 @@ class _FakeBroker:
 
     def ack(self, queue_name: str, guid: str) -> None:
         self.acked.append((queue_name, guid))
+
+
 @dataclass
 class _FakeMetricsServer:
     shutdown_calls: int = 0
 
     def shutdown(self) -> None:
         self.shutdown_calls += 1
+
+
 class MainGitHubIngressTests(unittest.TestCase):
-    def _non_heartbeat_published(self, broker: _FakeBroker) -> list[tuple[str, dict[str, object]]]:
+    def _non_heartbeat_published(
+        self, broker: _FakeBroker
+    ) -> list[tuple[str, dict[str, object]]]:
         return [
             item
             for item in broker.published
@@ -51,7 +69,52 @@ class MainGitHubIngressTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown keys"):
                 _load_config(str(config_path))
 
-    def test_load_schedule_jobs_accepts_cron_timezone_and_interval_fallback(self) -> None:
+    def test_build_live_connectors_supports_auxiliary_ingress(self) -> None:
+        config = {
+            "bbmb_address": "127.0.0.1:9876",
+            "auxiliary_ingress_enabled": True,
+            "auxiliary_ingress_routes": ["generic-post:12334", "new-service:/two"],
+            "auxiliary_ingress_context_refs": ["repo:/workspace/chatting"],
+        }
+        broker = _FakeBroker()
+
+        with patch("app.main_message_handler.BBMBQueueAdapter", return_value=broker):
+            connectors = _build_live_connectors(
+                argparse.Namespace(
+                    bbmb_address=None,
+                    auxiliary_ingress_enabled=False,
+                    auxiliary_ingress_route=[],
+                    auxiliary_ingress_context_ref=[],
+                    schedule_file=None,
+                    imap_host=None,
+                    imap_port=None,
+                    imap_username=None,
+                    imap_password_env=None,
+                    imap_mailbox=None,
+                    imap_search=None,
+                    telegram_enabled=False,
+                    telegram_bot_token_env=None,
+                    telegram_api_base_url=None,
+                    telegram_poll_timeout_seconds=None,
+                    telegram_attachment_dir=None,
+                    telegram_allowed_chat_id=[],
+                    telegram_allowed_channel_id=[],
+                    telegram_context_ref=[],
+                    context_ref=[],
+                ),
+                config,
+            )
+
+        self.assertEqual(len(connectors), 2)
+        self.assertIsInstance(connectors[0], AuxiliaryIngressConnector)
+        self.assertIsInstance(connectors[1], AuxiliaryIngressConnector)
+        self.assertEqual(broker.ensured, ["generic-post", "new-service"])
+        self.assertEqual(connectors[0]._reply_target, "generic-post")
+        self.assertEqual(connectors[1]._reply_target, "new-service")
+
+    def test_load_schedule_jobs_accepts_cron_timezone_and_interval_fallback(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             schedule_path = Path(tmpdir) / "schedule.json"
             schedule_path.write_text(
@@ -130,7 +193,9 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0].timezone_name, "UTC")
 
-    def test_load_schedule_jobs_ignores_interval_anchors_when_cron_is_present(self) -> None:
+    def test_load_schedule_jobs_ignores_interval_anchors_when_cron_is_present(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             schedule_path = Path(tmpdir) / "schedule.json"
             schedule_path.write_text(
@@ -195,7 +260,9 @@ class MainGitHubIngressTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "timezone is only valid with cron"):
                 _load_schedule_jobs(str(schedule_path))
 
-    def test_main_message_handler_publishes_assignment_event_once_and_uses_checkpoint(self) -> None:
+    def test_main_message_handler_publishes_assignment_event_once_and_uses_checkpoint(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             broker = _FakeBroker()
@@ -239,7 +306,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                     "app.handler.connectors.github_pull_request_review_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
-                patch("app.main_message_handler._build_live_connectors", return_value=[]),
+                patch(
+                    "app.main_message_handler._build_live_connectors", return_value=[]
+                ),
                 patch(
                     "sys.argv",
                     [
@@ -263,7 +332,9 @@ class MainGitHubIngressTests(unittest.TestCase):
 
             published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
-            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(
+                broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"]
+            )
             self.assertEqual(len(published), 1)
             self.assertEqual(published[0][0], "chatting.tasks.v1")
             self.assertEqual(
@@ -278,7 +349,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                 },
             )
 
-    def test_main_message_handler_resolves_assignee_from_authenticated_gh_user(self) -> None:
+    def test_main_message_handler_resolves_assignee_from_authenticated_gh_user(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             broker = _FakeBroker()
@@ -326,7 +399,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                     "app.handler.connectors.github_pull_request_review_connector.fetch_pull_request_review_events_for_repository",
                     return_value=[],
                 ),
-                patch("app.main_message_handler._build_live_connectors", return_value=[]),
+                patch(
+                    "app.main_message_handler._build_live_connectors", return_value=[]
+                ),
                 patch(
                     "sys.argv",
                     [
@@ -348,11 +423,15 @@ class MainGitHubIngressTests(unittest.TestCase):
 
             published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
-            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(
+                broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"]
+            )
             self.assertEqual(len(published), 1)
             self.assertEqual(published[0][0], "chatting.tasks.v1")
 
-    def test_main_message_handler_publishes_pull_request_review_event_once_and_uses_checkpoint(self) -> None:
+    def test_main_message_handler_publishes_pull_request_review_event_once_and_uses_checkpoint(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             broker = _FakeBroker()
@@ -400,7 +479,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                     "app.handler.connectors.github_pull_request_review_connector.expand_repository_patterns",
                     return_value=["brokensbone/chatting"],
                 ),
-                patch("app.main_message_handler._build_live_connectors", return_value=[]),
+                patch(
+                    "app.main_message_handler._build_live_connectors", return_value=[]
+                ),
                 patch(
                     "sys.argv",
                     [
@@ -437,7 +518,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                 },
             )
 
-    def test_main_message_handler_disables_misconfigured_github_ingress_and_keeps_running(self) -> None:
+    def test_main_message_handler_disables_misconfigured_github_ingress_and_keeps_running(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             broker = _FakeBroker()
@@ -479,18 +562,26 @@ class MainGitHubIngressTests(unittest.TestCase):
 
             published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
-            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(
+                broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"]
+            )
             self.assertEqual(len(published), 0)
             self.assertEqual(len(broker.published), 2)
             disabled_log_calls = [
                 call
                 for call in error_logger.call_args_list
-                if call.args and call.args[0] == "ingress_connector_disabled connector=%s loop=%s error=%s"
+                if call.args
+                and call.args[0]
+                == "ingress_connector_disabled connector=%s loop=%s error=%s"
             ]
             self.assertEqual(len(disabled_log_calls), 2)
-            self.assertTrue(all(call.args[1] == "github" for call in disabled_log_calls))
+            self.assertTrue(
+                all(call.args[1] == "github" for call in disabled_log_calls)
+            )
 
-    def test_main_message_handler_continues_with_healthy_connectors_when_imap_misconfigured(self) -> None:
+    def test_main_message_handler_continues_with_healthy_connectors_when_imap_misconfigured(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             schedule_path = Path(tmpdir) / "schedule.json"
@@ -545,13 +636,17 @@ class MainGitHubIngressTests(unittest.TestCase):
 
             published = self._non_heartbeat_published(broker)
             self.assertEqual(exit_code, 0)
-            self.assertEqual(broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"])
+            self.assertEqual(
+                broker.ensured, ["chatting.tasks.v1", "chatting.egress.v1"]
+            )
             self.assertEqual(len(published), 1)
             self.assertEqual(published[0][0], "chatting.tasks.v1")
             disabled_log_calls = [
                 call
                 for call in error_logger.call_args_list
-                if call.args and call.args[0] == "ingress_connector_disabled connector=%s loop=%s error=%s"
+                if call.args
+                and call.args[0]
+                == "ingress_connector_disabled connector=%s loop=%s error=%s"
             ]
             self.assertEqual(len(disabled_log_calls), 1)
             self.assertEqual(disabled_log_calls[0].args[1], "imap")
@@ -596,7 +691,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                 {"type": "internal", "target": "heartbeat"},
             )
 
-    def test_main_message_handler_starts_and_stops_metrics_server_with_defaults(self) -> None:
+    def test_main_message_handler_starts_and_stops_metrics_server_with_defaults(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             broker = _FakeBroker()
@@ -641,10 +738,14 @@ class MainGitHubIngressTests(unittest.TestCase):
     def test_main_message_handler_drains_egress_queue_until_empty(self) -> None:
         @dataclass
         class _QueueDrainingBroker(_FakeBroker):
-            egress_messages: deque[tuple[str, dict[str, object]]] = field(default_factory=deque)
+            egress_messages: deque[tuple[str, dict[str, object]]] = field(
+                default_factory=deque
+            )
             pickup_waits: list[int] = field(default_factory=list)
 
-            def pickup_json(self, queue_name: str, timeout_seconds: int, wait_seconds: int):
+            def pickup_json(
+                self, queue_name: str, timeout_seconds: int, wait_seconds: int
+            ):
                 del timeout_seconds
                 self.pickup_waits.append(wait_seconds)
                 if queue_name != "chatting.egress.v1" or not self.egress_messages:
@@ -677,14 +778,18 @@ class MainGitHubIngressTests(unittest.TestCase):
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:drain-1",
             )
-            task_message = TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:drain-1")
+            task_message = TaskQueueMessage.from_envelope(
+                envelope, trace_id="trace:email:drain-1"
+            )
             first_egress = EgressQueueMessage(
                 task_id=task_message.task_id,
                 envelope_id=task_message.envelope.id,
                 trace_id=task_message.trace_id,
                 event_index=0,
                 event_count=2,
-                message=OutboundMessage(channel="email", target="alice@example.com", body="first"),
+                message=OutboundMessage(
+                    channel="email", target="alice@example.com", body="first"
+                ),
                 emitted_at=datetime(2026, 3, 7, 10, 47, 36, tzinfo=timezone.utc),
                 event_id="evt:task:email:drain-1:0",
                 sequence=0,
@@ -757,6 +862,7 @@ class MainGitHubIngressTests(unittest.TestCase):
             )
             self.assertEqual(broker.pickup_waits[:3], [5, 0, 0])
             self.assertIn(broker.pickup_waits[3:], ([], [5]))
+
 
 if __name__ == "__main__":
     unittest.main()
