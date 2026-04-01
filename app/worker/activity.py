@@ -344,48 +344,10 @@ def _render_html(
     activity = snapshot["recent_activity"]
     assert isinstance(current_executor, dict)
     assert isinstance(activity, list)
-    active = bool(current_executor.get("active"))
-    state_title = "running" if active else "idle"
-    state_lines = [
-        f"<strong>state:</strong> {html.escape(state_title)}",
-        f"<strong>phase:</strong> {html.escape(str(current_executor.get('phase', 'idle')))}",
-    ]
-    for key in ("task_id", "envelope_id", "workflow", "attempt", "pid", "started_at"):
-        value = current_executor.get(key)
-        if value is not None:
-            if key.endswith("_at"):
-                value = _friendly_timestamp(value)
-            state_lines.append(
-                f"<strong>{html.escape(key)}:</strong> {html.escape(str(value))}"
-            )
-
-    rows = []
-    for item in activity:
-        assert isinstance(item, dict)
-        detail = item.get("detail")
-        detail_json = html.escape(
-            json.dumps(_detail_without_message(detail), sort_keys=True)
-        )
-        message_text = _message_text(item)
-        message_html = (
-            f"<div class='message'>{html.escape(message_text)}</div>"
-            if message_text is not None
-            else "<span class='muted'>-</span>"
-        )
-        occurred_at = str(item.get("occurred_at", ""))
-        friendly_occurred_at = _friendly_timestamp(occurred_at)
-        rows.append(
-            "<tr>"
-            f"<td title='{html.escape(occurred_at)}'>{html.escape(friendly_occurred_at)}</td>"
-            f"<td>{html.escape(str(item.get('phase', '')))}</td>"
-            f"<td>{html.escape(str(item.get('task_id', '')))}</td>"
-            f"<td>{html.escape(str(item.get('summary', '')))}</td>"
-            f"<td>{message_html}</td>"
-            f"<td><code>{detail_json}</code></td>"
-            "</tr>"
-        )
-    if not rows:
-        rows.append("<tr><td colspan='6'>No recent worker activity.</td></tr>")
+    activity_json = _json_script_value(snapshot)
+    initial_list_markup = _render_activity_list(activity)
+    initial_detail_markup = _render_detail_panel(activity[0] if activity else None)
+    current_state_markup = _render_current_executor(current_executor)
 
     showing_note = ""
     if snapshot.get("history_truncated"):
@@ -421,16 +383,13 @@ def _render_html(
     )
     refresh_label = "pause refresh" if auto_refresh else "resume refresh"
     refresh_note = "Auto-refresh every 5s." if auto_refresh else "Auto-refresh paused."
-    refresh_meta_tag = (
-        '  <meta http-equiv="refresh" content="5">\n' if auto_refresh else ""
-    )
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>Chatting Worker Activity</title>
-{refresh_meta_tag}  <style>
+  <style>
     :root {{
       color-scheme: light;
       --bg: #f4efe6;
@@ -439,43 +398,464 @@ def _render_html(
       --ink: #1f1d1a;
       --muted: #6b655d;
       --accent: #b85c38;
+      --accent-soft: #f4d8c9;
+      --shadow: 0 18px 45px rgba(56, 37, 18, 0.08);
     }}
     body {{ background: linear-gradient(180deg, #efe4d2 0%, var(--bg) 100%); color: var(--ink); font: 16px/1.4 Georgia, serif; margin: 0; }}
     main {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
     h1, h2 {{ font-family: "Iowan Old Style", Georgia, serif; margin: 0 0 12px; }}
-    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 8px 30px rgba(56, 37, 18, 0.08); padding: 18px; margin-bottom: 18px; }}
+    h3 {{ margin: 0 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}
+    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; margin-bottom: 18px; }}
+    .topbar {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }}
+    .controls {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
+    .button-link {{ appearance: none; border: 1px solid var(--border); background: transparent; color: var(--accent); border-radius: 999px; padding: 8px 12px; font: inherit; text-decoration: none; cursor: pointer; }}
+    .button-link:hover {{ background: var(--accent-soft); }}
     .note, .muted {{ color: var(--muted); }}
     a {{ color: var(--accent); }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ text-align: left; vertical-align: top; padding: 10px 8px; border-top: 1px solid var(--border); }}
-    th {{ border-top: none; }}
-    code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
-    .message {{ white-space: pre-wrap; word-break: break-word; max-width: 34ch; }}
+    code, pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
+    .layout {{ display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 18px; align-items: start; }}
+    .list-panel {{ padding: 0; overflow: hidden; }}
+    .list-header {{ padding: 18px 18px 0; }}
+    .activity-list {{ list-style: none; margin: 0; padding: 12px; display: grid; gap: 10px; max-height: 70vh; overflow: auto; }}
+    .activity-item {{ border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.65); padding: 0; }}
+    .activity-item button {{ width: 100%; text-align: left; background: transparent; border: none; padding: 14px; font: inherit; color: inherit; cursor: pointer; }}
+    .activity-item.selected {{ border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }}
+    .activity-kicker {{ display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }}
+    .activity-summary {{ font-size: 17px; margin: 6px 0; }}
+    .activity-message {{ color: var(--muted); white-space: pre-wrap; word-break: break-word; }}
+    .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-bottom: 16px; }}
+    .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
+    .detail-block dd {{ margin: 4px 0 0; }}
+    .detail-section {{ border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }}
+    .detail-section:first-of-type {{ border-top: none; margin-top: 0; padding-top: 0; }}
+    .detail-message {{ white-space: pre-wrap; word-break: break-word; font-size: 18px; line-height: 1.5; }}
+    .empty-state {{ padding: 28px 18px; color: var(--muted); }}
+    @media (max-width: 900px) {{
+      main {{ padding: 16px; }}
+      .layout {{ grid-template-columns: 1fr; }}
+      .activity-list {{ max-height: none; }}
+      .detail-grid {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
   <main>
     <div class="panel">
-      <h1>Worker Now</h1>
-      <p>{"<br>".join(state_lines)}</p>
-      <p class="muted">{html.escape(refresh_note)} <a href="{refresh_href}">{refresh_label}</a></p>
-      <p class="muted"><a href="/activity.json{"?include_internal=1" if include_internal else ""}">JSON</a> · <a href="{toggle_href}">{toggle_label}</a></p>
+      <div class="topbar">
+        <div>
+          <h1>Worker Now</h1>
+          <div id="current-executor">{current_state_markup}</div>
+          <p class="muted" id="refresh-note">{html.escape(refresh_note)}</p>
+        </div>
+        <div class="controls">
+          <button class="button-link" id="refresh-toggle" type="button">{html.escape(refresh_label)}</button>
+          <a class="button-link" href="/activity.json{"?include_internal=1" if include_internal else ""}">JSON</a>
+          <a class="button-link" href="{toggle_href}">{toggle_label}</a>
+          <a class="button-link" href="{refresh_href}">open current view</a>
+        </div>
+      </div>
     </div>
-    <div class="panel">
-      <h2>Recent Activity</h2>
-      {showing_note}
-      <table>
-        <thead>
-          <tr><th>When</th><th>Phase</th><th>Task</th><th>Summary</th><th>Message</th><th>Detail</th></tr>
-        </thead>
-        <tbody>
-          {"".join(rows)}
-        </tbody>
-      </table>
+    <div class="layout">
+      <section class="panel list-panel">
+        <div class="list-header">
+          <h2>Recent Activity</h2>
+          {showing_note}
+        </div>
+        <ul class="activity-list" id="activity-list">{initial_list_markup}</ul>
+      </section>
+      <section class="panel" id="detail-panel">{initial_detail_markup}</section>
     </div>
+    <script id="activity-snapshot" type="application/json">{activity_json}</script>
+    <script>
+      (() => {{
+        const snapshotElement = document.getElementById("activity-snapshot");
+        const listElement = document.getElementById("activity-list");
+        const detailElement = document.getElementById("detail-panel");
+        const currentExecutorElement = document.getElementById("current-executor");
+        const refreshToggleElement = document.getElementById("refresh-toggle");
+        const refreshNoteElement = document.getElementById("refresh-note");
+        const initialSnapshot = JSON.parse(snapshotElement.textContent);
+        const includeInternal = {str(include_internal).lower()};
+        let autoRefresh = {str(auto_refresh).lower()};
+        let selectedId = null;
+        let currentActivity = Array.isArray(initialSnapshot.recent_activity)
+          ? initialSnapshot.recent_activity
+          : [];
+        let timerId = null;
+
+        function eventId(item) {{
+          return [
+            item.occurred_at || "",
+            item.phase || "",
+            item.task_id || "",
+            item.envelope_id || "",
+            item.run_id || "",
+            item.summary || "",
+          ].join("|");
+        }}
+
+        function escapeHtml(value) {{
+          return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        }}
+
+        function messageText(item) {{
+          const detail = item && typeof item.detail === "object" ? item.detail : null;
+          if (!detail) {{
+            return null;
+          }}
+          for (const key of ["content", "body"]) {{
+            const value = detail[key];
+            if (typeof value === "string" && value.trim()) {{
+              return value.trim();
+            }}
+          }}
+          return null;
+        }}
+
+        function detailWithoutMessage(detail) {{
+          if (!detail || typeof detail !== "object") {{
+            return detail;
+          }}
+          return Object.fromEntries(
+            Object.entries(detail).filter(([key]) => key !== "content" && key !== "body")
+          );
+        }}
+
+        function friendlyTimestamp(value) {{
+          if (!value) {{
+            return "";
+          }}
+          const parsed = new Date(value);
+          if (Number.isNaN(parsed.getTime())) {{
+            return String(value);
+          }}
+          return new Intl.DateTimeFormat("en-GB", {{
+            weekday: "short",
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZone: "UTC",
+            timeZoneName: "short",
+          }}).format(parsed);
+        }}
+
+        function renderCurrentExecutor(currentExecutor) {{
+          const active = Boolean(currentExecutor && currentExecutor.active);
+          const entries = [
+            ["state", active ? "running" : "idle"],
+            ["phase", currentExecutor && currentExecutor.phase ? currentExecutor.phase : "idle"],
+            ["task_id", currentExecutor && currentExecutor.task_id],
+            ["envelope_id", currentExecutor && currentExecutor.envelope_id],
+            ["workflow", currentExecutor && currentExecutor.workflow],
+            ["attempt", currentExecutor && currentExecutor.attempt],
+            ["pid", currentExecutor && currentExecutor.pid],
+            [
+              "started_at",
+              currentExecutor && currentExecutor.started_at
+                ? friendlyTimestamp(currentExecutor.started_at)
+                : null,
+            ],
+          ].filter(([, value]) => value !== null && value !== undefined && value !== "");
+          currentExecutorElement.innerHTML = `<div class="detail-grid">${{entries
+            .map(
+              ([label, value]) =>
+                `<dl class="detail-block"><dt>${{escapeHtml(label)}}</dt><dd>${{escapeHtml(value)}}</dd></dl>`
+            )
+            .join("")}}</div>`;
+        }}
+
+        function renderList() {{
+          if (!currentActivity.length) {{
+            listElement.innerHTML = `<li class="empty-state">No recent worker activity.</li>`;
+            return;
+          }}
+          listElement.innerHTML = currentActivity
+            .map((item) => {{
+              const id = eventId(item);
+              const message = messageText(item);
+              const preview = message
+                ? escapeHtml(message)
+                : '<span class="muted">No message text</span>';
+              const selectedClass = id === selectedId ? " selected" : "";
+              return `
+                <li class="activity-item${{selectedClass}}" data-event-id="${{escapeHtml(id)}}">
+                  <button type="button">
+                    <div class="activity-kicker">
+                      <span title="${{escapeHtml(item.occurred_at || "")}}">${{escapeHtml(
+                        friendlyTimestamp(item.occurred_at)
+                      )}}</span>
+                      <span>${{escapeHtml(item.phase || "")}}</span>
+                    </div>
+                    <div class="activity-summary">${{escapeHtml(item.summary || "")}}</div>
+                    <div class="activity-message">${{preview}}</div>
+                  </button>
+                </li>`;
+            }})
+            .join("");
+        }}
+
+        function renderDetail() {{
+          const selectedItem =
+            currentActivity.find((item) => eventId(item) === selectedId) ||
+            currentActivity[0] ||
+            null;
+          if (selectedItem) {{
+            selectedId = eventId(selectedItem);
+          }}
+          if (!selectedItem) {{
+            detailElement.innerHTML =
+              `<div class="empty-state">Select an event to inspect it.</div>`;
+            return;
+          }}
+          const message = messageText(selectedItem);
+          const detailJson = JSON.stringify(
+            detailWithoutMessage(selectedItem.detail),
+            null,
+            2
+          );
+          const metaEntries = [
+            ["When", friendlyTimestamp(selectedItem.occurred_at)],
+            ["Phase", selectedItem.phase || ""],
+            ["Task", selectedItem.task_id || ""],
+            ["Envelope", selectedItem.envelope_id || ""],
+            ["Run", selectedItem.run_id || ""],
+            ["Source", selectedItem.source || ""],
+            ["Workflow", selectedItem.workflow || ""],
+          ].filter(([, value]) => value);
+          detailElement.innerHTML = `
+            <h2>Message Detail</h2>
+            <div class="detail-section">
+              <div class="detail-grid">
+                ${{metaEntries
+                  .map(
+                    ([label, value]) =>
+                      `<dl class="detail-block"><dt>${{escapeHtml(label)}}</dt><dd>${{escapeHtml(value)}}</dd></dl>`
+                  )
+                  .join("")}}
+              </div>
+            </div>
+            <div class="detail-section">
+              <h3>Summary</h3>
+              <p>${{escapeHtml(selectedItem.summary || "")}}</p>
+            </div>
+            <div class="detail-section">
+              <h3>Message</h3>
+              <div class="detail-message">${{
+                message
+                  ? escapeHtml(message)
+                  : '<span class="muted">No message text captured for this event.</span>'
+              }}</div>
+            </div>
+            <div class="detail-section">
+              <h3>Detail JSON</h3>
+              <pre><code>${{escapeHtml(detailJson)}}</code></pre>
+            </div>`;
+        }}
+
+        async function refreshData() {{
+          const response = await fetch(`/activity.json${{includeInternal ? "?include_internal=1" : ""}}`, {{
+            headers: {{ Accept: "application/json" }},
+            cache: "no-store",
+          }});
+          if (!response.ok) {{
+            throw new Error(`activity fetch failed: ${{response.status}}`);
+          }}
+          const snapshot = await response.json();
+          currentActivity = Array.isArray(snapshot.recent_activity)
+            ? snapshot.recent_activity
+            : [];
+          renderCurrentExecutor(snapshot.current_executor || {{}});
+          renderList();
+          renderDetail();
+        }}
+
+        function updateRefreshControls() {{
+          refreshToggleElement.textContent = autoRefresh ? "pause refresh" : "resume refresh";
+          refreshNoteElement.textContent = autoRefresh
+            ? "Auto-refresh every 5s in the background."
+            : "Auto-refresh paused.";
+        }}
+
+        function resetTimer() {{
+          if (timerId !== null) {{
+            window.clearInterval(timerId);
+            timerId = null;
+          }}
+          if (autoRefresh) {{
+            timerId = window.setInterval(() => {{
+              refreshData().catch((error) => {{
+                console.error(error);
+              }});
+            }}, 5000);
+          }}
+        }}
+
+        listElement.addEventListener("click", (event) => {{
+          const target =
+            event.target instanceof Element ? event.target.closest("[data-event-id]") : null;
+          if (!target) {{
+            return;
+          }}
+          const id = target.getAttribute("data-event-id");
+          if (!id) {{
+            return;
+          }}
+          selectedId = id;
+          renderList();
+          renderDetail();
+        }});
+
+        refreshToggleElement.addEventListener("click", () => {{
+          autoRefresh = !autoRefresh;
+          updateRefreshControls();
+          resetTimer();
+        }});
+
+        renderCurrentExecutor(initialSnapshot.current_executor || {{}});
+        if (currentActivity.length) {{
+          selectedId = eventId(currentActivity[0]);
+        }}
+        renderList();
+        renderDetail();
+        updateRefreshControls();
+        resetTimer();
+      }})();
+    </script>
   </main>
 </body>
 </html>"""
+
+
+def _render_current_executor(current_executor: dict[str, object]) -> str:
+    active = bool(current_executor.get("active"))
+    entries = [
+        ("state", "running" if active else "idle"),
+        ("phase", str(current_executor.get("phase", "idle"))),
+    ]
+    for key in ("task_id", "envelope_id", "workflow", "attempt", "pid", "started_at"):
+        value = current_executor.get(key)
+        if value is not None:
+            if key.endswith("_at"):
+                value = _friendly_timestamp(value)
+            entries.append((key, str(value)))
+    blocks = []
+    for label, value in entries:
+        blocks.append(
+            "<dl class='detail-block'>"
+            f"<dt>{html.escape(label)}</dt>"
+            f"<dd>{html.escape(value)}</dd>"
+            "</dl>"
+        )
+    return f"<div class='detail-grid'>{''.join(blocks)}</div>"
+
+
+def _render_activity_list(activity: list[object]) -> str:
+    items = []
+    for item in activity:
+        assert isinstance(item, dict)
+        event_id = _event_id(item)
+        occurred_at = str(item.get("occurred_at", ""))
+        message = _message_text(item)
+        preview = (
+            html.escape(message)
+            if message is not None
+            else "<span class='muted'>No message text</span>"
+        )
+        items.append(
+            "<li class='activity-item' "
+            f"data-event-id='{html.escape(event_id)}'>"
+            "<button type='button'>"
+            "<div class='activity-kicker'>"
+            f"<span title='{html.escape(occurred_at)}'>{html.escape(_friendly_timestamp(occurred_at))}</span>"
+            f"<span>{html.escape(str(item.get('phase', '')))}</span>"
+            "</div>"
+            f"<div class='activity-summary'>{html.escape(str(item.get('summary', '')))}</div>"
+            f"<div class='activity-message'>{preview}</div>"
+            "</button>"
+            "</li>"
+        )
+    if not items:
+        return "<li class='empty-state'>No recent worker activity.</li>"
+    items[0] = items[0].replace(
+        "class='activity-item'", "class='activity-item selected'", 1
+    )
+    return "".join(items)
+
+
+def _render_detail_panel(item: object) -> str:
+    if not isinstance(item, dict):
+        return "<div class='empty-state'>No recent worker activity.</div>"
+    detail = item.get("detail")
+    message = _message_text(item)
+    detail_json = html.escape(
+        json.dumps(_detail_without_message(detail), indent=2, sort_keys=True)
+    )
+    entries = [
+        ("When", _friendly_timestamp(item.get("occurred_at"))),
+        ("Phase", str(item.get("phase", ""))),
+        ("Task", str(item.get("task_id", ""))),
+        ("Envelope", str(item.get("envelope_id", ""))),
+        ("Run", str(item.get("run_id", ""))),
+        ("Source", str(item.get("source", ""))),
+        ("Workflow", str(item.get("workflow", ""))),
+    ]
+    blocks = []
+    for label, value in entries:
+        if not value:
+            continue
+        blocks.append(
+            "<dl class='detail-block'>"
+            f"<dt>{html.escape(label)}</dt>"
+            f"<dd>{html.escape(value)}</dd>"
+            "</dl>"
+        )
+    message_markup = (
+        html.escape(message)
+        if message is not None
+        else "<span class='muted'>No message text captured for this event.</span>"
+    )
+    return (
+        "<h2>Message Detail</h2>"
+        "<div class='detail-section'>"
+        f"<div class='detail-grid'>{''.join(blocks)}</div>"
+        "</div>"
+        "<div class='detail-section'>"
+        "<h3>Summary</h3>"
+        f"<p>{html.escape(str(item.get('summary', '')))}</p>"
+        "</div>"
+        "<div class='detail-section'>"
+        "<h3>Message</h3>"
+        f"<div class='detail-message'>{message_markup}</div>"
+        "</div>"
+        "<div class='detail-section'>"
+        "<h3>Detail JSON</h3>"
+        f"<pre><code>{detail_json}</code></pre>"
+        "</div>"
+    )
+
+
+def _event_id(item: dict[str, object]) -> str:
+    parts = [
+        str(item.get("occurred_at", "")),
+        str(item.get("phase", "")),
+        str(item.get("task_id", "")),
+        str(item.get("envelope_id", "")),
+        str(item.get("run_id", "")),
+        str(item.get("summary", "")),
+    ]
+    return "|".join(parts)
+
+
+def _json_script_value(value: object) -> str:
+    return json.dumps(value, sort_keys=True).replace("</", "<\\/")
 
 
 def _bool_query_flag(query: str, name: str) -> bool:

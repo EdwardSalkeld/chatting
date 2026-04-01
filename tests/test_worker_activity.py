@@ -138,13 +138,16 @@ class WorkerActivityTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
                     html_body = response.read().decode("utf-8")
                 self.assertIn("Worker Now", html_body)
+                self.assertIn("Recent Activity", html_body)
+                self.assertIn("Message Detail", html_body)
                 self.assertIn("task_received", html_body)
                 self.assertIn("hello", html_body)
                 self.assertIn("warning line", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:00:00 UTC", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
                 self.assertIn("pause refresh", html_body)
-                self.assertIn('http-equiv="refresh"', html_body)
+                self.assertIn("fetch(`/activity.json", html_body)
+                self.assertNotIn('http-equiv="refresh"', html_body)
 
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/?refresh_off=1"
