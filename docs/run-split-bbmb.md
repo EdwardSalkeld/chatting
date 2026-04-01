@@ -1,15 +1,17 @@
 # Running Split Mode With BBMB
 
-`chatting` runs as three services:
+`chatting` runs as three services by default, or four when auxiliary webhook ingress is enabled:
 - `message-handler` on the integration host (connectors + outbound dispatch)
 - `worker` on the execution host (routing + executor + policy)
 - `bbmb-server` in the middle (message bus)
+- optional `auxiliary-ingress` on a web-facing host (secret-path JSON POST listener)
 
 GitHub assignment polling is part of `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
 Queues are hardcoded:
+- `chatting.auxiliary-ingress.v1`
 - `chatting.tasks.v1`
 - `chatting.egress.v1`
 
@@ -26,6 +28,7 @@ For a worked message example and the full message-handler <-> worker conversatio
 - Host A (integration host): `uv run python -m app.main_message_handler`
 - Host B (execution host): `uv run python -m app.main_worker`
 - Host C (or A/B): `bbmb-server` on `:9876`
+- Host D optional (web-facing host): `uv run python -m app.main_auxiliary_ingress`
 
 All hosts must have network reachability to the BBMB TCP endpoint.
 
@@ -53,6 +56,11 @@ export CHATTING_MESSAGE_HANDLER_CONFIG_PATH=/tmp/message-handler.json
 uv run python -m app.main_message_handler
 ```
 
+Optional auxiliary ingress connector settings in message-handler config:
+- `auxiliary_ingress_enabled`
+- `auxiliary_ingress_queue`
+- `auxiliary_ingress_context_refs`
+
 ## 3) Configure worker
 
 ```bash
@@ -75,6 +83,17 @@ Optional env-based config path:
 export CHATTING_WORKER_CONFIG_PATH=/tmp/worker.json
 uv run python -m app.main_worker
 ```
+
+## 3.5) Optional auxiliary webhook ingress
+
+```bash
+uv run python -m app.main_auxiliary_ingress \
+  --bbmb-address 127.0.0.1:9876 \
+  --generic-post-path /very-secret-path
+```
+
+This service accepts JSON `POST` requests on the exact configured path and publishes only the
+parsed JSON body into `chatting.auxiliary-ingress.v1`.
 
 ## 4) Security boundary expectations
 

@@ -3,14 +3,21 @@ from datetime import datetime, timezone
 from email.message import EmailMessage as ParsedEmailMessage
 from tempfile import TemporaryDirectory
 
-from app.handler.connectors.github_issue_assignment_connector import GitHubIssueAssignmentConnector
-from app.handler.connectors.github_pull_request_review_connector import GitHubPullRequestReviewConnector
+from app.handler.connectors.github_issue_assignment_connector import (
+    GitHubIssueAssignmentConnector,
+)
+from app.handler.connectors.github_pull_request_review_connector import (
+    GitHubPullRequestReviewConnector,
+)
 from app.handler.connectors.imap_email_connector import ImapEmailConnector
-from app.handler.connectors.internal_heartbeat_connector import InternalHeartbeatConnector
+from app.handler.connectors.internal_heartbeat_connector import (
+    InternalHeartbeatConnector,
+)
 from app.handler.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
 )
+from app.handler.connectors.auxiliary_ingress_connector import AuxiliaryIngressConnector
 from app.handler.connectors.telegram_connector import (
     TelegramFileMetadata,
     TelegramConnector,
@@ -20,7 +27,14 @@ from app.handler.connectors.slack_connector import SlackConnector
 from app.handler.connectors.webhook_connector import WebhookConnector, WebhookEvent
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.models import PromptContext
-from tests.fixtures import CronTrigger, EmailMessage, FakeCronConnector, FakeEmailConnector
+from tests.fixtures import (
+    CronTrigger,
+    EmailMessage,
+    FakeCronConnector,
+    FakeEmailConnector,
+)
+
+
 class FakeCronConnectorTests(unittest.TestCase):
     def test_poll_normalizes_cron_trigger_to_envelope(self) -> None:
         connector = FakeCronConnector(
@@ -42,7 +56,9 @@ class FakeCronConnectorTests(unittest.TestCase):
         self.assertEqual(envelope.actor, None)
         self.assertEqual(envelope.reply_channel.type, "log")
         self.assertEqual(envelope.reply_channel.target, "daily-summary")
-        self.assertEqual(envelope.dedupe_key, "cron:daily-summary:2026-02-27T09:00:00+00:00")
+        self.assertEqual(
+            envelope.dedupe_key, "cron:daily-summary:2026-02-27T09:00:00+00:00"
+        )
         self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
 
     def test_poll_rejects_naive_scheduled_time(self) -> None:
@@ -59,6 +75,8 @@ class FakeCronConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
+
+
 class FakeEmailConnectorTests(unittest.TestCase):
     def test_poll_normalizes_email_to_envelope(self) -> None:
         connector = FakeEmailConnector(
@@ -104,6 +122,8 @@ class FakeEmailConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
+
+
 class IntervalScheduleConnectorTests(unittest.TestCase):
     def test_poll_emits_due_job_and_respects_interval(self) -> None:
         clock = _MutableClock(datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc))
@@ -427,6 +447,8 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
                 timezone_name="Europe/London",
                 context_refs=[],
             )
+
+
 class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
     def test_poll_normalizes_new_assignment_events_to_envelopes(self) -> None:
         responses = [
@@ -498,7 +520,9 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
             },
         ]
 
-        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+        def _graphql_runner(
+            query: str, variables: dict[str, object]
+        ) -> dict[str, object]:
             del query
             self.assertEqual(variables["repoOwner"], "brokensbone")
             self.assertEqual(variables["repoName"], "chatting")
@@ -534,7 +558,9 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
     def test_poll_continues_when_one_repository_fetch_fails(self) -> None:
         calls: list[tuple[str, str]] = []
 
-        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+        def _graphql_runner(
+            query: str, variables: dict[str, object]
+        ) -> dict[str, object]:
             del query
             calls.append((str(variables["repoOwner"]), str(variables["repoName"])))
             if variables["repoName"] == "chatting":
@@ -598,6 +624,8 @@ class GitHubIssueAssignmentConnectorTests(unittest.TestCase):
                 for line in logs.output
             )
         )
+
+
 class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
     def test_poll_normalizes_new_review_events_to_envelopes(self) -> None:
         responses = [
@@ -679,7 +707,9 @@ class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
             },
         ]
 
-        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+        def _graphql_runner(
+            query: str, variables: dict[str, object]
+        ) -> dict[str, object]:
             del query
             self.assertEqual(variables["repoOwner"], "brokensbone")
             self.assertEqual(variables["repoName"], "chatting")
@@ -707,7 +737,9 @@ class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
         )
         self.assertEqual(envelope.context_refs, ["repo:/home/edward/chatting"])
         self.assertEqual(envelope.dedupe_key, "github-review:R_1:PR_1:PRR_1")
-        self.assertIn("Linked issues: #60 Add ingress from GitHub reviews", envelope.content)
+        self.assertIn(
+            "Linked issues: #60 Add ingress from GitHub reviews", envelope.content
+        )
         self.assertEqual(second_poll, [])
         self.assertEqual(connector.last_poll_scanned_events, 1)
         self.assertEqual(connector.last_poll_new_events, 0)
@@ -716,7 +748,9 @@ class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
     def test_poll_continues_when_one_repository_fetch_fails(self) -> None:
         calls: list[tuple[str, str]] = []
 
-        def _graphql_runner(query: str, variables: dict[str, object]) -> dict[str, object]:
+        def _graphql_runner(
+            query: str, variables: dict[str, object]
+        ) -> dict[str, object]:
             del query
             calls.append((str(variables["repoOwner"]), str(variables["repoName"])))
             if variables["repoName"] == "chatting":
@@ -781,6 +815,8 @@ class GitHubPullRequestReviewConnectorTests(unittest.TestCase):
                 for line in logs.output
             )
         )
+
+
 class InternalHeartbeatConnectorTests(unittest.TestCase):
     def test_poll_emits_internal_heartbeat_with_unique_ids(self) -> None:
         current = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)
@@ -798,6 +834,8 @@ class InternalHeartbeatConnectorTests(unittest.TestCase):
         self.assertNotEqual(first[0].id, second[0].id)
         self.assertEqual(first[0].dedupe_key, first[0].id)
         self.assertEqual(second[0].dedupe_key, second[0].id)
+
+
 class ImapEmailConnectorTests(unittest.TestCase):
     def test_poll_normalizes_imap_messages_to_envelopes(self) -> None:
         raw_message = _build_raw_email(
@@ -884,6 +922,8 @@ class ImapEmailConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].received_at, fallback_now)
+
+
 class TelegramConnectorTests(unittest.TestCase):
     def test_poll_normalizes_supported_updates_and_advances_offset(self) -> None:
         responses = [
@@ -974,7 +1014,9 @@ class TelegramConnectorTests(unittest.TestCase):
             ],
         )
 
-    def test_poll_respects_allowed_chat_ids_and_skips_unsupported_payloads(self) -> None:
+    def test_poll_respects_allowed_chat_ids_and_skips_unsupported_payloads(
+        self,
+    ) -> None:
         connector = TelegramConnector(
             bot_token="token",
             allowed_chat_ids=["12345"],
@@ -1027,7 +1069,9 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].id, "telegram:2001")
 
-    def test_poll_accepts_channel_post_when_channel_id_is_explicitly_allowed(self) -> None:
+    def test_poll_accepts_channel_post_when_channel_id_is_explicitly_allowed(
+        self,
+    ) -> None:
         connector = TelegramConnector(
             bot_token="token",
             allowed_channel_ids=["-100123"],
@@ -1089,7 +1133,9 @@ class TelegramConnectorTests(unittest.TestCase):
             ),
         )
 
-        with self.assertLogs("app.handler.connectors.telegram_connector", level="INFO") as logs:
+        with self.assertLogs(
+            "app.handler.connectors.telegram_connector", level="INFO"
+        ) as logs:
             envelopes = connector.poll()
 
         self.assertEqual(envelopes, [])
@@ -1149,10 +1195,12 @@ class TelegramConnectorTests(unittest.TestCase):
                     ],
                 ),
                 resolve_file_metadata=lambda url, _timeout: (
-                    self.assertIn("file_id=large", url) or TelegramFileMetadata(file_path="photos/leaf.jpg")
+                    self.assertIn("file_id=large", url)
+                    or TelegramFileMetadata(file_path="photos/leaf.jpg")
                 ),
                 download_file_bytes=lambda url, _timeout: (
-                    self.assertIn("/file/bottoken/photos/leaf.jpg", url) or b"jpeg-bytes"
+                    self.assertIn("/file/bottoken/photos/leaf.jpg", url)
+                    or b"jpeg-bytes"
                 ),
             )
 
@@ -1179,12 +1227,16 @@ class TelegramConnectorTests(unittest.TestCase):
                                 "message_id": 11,
                                 "date": 1772272800,
                                 "chat": {"id": 12345},
-                                "photo": [{"file_id": "only", "width": 800, "height": 600}],
+                                "photo": [
+                                    {"file_id": "only", "width": 800, "height": 600}
+                                ],
                             },
                         }
                     ],
                 ),
-                resolve_file_metadata=lambda _url, _timeout: TelegramFileMetadata(file_path="photos/photo.jpg"),
+                resolve_file_metadata=lambda _url, _timeout: TelegramFileMetadata(
+                    file_path="photos/photo.jpg"
+                ),
                 download_file_bytes=lambda _url, _timeout: b"jpeg-bytes",
             )
 
@@ -1285,6 +1337,8 @@ class TelegramConnectorTests(unittest.TestCase):
                 "map_url": "https://maps.google.com/?q=51.507351,-0.127758",
             },
         )
+
+
 class SlackConnectorTests(unittest.TestCase):
     def test_poll_normalizes_messages_to_im_envelopes(self) -> None:
         connector = SlackConnector(
@@ -1326,6 +1380,8 @@ class SlackConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].id, "slack:m-3")
+
+
 class WebhookConnectorTests(unittest.TestCase):
     def test_poll_drains_enqueued_webhook_events(self) -> None:
         connector = WebhookConnector()
@@ -1366,6 +1422,60 @@ class WebhookConnectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             connector.poll()
+
+
+class AuxiliaryIngressConnectorTests(unittest.TestCase):
+    def test_poll_drains_queue_and_renders_body_only_content(self) -> None:
+        class _FakeBroker:
+            def __init__(self) -> None:
+                self.messages = [
+                    (
+                        "guid-1",
+                        {
+                            "schema_version": "1.0",
+                            "message_type": "chatting.auxiliary_ingress.v1",
+                            "event_id": "aux:1",
+                            "received_at": "2026-04-01T12:00:00Z",
+                            "body": {"hello": "world", "nested": [1, 2]},
+                        },
+                    )
+                ]
+                self.acked: list[tuple[str, str]] = []
+
+            def pickup_json(
+                self, queue_name: str, timeout_seconds: int, wait_seconds: int
+            ):
+                del timeout_seconds, wait_seconds
+                if queue_name != "chatting.auxiliary-ingress.v1" or not self.messages:
+                    return None
+                guid, payload = self.messages.pop(0)
+                return type("Picked", (), {"guid": guid, "payload": payload})()
+
+            def ack(self, queue_name: str, guid: str) -> None:
+                self.acked.append((queue_name, guid))
+
+        broker = _FakeBroker()
+        connector = AuxiliaryIngressConnector(
+            broker=broker,  # type: ignore[arg-type]
+            context_refs=["repo:/workspace/chatting"],
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(len(envelopes), 1)
+        envelope = envelopes[0]
+        self.assertEqual(envelope.source, "webhook")
+        self.assertEqual(envelope.reply_channel.type, "webhook")
+        self.assertEqual(envelope.reply_channel.target, "generic_post")
+        self.assertEqual(envelope.context_refs, ["repo:/workspace/chatting"])
+        self.assertEqual(
+            envelope.content,
+            '{\n  "hello": "world",\n  "nested": [\n    1,\n    2\n  ]\n}',
+        )
+        connector.ack_envelope(envelope.id)
+        self.assertEqual(broker.acked, [("chatting.auxiliary-ingress.v1", "guid-1")])
+
+
 class _MutableClock:
     def __init__(self, current: datetime) -> None:
         self._current = current
@@ -1375,6 +1485,8 @@ class _MutableClock:
 
     def set(self, value: datetime) -> None:
         self._current = value
+
+
 class _FakeImapClient:
     def __init__(self, raw_messages_by_uid: dict[bytes, bytes]) -> None:
         self._raw_messages_by_uid = raw_messages_by_uid
@@ -1395,6 +1507,8 @@ class _FakeImapClient:
 
     def logout(self):
         return "BYE", [b"logged-out"]
+
+
 def _build_raw_email(*, sender: str, subject: str, body: str, date_value: str) -> bytes:
     parsed = ParsedEmailMessage()
     parsed["From"] = sender
@@ -1403,5 +1517,7 @@ def _build_raw_email(*, sender: str, subject: str, body: str, date_value: str) -
     parsed["Date"] = date_value
     parsed.set_content(body)
     return parsed.as_bytes()
+
+
 if __name__ == "__main__":
     unittest.main()

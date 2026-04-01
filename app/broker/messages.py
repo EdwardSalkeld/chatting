@@ -19,6 +19,7 @@ SourceType = Literal["cron", "email", "im", "webhook", "internal"]
 
 _TASK_MESSAGE_TYPE = "chatting.task.v1"
 _EGRESS_MESSAGE_TYPE_V2 = "chatting.egress.v2"
+_AUXILIARY_INGRESS_MESSAGE_TYPE = "chatting.auxiliary_ingress.v1"
 
 
 def _require_non_empty_string(value: object, *, field_name: str) -> str:
@@ -100,6 +101,22 @@ def _parse_prompt_context_list(value: object, *, field_name: str) -> list[str]:
         raise ValueError(f"{field_name} must be a list")
     return [_require_non_empty_string(item, field_name=field_name) for item in value]
 
+
+def _parse_json_value(value: object, *, field_name: str) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_parse_json_value(item, field_name=field_name) for item in value]
+    if isinstance(value, dict):
+        parsed: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"{field_name} object keys must be non-empty strings")
+            parsed[key] = _parse_json_value(item, field_name=field_name)
+        return parsed
+    raise ValueError(f"{field_name} must be valid JSON data")
+
+
 @dataclass(frozen=True)
 class TaskQueueMessage:
     """Message published by ingress and consumed by worker."""
@@ -135,7 +152,9 @@ class TaskQueueMessage:
     def from_dict(cls, payload: dict[str, Any]) -> "TaskQueueMessage":
         if not isinstance(payload, dict):
             raise ValueError("task_message_payload_must_be_object")
-        message_type = _require_non_empty_string(payload.get("message_type"), field_name="message_type")
+        message_type = _require_non_empty_string(
+            payload.get("message_type"), field_name="message_type"
+        )
         if message_type != _TASK_MESSAGE_TYPE:
             raise ValueError("task_message_type_invalid")
 
@@ -161,17 +180,30 @@ class TaskQueueMessage:
                 raise ValueError("envelope.attachments[] must be an object")
             attachments.append(
                 AttachmentRef(
-                    uri=_require_non_empty_string(item.get("uri"), field_name="envelope.attachments[].uri"),
+                    uri=_require_non_empty_string(
+                        item.get("uri"), field_name="envelope.attachments[].uri"
+                    ),
                     name=item.get("name"),
                 )
             )
 
         envelope = TaskEnvelope(
-            id=_require_non_empty_string(envelope_payload.get("id"), field_name="envelope.id"),
-            source=cast(SourceType, _require_non_empty_string(envelope_payload.get("source"), field_name="envelope.source")),
-            received_at=_parse_utc_datetime(envelope_payload.get("received_at"), field_name="envelope.received_at"),
+            id=_require_non_empty_string(
+                envelope_payload.get("id"), field_name="envelope.id"
+            ),
+            source=cast(
+                SourceType,
+                _require_non_empty_string(
+                    envelope_payload.get("source"), field_name="envelope.source"
+                ),
+            ),
+            received_at=_parse_utc_datetime(
+                envelope_payload.get("received_at"), field_name="envelope.received_at"
+            ),
             actor=envelope_payload.get("actor"),
-            content=_require_non_empty_string(envelope_payload.get("content"), field_name="envelope.content"),
+            content=_require_non_empty_string(
+                envelope_payload.get("content"), field_name="envelope.content"
+            ),
             attachments=attachments,
             context_refs=[
                 _require_non_empty_string(item, field_name="envelope.context_refs[]")
@@ -195,7 +227,9 @@ class TaskQueueMessage:
                 envelope_payload.get("dedupe_key"),
                 field_name="envelope.dedupe_key",
             ),
-            prompt_context=_parse_prompt_context_payload(envelope_payload.get("prompt_context")),
+            prompt_context=_parse_prompt_context_payload(
+                envelope_payload.get("prompt_context")
+            ),
             schema_version=_require_non_empty_string(
                 envelope_payload.get("schema_version", SCHEMA_VERSION),
                 field_name="envelope.schema_version",
@@ -204,9 +238,15 @@ class TaskQueueMessage:
 
         return cls(
             envelope=envelope,
-            trace_id=_require_non_empty_string(payload.get("trace_id"), field_name="trace_id"),
-            task_id=_require_non_empty_string(payload.get("task_id"), field_name="task_id"),
-            emitted_at=_parse_utc_datetime(payload.get("emitted_at"), field_name="emitted_at"),
+            trace_id=_require_non_empty_string(
+                payload.get("trace_id"), field_name="trace_id"
+            ),
+            task_id=_require_non_empty_string(
+                payload.get("task_id"), field_name="task_id"
+            ),
+            emitted_at=_parse_utc_datetime(
+                payload.get("emitted_at"), field_name="emitted_at"
+            ),
             schema_version=_require_non_empty_string(
                 payload.get("schema_version", SCHEMA_VERSION),
                 field_name="schema_version",
@@ -214,7 +254,9 @@ class TaskQueueMessage:
         )
 
     @classmethod
-    def from_envelope(cls, envelope: TaskEnvelope, *, trace_id: str) -> "TaskQueueMessage":
+    def from_envelope(
+        cls, envelope: TaskEnvelope, *, trace_id: str
+    ) -> "TaskQueueMessage":
         return cls(
             envelope=envelope,
             trace_id=trace_id,
@@ -256,7 +298,9 @@ class EgressQueueMessage:
             raise ValueError("event_kind must be message, completion, or incremental")
         if self.sequence is None:
             if self.event_kind != "incremental":
-                raise ValueError("sequence is required for message and completion events")
+                raise ValueError(
+                    "sequence is required for message and completion events"
+                )
             object.__setattr__(self, "event_index", 0)
             return
         _parse_sequence(self.sequence)
@@ -282,7 +326,9 @@ class EgressQueueMessage:
     def from_dict(cls, payload: dict[str, Any]) -> "EgressQueueMessage":
         if not isinstance(payload, dict):
             raise ValueError("egress_message_payload_must_be_object")
-        message_type = _require_non_empty_string(payload.get("message_type"), field_name="message_type")
+        message_type = _require_non_empty_string(
+            payload.get("message_type"), field_name="message_type"
+        )
         if message_type != _EGRESS_MESSAGE_TYPE_V2:
             raise ValueError("egress_message_type_invalid")
 
@@ -290,30 +336,48 @@ class EgressQueueMessage:
         if not isinstance(message_payload, dict):
             raise ValueError("message must be an object")
 
-        event_id = _require_non_empty_string(payload.get("event_id"), field_name="event_id")
+        event_id = _require_non_empty_string(
+            payload.get("event_id"), field_name="event_id"
+        )
         raw_sequence = payload.get("sequence")
         sequence: int | None = None
         if raw_sequence is not None:
             sequence = _parse_sequence(raw_sequence)
-        event_kind = _require_non_empty_string(payload.get("event_kind"), field_name="event_kind")
+        event_kind = _require_non_empty_string(
+            payload.get("event_kind"), field_name="event_kind"
+        )
 
         return cls(
-            task_id=_require_non_empty_string(payload.get("task_id"), field_name="task_id"),
-            envelope_id=_require_non_empty_string(payload.get("envelope_id"), field_name="envelope_id"),
-            trace_id=_require_non_empty_string(payload.get("trace_id"), field_name="trace_id"),
+            task_id=_require_non_empty_string(
+                payload.get("task_id"), field_name="task_id"
+            ),
+            envelope_id=_require_non_empty_string(
+                payload.get("envelope_id"), field_name="envelope_id"
+            ),
+            trace_id=_require_non_empty_string(
+                payload.get("trace_id"), field_name="trace_id"
+            ),
             event_index=sequence if sequence is not None else 0,
             event_count=1,
             message=OutboundMessage(
-                channel=_require_non_empty_string(message_payload.get("channel"), field_name="message.channel"),
-                target=_require_non_empty_string(message_payload.get("target"), field_name="message.target"),
-                body=_optional_non_empty_string(message_payload.get("body"), field_name="message.body"),
+                channel=_require_non_empty_string(
+                    message_payload.get("channel"), field_name="message.channel"
+                ),
+                target=_require_non_empty_string(
+                    message_payload.get("target"), field_name="message.target"
+                ),
+                body=_optional_non_empty_string(
+                    message_payload.get("body"), field_name="message.body"
+                ),
                 attachment=_parse_message_attachment(message_payload.get("attachment")),
                 metadata=_parse_optional_dict(
                     message_payload.get("metadata"),
                     field_name="message.metadata",
                 ),
             ),
-            emitted_at=_parse_utc_datetime(payload.get("emitted_at"), field_name="emitted_at"),
+            emitted_at=_parse_utc_datetime(
+                payload.get("emitted_at"), field_name="emitted_at"
+            ),
             event_id=event_id,
             sequence=sequence,
             event_kind=event_kind,
@@ -331,12 +395,70 @@ def _parse_message_attachment(value: object) -> AttachmentRef | None:
     if not isinstance(value, dict):
         raise ValueError("message.attachment must be an object")
     return AttachmentRef(
-        uri=_require_non_empty_string(value.get("uri"), field_name="message.attachment.uri"),
-        name=_optional_non_empty_string(value.get("name"), field_name="message.attachment.name"),
+        uri=_require_non_empty_string(
+            value.get("uri"), field_name="message.attachment.uri"
+        ),
+        name=_optional_non_empty_string(
+            value.get("name"), field_name="message.attachment.name"
+        ),
     )
 
 
+@dataclass(frozen=True)
+class AuxiliaryIngressQueueMessage:
+    """Raw JSON body received by the auxiliary ingress service."""
+
+    event_id: str
+    received_at: datetime
+    body: Any
+    schema_version: str = SCHEMA_VERSION
+    message_type: str = _AUXILIARY_INGRESS_MESSAGE_TYPE
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError(f"unsupported_schema_version:{self.schema_version}")
+        if self.message_type != _AUXILIARY_INGRESS_MESSAGE_TYPE:
+            raise ValueError("message_type must be chatting.auxiliary_ingress.v1")
+        _require_non_empty_string(self.event_id, field_name="event_id")
+        if self.received_at.tzinfo is None:
+            raise ValueError("received_at must be timezone-aware")
+        _parse_json_value(self.body, field_name="body")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "message_type": self.message_type,
+            "event_id": self.event_id,
+            "received_at": _serialize_utc_datetime(self.received_at),
+            "body": self.body,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AuxiliaryIngressQueueMessage":
+        if not isinstance(payload, dict):
+            raise ValueError("auxiliary_ingress_payload_must_be_object")
+        message_type = _require_non_empty_string(
+            payload.get("message_type"), field_name="message_type"
+        )
+        if message_type != _AUXILIARY_INGRESS_MESSAGE_TYPE:
+            raise ValueError("auxiliary_ingress_message_type_invalid")
+        return cls(
+            event_id=_require_non_empty_string(
+                payload.get("event_id"), field_name="event_id"
+            ),
+            received_at=_parse_utc_datetime(
+                payload.get("received_at"), field_name="received_at"
+            ),
+            body=_parse_json_value(payload.get("body"), field_name="body"),
+            schema_version=_require_non_empty_string(
+                payload.get("schema_version", SCHEMA_VERSION),
+                field_name="schema_version",
+            ),
+        )
+
+
 __all__ = [
+    "AuxiliaryIngressQueueMessage",
     "TaskQueueMessage",
     "EgressQueueMessage",
 ]

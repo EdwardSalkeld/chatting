@@ -25,6 +25,7 @@ from app.handler.applier import (
     TelegramMessageSender,
 )
 from app.broker import (
+    AUXILIARY_INGRESS_QUEUE_NAME,
     BBMBQueueAdapter,
     EGRESS_QUEUE_NAME,
     EgressQueueMessage,
@@ -32,6 +33,7 @@ from app.broker import (
     TaskQueueMessage,
 )
 from app.handler.connectors import (
+    AuxiliaryIngressConnector,
     Connector,
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
@@ -46,7 +48,10 @@ from app.handler.github_ingress import (
     default_graphql_runner,
     fetch_authenticated_viewer_login,
 )
-from app.internal_heartbeat import INTERNAL_HEARTBEAT_TARGET, is_internal_heartbeat_envelope
+from app.internal_heartbeat import (
+    INTERNAL_HEARTBEAT_TARGET,
+    is_internal_heartbeat_envelope,
+)
 from app.handler.runtime import (
     TaskLedgerRecord,
     TaskLedgerStore,
@@ -75,6 +80,9 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "metrics_host",
         "metrics_port",
         "allowed_egress_channels",
+        "auxiliary_ingress_enabled",
+        "auxiliary_ingress_queue",
+        "auxiliary_ingress_context_refs",
         "prompt_context",
         "schedule_file",
         "imap_host",
@@ -238,9 +246,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--db-path", help="Path to message-handler SQLite DB.")
     parser.add_argument("--bbmb-address", help="BBMB address host:port.")
-    parser.add_argument("--max-loops", type=_positive_int, help="Optional loop limit for smoke runs.")
-    parser.add_argument("--poll-interval-seconds", type=_positive_float, help="Loop interval.")
-    parser.add_argument("--poll-timeout-seconds", type=_positive_int, help="Egress pickup timeout seconds.")
+    parser.add_argument(
+        "--max-loops", type=_positive_int, help="Optional loop limit for smoke runs."
+    )
+    parser.add_argument(
+        "--poll-interval-seconds", type=_positive_float, help="Loop interval."
+    )
+    parser.add_argument(
+        "--poll-timeout-seconds",
+        type=_positive_int,
+        help="Egress pickup timeout seconds.",
+    )
     parser.add_argument("--metrics-host", help="Metrics bind host.")
     parser.add_argument("--metrics-port", type=_positive_int, help="Metrics bind port.")
     parser.add_argument(
@@ -248,6 +264,20 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Allowed egress channel (repeatable).",
+    )
+    parser.add_argument(
+        "--auxiliary-ingress-enabled",
+        action="store_true",
+        help="Enable auxiliary BBMB-backed JSON ingress.",
+    )
+    parser.add_argument(
+        "--auxiliary-ingress-queue", help="BBMB queue for auxiliary ingress payloads."
+    )
+    parser.add_argument(
+        "--auxiliary-ingress-context-ref",
+        action="append",
+        default=[],
+        help="Context ref to attach to auxiliary ingress tasks (repeatable).",
     )
     parser.add_argument("--schedule-file", help="Schedule jobs JSON file.")
     parser.add_argument("--imap-host", help="IMAP host for polling.")
@@ -261,12 +291,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--smtp-username", help="SMTP username.")
     parser.add_argument("--smtp-password-env", help="SMTP password env var name.")
     parser.add_argument("--smtp-from", help="SMTP from address.")
-    parser.add_argument("--smtp-starttls", action="store_true", help="Use SMTP STARTTLS.")
-    parser.add_argument("--error-email-to", help="Email recipient for handler dispatch failures.")
-    parser.add_argument("--telegram-enabled", action="store_true", help="Enable Telegram connector+sender.")
+    parser.add_argument(
+        "--smtp-starttls", action="store_true", help="Use SMTP STARTTLS."
+    )
+    parser.add_argument(
+        "--error-email-to", help="Email recipient for handler dispatch failures."
+    )
+    parser.add_argument(
+        "--telegram-enabled",
+        action="store_true",
+        help="Enable Telegram connector+sender.",
+    )
     parser.add_argument("--telegram-bot-token-env", help="Telegram token env var name.")
     parser.add_argument("--telegram-api-base-url", help="Telegram API base URL.")
-    parser.add_argument("--telegram-poll-timeout-seconds", type=_positive_int, help="Telegram poll timeout.")
+    parser.add_argument(
+        "--telegram-poll-timeout-seconds",
+        type=_positive_int,
+        help="Telegram poll timeout.",
+    )
     parser.add_argument(
         "--telegram-attachment-dir",
         help="Local directory for downloaded Telegram photo attachments.",
@@ -315,8 +357,13 @@ def _parse_args() -> argparse.Namespace:
         "--github-assignee-login",
         help="GitHub login to filter assigned issues and authored pull request reviews for.",
     )
-    parser.add_argument("--github-reply-channel-type", help="Reply channel type for generated tasks.")
-    parser.add_argument("--github-reply-channel-target", help="Reply channel target for generated tasks.")
+    parser.add_argument(
+        "--github-reply-channel-type", help="Reply channel type for generated tasks."
+    )
+    parser.add_argument(
+        "--github-reply-channel-target",
+        help="Reply channel target for generated tasks.",
+    )
     parser.add_argument(
         "--github-context-ref",
         action="append",
@@ -336,14 +383,18 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_config(config_path: str | None, environ: Mapping[str, str] | None = None) -> dict[str, object]:
+def _load_config(
+    config_path: str | None, environ: Mapping[str, str] | None = None
+) -> dict[str, object]:
     env = os.environ if environ is None else environ
     path = config_path
     if path is None:
         raw = env.get(MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR)
         if raw is not None:
             if not raw.strip():
-                raise ValueError(f"{MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR} must not be empty")
+                raise ValueError(
+                    f"{MESSAGE_HANDLER_CONFIG_PATH_ENV_VAR} must not be empty"
+                )
             path = raw
 
     if not path:
@@ -357,7 +408,9 @@ def _load_config(config_path: str | None, environ: Mapping[str, str] | None = No
     return payload
 
 
-def _resolve_error_email_recipient(args: argparse.Namespace, config: dict[str, object]) -> str | None:
+def _resolve_error_email_recipient(
+    args: argparse.Namespace, config: dict[str, object]
+) -> str | None:
     if args.error_email_to is not None:
         stripped = args.error_email_to.strip()
         return stripped or None
@@ -466,7 +519,13 @@ def _send_egress_dispatch_error_email(
         )
 
 
-def _resolve_str(cli_value: str | None, config_value: object, *, default_value: str, setting_name: str) -> str:
+def _resolve_str(
+    cli_value: str | None,
+    config_value: object,
+    *,
+    default_value: str,
+    setting_name: str,
+) -> str:
     if cli_value is not None:
         if not cli_value.strip():
             raise ValueError(f"{setting_name} must not be empty")
@@ -497,12 +556,22 @@ def _resolve_optional_str(
     return config_value
 
 
-def _resolve_positive_int(cli_value: int | None, config_value: object, *, default_value: int, setting_name: str) -> int:
+def _resolve_positive_int(
+    cli_value: int | None,
+    config_value: object,
+    *,
+    default_value: int,
+    setting_name: str,
+) -> int:
     if cli_value is not None:
         return cli_value
     if config_value is None:
         return default_value
-    if not isinstance(config_value, int) or isinstance(config_value, bool) or config_value <= 0:
+    if (
+        not isinstance(config_value, int)
+        or isinstance(config_value, bool)
+        or config_value <= 0
+    ):
         raise ValueError(f"config {setting_name} must be a positive integer")
     return config_value
 
@@ -541,11 +610,15 @@ def _resolve_bool(
     return config_value
 
 
-def _resolve_allowed_egress_channels(args: argparse.Namespace, config: dict[str, object]) -> set[str]:
+def _resolve_allowed_egress_channels(
+    args: argparse.Namespace, config: dict[str, object]
+) -> set[str]:
     config_values: list[str] = []
     raw_config_values = config.get("allowed_egress_channels")
     if raw_config_values is not None:
-        if not isinstance(raw_config_values, list) or not all(isinstance(item, str) for item in raw_config_values):
+        if not isinstance(raw_config_values, list) or not all(
+            isinstance(item, str) for item in raw_config_values
+        ):
             raise ValueError("config allowed_egress_channels must be a list of strings")
         config_values = list(raw_config_values)
 
@@ -557,7 +630,9 @@ def _resolve_allowed_egress_channels(args: argparse.Namespace, config: dict[str,
     return set(merged)
 
 
-def _resolve_required_str(cli_value: str | None, config_value: object, *, setting_name: str) -> str:
+def _resolve_required_str(
+    cli_value: str | None, config_value: object, *, setting_name: str
+) -> str:
     resolved = _resolve_str(
         cli_value,
         config_value,
@@ -565,11 +640,15 @@ def _resolve_required_str(cli_value: str | None, config_value: object, *, settin
         setting_name=setting_name,
     ).strip()
     if not resolved:
-        raise ValueError(f"{setting_name} is required when github_repositories is configured")
+        raise ValueError(
+            f"{setting_name} is required when github_repositories is configured"
+        )
     return resolved
 
 
-def _resolve_context_refs(args_values: list[str], config: dict[str, object]) -> list[str]:
+def _resolve_context_refs(
+    args_values: list[str], config: dict[str, object]
+) -> list[str]:
     raw_config_values = config.get("context_ref")
     if raw_config_values is None:
         raw_config_values = config.get("context_refs")
@@ -578,9 +657,13 @@ def _resolve_context_refs(args_values: list[str], config: dict[str, object]) -> 
         config_values: list[str] = []
     else:
         if not isinstance(raw_config_values, list):
-            raise ValueError("config context_ref/context_refs must be a list of strings")
+            raise ValueError(
+                "config context_ref/context_refs must be a list of strings"
+            )
         if not all(isinstance(item, str) for item in raw_config_values):
-            raise ValueError("config context_ref/context_refs must be a list of strings")
+            raise ValueError(
+                "config context_ref/context_refs must be a list of strings"
+            )
         config_values = list(raw_config_values)
 
     merged_values = [*config_values, *args_values]
@@ -589,7 +672,33 @@ def _resolve_context_refs(args_values: list[str], config: dict[str, object]) -> 
     return merged_values
 
 
-def _resolve_prompt_context_values(config: dict[str, object], *, setting_name: str) -> list[str]:
+def _resolve_auxiliary_ingress_context_refs(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> list[str]:
+    raw_config_values = config.get("auxiliary_ingress_context_refs")
+    if raw_config_values is None:
+        config_values = _resolve_context_refs(args.context_ref, config)
+    else:
+        if not isinstance(raw_config_values, list):
+            raise ValueError(
+                "config auxiliary_ingress_context_refs must be a list of strings"
+            )
+        if not all(isinstance(item, str) for item in raw_config_values):
+            raise ValueError(
+                "config auxiliary_ingress_context_refs must be a list of strings"
+            )
+        config_values = list(raw_config_values)
+
+    merged_values = [*config_values, *args.auxiliary_ingress_context_ref]
+    if any(not value.strip() for value in merged_values):
+        raise ValueError("auxiliary_ingress_context_ref entries must not be empty")
+    return [value.strip() for value in merged_values]
+
+
+def _resolve_prompt_context_values(
+    config: dict[str, object], *, setting_name: str
+) -> list[str]:
     raw_values = config.get(setting_name, [])
     if raw_values is None:
         return []
@@ -602,12 +711,18 @@ def _resolve_prompt_context_values(config: dict[str, object], *, setting_name: s
     return [item.strip() for item in raw_values]
 
 
-def _resolve_github_repositories(args: argparse.Namespace, config: dict[str, object]) -> list[str]:
+def _resolve_github_repositories(
+    args: argparse.Namespace, config: dict[str, object]
+) -> list[str]:
     repositories: list[str] = []
     config_values = config.get("github_repositories")
     if config_values is not None:
-        if not isinstance(config_values, list) or not all(isinstance(item, str) for item in config_values):
-            raise ValueError("config github_repositories must be a list of owner/repo strings")
+        if not isinstance(config_values, list) or not all(
+            isinstance(item, str) for item in config_values
+        ):
+            raise ValueError(
+                "config github_repositories must be a list of owner/repo strings"
+            )
         repositories.extend(config_values)
     repositories.extend(args.github_repository)
 
@@ -618,10 +733,14 @@ def _resolve_github_repositories(args: argparse.Namespace, config: dict[str, obj
             raise ValueError("github_repositories entries must not be empty")
         parts = repository.strip().split("/", maxsplit=1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
-            raise ValueError("github_repositories entries must be owner/repo or owner/*")
+            raise ValueError(
+                "github_repositories entries must be owner/repo or owner/*"
+            )
         owner, name = parts
         if name != "*" and "*" in name:
-            raise ValueError("github_repositories entries must be owner/repo or owner/*")
+            raise ValueError(
+                "github_repositories entries must be owner/repo or owner/*"
+            )
         normalized = f"{owner}/{name}"
         if normalized in seen:
             continue
@@ -630,11 +749,15 @@ def _resolve_github_repositories(args: argparse.Namespace, config: dict[str, obj
     return deduped
 
 
-def _resolve_github_context_refs(args: argparse.Namespace, config: dict[str, object]) -> list[str]:
+def _resolve_github_context_refs(
+    args: argparse.Namespace, config: dict[str, object]
+) -> list[str]:
     context_refs: list[str] = []
     config_values = config.get("github_context_refs")
     if config_values is not None:
-        if not isinstance(config_values, list) or not all(isinstance(item, str) for item in config_values):
+        if not isinstance(config_values, list) or not all(
+            isinstance(item, str) for item in config_values
+        ):
             raise ValueError("config github_context_refs must be a list of strings")
         context_refs.extend(config_values)
     context_refs.extend(args.github_context_ref)
@@ -653,9 +776,13 @@ def _resolve_telegram_allowed_chat_ids(
         config_values = []
     else:
         if not isinstance(raw_config_values, list):
-            raise ValueError("config telegram_allowed_chat_ids must be a list of strings")
+            raise ValueError(
+                "config telegram_allowed_chat_ids must be a list of strings"
+            )
         if not all(isinstance(item, str) for item in raw_config_values):
-            raise ValueError("config telegram_allowed_chat_ids must be a list of strings")
+            raise ValueError(
+                "config telegram_allowed_chat_ids must be a list of strings"
+            )
         config_values = list(raw_config_values)
 
     merged_values = [*config_values, *args.telegram_allowed_chat_id]
@@ -676,9 +803,13 @@ def _resolve_telegram_allowed_channel_ids(
         config_values = []
     else:
         if not isinstance(raw_config_values, list):
-            raise ValueError("config telegram_allowed_channel_ids must be a list of strings")
+            raise ValueError(
+                "config telegram_allowed_channel_ids must be a list of strings"
+            )
         if not all(isinstance(item, str) for item in raw_config_values):
-            raise ValueError("config telegram_allowed_channel_ids must be a list of strings")
+            raise ValueError(
+                "config telegram_allowed_channel_ids must be a list of strings"
+            )
         config_values = list(raw_config_values)
 
     merged_values = [*config_values, *args.telegram_allowed_channel_id]
@@ -717,7 +848,9 @@ def _resolve_telegram_attachment_dir(
     return _resolve_str(
         getattr(args, "telegram_attachment_dir", None),
         config.get("telegram_attachment_dir"),
-        default_value=str(Path(tempfile.gettempdir()) / "chatting-telegram-attachments"),
+        default_value=str(
+            Path(tempfile.gettempdir()) / "chatting-telegram-attachments"
+        ),
         setting_name="telegram_attachment_dir",
     )
 
@@ -781,7 +914,10 @@ def _resolve_telegram_attachment_cleanup_settings(
         or args.telegram_attachment_max_age_seconds is not None
         or any(key in config for key in cleanup_keys)
     )
-    if not _is_connector_configured(args, config, connector="telegram") and not explicit_cleanup_configured:
+    if (
+        not _is_connector_configured(args, config, connector="telegram")
+        and not explicit_cleanup_configured
+    ):
         return None
 
     cleanup_grace_seconds = _resolve_positive_int(
@@ -808,7 +944,16 @@ def _resolve_telegram_attachment_cleanup_settings(
     )
 
 
-def _is_connector_configured(args: argparse.Namespace, config: dict[str, object], *, connector: str) -> bool:
+def _is_connector_configured(
+    args: argparse.Namespace, config: dict[str, object], *, connector: str
+) -> bool:
+    if connector == "auxiliary_ingress":
+        if args.auxiliary_ingress_enabled:
+            return True
+        if "auxiliary_ingress_enabled" not in config:
+            return False
+        configured_value = config.get("auxiliary_ingress_enabled")
+        return configured_value is not None and configured_value is not False
     if connector == "schedule":
         return args.schedule_file is not None or config.get("schedule_file") is not None
     if connector == "imap":
@@ -821,13 +966,20 @@ def _is_connector_configured(args: argparse.Namespace, config: dict[str, object]
         configured_value = config.get("telegram_enabled")
         return configured_value is not None and configured_value is not False
     if connector == "github":
-        return bool(args.github_repository) or config.get("github_repositories") is not None
+        return (
+            bool(args.github_repository)
+            or config.get("github_repositories") is not None
+        )
     raise ValueError(f"unsupported connector: {connector}")
 
 
-def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) -> list[Connector]:
+def _build_live_connectors(
+    args: argparse.Namespace, config: dict[str, object]
+) -> list[Connector]:
     connectors: list[Connector] = []
-    global_prompt_context = _resolve_prompt_context_values(config, setting_name="prompt_context")
+    global_prompt_context = _resolve_prompt_context_values(
+        config, setting_name="prompt_context"
+    )
     email_prompt_context = _resolve_prompt_context_values(
         config,
         setting_name="email_prompt_context",
@@ -836,7 +988,40 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
         config,
         setting_name="telegram_prompt_context",
     )
-    cron_prompt_context = _resolve_prompt_context_values(config, setting_name="cron_prompt_context")
+    cron_prompt_context = _resolve_prompt_context_values(
+        config, setting_name="cron_prompt_context"
+    )
+
+    auxiliary_ingress_enabled = _resolve_bool(
+        getattr(args, "auxiliary_ingress_enabled", None),
+        config.get("auxiliary_ingress_enabled"),
+        default_value=False,
+        setting_name="auxiliary_ingress_enabled",
+    )
+    if auxiliary_ingress_enabled:
+        auxiliary_queue_name = _resolve_str(
+            getattr(args, "auxiliary_ingress_queue", None),
+            config.get("auxiliary_ingress_queue"),
+            default_value=AUXILIARY_INGRESS_QUEUE_NAME,
+            setting_name="auxiliary_ingress_queue",
+        )
+        auxiliary_broker = BBMBQueueAdapter(
+            address=_resolve_str(
+                args.bbmb_address,
+                config.get("bbmb_address"),
+                default_value="127.0.0.1:9876",
+                setting_name="bbmb_address",
+            )
+        )
+        auxiliary_broker.ensure_queue(auxiliary_queue_name)
+        connectors.append(
+            AuxiliaryIngressConnector(
+                broker=auxiliary_broker,
+                queue_name=auxiliary_queue_name,
+                context_refs=_resolve_auxiliary_ingress_context_refs(args, config),
+                prompt_context=PromptContext(global_instructions=global_prompt_context),
+            )
+        )
 
     schedule_file = _resolve_optional_str(
         args.schedule_file,
@@ -926,7 +1111,9 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
         )
         bot_token = os.environ.get(telegram_bot_token_env, "")
         if not bot_token:
-            raise ValueError(f"missing Telegram bot token env var: {telegram_bot_token_env}")
+            raise ValueError(
+                f"missing Telegram bot token env var: {telegram_bot_token_env}"
+            )
         connectors.append(
             TelegramConnector(
                 bot_token=bot_token,
@@ -954,13 +1141,13 @@ def _build_live_connectors(args: argparse.Namespace, config: dict[str, object]) 
         )
 
     if not connectors:
-        raise ValueError(
-            "live mode requires at least one connector (--schedule-file and/or --imap-host)"
-        )
+        raise ValueError("live mode requires at least one configured ingress connector")
     return connectors
 
 
-def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> SmtpEmailSender | None:
+def _build_email_sender(
+    args: argparse.Namespace, config: dict[str, object]
+) -> SmtpEmailSender | None:
     smtp_host = _resolve_optional_str(
         args.smtp_host,
         config.get("smtp_host"),
@@ -983,7 +1170,9 @@ def _build_email_sender(args: argparse.Namespace, config: dict[str, object]) -> 
         or smtp_username
     )
     if not from_address:
-        raise ValueError("--smtp-from or --smtp-username is required when --smtp-host is set")
+        raise ValueError(
+            "--smtp-from or --smtp-username is required when --smtp-host is set"
+        )
 
     password = None
     if smtp_username:
@@ -1048,7 +1237,9 @@ def _build_telegram_sender(
     )
     bot_token = os.environ.get(telegram_bot_token_env, "")
     if not bot_token:
-        raise ValueError(f"missing Telegram bot token env var: {telegram_bot_token_env}")
+        raise ValueError(
+            f"missing Telegram bot token env var: {telegram_bot_token_env}"
+        )
 
     return TelegramMessageSender(
         bot_token=bot_token,
@@ -1084,14 +1275,20 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
 
         job_name = raw_job["job_name"]
         if not isinstance(job_name, str) or not job_name.strip():
-            raise ValueError(f"schedule job at index {index} job_name must be a non-empty string")
+            raise ValueError(
+                f"schedule job at index {index} job_name must be a non-empty string"
+            )
         content = raw_job["content"]
         if not isinstance(content, str) or not content.strip():
-            raise ValueError(f"schedule job at index {index} content must be a non-empty string")
+            raise ValueError(
+                f"schedule job at index {index} content must be a non-empty string"
+            )
 
         cron = raw_job.get("cron")
         if cron is not None and (not isinstance(cron, str) or not cron.strip()):
-            raise ValueError(f"schedule job at index {index} cron must be a non-empty string")
+            raise ValueError(
+                f"schedule job at index {index} cron must be a non-empty string"
+            )
 
         raw_interval = raw_job.get("interval_seconds")
         interval_seconds: int | None = None
@@ -1116,7 +1313,9 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                     f"schedule job at index {index} timezone must be a non-empty string"
                 )
         elif timezone_name is not None:
-            raise ValueError(f"schedule job at index {index} timezone is only valid with cron")
+            raise ValueError(
+                f"schedule job at index {index} timezone is only valid with cron"
+            )
 
         if interval_seconds is None and cron is None:
             raise ValueError(
@@ -1142,8 +1341,14 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
         raw_start_at = raw_job.get("start_at")
         if cron is None:
             if raw_start_at is not None and not isinstance(raw_start_at, str):
-                raise ValueError(f"schedule job at index {index} start_at must be an RFC3339 string")
-            start_at = _parse_optional_rfc3339(raw_start_at) if raw_start_at is not None else None
+                raise ValueError(
+                    f"schedule job at index {index} start_at must be an RFC3339 string"
+                )
+            start_at = (
+                _parse_optional_rfc3339(raw_start_at)
+                if raw_start_at is not None
+                else None
+            )
         else:
             start_at = None
 
@@ -1156,7 +1361,8 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             )
         reply_channel_target = raw_job.get("reply_channel_target")
         if reply_channel_target is not None and (
-            not isinstance(reply_channel_target, str) or not reply_channel_target.strip()
+            not isinstance(reply_channel_target, str)
+            or not reply_channel_target.strip()
         ):
             raise ValueError(
                 f"schedule job at index {index} reply_channel_target must be a non-empty string"
@@ -1173,9 +1379,13 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 content=content.strip(),
                 context_refs=list(raw_context_refs),
                 prompt_context=list(raw_prompt_context),
-                interval_seconds=interval_seconds if isinstance(interval_seconds, int) else None,
+                interval_seconds=interval_seconds
+                if isinstance(interval_seconds, int)
+                else None,
                 cron=cron.strip() if isinstance(cron, str) else None,
-                timezone_name=timezone_name.strip() if isinstance(timezone_name, str) else None,
+                timezone_name=timezone_name.strip()
+                if isinstance(timezone_name, str)
+                else None,
                 start_at=start_at,
                 reply_channel_type=reply_channel_type.strip()
                 if isinstance(reply_channel_type, str)
@@ -1260,12 +1470,28 @@ def _build_live_connectors_fail_open(
                 "context_refs",
             ),
         ),
+        "auxiliary_ingress": (
+            (
+                "auxiliary_ingress_enabled",
+                "auxiliary_ingress_queue",
+                "auxiliary_ingress_context_ref",
+                "context_ref",
+            ),
+            (
+                "auxiliary_ingress_enabled",
+                "auxiliary_ingress_queue",
+                "auxiliary_ingress_context_refs",
+                "prompt_context",
+                "context_ref",
+                "context_refs",
+                "bbmb_address",
+            ),
+        ),
         "github": (
             (
                 "github_repository",
                 "github_assignee_login",
                 "github_context_ref",
-
                 "github_max_issues",
                 "github_max_timeline_events",
             ),
@@ -1273,7 +1499,6 @@ def _build_live_connectors_fail_open(
                 "github_repositories",
                 "github_assignee_login",
                 "github_context_refs",
-
                 "github_max_issues",
                 "github_max_timeline_events",
             ),
@@ -1290,6 +1515,9 @@ def _build_live_connectors_fail_open(
             "imap_password_env": None,
             "imap_mailbox": None,
             "imap_search": None,
+            "auxiliary_ingress_enabled": False,
+            "auxiliary_ingress_queue": None,
+            "auxiliary_ingress_context_ref": [],
             "telegram_enabled": False,
             "telegram_bot_token_env": None,
             "telegram_api_base_url": None,
@@ -1302,13 +1530,18 @@ def _build_live_connectors_fail_open(
             "github_repository": [],
             "github_assignee_login": None,
             "github_context_ref": [],
-
             "github_max_issues": None,
             "github_max_timeline_events": None,
         }
     )
 
-    for connector_name in ("schedule", "imap", "telegram", "github"):
+    for connector_name in (
+        "schedule",
+        "imap",
+        "telegram",
+        "auxiliary_ingress",
+        "github",
+    ):
         if not _is_connector_configured(args, config, connector=connector_name):
             continue
         selected_arg_keys, selected_config_keys = connector_args[connector_name]
@@ -1320,7 +1553,9 @@ def _build_live_connectors_fail_open(
             else:
                 scoped_args_payload[key] = value
         scoped_args = argparse.Namespace(**scoped_args_payload)
-        scoped_config = {key: config[key] for key in selected_config_keys if key in config}
+        scoped_config = {
+            key: config[key] for key in selected_config_keys if key in config
+        }
         try:
             if connector_name == "github":
                 settings = _resolve_github_ingress_settings(scoped_args, scoped_config)
@@ -1351,7 +1586,9 @@ def _build_live_connectors_fail_open(
                 continue
             connectors.extend(_build_live_connectors(scoped_args, scoped_config))
         except Exception as error:  # noqa: BLE001
-            LOGGER.exception("ingress_connector_startup_failed connector=%s", connector_name)
+            LOGGER.exception(
+                "ingress_connector_startup_failed connector=%s", connector_name
+            )
             disabled_components.append(
                 DisabledIngressComponent(
                     component=connector_name,
@@ -1361,7 +1598,9 @@ def _build_live_connectors_fail_open(
     return connectors, disabled_components
 
 
-def _build_policy_decision_for_message(egress_message: EgressQueueMessage) -> PolicyDecision:
+def _build_policy_decision_for_message(
+    egress_message: EgressQueueMessage,
+) -> PolicyDecision:
     return PolicyDecision(
         approved_actions=[],
         blocked_actions=[],
@@ -1462,7 +1701,9 @@ def _handle_egress_message(
         _ack_and_mark_outbox(egress_message.event_id)
         return
 
-    internal_heartbeat = is_internal_heartbeat_envelope(ledger_record.task_message.envelope)
+    internal_heartbeat = is_internal_heartbeat_envelope(
+        ledger_record.task_message.envelope
+    )
     heartbeat_log_message = (
         internal_heartbeat
         and egress_message.message.channel == "log"
@@ -1496,7 +1737,9 @@ def _handle_egress_message(
         _ack_and_mark_outbox()
         return
 
-    if store.has_dispatched_event_id(task_id=egress_message.task_id, event_id=egress_message.event_id):
+    if store.has_dispatched_event_id(
+        task_id=egress_message.task_id, event_id=egress_message.event_id
+    ):
         if telemetry is not None:
             telemetry.record_deduped()
         LOGGER.info(
@@ -1629,7 +1872,11 @@ def _dispatch_unsequenced_egress(
             event_id=egress_message.event_id,
         )
     dispatch_latency_ms = int(
-        (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
+        (
+            datetime.now(timezone.utc)
+            - egress_message.emitted_at.astimezone(timezone.utc)
+        ).total_seconds()
+        * 1000
     )
     if telemetry is not None:
         telemetry.record_dispatched(
@@ -1640,7 +1887,10 @@ def _dispatch_unsequenced_egress(
         for message in apply_result.dispatched_messages:
             if message.channel != "telegram":
                 continue
-            if message.target != ledger_record.task_message.envelope.reply_channel.target:
+            if (
+                message.target
+                != ledger_record.task_message.envelope.reply_channel.target
+            ):
                 continue
             if message.body is None:
                 continue
@@ -1674,9 +1924,13 @@ def _apply_completion_event(
         store.mark_dispatched_event_id(
             task_id=egress_message.task_id,
             event_id=egress_message.event_id,
-    )
+        )
     dispatch_latency_ms = int(
-        (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
+        (
+            datetime.now(timezone.utc)
+            - egress_message.emitted_at.astimezone(timezone.utc)
+        ).total_seconds()
+        * 1000
     )
     if telemetry is not None:
         telemetry.record_dispatched(
@@ -1762,7 +2016,9 @@ def _flush_task_egress_in_sequence(
 
     while True:
         expected_sequence = ledger.expected_sequence(task_id)
-        staged = ledger.get_staged_event_by_sequence(task_id=task_id, sequence=expected_sequence)
+        staged = ledger.get_staged_event_by_sequence(
+            task_id=task_id, sequence=expected_sequence
+        )
         if staged is None:
             return
 
@@ -1843,14 +2099,21 @@ def _flush_task_egress_in_sequence(
             sequence=staged.sequence,
         )
         dispatch_latency_ms = int(
-            (datetime.now(timezone.utc) - egress_message.emitted_at.astimezone(timezone.utc)).total_seconds() * 1000
+            (
+                datetime.now(timezone.utc)
+                - egress_message.emitted_at.astimezone(timezone.utc)
+            ).total_seconds()
+            * 1000
         )
         if telemetry is not None:
             telemetry.record_dispatched(
                 event_kind=egress_message.event_kind,
                 latency_ms=max(dispatch_latency_ms, 0),
             )
-        if is_internal_heartbeat_envelope(ledger_record.task_message.envelope) and heartbeat_telemetry is not None:
+        if (
+            is_internal_heartbeat_envelope(ledger_record.task_message.envelope)
+            and heartbeat_telemetry is not None
+        ):
             heartbeat_received_at = datetime.now(timezone.utc)
             heartbeat_telemetry.record_received(
                 sent_at=ledger_record.task_message.emitted_at,
@@ -1867,7 +2130,10 @@ def _flush_task_egress_in_sequence(
             for message in apply_result.dispatched_messages:
                 if message.channel != "telegram":
                     continue
-                if message.target != ledger_record.task_message.envelope.reply_channel.target:
+                if (
+                    message.target
+                    != ledger_record.task_message.envelope.reply_channel.target
+                ):
                     continue
                 store.append_conversation_turn(
                     channel="telegram",
@@ -1931,12 +2197,18 @@ def _run_ingress_loop(
                     state_by_connector=poll_failure_log_state_by_connector,
                 )
                 continue
-            if isinstance(connector, (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector)):
+            if isinstance(
+                connector,
+                (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector),
+            ):
                 github_scanned_events += connector.last_poll_scanned_events
                 github_new_events += connector.last_poll_new_events
                 github_checkpoint = connector.last_poll_checkpoint_id
             for envelope in envelopes:
-                if store.seen(envelope.source, envelope.dedupe_key):
+                already_seen = store.seen(envelope.source, envelope.dedupe_key)
+                if already_seen:
+                    if isinstance(connector, AuxiliaryIngressConnector):
+                        connector.ack_envelope(envelope.id)
                     continue
                 task_id = f"task:{envelope.id}"
                 task_envelope = _prepare_ingress_envelope(
@@ -1950,7 +2222,10 @@ def _run_ingress_loop(
                 )
                 broker.publish_json(TASK_QUEUE_NAME, task_message.to_dict())
                 ledger.record_task(task_message)
-                if attachment_store is not None and attachment_cleanup_settings is not None:
+                if (
+                    attachment_store is not None
+                    and attachment_cleanup_settings is not None
+                ):
                     tracked_attachments = attachment_store.record_task_attachments(
                         task_message=task_message,
                         attachment_root_dir=attachment_cleanup_settings.attachment_root_dir,
@@ -1962,10 +2237,15 @@ def _run_ingress_loop(
                             tracked_attachments,
                         )
                 store.mark_seen(envelope.source, envelope.dedupe_key)
+                if isinstance(connector, AuxiliaryIngressConnector):
+                    connector.ack_envelope(envelope.id)
                 if is_internal_heartbeat_envelope(task_message.envelope):
                     heartbeat_telemetry.record_sent(sent_at=task_message.emitted_at)
                 ingress_published += 1
-                if isinstance(connector, (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector)):
+                if isinstance(
+                    connector,
+                    (GitHubIssueAssignmentConnector, GitHubPullRequestReviewConnector),
+                ):
                     github_published += 1
         if attachment_store is not None and attachment_cleanup_settings is not None:
             attachment_cleanup_result = cleanup_telegram_attachments(
@@ -1974,7 +2254,9 @@ def _run_ingress_loop(
                 completion_grace_period=timedelta(
                     seconds=attachment_cleanup_settings.cleanup_grace_seconds
                 ),
-                max_attachment_age=timedelta(seconds=attachment_cleanup_settings.max_age_seconds),
+                max_attachment_age=timedelta(
+                    seconds=attachment_cleanup_settings.max_age_seconds
+                ),
             )
             if (
                 attachment_cleanup_result.deleted_count
@@ -2019,10 +2301,18 @@ def _run_ingress_loop(
             github_new_events,
             github_published,
             github_checkpoint,
-            attachment_cleanup_result.deleted_count if attachment_cleanup_result is not None else 0,
-            attachment_cleanup_result.missing_count if attachment_cleanup_result is not None else 0,
-            attachment_cleanup_result.failed_count if attachment_cleanup_result is not None else 0,
-            attachment_cleanup_result.reclaimed_bytes if attachment_cleanup_result is not None else 0,
+            attachment_cleanup_result.deleted_count
+            if attachment_cleanup_result is not None
+            else 0,
+            attachment_cleanup_result.missing_count
+            if attachment_cleanup_result is not None
+            else 0,
+            attachment_cleanup_result.failed_count
+            if attachment_cleanup_result is not None
+            else 0,
+            attachment_cleanup_result.reclaimed_bytes
+            if attachment_cleanup_result is not None
+            else 0,
             heartbeat_snapshot["sent_total"],
             heartbeat_snapshot["received_total"],
             heartbeat_snapshot["latest_sent_at"],
@@ -2095,7 +2385,9 @@ def main() -> int:
     db_path = _resolve_str(
         args.db_path,
         config.get("db_path"),
-        default_value=str(Path(tempfile.gettempdir()) / "chatting-message-handler-state.db"),
+        default_value=str(
+            Path(tempfile.gettempdir()) / "chatting-message-handler-state.db"
+        ),
         setting_name="db_path",
     )
     bbmb_address = _resolve_str(
@@ -2135,11 +2427,17 @@ def main() -> int:
         setting_name="metrics_port",
     )
     allowed_egress_channels = _resolve_allowed_egress_channels(args, config)
-    attachment_cleanup_settings = _resolve_telegram_attachment_cleanup_settings(args, config)
+    attachment_cleanup_settings = _resolve_telegram_attachment_cleanup_settings(
+        args, config
+    )
 
     store = SQLiteStateStore(db_path)
     ledger = TaskLedgerStore(db_path)
-    attachment_store = TelegramAttachmentStore(db_path) if attachment_cleanup_settings is not None else None
+    attachment_store = (
+        TelegramAttachmentStore(db_path)
+        if attachment_cleanup_settings is not None
+        else None
+    )
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)
     broker.ensure_queue(EGRESS_QUEUE_NAME)
