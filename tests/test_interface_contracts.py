@@ -133,6 +133,7 @@ class InterfaceContractTests(unittest.TestCase):
         self.assertIsInstance(
             AuxiliaryIngressConnector(
                 broker=_AuxiliaryIngressBroker(),  # type: ignore[arg-type]
+                queue_name="chatting.ingress.github.generic-post.v1",
             ),
             Connector,
         )
