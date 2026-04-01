@@ -6,7 +6,6 @@ import json
 from typing import Any
 
 from app.broker import (
-    AUXILIARY_INGRESS_QUEUE_NAME,
     AuxiliaryIngressQueueMessage,
     BBMBQueueAdapter,
 )
@@ -22,7 +21,7 @@ class AuxiliaryIngressConnector:
         self,
         *,
         broker: BBMBQueueAdapter,
-        queue_name: str = AUXILIARY_INGRESS_QUEUE_NAME,
+        queue_name: str,
         reply_target: str = "generic_post",
         context_refs: list[str] | None = None,
         prompt_context: PromptContext | None = None,

@@ -83,7 +83,6 @@ class MainGitHubIngressTests(unittest.TestCase):
                 argparse.Namespace(
                     bbmb_address=None,
                     auxiliary_ingress_enabled=False,
-                    auxiliary_ingress_queue=None,
                     auxiliary_ingress_route=[],
                     auxiliary_ingress_context_ref=[],
                     schedule_file=None,

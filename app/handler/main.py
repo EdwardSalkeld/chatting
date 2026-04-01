@@ -25,7 +25,6 @@ from app.handler.applier import (
     TelegramMessageSender,
 )
 from app.broker import (
-    AUXILIARY_INGRESS_QUEUE_NAME,
     BBMBQueueAdapter,
     EGRESS_QUEUE_NAME,
     EgressQueueMessage,
@@ -81,7 +80,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "metrics_port",
         "allowed_egress_channels",
         "auxiliary_ingress_enabled",
-        "auxiliary_ingress_queue",
         "auxiliary_ingress_routes",
         "auxiliary_ingress_context_refs",
         "prompt_context",
@@ -270,9 +268,6 @@ def _parse_args() -> argparse.Namespace:
         "--auxiliary-ingress-enabled",
         action="store_true",
         help="Enable auxiliary BBMB-backed JSON ingress.",
-    )
-    parser.add_argument(
-        "--auxiliary-ingress-queue", help="BBMB queue for auxiliary ingress payloads."
     )
     parser.add_argument(
         "--auxiliary-ingress-route",
@@ -748,16 +743,10 @@ def _resolve_auxiliary_ingress_queue_names(
         )
     )
 
-    legacy_queue_name = _resolve_optional_str(
-        getattr(args, "auxiliary_ingress_queue", None),
-        config.get("auxiliary_ingress_queue"),
-        setting_name="auxiliary_ingress_queue",
-    )
-    if legacy_queue_name is not None:
-        queue_names.append(legacy_queue_name)
-
     if not queue_names:
-        return [AUXILIARY_INGRESS_QUEUE_NAME]
+        raise ValueError(
+            "auxiliary ingress requires auxiliary_ingress_routes or --auxiliary-ingress-route"
+        )
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -1547,14 +1536,12 @@ def _build_live_connectors_fail_open(
         "auxiliary_ingress": (
             (
                 "auxiliary_ingress_enabled",
-                "auxiliary_ingress_queue",
                 "auxiliary_ingress_route",
                 "auxiliary_ingress_context_ref",
                 "context_ref",
             ),
             (
                 "auxiliary_ingress_enabled",
-                "auxiliary_ingress_queue",
                 "auxiliary_ingress_routes",
                 "auxiliary_ingress_context_refs",
                 "prompt_context",
@@ -1592,7 +1579,6 @@ def _build_live_connectors_fail_open(
             "imap_mailbox": None,
             "imap_search": None,
             "auxiliary_ingress_enabled": False,
-            "auxiliary_ingress_queue": None,
             "auxiliary_ingress_route": [],
             "auxiliary_ingress_context_ref": [],
             "telegram_enabled": False,

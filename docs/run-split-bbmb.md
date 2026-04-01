@@ -58,7 +58,6 @@ uv run python -m app.main_message_handler
 
 Optional auxiliary ingress connector settings in message-handler config:
 - `auxiliary_ingress_enabled`
-- `auxiliary_ingress_queue`
 - `auxiliary_ingress_routes`
 - `auxiliary_ingress_context_refs`
 

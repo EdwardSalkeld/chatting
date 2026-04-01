@@ -1457,6 +1457,7 @@ class AuxiliaryIngressConnectorTests(unittest.TestCase):
         broker = _FakeBroker()
         connector = AuxiliaryIngressConnector(
             broker=broker,  # type: ignore[arg-type]
+            queue_name="chatting.auxiliary-ingress.v1",
             context_refs=["repo:/workspace/chatting"],
         )
 

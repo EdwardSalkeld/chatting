@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Mapping
 
 from app.broker import (
-    AUXILIARY_INGRESS_QUEUE_NAME,
     AuxiliaryIngressQueueMessage,
     BBMBQueueAdapter,
 )
@@ -25,8 +24,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "bbmb_address",
         "listen_host",
         "listen_port",
-        "generic_post_path",
-        "queue_name",
         "ingress_routes",
     }
 )
@@ -58,15 +55,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--listen-host", default="127.0.0.1", help="HTTP bind host.")
     parser.add_argument(
         "--listen-port", type=_positive_int, default=9481, help="HTTP bind port."
-    )
-    parser.add_argument(
-        "--generic-post-path",
-        help="Exact secret path that accepts JSON POST bodies.",
-    )
-    parser.add_argument(
-        "--queue-name",
-        default=AUXILIARY_INGRESS_QUEUE_NAME,
-        help="BBMB queue name for auxiliary ingress payloads.",
     )
     parser.add_argument(
         "--ingress-route",
@@ -138,22 +126,6 @@ def _resolve_ingress_routes(
         route_specs.extend(_parse_ingress_route(item) for item in raw_config_routes)
 
     route_specs.extend(_parse_ingress_route(item) for item in args.ingress_route)
-
-    legacy_path = config.get("generic_post_path")
-    if legacy_path is None:
-        legacy_path = args.generic_post_path
-    legacy_queue_name = config.get("queue_name")
-    if legacy_queue_name is None:
-        legacy_queue_name = args.queue_name
-    if legacy_path is not None:
-        if legacy_queue_name is not None and not isinstance(legacy_queue_name, str):
-            raise ValueError("config queue_name must be a string")
-        route_specs.append(
-            (
-                (legacy_queue_name or AUXILIARY_INGRESS_QUEUE_NAME).strip(),
-                _normalize_path(str(legacy_path)),
-            )
-        )
 
     if not route_specs:
         raise ValueError("at least one ingress route must be configured")

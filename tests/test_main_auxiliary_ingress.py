@@ -107,11 +107,7 @@ class MainAuxiliaryIngressTests(unittest.TestCase):
 
     def test_resolve_ingress_routes_prefers_dynamic_config(self) -> None:
         routes = _resolve_ingress_routes(
-            Namespace(
-                ingress_route=[],
-                generic_post_path=None,
-                queue_name="chatting.auxiliary-ingress.v1",
-            ),
+            Namespace(ingress_route=[]),
             {"ingress_routes": ["generic-post:12334", "new-service:/secret-two"]},
         )
 
@@ -122,6 +118,10 @@ class MainAuxiliaryIngressTests(unittest.TestCase):
                 "/secret-two": "new-service",
             },
         )
+
+    def test_resolve_ingress_routes_requires_route_config(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one ingress route"):
+            _resolve_ingress_routes(Namespace(ingress_route=[]), {})
 
     def test_load_config_accepts_ingress_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
