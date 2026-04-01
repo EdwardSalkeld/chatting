@@ -143,6 +143,8 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("task_received", html_body)
                 self.assertIn("hello", html_body)
                 self.assertIn("warning line", html_body)
+                self.assertIn("task:</strong> task:telegram:1", html_body)
+                self.assertIn("source:</strong> im", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:00:00 UTC", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
                 self.assertIn("pause refresh", html_body)
