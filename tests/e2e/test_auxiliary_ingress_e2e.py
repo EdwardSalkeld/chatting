@@ -31,6 +31,13 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     raise TimeoutError(f"timed out waiting for {host}:{port}")
 
 
+def _reserve_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        return int(listener.getsockname()[1])
+
+
 def _post_json(host: str, port: int, path: str, payload: object) -> dict[str, object]:
     connection = http.client.HTTPConnection(host, port, timeout=5)
     try:
@@ -59,17 +66,14 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
         if not server_bin.exists():
             self.skipTest(f"bbmb server binary not found: {server_bin}")
 
-        if _is_port_open("127.0.0.1", 9876):
-            self.skipTest("127.0.0.1:9876 already in use")
-        if _is_port_open("127.0.0.1", 9481):
-            self.skipTest("127.0.0.1:9481 already in use")
-        if _is_port_open("127.0.0.1", 9464):
-            self.skipTest("127.0.0.1:9464 already in use")
-        if _is_port_open("127.0.0.1", 9465):
-            self.skipTest("127.0.0.1:9465 already in use")
-
         repo_root = Path(__file__).resolve().parent.parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
+        auxiliary_port = _reserve_port()
+        handler_metrics_port = _reserve_port()
+        worker_activity_port = _reserve_port()
+
+        if _is_port_open("127.0.0.1", 9876):
+            self.skipTest("127.0.0.1:9876 already in use")
 
         server_proc: subprocess.Popen[str] | None = None
         auxiliary_proc: subprocess.Popen[str] | None = None
@@ -100,6 +104,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 1,
                         "max_loops": 60,
                         "allowed_egress_channels": ["log"],
+                        "metrics_port": handler_metrics_port,
                         "auxiliary_ingress_enabled": True,
                         "auxiliary_ingress_routes": ["generic-post:12334"],
                     }
@@ -115,6 +120,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
                         "max_loops": 60,
+                        "activity_port": worker_activity_port,
                         "codex_command": f"{sys.executable} {fake_codex}",
                     }
                 ),
@@ -125,7 +131,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                     {
                         "bbmb_address": "127.0.0.1:9876",
                         "listen_host": "127.0.0.1",
-                        "listen_port": 9481,
+                        "listen_port": auxiliary_port,
                         "ingress_routes": ["generic-post:12334"],
                     }
                 ),
@@ -163,7 +169,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                     text=True,
                     env=env,
                 )
-                _wait_for_port("127.0.0.1", 9481, timeout_seconds=5.0)
+                _wait_for_port("127.0.0.1", auxiliary_port, timeout_seconds=5.0)
 
                 worker_proc = subprocess.Popen(
                     [
@@ -202,7 +208,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                 }
                 response_payload = _post_json(
                     "127.0.0.1",
-                    9481,
+                    auxiliary_port,
                     "/12334",
                     request_body,
                 )
