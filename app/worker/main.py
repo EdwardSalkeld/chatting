@@ -285,7 +285,18 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
     if not command:
         raise ValueError("codex_command or claude_command must be configured")
 
-    return CodexExecutor(command=command, cwd=codex_working_dir)
+    executor_env = _build_executor_env(args.config, os.environ)
+    return CodexExecutor(command=command, cwd=codex_working_dir, env=executor_env)
+
+
+def _build_executor_env(
+    config_path: str | None, environ: Mapping[str, str]
+) -> dict[str, str] | None:
+    if config_path is None:
+        return None
+    env = dict(environ)
+    env[WORKER_CONFIG_PATH_ENV_VAR] = str(Path(config_path).resolve())
+    return env
 
 
 def main() -> int:
