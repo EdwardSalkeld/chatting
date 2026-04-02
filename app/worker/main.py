@@ -38,6 +38,7 @@ WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
 LOGGER = logging.getLogger(__name__)
 ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     {
+        "activity_port",
         "bbmb_address",
         "claude_command",
         "codex_command",
@@ -67,6 +68,13 @@ def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be a non-negative integer")
     return parsed
 
 
@@ -110,6 +118,11 @@ def _parse_args() -> argparse.Namespace:
         "--activity-history-limit",
         type=_positive_int,
         help="Maximum recent worker activity events to show in the UI.",
+    )
+    parser.add_argument(
+        "--activity-port",
+        type=_non_negative_int,
+        help="Worker activity HTTP port. Use 0 to pick an ephemeral port.",
     )
     parser.add_argument(
         "--codex-working-dir",
@@ -193,6 +206,26 @@ def _resolve_positive_int(
     return config_value
 
 
+def _resolve_non_negative_int(
+    cli_value: int | None,
+    config_value: object,
+    *,
+    default_value: int,
+    setting_name: str,
+) -> int:
+    if cli_value is not None:
+        return cli_value
+    if config_value is None:
+        return default_value
+    if (
+        not isinstance(config_value, int)
+        or isinstance(config_value, bool)
+        or config_value < 0
+    ):
+        raise ValueError(f"config {setting_name} must be a non-negative integer")
+    return config_value
+
+
 def _resolve_positive_float(
     cli_value: float | None,
     config_value: object,
@@ -252,7 +285,18 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
     if not command:
         raise ValueError("codex_command or claude_command must be configured")
 
-    return CodexExecutor(command=command, cwd=codex_working_dir)
+    executor_env = _build_executor_env(args.config, os.environ)
+    return CodexExecutor(command=command, cwd=codex_working_dir, env=executor_env)
+
+
+def _build_executor_env(
+    config_path: str | None, environ: Mapping[str, str]
+) -> dict[str, str] | None:
+    if config_path is None:
+        return None
+    env = dict(environ)
+    env[WORKER_CONFIG_PATH_ENV_VAR] = str(Path(config_path).resolve())
+    return env
 
 
 def main() -> int:
@@ -302,6 +346,12 @@ def main() -> int:
         default_value=DEFAULT_ACTIVITY_HISTORY_LIMIT,
         setting_name="activity_history_limit",
     )
+    activity_port = _resolve_non_negative_int(
+        args.activity_port,
+        config.get("activity_port"),
+        default_value=DEFAULT_ACTIVITY_PORT,
+        setting_name="activity_port",
+    )
 
     store = SQLiteStateStore(db_path)
     activity_monitor = WorkerActivityMonitor(
@@ -310,7 +360,7 @@ def main() -> int:
     )
     activity_server: WorkerActivityServer = start_worker_activity_server(
         host=DEFAULT_ACTIVITY_HOST,
-        port=DEFAULT_ACTIVITY_PORT,
+        port=activity_port,
         monitor=activity_monitor,
     )
     broker = BBMBQueueAdapter(address=bbmb_address)

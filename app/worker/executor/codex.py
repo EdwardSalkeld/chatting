@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from app.models import (
     ExecutionResult,
@@ -21,6 +21,7 @@ class CodexExecutor:
 
     command: tuple[str, ...] = ("codex", "exec", "--json")
     cwd: str | None = None
+    env: Mapping[str, str] | None = None
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
@@ -36,6 +37,7 @@ class CodexExecutor:
                 timeout=task.execution_constraints.timeout_seconds,
                 check=False,
                 cwd=self.cwd,
+                env=dict(self.env) if self.env is not None else None,
             )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")

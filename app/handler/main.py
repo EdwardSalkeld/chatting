@@ -72,6 +72,7 @@ LOGGER = logging.getLogger("app.main_message_handler")
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
         "bbmb_address",
+        "auxiliary_ingress_bbmb_address",
         "db_path",
         "max_loops",
         "poll_interval_seconds",
@@ -245,6 +246,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--db-path", help="Path to message-handler SQLite DB.")
     parser.add_argument("--bbmb-address", help="BBMB address host:port.")
+    parser.add_argument(
+        "--auxiliary-ingress-bbmb-address",
+        help="Auxiliary-ingress BBMB address host:port.",
+    )
     parser.add_argument(
         "--max-loops", type=_positive_int, help="Optional loop limit for smoke runs."
     )
@@ -758,6 +763,23 @@ def _resolve_auxiliary_ingress_queue_names(
     return deduped
 
 
+def _resolve_auxiliary_ingress_bbmb_address(
+    args: argparse.Namespace,
+    config: dict[str, object],
+) -> str:
+    return _resolve_str(
+        getattr(args, "auxiliary_ingress_bbmb_address", None),
+        config.get("auxiliary_ingress_bbmb_address"),
+        default_value=_resolve_str(
+            args.bbmb_address,
+            config.get("bbmb_address"),
+            default_value="127.0.0.1:9876",
+            setting_name="bbmb_address",
+        ),
+        setting_name="auxiliary_ingress_bbmb_address",
+    )
+
+
 def _resolve_prompt_context_values(
     config: dict[str, object], *, setting_name: str
 ) -> list[str]:
@@ -1063,12 +1085,7 @@ def _build_live_connectors(
     if auxiliary_ingress_enabled:
         auxiliary_queue_names = _resolve_auxiliary_ingress_queue_names(args, config)
         auxiliary_broker = BBMBQueueAdapter(
-            address=_resolve_str(
-                args.bbmb_address,
-                config.get("bbmb_address"),
-                default_value="127.0.0.1:9876",
-                setting_name="bbmb_address",
-            )
+            address=_resolve_auxiliary_ingress_bbmb_address(args, config)
         )
         auxiliary_context_refs = _resolve_auxiliary_ingress_context_refs(args, config)
         auxiliary_prompt_context = PromptContext(
@@ -1548,6 +1565,7 @@ def _build_live_connectors_fail_open(
                 "context_ref",
                 "context_refs",
                 "bbmb_address",
+                "auxiliary_ingress_bbmb_address",
             ),
         ),
         "github": (
