@@ -242,6 +242,21 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         worker_log_fh=worker_log_fh,
                         auxiliary_log_fh=auxiliary_log_fh,
                     )
+                    expected_envelope_id = task_id.removeprefix("task:")
+                    self._wait_for_successful_worker_run(
+                        worker_db_path=worker_db_path,
+                        expected_envelope_id=expected_envelope_id,
+                        timeout_seconds=30,
+                        handler_proc=handler_proc,
+                        worker_proc=worker_proc,
+                        auxiliary_proc=auxiliary_proc,
+                        handler_log=handler_log,
+                        worker_log=worker_log,
+                        auxiliary_log=auxiliary_log,
+                        handler_log_fh=handler_log_fh,
+                        worker_log_fh=worker_log_fh,
+                        auxiliary_log_fh=auxiliary_log_fh,
+                    )
 
                     auxiliary_proc.terminate()
                     auxiliary_proc.wait(timeout=5)
@@ -282,7 +297,6 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
 
                     worker_store = SQLiteStateStore(str(worker_db_path))
                     worker_runs = worker_store.list_runs()
-                    expected_envelope_id = task_id.removeprefix("task:")
                     self.assertTrue(
                         any(
                             run.envelope_id == expected_envelope_id
@@ -395,6 +409,61 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
         )
         self.fail(
             f"completion event was not recorded for task_id={task_id!r}\n\n{diagnostics}"
+        )
+
+    def _wait_for_successful_worker_run(
+        self,
+        *,
+        worker_db_path: Path,
+        expected_envelope_id: str,
+        timeout_seconds: float,
+        handler_proc: subprocess.Popen[str] | None,
+        worker_proc: subprocess.Popen[str] | None,
+        auxiliary_proc: subprocess.Popen[str] | None,
+        handler_log: Path,
+        worker_log: Path,
+        auxiliary_log: Path,
+        handler_log_fh,
+        worker_log_fh,
+        auxiliary_log_fh,
+    ) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            worker_store = SQLiteStateStore(str(worker_db_path))
+            worker_runs = worker_store.list_runs()
+            if any(
+                run.envelope_id == expected_envelope_id
+                and run.result_status == "success"
+                for run in worker_runs
+            ):
+                return
+            time.sleep(1)
+        diagnostics = self._dump_diagnostics(
+            handler_proc=handler_proc,
+            worker_proc=worker_proc,
+            auxiliary_proc=auxiliary_proc,
+            handler_log=handler_log,
+            worker_log=worker_log,
+            auxiliary_log=auxiliary_log,
+            handler_log_fh=handler_log_fh,
+            worker_log_fh=worker_log_fh,
+            auxiliary_log_fh=auxiliary_log_fh,
+        )
+        worker_store = SQLiteStateStore(str(worker_db_path))
+        worker_runs = worker_store.list_runs()
+        worker_run_summary = [
+            {
+                "run_id": run.run_id,
+                "envelope_id": run.envelope_id,
+                "result_status": run.result_status,
+                "workflow": run.workflow,
+            }
+            for run in worker_runs
+        ]
+        self.fail(
+            "successful worker run was not recorded for "
+            f"envelope_id={expected_envelope_id!r}\n\n"
+            f"worker_runs={worker_run_summary}\n\n{diagnostics}"
         )
 
     def _dump_diagnostics(
