@@ -19,6 +19,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Download bbmb-server
+        run: |
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
+          (
+            cd "${{ runner.temp }}"
+            sha256sum -c bbmb-server-linux-amd64.sha256
+          )
+          chmod +x "${{ runner.temp }}/bbmb-server-linux-amd64"
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -33,4 +47,6 @@ jobs:
         run: uv sync --locked
 
       - name: Run auxiliary ingress E2E tests
+        env:
+          CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
         run: uv run python -m unittest tests.e2e.test_auxiliary_ingress_e2e -v
