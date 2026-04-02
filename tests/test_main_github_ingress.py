@@ -72,16 +72,18 @@ class MainGitHubIngressTests(unittest.TestCase):
     def test_build_live_connectors_supports_auxiliary_ingress(self) -> None:
         config = {
             "bbmb_address": "127.0.0.1:9876",
+            "auxiliary_ingress_bbmb_address": "127.0.0.1:9988",
             "auxiliary_ingress_enabled": True,
             "auxiliary_ingress_routes": ["generic-post:12334", "new-service:/two"],
             "auxiliary_ingress_context_refs": ["repo:/workspace/chatting"],
         }
         broker = _FakeBroker()
 
-        with patch("app.main_message_handler.BBMBQueueAdapter", return_value=broker):
+        with patch("app.main_message_handler.BBMBQueueAdapter", return_value=broker) as broker_cls:
             connectors = _build_live_connectors(
                 argparse.Namespace(
                     bbmb_address=None,
+                    auxiliary_ingress_bbmb_address=None,
                     auxiliary_ingress_enabled=False,
                     auxiliary_ingress_route=[],
                     auxiliary_ingress_context_ref=[],
@@ -105,6 +107,10 @@ class MainGitHubIngressTests(unittest.TestCase):
                 config,
             )
 
+        self.assertEqual(
+            broker_cls.call_args.kwargs,
+            {"address": "127.0.0.1:9988"},
+        )
         self.assertEqual(len(connectors), 2)
         self.assertIsInstance(connectors[0], AuxiliaryIngressConnector)
         self.assertIsInstance(connectors[1], AuxiliaryIngressConnector)

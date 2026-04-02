@@ -1,4 +1,4 @@
-"""End-to-end auxiliary ingress test using the real BBMB server."""
+"""End-to-end auxiliary ingress test with separate auxiliary and main brokers."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from app.state import SQLiteStateStore
+from tests.e2e.fake_bbmb_server import FakeBBMBServer
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -59,23 +60,16 @@ def _post_json(host: str, port: int, path: str, payload: object) -> dict[str, ob
 
 class AuxiliaryIngressE2ETests(unittest.TestCase):
     def test_auxiliary_ingress_post_reaches_worker_and_completes(self) -> None:
-        server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
-        if not server_bin_raw:
-            self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
-        server_bin = Path(server_bin_raw)
-        if not server_bin.exists():
-            self.skipTest(f"bbmb server binary not found: {server_bin}")
-
         repo_root = Path(__file__).resolve().parent.parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
+        main_bbmb_port = _reserve_port()
+        auxiliary_bbmb_port = _reserve_port()
         auxiliary_port = _reserve_port()
         handler_metrics_port = _reserve_port()
         worker_activity_port = _reserve_port()
+        main_bbmb_address = f"127.0.0.1:{main_bbmb_port}"
+        auxiliary_bbmb_address = f"127.0.0.1:{auxiliary_bbmb_port}"
 
-        if _is_port_open("127.0.0.1", 9876):
-            self.skipTest("127.0.0.1:9876 already in use")
-
-        server_proc: subprocess.Popen[str] | None = None
         auxiliary_proc: subprocess.Popen[str] | None = None
         worker_proc: subprocess.Popen[str] | None = None
         handler_proc: subprocess.Popen[str] | None = None
@@ -99,13 +93,14 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(handler_db_path),
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": main_bbmb_address,
                         "poll_interval_seconds": 0.1,
                         "poll_timeout_seconds": 1,
                         "max_loops": 60,
                         "allowed_egress_channels": ["log"],
                         "metrics_port": handler_metrics_port,
                         "auxiliary_ingress_enabled": True,
+                        "auxiliary_ingress_bbmb_address": auxiliary_bbmb_address,
                         "auxiliary_ingress_routes": ["generic-post:12334"],
                     }
                 ),
@@ -115,7 +110,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(worker_db_path),
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": main_bbmb_address,
                         "max_attempts": 2,
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
@@ -129,7 +124,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
             auxiliary_config_path.write_text(
                 json.dumps(
                     {
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": auxiliary_bbmb_address,
                         "listen_host": "127.0.0.1",
                         "listen_port": auxiliary_port,
                         "ingress_routes": ["generic-post:12334"],
@@ -146,165 +141,169 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
             auxiliary_log_fh = open(auxiliary_log, "w", encoding="utf-8")
 
             try:
-                server_proc = subprocess.Popen(
-                    [str(server_bin)],
-                    cwd=repo_root,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                _wait_for_port("127.0.0.1", 9876, timeout_seconds=5.0)
+                with (
+                    FakeBBMBServer("127.0.0.1", main_bbmb_port),
+                    FakeBBMBServer("127.0.0.1", auxiliary_bbmb_port),
+                ):
+                    _wait_for_port("127.0.0.1", main_bbmb_port, timeout_seconds=5.0)
+                    _wait_for_port(
+                        "127.0.0.1", auxiliary_bbmb_port, timeout_seconds=5.0
+                    )
 
-                auxiliary_proc = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "app.main_auxiliary_ingress",
-                        "--config",
-                        str(auxiliary_config_path),
-                    ],
-                    cwd=repo_root,
-                    stdout=auxiliary_log_fh,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    env=env,
-                )
-                _wait_for_port("127.0.0.1", auxiliary_port, timeout_seconds=5.0)
+                    auxiliary_proc = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-m",
+                            "app.main_auxiliary_ingress",
+                            "--config",
+                            str(auxiliary_config_path),
+                        ],
+                        cwd=repo_root,
+                        stdout=auxiliary_log_fh,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        env=env,
+                    )
+                    _wait_for_port("127.0.0.1", auxiliary_port, timeout_seconds=5.0)
 
-                worker_proc = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "app.main_worker",
-                        "--config",
-                        str(worker_config_path),
-                    ],
-                    cwd=repo_root,
-                    stdout=worker_log_fh,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    env=env,
-                )
-                handler_proc = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "app.main_message_handler",
-                        "--config",
-                        str(handler_config_path),
-                    ],
-                    cwd=repo_root,
-                    stdout=handler_log_fh,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    env=env,
-                )
+                    worker_proc = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-m",
+                            "app.main_worker",
+                            "--config",
+                            str(worker_config_path),
+                        ],
+                        cwd=repo_root,
+                        stdout=worker_log_fh,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        env=env,
+                    )
+                    handler_proc = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-m",
+                            "app.main_message_handler",
+                            "--config",
+                            str(handler_config_path),
+                        ],
+                        cwd=repo_root,
+                        stdout=handler_log_fh,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        env=env,
+                    )
 
-                time.sleep(1)
+                    time.sleep(1)
 
-                request_body = {
-                    "kind": "generic-post",
-                    "message": "Please do the auxiliary ingress e2e thing",
-                }
-                response_payload = _post_json(
-                    "127.0.0.1",
-                    auxiliary_port,
-                    "/12334",
-                    request_body,
-                )
-                self.assertEqual(response_payload["status"], "queued")
+                    request_body = {
+                        "kind": "generic-post",
+                        "message": "Please do the auxiliary ingress e2e thing",
+                    }
+                    response_payload = _post_json(
+                        "127.0.0.1",
+                        auxiliary_port,
+                        "/12334",
+                        request_body,
+                    )
+                    self.assertEqual(response_payload["status"], "queued")
 
-                prompt_file = prompt_dir / "prompt.json"
-                prompt = self._wait_for_prompt(
-                    prompt_file=prompt_file,
-                    timeout_seconds=30,
-                    handler_proc=handler_proc,
-                    worker_proc=worker_proc,
-                    auxiliary_proc=auxiliary_proc,
-                    handler_log=handler_log,
-                    worker_log=worker_log,
-                    auxiliary_log=auxiliary_log,
-                    handler_log_fh=handler_log_fh,
-                    worker_log_fh=worker_log_fh,
-                    auxiliary_log_fh=auxiliary_log_fh,
-                )
+                    prompt_file = prompt_dir / "prompt.json"
+                    prompt = self._wait_for_prompt(
+                        prompt_file=prompt_file,
+                        timeout_seconds=30,
+                        handler_proc=handler_proc,
+                        worker_proc=worker_proc,
+                        auxiliary_proc=auxiliary_proc,
+                        handler_log=handler_log,
+                        worker_log=worker_log,
+                        auxiliary_log=auxiliary_log,
+                        handler_log_fh=handler_log_fh,
+                        worker_log_fh=worker_log_fh,
+                        auxiliary_log_fh=auxiliary_log_fh,
+                    )
 
-                task = prompt["task"]
-                task_id = task["task_id"]
-                expected_event_id = f"evt:{task_id}:0:completion:internal"
-                self._wait_for_completion(
-                    handler_db_path=handler_db_path,
-                    task_id=task_id,
-                    event_id=expected_event_id,
-                    timeout_seconds=30,
-                    handler_proc=handler_proc,
-                    worker_proc=worker_proc,
-                    auxiliary_proc=auxiliary_proc,
-                    handler_log=handler_log,
-                    worker_log=worker_log,
-                    auxiliary_log=auxiliary_log,
-                    handler_log_fh=handler_log_fh,
-                    worker_log_fh=worker_log_fh,
-                    auxiliary_log_fh=auxiliary_log_fh,
-                )
-
-                auxiliary_proc.terminate()
-                auxiliary_proc.wait(timeout=5)
-                auxiliary_proc = None
-
-                handler_out = ""
-                worker_out = ""
-                handler_err = ""
-                worker_err = ""
-                if handler_proc is not None:
-                    handler_out, handler_err = handler_proc.communicate(timeout=45)
-                if worker_proc is not None:
-                    worker_out, worker_err = worker_proc.communicate(timeout=45)
-
-                self.assertEqual(
-                    handler_proc.returncode,
-                    0,
-                    msg=(
-                        "message-handler exited non-zero\n"
-                        f"stdout:\n{handler_out}\n"
-                        f"stderr:\n{handler_err}"
-                    ),
-                )
-                self.assertEqual(
-                    worker_proc.returncode,
-                    0,
-                    msg=f"worker exited non-zero\nstdout:\n{worker_out}\nstderr:\n{worker_err}",
-                )
-
-                self.assertEqual(task["source"], "webhook")
-                self.assertEqual(json.loads(task["content"]), request_body)
-                self.assertEqual(task["reply_channel"]["type"], "webhook")
-                self.assertEqual(task["reply_channel"]["target"], "generic-post")
-
-                worker_store = SQLiteStateStore(str(worker_db_path))
-                worker_runs = worker_store.list_runs()
-                expected_envelope_id = task_id.removeprefix("task:")
-                self.assertTrue(
-                    any(
-                        run.envelope_id == expected_envelope_id
-                        and run.result_status == "success"
-                        for run in worker_runs
-                    ),
-                    msg=(
-                        "missing successful worker run for "
-                        f"envelope_id={expected_envelope_id!r}"
-                    ),
-                )
-
-                handler_store = SQLiteStateStore(str(handler_db_path))
-                self.assertTrue(
-                    handler_store.has_dispatched_event_id(
+                    task = prompt["task"]
+                    task_id = task["task_id"]
+                    expected_event_id = f"evt:{task_id}:0:completion:internal"
+                    self._wait_for_completion(
+                        handler_db_path=handler_db_path,
                         task_id=task_id,
                         event_id=expected_event_id,
+                        timeout_seconds=30,
+                        handler_proc=handler_proc,
+                        worker_proc=worker_proc,
+                        auxiliary_proc=auxiliary_proc,
+                        handler_log=handler_log,
+                        worker_log=worker_log,
+                        auxiliary_log=auxiliary_log,
+                        handler_log_fh=handler_log_fh,
+                        worker_log_fh=worker_log_fh,
+                        auxiliary_log_fh=auxiliary_log_fh,
                     )
-                )
+
+                    auxiliary_proc.terminate()
+                    auxiliary_proc.wait(timeout=5)
+                    auxiliary_proc = None
+
+                    handler_out = ""
+                    worker_out = ""
+                    handler_err = ""
+                    worker_err = ""
+                    if handler_proc is not None:
+                        handler_out, handler_err = handler_proc.communicate(timeout=45)
+                    if worker_proc is not None:
+                        worker_out, worker_err = worker_proc.communicate(timeout=45)
+
+                    self.assertEqual(
+                        handler_proc.returncode,
+                        0,
+                        msg=(
+                            "message-handler exited non-zero\n"
+                            f"stdout:\n{handler_out}\n"
+                            f"stderr:\n{handler_err}"
+                        ),
+                    )
+                    self.assertEqual(
+                        worker_proc.returncode,
+                        0,
+                        msg=(
+                            "worker exited non-zero\n"
+                            f"stdout:\n{worker_out}\n"
+                            f"stderr:\n{worker_err}"
+                        ),
+                    )
+
+                    self.assertEqual(task["source"], "webhook")
+                    self.assertEqual(json.loads(task["content"]), request_body)
+                    self.assertEqual(task["reply_channel"]["type"], "webhook")
+                    self.assertEqual(task["reply_channel"]["target"], "generic-post")
+
+                    worker_store = SQLiteStateStore(str(worker_db_path))
+                    worker_runs = worker_store.list_runs()
+                    expected_envelope_id = task_id.removeprefix("task:")
+                    self.assertTrue(
+                        any(
+                            run.envelope_id == expected_envelope_id
+                            and run.result_status == "success"
+                            for run in worker_runs
+                        ),
+                        msg=(
+                            "missing successful worker run for "
+                            f"envelope_id={expected_envelope_id!r}"
+                        ),
+                    )
+
+                    handler_store = SQLiteStateStore(str(handler_db_path))
+                    self.assertTrue(
+                        handler_store.has_dispatched_event_id(
+                            task_id=task_id,
+                            event_id=expected_event_id,
+                        )
+                    )
             finally:
-                for proc in (handler_proc, worker_proc, auxiliary_proc, server_proc):
+                for proc in (handler_proc, worker_proc, auxiliary_proc):
                     if proc is None:
                         continue
                     if proc.poll() is None:
