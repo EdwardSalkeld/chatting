@@ -7,7 +7,7 @@ ARG GO_ARCHIVE=go${GO_VERSION}.linux-amd64.tar.gz
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates curl gh git gosu ripgrep \
+    && apt-get install -y --no-install-recommends bubblewrap nodejs npm ca-certificates curl gh git gosu ripgrep \
     && npm install -g @openai/codex @anthropic-ai/claude-code \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
