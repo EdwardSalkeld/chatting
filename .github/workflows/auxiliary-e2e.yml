@@ -1,0 +1,52 @@
+name: Auxiliary E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  auxiliary-e2e:
+    name: Auxiliary End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download bbmb-server
+        run: |
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
+          curl -fsSL \
+            -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
+            https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
+          (
+            cd "${{ runner.temp }}"
+            sha256sum -c bbmb-server-linux-amd64.sha256
+          )
+          chmod +x "${{ runner.temp }}/bbmb-server-linux-amd64"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Run auxiliary ingress E2E tests
+        env:
+          CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
+        run: uv run python -m unittest tests.e2e.test_auxiliary_ingress_e2e -v
