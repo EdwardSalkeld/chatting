@@ -277,12 +277,17 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
 
                 worker_store = SQLiteStateStore(str(worker_db_path))
                 worker_runs = worker_store.list_runs()
+                expected_envelope_id = task_id.removeprefix("task:")
                 self.assertTrue(
                     any(
-                        run.task_id == task_id and run.result_status == "success"
+                        run.envelope_id == expected_envelope_id
+                        and run.result_status == "success"
                         for run in worker_runs
                     ),
-                    msg=f"missing successful worker run for task_id={task_id!r}",
+                    msg=(
+                        "missing successful worker run for "
+                        f"envelope_id={expected_envelope_id!r}"
+                    ),
                 )
 
                 handler_store = SQLiteStateStore(str(handler_db_path))
@@ -367,7 +372,9 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             handler_store = SQLiteStateStore(str(handler_db_path))
-            if handler_store.has_dispatched_event_id(task_id=task_id, event_id=event_id):
+            if handler_store.has_dispatched_event_id(
+                task_id=task_id, event_id=event_id
+            ):
                 return
             time.sleep(1)
         diagnostics = self._dump_diagnostics(
