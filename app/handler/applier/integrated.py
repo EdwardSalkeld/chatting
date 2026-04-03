@@ -8,6 +8,7 @@ import mimetypes
 import smtplib
 import subprocess
 import html
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -724,6 +725,7 @@ def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
 
 
 def _normalize_telegram_text_for_parse_mode(text: str, parse_mode: str | None) -> str:
+    text = _normalize_telegram_escaped_sequences(text)
     if parse_mode is None:
         return text
     if parse_mode == "HTML":
@@ -733,6 +735,21 @@ def _normalize_telegram_text_for_parse_mode(text: str, parse_mode: str | None) -
     if parse_mode == "Markdown":
         return _escape_telegram_markdown(text)
     return text
+
+
+def _normalize_telegram_escaped_sequences(text: str) -> str:
+    text = re.sub(r"\\+([nrt])", lambda match: _decode_backslash_escape(match.group(1)), text)
+    return re.sub(r"\\+([_*`\[\]()~>#\+\-=|{}.!])", r"\1", text)
+
+
+def _decode_backslash_escape(character: str) -> str:
+    if character == "n":
+        return "\n"
+    if character == "r":
+        return "\r"
+    if character == "t":
+        return "\t"
+    return character
 
 
 def _escape_telegram_markdown(text: str) -> str:

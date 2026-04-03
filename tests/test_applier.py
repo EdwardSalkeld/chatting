@@ -656,6 +656,76 @@ class TelegramMessageSenderTests(unittest.TestCase):
             },
         )
 
+    def test_send_normalizes_double_escaped_newlines_and_markdown_punctuation(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": {"message_id": 6}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send(
+            "12345",
+            OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body=r"Your three 1960s albums are:\\n\\n- Gal Costa \\(second edition\\)",
+            ),
+        )
+
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(
+            seen_calls[0][1],
+            {
+                "chat_id": "12345",
+                "text": "Your three 1960s albums are:\n\n- Gal Costa \\(second edition\\)",
+                "parse_mode": "Markdown",
+            },
+        )
+
+    def test_send_normalizes_repeated_backslashes_before_newline_escape(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": {"message_id": 7}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send(
+            "12345",
+            OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body=r"Line one\\\\nLine two",
+            ),
+        )
+
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(
+            seen_calls[0][1],
+            {
+                "chat_id": "12345",
+                "text": "Line one\nLine two",
+                "parse_mode": "Markdown",
+            },
+        )
+
     def test_send_photo_attachment_posts_multipart_with_caption(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], str, Path, float]] = []
 
