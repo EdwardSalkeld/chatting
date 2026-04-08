@@ -118,9 +118,7 @@ class MainGitHubIngressTests(unittest.TestCase):
         self.assertEqual(connectors[0]._reply_target, "generic-post")
         self.assertEqual(connectors[1]._reply_target, "new-service")
 
-    def test_load_schedule_jobs_accepts_cron_timezone_and_interval_fallback(
-        self,
-    ) -> None:
+    def test_load_schedule_jobs_accepts_cron_timezone(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             schedule_path = Path(tmpdir) / "schedule.json"
             schedule_path.write_text(
@@ -131,13 +129,11 @@ class MainGitHubIngressTests(unittest.TestCase):
                             "content": "Run cron job",
                             "cron": "0 8 * * *",
                             "timezone": "Europe/London",
-                            "interval_seconds": 86400,
                         },
                         {
-                            "job_name": "interval-job",
-                            "content": "Run interval job",
-                            "interval_seconds": 300,
-                            "start_at": "2026-03-07T00:00:00Z",
+                            "job_name": "prompted-cron-job",
+                            "content": "Run prompted cron job",
+                            "cron": "*/5 * * * *",
                             "prompt_context": ["Mention overdue alerts first."],
                         },
                     ]
@@ -150,9 +146,8 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(len(jobs), 2)
             self.assertEqual(jobs[0].cron, "0 8 * * *")
             self.assertEqual(jobs[0].timezone_name, "Europe/London")
-            self.assertEqual(jobs[0].interval_seconds, 86400)
-            self.assertEqual(jobs[1].interval_seconds, 300)
-            self.assertEqual(jobs[1].cron, None)
+            self.assertEqual(jobs[1].cron, "*/5 * * * *")
+            self.assertEqual(jobs[1].timezone_name, "UTC")
             self.assertEqual(jobs[1].prompt_context, ["Mention overdue alerts first."])
 
     def test_load_schedule_jobs_rejects_invalid_prompt_context(self) -> None:
@@ -162,9 +157,9 @@ class MainGitHubIngressTests(unittest.TestCase):
                 json.dumps(
                     [
                         {
-                            "job_name": "interval-job",
-                            "content": "Run interval job",
-                            "interval_seconds": 300,
+                            "job_name": "cron-job",
+                            "content": "Run cron job",
+                            "cron": "*/5 * * * *",
                             "prompt_context": [""],
                         }
                     ]
@@ -199,9 +194,7 @@ class MainGitHubIngressTests(unittest.TestCase):
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0].timezone_name, "UTC")
 
-    def test_load_schedule_jobs_ignores_interval_anchors_when_cron_is_present(
-        self,
-    ) -> None:
+    def test_load_schedule_jobs_rejects_unknown_legacy_schedule_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             schedule_path = Path(tmpdir) / "schedule.json"
             schedule_path.write_text(
@@ -212,19 +205,14 @@ class MainGitHubIngressTests(unittest.TestCase):
                             "content": "Run cron job",
                             "cron": "0 8 * * *",
                             "interval_seconds": "legacy-value",
-                            "start_at": 123,
                         }
                     ]
                 ),
                 encoding="utf-8",
             )
 
-            jobs = _load_schedule_jobs(str(schedule_path))
-
-            self.assertEqual(len(jobs), 1)
-            self.assertEqual(jobs[0].cron, "0 8 * * *")
-            self.assertEqual(jobs[0].interval_seconds, None)
-            self.assertEqual(jobs[0].start_at, None)
+            with self.assertRaisesRegex(ValueError, "unknown keys"):
+                _load_schedule_jobs(str(schedule_path))
 
     def test_load_schedule_jobs_rejects_invalid_cron_timezone(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -246,16 +234,15 @@ class MainGitHubIngressTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid timezone"):
                 _load_schedule_jobs(str(schedule_path))
 
-    def test_load_schedule_jobs_rejects_timezone_without_cron(self) -> None:
+    def test_load_schedule_jobs_requires_cron(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             schedule_path = Path(tmpdir) / "schedule.json"
             schedule_path.write_text(
                 json.dumps(
                     [
                         {
-                            "job_name": "interval-job",
+                            "job_name": "missing-cron",
                             "content": "Run interval job",
-                            "interval_seconds": 60,
                             "timezone": "UTC",
                         }
                     ]
@@ -263,7 +250,7 @@ class MainGitHubIngressTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "timezone is only valid with cron"):
+            with self.assertRaisesRegex(ValueError, "cron must be a non-empty string"):
                 _load_schedule_jobs(str(schedule_path))
 
     def test_main_message_handler_publishes_assignment_event_once_and_uses_checkpoint(
@@ -597,7 +584,7 @@ class MainGitHubIngressTests(unittest.TestCase):
                         {
                             "job_name": "heartbeat",
                             "content": "daily check",
-                            "interval_seconds": 1,
+                            "cron": "* * * * *",
                             "reply_channel_type": "log",
                             "reply_channel_target": "ops",
                         }

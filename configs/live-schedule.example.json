@@ -2,8 +2,7 @@
   {
     "job_name": "heartbeat",
     "content": "Run scheduled heartbeat",
-    "interval_seconds": 300,
-    "start_at": "2026-03-07T00:00:00Z"
+    "cron": "*/5 * * * *"
   },
   {
     "job_name": "london-morning",

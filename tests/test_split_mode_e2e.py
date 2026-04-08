@@ -51,9 +51,8 @@ class SplitModeE2ETests(unittest.TestCase):
                 {
                     "job_name": "ci-split-smoke",
                     "content": "CI smoke task",
-                    "interval_seconds": 3600,
+                    "cron": "0 * * * *",
                     "context_refs": ["repo:/workspace/chatting"],
-                    "start_at": "2026-01-01T00:00:00Z",
                     "reply_channel_type": "log",
                     "reply_channel_target": "ci-split-smoke",
                 }
