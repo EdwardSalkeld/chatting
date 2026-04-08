@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.state import SQLiteStateStore
@@ -46,12 +47,14 @@ class SplitModeE2ETests(unittest.TestCase):
             schedule_path = temp_root / "schedule.json"
             handler_config_path = temp_root / "message-handler.json"
             worker_config_path = temp_root / "worker.json"
+            now = datetime.now(timezone.utc)
+            immediate_cron = f"{now.minute} {now.hour} * * *"
 
             schedule_payload = [
                 {
                     "job_name": "ci-split-smoke",
                     "content": "CI smoke task",
-                    "cron": "0 * * * *",
+                    "cron": immediate_cron,
                     "context_refs": ["repo:/workspace/chatting"],
                     "reply_channel_type": "log",
                     "reply_channel_target": "ci-split-smoke",
@@ -82,6 +85,7 @@ class SplitModeE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
                         "max_loops": 20,
+                        "activity_port": 0,
                         "codex_command": f"{sys.executable} {fake_codex}",
                     }
                 ),
