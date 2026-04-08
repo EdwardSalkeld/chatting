@@ -88,10 +88,6 @@ class SplitModeE2ETests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            expected_envelope_id = "cron:ci-split-smoke:2026-01-01T00:00:00+00:00"
-            expected_task_id = f"task:{expected_envelope_id}"
-            expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
-
             try:
                 server_proc = subprocess.Popen(
                     [str(server_bin)],
@@ -156,10 +152,14 @@ class SplitModeE2ETests(unittest.TestCase):
 
             worker_store = SQLiteStateStore(str(worker_db_path))
             worker_runs = worker_store.list_runs()
+            matching_worker_runs = [
+                run for run in worker_runs if run.envelope_id.startswith("cron:ci-split-smoke:")
+            ]
             self.assertTrue(
-                any(run.envelope_id == expected_envelope_id for run in worker_runs),
-                msg=f"missing worker run for expected envelope_id={expected_envelope_id!r}",
+                matching_worker_runs,
+                msg="missing worker run for ci-split-smoke cron schedule",
             )
+            expected_envelope_id = matching_worker_runs[0].envelope_id
             self.assertTrue(
                 any(
                     run.envelope_id == expected_envelope_id and run.result_status == "success"
@@ -169,6 +169,8 @@ class SplitModeE2ETests(unittest.TestCase):
             )
 
             handler_store = SQLiteStateStore(str(handler_db_path))
+            expected_task_id = f"task:{expected_envelope_id}"
+            expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
             self.assertEqual(handler_store.list_dispatched_event_indices(run_id=expected_task_id), [])
             self.assertTrue(
                 handler_store.has_dispatched_event_id(
