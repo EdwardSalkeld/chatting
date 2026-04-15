@@ -125,15 +125,14 @@ class FakeEmailConnectorTests(unittest.TestCase):
 
 
 class IntervalScheduleConnectorTests(unittest.TestCase):
-    def test_poll_emits_due_job_and_respects_interval(self) -> None:
+    def test_poll_emits_due_job_and_respects_cron_schedule(self) -> None:
         clock = _MutableClock(datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc))
         connector = IntervalScheduleConnector(
             jobs=[
                 IntervalScheduleJob(
                     job_name="heartbeat",
                     content="Run scheduled heartbeat",
-                    interval_seconds=60,
-                    start_at=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+                    cron="* * * * *",
                     context_refs=["repo:/home/edward/chatting"],
                 )
             ],
@@ -164,8 +163,7 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
                 IntervalScheduleJob(
                     job_name="heartbeat",
                     content="Run scheduled heartbeat",
-                    interval_seconds=60,
-                    start_at=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+                    cron="* * * * *",
                     context_refs=[],
                     prompt_context=["Include yesterday's failures first."],
                 )
@@ -186,13 +184,11 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
             ],
         )
 
-    def test_job_rejects_naive_start_at(self) -> None:
-        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+    def test_job_requires_cron_expression(self) -> None:
+        with self.assertRaisesRegex(TypeError, "required positional argument: 'cron'"):
             IntervalScheduleJob(
                 job_name="daily",
                 content="Run",
-                interval_seconds=30,
-                start_at=datetime(2026, 2, 28, 10, 0),
                 context_refs=[],
             )
 
@@ -256,41 +252,6 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
         self.assertEqual(
             second_poll[0].dedupe_key,
             "cron:london-morning:2026-03-01T08:00:00+00:00",
-        )
-
-    def test_cron_schedule_takes_precedence_over_interval_fields(self) -> None:
-        clock = _MutableClock(datetime(2026, 2, 28, 8, 0, tzinfo=timezone.utc))
-        connector = IntervalScheduleConnector(
-            jobs=[
-                IntervalScheduleJob(
-                    job_name="cron-wins",
-                    content="Use the cron schedule",
-                    interval_seconds=60,
-                    start_at=datetime(2026, 2, 28, 7, 0, tzinfo=timezone.utc),
-                    cron="0 8 * * *",
-                    timezone_name="UTC",
-                    context_refs=[],
-                )
-            ],
-            now_provider=clock.now,
-        )
-
-        first_poll = connector.poll()
-        self.assertEqual(len(first_poll), 1)
-        self.assertEqual(
-            first_poll[0].dedupe_key,
-            "cron:cron-wins:2026-02-28T08:00:00+00:00",
-        )
-
-        clock.set(datetime(2026, 2, 28, 8, 1, tzinfo=timezone.utc))
-        self.assertEqual(connector.poll(), [])
-
-        clock.set(datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc))
-        second_poll = connector.poll()
-        self.assertEqual(len(second_poll), 1)
-        self.assertEqual(
-            second_poll[0].dedupe_key,
-            "cron:cron-wins:2026-03-01T08:00:00+00:00",
         )
 
     def test_cron_schedule_fires_near_nonexistent_dst_local_times(self) -> None:
@@ -358,8 +319,7 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
                 IntervalScheduleJob(
                     job_name="morning-weather",
                     content="Check weather in Leeds",
-                    interval_seconds=60,
-                    start_at=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+                    cron="0 10 * * *",
                     context_refs=["repo:/home/edward/chatting"],
                     reply_channel_type="telegram",
                     reply_channel_target="8605042448",
@@ -405,28 +365,6 @@ class IntervalScheduleConnectorTests(unittest.TestCase):
             second_poll[0].dedupe_key,
             "cron:london-morning:2026-03-02T08:00:00+00:00",
         )
-
-    def test_poll_uses_cron_precedence_when_interval_is_also_present(self) -> None:
-        clock = _MutableClock(datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc))
-        connector = IntervalScheduleConnector(
-            jobs=[
-                IntervalScheduleJob(
-                    job_name="cron-wins",
-                    content="Run cron-scheduled task",
-                    interval_seconds=60,
-                    cron="0 8 * * *",
-                    timezone_name="Europe/London",
-                    context_refs=[],
-                )
-            ],
-            now_provider=clock.now,
-        )
-
-        first_poll = connector.poll()
-        self.assertEqual(len(first_poll), 1)
-
-        clock.set(datetime(2026, 3, 1, 8, 1, tzinfo=timezone.utc))
-        self.assertEqual(connector.poll(), [])
 
     def test_cron_job_rejects_invalid_timezone(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid timezone"):

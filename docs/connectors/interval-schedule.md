@@ -4,7 +4,7 @@ Module: `app.connectors.interval_schedule_connector`
 
 ## Purpose
 
-Live scheduled-job connector that emits `cron`-source events from either fixed intervals or cron expressions.
+Live scheduled-job connector that emits `cron`-source events from cron expressions.
 
 ## Runtime config keys
 
@@ -16,34 +16,16 @@ Global schedule prompt guidance comes from message-handler config:
 Each job supports:
 - `job_name` (required)
 - `content` (required)
-- `interval_seconds` (optional positive int)
-- `cron` (optional 5-field cron expression)
-- `timezone` (optional with `cron`, defaults to `UTC`; uses an IANA name such as `Europe/London`)
+- `cron` (required 5-field cron expression)
+- `timezone` (optional, defaults to `UTC`; uses an IANA name such as `Europe/London`)
 - `context_refs` (optional list of non-empty strings)
 - `prompt_context` (optional list of per-job prompt instructions)
-- `start_at` (optional RFC3339 datetime for interval schedules)
 - `reply_channel_type` (optional non-empty string, requires `reply_channel_target`)
 - `reply_channel_target` (optional non-empty string, requires `reply_channel_type`)
 
-Each job must define at least one schedule:
-- interval mode: `interval_seconds` with optional `start_at`
-- cron mode: `cron` with an optional `timezone`
-
-If both `cron` and `interval_seconds` are present, cron scheduling takes precedence.
+Each job must define a cron schedule.
 
 ## Examples
-
-Interval:
-
-```json
-{
-  "job_name": "heartbeat",
-  "content": "Run scheduled heartbeat",
-  "interval_seconds": 300,
-  "start_at": "2026-03-07T00:00:00Z",
-  "prompt_context": ["Mention overdue alerts first."]
-}
-```
 
 Cron:
 
@@ -53,19 +35,6 @@ Cron:
   "content": "Prepare the 8am London update",
   "cron": "0 8 * * *",
   "timezone": "Europe/London"
-}
-```
-
-Cron with an interval fallback left in place during migration. The cron schedule wins:
-
-```json
-{
-  "job_name": "daily-summary",
-  "content": "Publish the daily summary",
-  "cron": "0 8 * * *",
-  "timezone": "Europe/London",
-  "interval_seconds": 86400,
-  "start_at": "2026-03-01T08:00:00Z"
 }
 ```
 
@@ -79,7 +48,7 @@ Cron with an interval fallback left in place during migration. The cron schedule
 
 ## Notes
 
-- Startup validation is strict: unknown keys, missing keys, invalid types, blank fields, invalid cron expressions, invalid timezone names, and invalid `start_at` values are rejected.
+- Startup validation is strict: unknown keys, missing keys, invalid types, blank fields, invalid cron expressions, and invalid timezone names are rejected.
 - Prompt guidance is assembled in this order before task content:
   global `prompt_context`, then `cron_prompt_context`, then the job's own `prompt_context`.
 - `reply_channel_type` and `reply_channel_target` must be provided together.

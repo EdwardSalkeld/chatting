@@ -133,12 +133,10 @@ ALLOWED_SCHEDULE_JOB_KEYS = frozenset(
         "content",
         "cron",
         "context_refs",
-        "interval_seconds",
         "job_name",
         "prompt_context",
         "reply_channel_target",
         "reply_channel_type",
-        "start_at",
         "timezone",
     }
 )
@@ -1365,41 +1363,17 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             )
 
         cron = raw_job.get("cron")
-        if cron is not None and (not isinstance(cron, str) or not cron.strip()):
+        if not isinstance(cron, str) or not cron.strip():
             raise ValueError(
                 f"schedule job at index {index} cron must be a non-empty string"
             )
 
-        raw_interval = raw_job.get("interval_seconds")
-        interval_seconds: int | None = None
-        if isinstance(raw_interval, int) and not isinstance(raw_interval, bool):
-            interval_seconds = raw_interval
-        if cron is None:
-            if interval_seconds is None or interval_seconds <= 0:
-                raise ValueError(
-                    f"schedule job at index {index} interval_seconds must be a positive integer"
-                )
-        elif interval_seconds is not None and interval_seconds <= 0:
-            raise ValueError(
-                f"schedule job at index {index} interval_seconds must be a positive integer"
-            )
-
         timezone_name = raw_job.get("timezone")
-        if cron is not None:
-            if timezone_name is None:
-                timezone_name = "UTC"
-            elif not isinstance(timezone_name, str) or not timezone_name.strip():
-                raise ValueError(
-                    f"schedule job at index {index} timezone must be a non-empty string"
-                )
-        elif timezone_name is not None:
+        if timezone_name is None:
+            timezone_name = "UTC"
+        elif not isinstance(timezone_name, str) or not timezone_name.strip():
             raise ValueError(
-                f"schedule job at index {index} timezone is only valid with cron"
-            )
-
-        if interval_seconds is None and cron is None:
-            raise ValueError(
-                f"schedule job at index {index} must define interval_seconds or cron"
+                f"schedule job at index {index} timezone must be a non-empty string"
             )
 
         raw_context_refs = raw_job.get("context_refs", [])
@@ -1417,20 +1391,6 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             raise ValueError(
                 f"schedule job at index {index} prompt_context must be a list of non-empty strings"
             )
-
-        raw_start_at = raw_job.get("start_at")
-        if cron is None:
-            if raw_start_at is not None and not isinstance(raw_start_at, str):
-                raise ValueError(
-                    f"schedule job at index {index} start_at must be an RFC3339 string"
-                )
-            start_at = (
-                _parse_optional_rfc3339(raw_start_at)
-                if raw_start_at is not None
-                else None
-            )
-        else:
-            start_at = None
 
         reply_channel_type = raw_job.get("reply_channel_type")
         if reply_channel_type is not None and (
@@ -1459,14 +1419,10 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
                 content=content.strip(),
                 context_refs=list(raw_context_refs),
                 prompt_context=list(raw_prompt_context),
-                interval_seconds=interval_seconds
-                if isinstance(interval_seconds, int)
-                else None,
-                cron=cron.strip() if isinstance(cron, str) else None,
+                cron=cron.strip(),
                 timezone_name=timezone_name.strip()
                 if isinstance(timezone_name, str)
                 else None,
-                start_at=start_at,
                 reply_channel_type=reply_channel_type.strip()
                 if isinstance(reply_channel_type, str)
                 else None,
@@ -1476,15 +1432,6 @@ def _load_schedule_jobs(schedule_file: str) -> list[IntervalScheduleJob]:
             )
         )
     return jobs
-
-
-def _parse_optional_rfc3339(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("schedule job start_at must be timezone-aware")
-    return parsed.astimezone(timezone.utc)
-
-
 def _build_live_connectors_fail_open(
     args: argparse.Namespace,
     config: dict[str, object],
