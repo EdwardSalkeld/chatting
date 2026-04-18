@@ -25,19 +25,27 @@ from app.models import (
     ReplyChannel,
     TaskEnvelope,
 )
+
+
 class NoOpApplierTests(unittest.TestCase):
     def test_skips_approved_actions_and_dispatches_messages(self) -> None:
         decision = PolicyDecision(
             approved_actions=[ActionProposal(type="write_file", path="docs/notes.md")],
             blocked_actions=[],
-            approved_messages=[OutboundMessage(channel="email", target="alice@example.com", body="Done.")],
+            approved_messages=[
+                OutboundMessage(
+                    channel="email", target="alice@example.com", body="Done."
+                )
+            ],
             reason_codes=[],
         )
 
         result = NoOpApplier().apply(decision)
 
         self.assertEqual(result.applied_actions, [])
-        self.assertEqual([action.type for action in result.skipped_actions], ["write_file"])
+        self.assertEqual(
+            [action.type for action in result.skipped_actions], ["write_file"]
+        )
         self.assertEqual(
             [message.channel for message in result.dispatched_messages],
             ["email"],
@@ -55,12 +63,16 @@ class NoOpApplierTests(unittest.TestCase):
         result = NoOpApplier().apply(decision)
 
         self.assertEqual(result.reason_codes, ["policy_blocked_actions_present"])
+
+
 @dataclass
 class _RecordingEmailSender:
     sent: list[tuple[str, str, str | None]]
 
     def send(self, target: str, body: str, *, subject: str | None = None) -> None:
         self.sent.append((target, body, subject))
+
+
 class IntegratedApplierTests(unittest.TestCase):
     def test_apply_writes_files_and_dispatches_email_and_log_messages(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -85,11 +97,15 @@ class IntegratedApplierTests(unittest.TestCase):
                 reason_codes=[],
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(decision)
+            result = IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(
+                decision
+            )
 
             written_path = Path(tmpdir) / "docs" / "generated.txt"
             self.assertTrue(written_path.exists())
-            self.assertEqual(written_path.read_text(encoding="utf-8"), "hello from applier")
+            self.assertEqual(
+                written_path.read_text(encoding="utf-8"), "hello from applier"
+            )
             self.assertEqual(result.applied_actions, decision.approved_actions)
             self.assertEqual(result.skipped_actions, [])
             self.assertEqual(
@@ -182,11 +198,22 @@ class IntegratedApplierTests(unittest.TestCase):
                 reason_codes=[],
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                decision
+            )
 
             self.assertEqual(
                 sender.sent,
-                [("12345", OutboundMessage(channel="telegram", target="12345", body="Done via telegram."))],
+                [
+                    (
+                        "12345",
+                        OutboundMessage(
+                            channel="telegram",
+                            target="12345",
+                            body="Done via telegram.",
+                        ),
+                    )
+                ],
             )
             self.assertEqual(
                 [message.channel for message in result.dispatched_messages],
@@ -211,7 +238,9 @@ class IntegratedApplierTests(unittest.TestCase):
                 reason_codes=[],
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                decision
+            )
 
             self.assertEqual(sender.reactions, [("12345", 321, "👍")])
             self.assertEqual(
@@ -240,18 +269,28 @@ class IntegratedApplierTests(unittest.TestCase):
                         channel="telegram",
                         target="12345",
                         body="caption",
-                        attachment=AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
+                        attachment=AttachmentRef(
+                            uri=image_path.as_uri(), name="menu.png"
+                        ),
                     )
                 ],
                 reason_codes=[],
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                decision
+            )
 
             self.assertEqual(len(sender.sent), 1)
             self.assertEqual(sender.sent[0][0], "12345")
-            self.assertEqual(sender.sent[0][1].attachment, AttachmentRef(uri=image_path.as_uri(), name="menu.png"))
-            self.assertEqual(result.dispatched_messages[0].attachment, AttachmentRef(uri=image_path.as_uri(), name="menu.png"))
+            self.assertEqual(
+                sender.sent[0][1].attachment,
+                AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
+            )
+            self.assertEqual(
+                result.dispatched_messages[0].attachment,
+                AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
+            )
 
     def test_apply_dispatches_telegram_document_attachment(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -265,21 +304,30 @@ class IntegratedApplierTests(unittest.TestCase):
                     OutboundMessage(
                         channel="telegram",
                         target="12345",
-                        attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                        attachment=AttachmentRef(
+                            uri=pdf_path.as_uri(), name="menu.pdf"
+                        ),
                     )
                 ],
                 reason_codes=[],
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                decision
+            )
 
             self.assertEqual(len(sender.sent), 1)
-            self.assertEqual(sender.sent[0][1].attachment, AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"))
+            self.assertEqual(
+                sender.sent[0][1].attachment,
+                AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+            )
             self.assertIsNone(result.dispatched_messages[0].body)
 
     def test_apply_raises_attachment_dispatch_error_for_missing_file(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            sender = TelegramMessageSender(bot_token="token", http_post_multipart=lambda *_args: {"ok": True})
+            sender = TelegramMessageSender(
+                bot_token="token", http_post_multipart=lambda *_args: {"ok": True}
+            )
             decision = PolicyDecision(
                 approved_actions=[],
                 blocked_actions=[],
@@ -287,18 +335,26 @@ class IntegratedApplierTests(unittest.TestCase):
                     OutboundMessage(
                         channel="telegram",
                         target="12345",
-                        attachment=AttachmentRef(uri="file:///does/not/exist.pdf", name="missing.pdf"),
+                        attachment=AttachmentRef(
+                            uri="file:///does/not/exist.pdf", name="missing.pdf"
+                        ),
                     )
                 ],
                 reason_codes=[],
             )
 
             with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                    decision
+                )
 
-            self.assertEqual(context.exception.reason_code, "telegram_attachment_missing")
+            self.assertEqual(
+                context.exception.reason_code, "telegram_attachment_missing"
+            )
 
-    def test_apply_raises_attachment_dispatch_error_on_telegram_api_failure(self) -> None:
+    def test_apply_raises_attachment_dispatch_error_on_telegram_api_failure(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             pdf_path = Path(tmpdir) / "menu.pdf"
             pdf_path.write_bytes(b"%PDF")
@@ -314,22 +370,30 @@ class IntegratedApplierTests(unittest.TestCase):
                         channel="telegram",
                         target="12345",
                         body="menu",
-                        attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                        attachment=AttachmentRef(
+                            uri=pdf_path.as_uri(), name="menu.pdf"
+                        ),
                     )
                 ],
                 reason_codes=[],
             )
 
             with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                    decision
+                )
 
-            self.assertEqual(context.exception.reason_code, "telegram_attachment_send_failed")
+            self.assertEqual(
+                context.exception.reason_code, "telegram_attachment_send_failed"
+            )
 
     def test_apply_skips_write_outside_base_dir(self) -> None:
         with TemporaryDirectory() as tmpdir:
             decision = PolicyDecision(
                 approved_actions=[
-                    ActionProposal(type="write_file", path="../escape.txt", content="nope")
+                    ActionProposal(
+                        type="write_file", path="../escape.txt", content="nope"
+                    )
                 ],
                 blocked_actions=[],
                 approved_messages=[],
@@ -418,16 +482,27 @@ class IntegratedApplierTests(unittest.TestCase):
                 reason_codes=[],
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, github_sender=sender).apply(decision)
+            result = IntegratedApplier(base_dir=tmpdir, github_sender=sender).apply(
+                decision
+            )
 
             self.assertEqual(
                 sender.sent,
-                [("https://github.com/brokensbone/chatting/issues/12", "Done via GitHub.")],
+                [
+                    (
+                        "https://github.com/brokensbone/chatting/issues/12",
+                        "Done via GitHub.",
+                    )
+                ],
             )
-            self.assertEqual([message.channel for message in result.dispatched_messages], ["github"])
+            self.assertEqual(
+                [message.channel for message in result.dispatched_messages], ["github"]
+            )
             self.assertEqual(result.reason_codes, [])
 
-    def test_apply_raises_dispatch_error_with_partial_progress_on_github_failure(self) -> None:
+    def test_apply_raises_dispatch_error_with_partial_progress_on_github_failure(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _FailingGitHubSender()
             decision = PolicyDecision(
@@ -463,7 +538,9 @@ class IntegratedApplierTests(unittest.TestCase):
                 ],
             )
 
-    def test_apply_maps_final_channel_to_envelope_reply_channel_for_telegram(self) -> None:
+    def test_apply_maps_final_channel_to_envelope_reply_channel_for_telegram(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _RecordingTelegramSender(sent=[])
             decision = PolicyDecision(
@@ -497,7 +574,14 @@ class IntegratedApplierTests(unittest.TestCase):
 
             self.assertEqual(
                 sender.sent,
-                [("8605042448", OutboundMessage(channel="final", target="user", body="Answer from model."))],
+                [
+                    (
+                        "8605042448",
+                        OutboundMessage(
+                            channel="final", target="user", body="Answer from model."
+                        ),
+                    )
+                ],
             )
             self.assertEqual(
                 [message.channel for message in result.dispatched_messages],
@@ -509,7 +593,9 @@ class IntegratedApplierTests(unittest.TestCase):
             )
             self.assertEqual(result.reason_codes, [])
 
-    def test_apply_raises_dispatch_error_with_partial_progress_on_telegram_failure(self) -> None:
+    def test_apply_raises_dispatch_error_with_partial_progress_on_telegram_failure(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _FailingTelegramSender()
             decision = PolicyDecision(
@@ -523,13 +609,17 @@ class IntegratedApplierTests(unittest.TestCase):
             )
 
             with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(decision)
+                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
+                    decision
+                )
 
             self.assertEqual(context.exception.reason_code, "telegram_dispatch_failed")
             self.assertEqual(
                 context.exception.dispatched_messages,
                 [OutboundMessage(channel="telegram", target="12345", body="👀")],
             )
+
+
 class SmtpEmailSenderTests(unittest.TestCase):
     def test_send_uses_smtp_client(self) -> None:
         client = _FakeSmtpClient()
@@ -551,6 +641,8 @@ class SmtpEmailSenderTests(unittest.TestCase):
         self.assertEqual(message["From"], "bot@example.com")
         self.assertEqual(message["Subject"], "Automation response")
         self.assertTrue(client.quit_called)
+
+
 class TelegramMessageSenderTests(unittest.TestCase):
     def test_send_posts_message_and_validates_ok_response(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
@@ -568,7 +660,9 @@ class TelegramMessageSenderTests(unittest.TestCase):
             http_post_json=fake_http_post_json,
         )
 
-        sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
+        sender.send(
+            "12345", OutboundMessage(channel="telegram", target="12345", body="hello")
+        )
 
         self.assertEqual(len(seen_calls), 1)
         call_url, call_payload, call_timeout = seen_calls[0]
@@ -582,7 +676,9 @@ class TelegramMessageSenderTests(unittest.TestCase):
         )
         self.assertEqual(call_timeout, 10.0)
 
-    def test_send_retries_without_parse_mode_when_telegram_rejects_entities(self) -> None:
+    def test_send_retries_without_parse_mode_when_telegram_rejects_entities(
+        self,
+    ) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
 
         def fake_http_post_json(
@@ -600,7 +696,9 @@ class TelegramMessageSenderTests(unittest.TestCase):
             http_post_json=fake_http_post_json,
         )
 
-        sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
+        sender.send(
+            "12345", OutboundMessage(channel="telegram", target="12345", body="hello")
+        )
 
         self.assertEqual(len(seen_calls), 2)
         self.assertEqual(
@@ -619,7 +717,10 @@ class TelegramMessageSenderTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "telegram_send_failed"):
-            sender.send("12345", OutboundMessage(channel="telegram", target="12345", body="hello"))
+            sender.send(
+                "12345",
+                OutboundMessage(channel="telegram", target="12345", body="hello"),
+            )
 
     def test_send_escapes_markdown_sensitive_text_before_first_send(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
@@ -656,7 +757,9 @@ class TelegramMessageSenderTests(unittest.TestCase):
             },
         )
 
-    def test_send_normalizes_double_escaped_newlines_and_markdown_punctuation(self) -> None:
+    def test_send_normalizes_literal_escape_sequences_before_markdown_escape(
+        self,
+    ) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
 
         def fake_http_post_json(
@@ -677,7 +780,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
             OutboundMessage(
                 channel="telegram",
                 target="12345",
-                body=r"Your three 1960s albums are:\\n\\n- Gal Costa \\(second edition\\)",
+                body=r"Your three 1960s saved albums are all from 1969:\n\n- Gal Costa \(second edition\)",
             ),
         )
 
@@ -686,42 +789,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
             seen_calls[0][1],
             {
                 "chat_id": "12345",
-                "text": "Your three 1960s albums are:\n\n- Gal Costa \\(second edition\\)",
-                "parse_mode": "Markdown",
-            },
-        )
-
-    def test_send_normalizes_repeated_backslashes_before_newline_escape(self) -> None:
-        seen_calls: list[tuple[str, dict[str, object], float]] = []
-
-        def fake_http_post_json(
-            url: str,
-            payload: dict[str, object],
-            timeout: float,
-        ) -> dict[str, object]:
-            seen_calls.append((url, payload, timeout))
-            return {"ok": True, "result": {"message_id": 7}}
-
-        sender = TelegramMessageSender(
-            bot_token="token",
-            http_post_json=fake_http_post_json,
-        )
-
-        sender.send(
-            "12345",
-            OutboundMessage(
-                channel="telegram",
-                target="12345",
-                body=r"Line one\\\\nLine two",
-            ),
-        )
-
-        self.assertEqual(len(seen_calls), 1)
-        self.assertEqual(
-            seen_calls[0][1],
-            {
-                "chat_id": "12345",
-                "text": "Line one\nLine two",
+                "text": "Your three 1960s saved albums are all from 1969:\n\n- Gal Costa \\(second edition\\)",
                 "parse_mode": "Markdown",
             },
         )
@@ -802,11 +870,83 @@ class TelegramMessageSenderTests(unittest.TestCase):
             )
 
         self.assertEqual(len(seen_calls), 2)
-        self.assertEqual(seen_calls[0][0], "https://api.telegram.org/bottoken/sendDocument")
+        self.assertEqual(
+            seen_calls[0][0], "https://api.telegram.org/bottoken/sendDocument"
+        )
         self.assertEqual(seen_calls[0][1]["parse_mode"], "Markdown")
         self.assertNotIn("parse_mode", seen_calls[1][1])
         self.assertEqual(seen_calls[0][2], "document")
         self.assertEqual(seen_calls[1][1]["caption"], "**menu**")
+
+    def test_send_retries_with_normalized_plain_text_after_parse_error(self) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            if len(seen_calls) == 1:
+                return {"ok": False, "description": "Bad Request: can't parse entities"}
+            return {"ok": True, "result": {"message_id": 7}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send(
+            "12345",
+            OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body=r"Heading\n\n- Item \(note\)",
+            ),
+        )
+
+        self.assertEqual(len(seen_calls), 2)
+        self.assertEqual(
+            seen_calls[1][1],
+            {"chat_id": "12345", "text": "Heading\n\n- Item (note)"},
+        )
+
+    def test_send_normalizes_double_escaped_sequences_before_markdown_escape(
+        self,
+    ) -> None:
+        seen_calls: list[tuple[str, dict[str, object], float]] = []
+
+        def fake_http_post_json(
+            url: str,
+            payload: dict[str, object],
+            timeout: float,
+        ) -> dict[str, object]:
+            seen_calls.append((url, payload, timeout))
+            return {"ok": True, "result": {"message_id": 8}}
+
+        sender = TelegramMessageSender(
+            bot_token="token",
+            http_post_json=fake_http_post_json,
+        )
+
+        sender.send(
+            "12345",
+            OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body=r"Your three 1960s saved albums are all from 1969:\\n\\n- Gal Costa \\(second edition\\)",
+            ),
+        )
+
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(
+            seen_calls[0][1],
+            {
+                "chat_id": "12345",
+                "text": "Your three 1960s saved albums are all from 1969:\n\n- Gal Costa \\(second edition\\)",
+                "parse_mode": "Markdown",
+            },
+        )
 
     def test_send_attachment_raises_when_telegram_response_not_ok(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -817,17 +957,23 @@ class TelegramMessageSenderTests(unittest.TestCase):
                 http_post_multipart=lambda *_args: {"ok": False},
             )
 
-            with self.assertRaisesRegex(RuntimeError, "telegram_attachment_send_failed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "telegram_attachment_send_failed"
+            ):
                 sender.send(
                     "12345",
                     OutboundMessage(
                         channel="telegram",
                         target="12345",
-                        attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
+                        attachment=AttachmentRef(
+                            uri=pdf_path.as_uri(), name="menu.pdf"
+                        ),
                     ),
                 )
 
-    def test_default_http_post_json_returns_error_payload_and_logs_http_error_body(self) -> None:
+    def test_default_http_post_json_returns_error_payload_and_logs_http_error_body(
+        self,
+    ) -> None:
         http_error = urllib.error.HTTPError(
             url="https://api.telegram.org/bottoken/sendMessage",
             code=400,
@@ -837,8 +983,13 @@ class TelegramMessageSenderTests(unittest.TestCase):
         )
 
         with (
-            patch("app.handler.applier.integrated.urllib.request.urlopen", side_effect=http_error),
-            self.assertLogs("app.handler.applier.integrated", level="ERROR") as captured,
+            patch(
+                "app.handler.applier.integrated.urllib.request.urlopen",
+                side_effect=http_error,
+            ),
+            self.assertLogs(
+                "app.handler.applier.integrated", level="ERROR"
+            ) as captured,
         ):
             response = _default_http_post_json(
                 "https://api.telegram.org/bottoken/sendMessage",
@@ -853,7 +1004,7 @@ class TelegramMessageSenderTests(unittest.TestCase):
         self.assertEqual(len(captured.records), 1)
         self.assertIn("status=400", captured.output[0])
         self.assertIn("Bad Request", captured.output[0])
-        self.assertIn('chat not found', captured.output[0])
+        self.assertIn("chat not found", captured.output[0])
 
     def test_react_posts_set_message_reaction_request(self) -> None:
         seen_calls: list[tuple[str, dict[str, object], float]] = []
@@ -887,6 +1038,8 @@ class TelegramMessageSenderTests(unittest.TestCase):
                 )
             ],
         )
+
+
 class GitHubIssueCommentSenderTests(unittest.TestCase):
     def test_send_uses_gh_cli_for_issue_url_target(self) -> None:
         seen_commands: list[list[str]] = []
@@ -903,7 +1056,18 @@ class GitHubIssueCommentSenderTests(unittest.TestCase):
 
         self.assertEqual(
             seen_commands,
-            [["gh", "issue", "comment", "12", "--repo", "brokensbone/chatting", "--body", "hello"]],
+            [
+                [
+                    "gh",
+                    "issue",
+                    "comment",
+                    "12",
+                    "--repo",
+                    "brokensbone/chatting",
+                    "--body",
+                    "hello",
+                ]
+            ],
         )
 
     def test_send_uses_gh_cli_for_slug_target(self) -> None:
@@ -921,7 +1085,18 @@ class GitHubIssueCommentSenderTests(unittest.TestCase):
 
         self.assertEqual(
             seen_commands,
-            [["gh", "issue", "comment", "13", "--repo", "brokensbone/chatting", "--body", "hello"]],
+            [
+                [
+                    "gh",
+                    "issue",
+                    "comment",
+                    "13",
+                    "--repo",
+                    "brokensbone/chatting",
+                    "--body",
+                    "hello",
+                ]
+            ],
         )
 
     def test_send_uses_gh_cli_for_pull_request_url_target(self) -> None:
@@ -939,7 +1114,18 @@ class GitHubIssueCommentSenderTests(unittest.TestCase):
 
         self.assertEqual(
             seen_commands,
-            [["gh", "issue", "comment", "60", "--repo", "brokensbone/chatting", "--body", "hello"]],
+            [
+                [
+                    "gh",
+                    "issue",
+                    "comment",
+                    "60",
+                    "--repo",
+                    "brokensbone/chatting",
+                    "--body",
+                    "hello",
+                ]
+            ],
         )
 
     def test_send_raises_for_invalid_target(self) -> None:
@@ -954,6 +1140,8 @@ class GitHubIssueCommentSenderTests(unittest.TestCase):
         sender = GitHubIssueCommentSender(command_runner=lambda _command: _Result())
         with self.assertRaisesRegex(RuntimeError, "github_issue_comment_failed"):
             sender.send("brokensbone/chatting#13", "hello")
+
+
 class _FakeSmtpClient:
     def __init__(self) -> None:
         self.login_args: tuple[str, str] | None = None
@@ -968,6 +1156,8 @@ class _FakeSmtpClient:
 
     def quit(self) -> None:
         self.quit_called = True
+
+
 @dataclass
 class _RecordingTelegramSender:
     sent: list[tuple[str, OutboundMessage]]
@@ -978,6 +1168,8 @@ class _RecordingTelegramSender:
 
     def react(self, target: str, message_id: int, emoji: str) -> None:
         self.reactions.append((target, message_id, emoji))
+
+
 class _FailingTelegramSender:
     def __init__(self) -> None:
         self._count = 0
@@ -986,12 +1178,16 @@ class _FailingTelegramSender:
         self._count += 1
         if self._count == 2:
             raise RuntimeError("simulated dispatch failure")
+
+
 @dataclass
 class _RecordingGitHubSender:
     sent: list[tuple[str, str]]
 
     def send(self, target: str, body: str) -> None:
         self.sent.append((target, body))
+
+
 class _FailingGitHubSender:
     def __init__(self) -> None:
         self._count = 0
@@ -1000,6 +1196,8 @@ class _FailingGitHubSender:
         self._count += 1
         if self._count == 2:
             raise RuntimeError("simulated dispatch failure")
+
+
 def _email_envelope(*, subject: str, body: str):
     from app.models import ReplyChannel, TaskEnvelope
 
@@ -1014,5 +1212,7 @@ def _email_envelope(*, subject: str, body: str):
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         dedupe_key="email:test",
     )
+
+
 if __name__ == "__main__":
     unittest.main()
