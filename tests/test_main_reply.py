@@ -25,6 +25,8 @@ class _FakeBroker:
     def publish_json(self, queue_name: str, payload: dict[str, object]) -> str:
         self.published.append((queue_name, payload))
         return "guid-1"
+
+
 class MainReplyCliTests(unittest.TestCase):
     def test_main_reply_publishes_unsequenced_incremental_v2_payload(self) -> None:
         broker = _FakeBroker("127.0.0.1:9876")
@@ -71,11 +73,15 @@ class MainReplyCliTests(unittest.TestCase):
     def test_main_reply_uses_bbmb_address_from_worker_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(json.dumps({"bbmb_address": "10.0.0.5:9999"}), encoding="utf-8")
+            config_path.write_text(
+                json.dumps({"bbmb_address": "10.0.0.5:9999"}), encoding="utf-8"
+            )
             broker = _FakeBroker("placeholder")
             stdout = io.StringIO()
             with (
-                patch("app.main_reply.BBMBQueueAdapter", return_value=broker) as broker_ctor,
+                patch(
+                    "app.main_reply.BBMBQueueAdapter", return_value=broker
+                ) as broker_ctor,
                 patch("sys.stdout", stdout),
                 patch(
                     "sys.argv",
@@ -92,7 +98,7 @@ class MainReplyCliTests(unittest.TestCase):
                         str(config_path),
                     ],
                 ),
-                ):
+            ):
                 exit_code = main()
 
         self.assertEqual(exit_code, 0)
@@ -116,7 +122,9 @@ class MainReplyCliTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "envelope_id is required"):
                 main()
 
-    def test_main_reply_publishes_telegram_reaction_using_explicit_message_id(self) -> None:
+    def test_main_reply_publishes_telegram_reaction_using_explicit_message_id(
+        self,
+    ) -> None:
         broker = _FakeBroker("127.0.0.1:9876")
         with (
             patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
@@ -144,11 +152,15 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(payload["message"]["body"], "👍")
         self.assertEqual(payload["message"]["metadata"], {"message_id": 123})
 
-    def test_main_reply_publishes_telegram_reaction_using_task_ledger_message_id(self) -> None:
+    def test_main_reply_publishes_telegram_reaction_using_task_ledger_message_id(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(json.dumps({"db_path": str(db_path)}), encoding="utf-8")
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
             ledger = TaskLedgerStore(str(db_path))
             envelope = TaskEnvelope(
                 id="telegram:53",
@@ -165,7 +177,9 @@ class MainReplyCliTests(unittest.TestCase):
                 ),
                 dedupe_key="telegram:53",
             )
-            ledger.record_task(TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53"))
+            ledger.record_task(
+                TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53")
+            )
 
             broker = _FakeBroker("127.0.0.1:9876")
             with (
@@ -223,13 +237,19 @@ class MainReplyCliTests(unittest.TestCase):
         _, payload = broker.published[0]
         self.assertEqual(payload["message"]["body"], "This week's menu")
         self.assertEqual(payload["message"]["attachment"]["name"], "menu.pdf")
-        self.assertEqual(payload["message"]["attachment"]["uri"], attachment_path.as_uri())
+        self.assertEqual(
+            payload["message"]["attachment"]["uri"], attachment_path.as_uri()
+        )
 
-    def test_main_reply_records_worker_activity_when_db_path_is_configured(self) -> None:
+    def test_main_reply_records_worker_activity_when_db_path_is_configured(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(json.dumps({"db_path": str(db_path)}), encoding="utf-8")
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
             broker = _FakeBroker("127.0.0.1:9876")
             with (
                 patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
@@ -252,10 +272,69 @@ class MainReplyCliTests(unittest.TestCase):
                 exit_code = main()
 
             self.assertEqual(exit_code, 0)
-            activity = SQLiteStateStore(str(db_path)).list_recent_worker_activity(limit=5, include_internal=True)
+            activity = SQLiteStateStore(str(db_path)).list_recent_worker_activity(
+                limit=5, include_internal=True
+            )
             self.assertEqual(len(activity), 1)
             self.assertEqual(activity[0]["phase"], "egress_incremental")
             self.assertEqual(activity[0]["detail"]["publish_source"], "main_reply")
+
+    def test_main_reply_normalizes_literal_escape_sequences_in_message_body(
+        self,
+    ) -> None:
+        broker = _FakeBroker("127.0.0.1:9876")
+        with (
+            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+            patch(
+                "sys.argv",
+                [
+                    "main_reply.py",
+                    "task:telegram:53",
+                    "--message",
+                    r"Proof line 1.\nProof line 2.\n\nTabs:\tokay",
+                    "--channel",
+                    "telegram",
+                    "--target",
+                    "8605042448",
+                ],
+            ),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        _, payload = broker.published[0]
+        self.assertEqual(
+            payload["message"]["body"], "Proof line 1.\nProof line 2.\n\nTabs:\tokay"
+        )
+
+    def test_main_reply_normalizes_double_escaped_sequences_in_message_body(
+        self,
+    ) -> None:
+        broker = _FakeBroker("127.0.0.1:9876")
+        with (
+            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+            patch(
+                "sys.argv",
+                [
+                    "main_reply.py",
+                    "task:telegram:53",
+                    "--message",
+                    r"Proof line 1.\\nProof line 2.\\n\\nEscaped \\(paren\\)",
+                    "--channel",
+                    "telegram",
+                    "--target",
+                    "8605042448",
+                ],
+            ),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        _, payload = broker.published[0]
+        self.assertEqual(
+            payload["message"]["body"],
+            "Proof line 1.\nProof line 2.\n\nEscaped (paren)",
+        )
 
 
 if __name__ == "__main__":

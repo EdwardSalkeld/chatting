@@ -8,7 +8,6 @@ import mimetypes
 import smtplib
 import subprocess
 import html
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,7 +18,14 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
-from app.models import ActionProposal, ApplyResult, OutboundMessage, PolicyDecision, TaskEnvelope
+from app.models import (
+    ActionProposal,
+    ApplyResult,
+    OutboundMessage,
+    PolicyDecision,
+    TaskEnvelope,
+)
+from app.telegram_text import normalize_telegram_outbound_text
 
 LOGGER = logging.getLogger(__name__)
 _MAX_HTTP_ERROR_LOG_BODY_CHARS = 500
@@ -127,7 +133,7 @@ class SmtpEmailSender:
             host,
             port,
             timeout=self.timeout_seconds,
-            )
+        )
 
 
 @dataclass(frozen=True)
@@ -138,7 +144,9 @@ class TelegramMessageSender:
     api_base_url: str = "https://api.telegram.org"
     parse_mode: str | None = "Markdown"
     timeout_seconds: float = 10.0
-    http_post_json: Callable[[str, dict[str, object], float], dict[str, object]] | None = None
+    http_post_json: (
+        Callable[[str, dict[str, object], float], dict[str, object]] | None
+    ) = None
     http_post_multipart: (
         Callable[[str, dict[str, object], str, Path, float], dict[str, object]] | None
     ) = None
@@ -148,8 +156,14 @@ class TelegramMessageSender:
             raise ValueError("bot_token is required")
         if not self.api_base_url:
             raise ValueError("api_base_url is required")
-        if self.parse_mode is not None and self.parse_mode not in {"Markdown", "MarkdownV2", "HTML"}:
-            raise ValueError("parse_mode must be one of Markdown, MarkdownV2, HTML, or None")
+        if self.parse_mode is not None and self.parse_mode not in {
+            "Markdown",
+            "MarkdownV2",
+            "HTML",
+        }:
+            raise ValueError(
+                "parse_mode must be one of Markdown, MarkdownV2, HTML, or None"
+            )
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -168,7 +182,9 @@ class TelegramMessageSender:
         url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/{api_method}"
         payload: dict[str, object] = {"chat_id": target}
         if message.body is not None:
-            payload["caption"] = _normalize_telegram_text_for_parse_mode(message.body, self.parse_mode)
+            payload["caption"] = _normalize_telegram_text_for_parse_mode(
+                message.body, self.parse_mode
+            )
         if self.parse_mode is not None and message.body is not None:
             payload["parse_mode"] = self.parse_mode
 
@@ -177,11 +193,17 @@ class TelegramMessageSender:
         if response.get("ok") is True:
             return
 
-        if self.parse_mode is not None and message.body is not None and _is_telegram_parse_mode_error(response):
+        if (
+            self.parse_mode is not None
+            and message.body is not None
+            and _is_telegram_parse_mode_error(response)
+        ):
             fallback_payload = dict(payload)
             fallback_payload.pop("parse_mode", None)
             fallback_payload["caption"] = message.body
-            fallback_response = client(url, fallback_payload, field_name, file_path, self.timeout_seconds)
+            fallback_response = client(
+                url, fallback_payload, field_name, file_path, self.timeout_seconds
+            )
             if fallback_response.get("ok") is True:
                 return
 
@@ -193,9 +215,12 @@ class TelegramMessageSender:
 
         client = self.http_post_json or _default_http_post_json
         url = f"{self.api_base_url.rstrip('/')}/bot{self.bot_token}/sendMessage"
+        normalized_body = normalize_telegram_outbound_text(body)
         payload: dict[str, object] = {
             "chat_id": target,
-            "text": _normalize_telegram_text_for_parse_mode(body, self.parse_mode),
+            "text": _normalize_telegram_text_for_parse_mode(
+                normalized_body, self.parse_mode
+            ),
         }
         if self.parse_mode is not None:
             payload["parse_mode"] = self.parse_mode
@@ -205,12 +230,17 @@ class TelegramMessageSender:
 
         # Gracefully degrade to plain text when Telegram rejects formatting entities.
         if self.parse_mode is not None and _is_telegram_parse_mode_error(response):
-            plain_text_payload: dict[str, object] = {"chat_id": target, "text": body}
+            plain_text_payload: dict[str, object] = {
+                "chat_id": target,
+                "text": normalized_body,
+            }
             fallback_response = client(url, plain_text_payload, self.timeout_seconds)
             if fallback_response.get("ok") is True:
                 return
 
-        raise RuntimeError(_describe_telegram_response_error("telegram_send_failed", response))
+        raise RuntimeError(
+            _describe_telegram_response_error("telegram_send_failed", response)
+        )
 
     def react(self, target: str, message_id: int, emoji: str) -> None:
         if not target:
@@ -230,7 +260,9 @@ class TelegramMessageSender:
         response = client(url, payload, self.timeout_seconds)
         if response.get("ok") is True:
             return
-        raise RuntimeError(_describe_telegram_response_error("telegram_reaction_failed", response))
+        raise RuntimeError(
+            _describe_telegram_response_error("telegram_reaction_failed", response)
+        )
 
 
 @dataclass(frozen=True)
@@ -271,7 +303,9 @@ class IntegratedApplier:
     telegram_sender: TelegramSender | None = None
     github_sender: GitHubSender | None = None
 
-    def apply(self, decision: PolicyDecision, envelope: TaskEnvelope | None = None) -> ApplyResult:
+    def apply(
+        self, decision: PolicyDecision, envelope: TaskEnvelope | None = None
+    ) -> ApplyResult:
         applied_actions: list[ActionProposal] = []
         skipped_actions: list[ActionProposal] = []
         dispatched_messages: list[OutboundMessage] = []
@@ -311,11 +345,15 @@ class IntegratedApplier:
             )
 
             if dispatch_channel == "log":
-                LOGGER.info("log_dispatch target=%s body=%s", dispatch_target, message.body)
+                LOGGER.info(
+                    "log_dispatch target=%s body=%s", dispatch_target, message.body
+                )
                 dispatched_messages.append(normalized_message)
                 continue
             if dispatch_channel == "drop":
-                LOGGER.info("drop_marker target=%s body=%s", dispatch_target, message.body)
+                LOGGER.info(
+                    "drop_marker target=%s body=%s", dispatch_target, message.body
+                )
                 dispatched_messages.append(normalized_message)
                 continue
             if dispatch_channel == "email":
@@ -359,7 +397,9 @@ class IntegratedApplier:
                     self.telegram_sender.send(dispatch_target, message)
                     dispatched_messages.append(normalized_message)
                 except Exception as error:  # noqa: BLE001
-                    error_reason = _telegram_dispatch_reason_code(message, exception=error)
+                    error_reason = _telegram_dispatch_reason_code(
+                        message, exception=error
+                    )
                     LOGGER.exception(
                         "drop_dispatch reason=%s channel=%s target=%s",
                         error_reason,
@@ -410,7 +450,9 @@ class IntegratedApplier:
                         raise ValueError("telegram reaction emoji is required")
                     self.telegram_sender.react(
                         dispatch_target,
-                        _resolve_telegram_reaction_message_id(message=message, envelope=envelope),
+                        _resolve_telegram_reaction_message_id(
+                            message=message, envelope=envelope
+                        ),
                         message.body,
                     )
                     dispatched_messages.append(normalized_message)
@@ -484,11 +526,7 @@ def _format_email_reply(
     if not quoted_original:
         return reply_subject, cleaned_body
 
-    reply_body = (
-        f"{cleaned_body.rstrip()}\n\n"
-        "Original message:\n"
-        f"{quoted_original}\n"
-    )
+    reply_body = f"{cleaned_body.rstrip()}\n\nOriginal message:\n{quoted_original}\n"
     return reply_subject, reply_body
 
 
@@ -588,7 +626,9 @@ def _default_http_post_json(
         ) from error
     except urllib.error.URLError as error:
         LOGGER.error("telegram_http_error reason=%s", getattr(error, "reason", error))
-        raise RuntimeError(f"telegram_http_error reason={getattr(error, 'reason', error)}") from error
+        raise RuntimeError(
+            f"telegram_http_error reason={getattr(error, 'reason', error)}"
+        ) from error
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as error:
@@ -706,7 +746,9 @@ def _telegram_api_method_for_attachment(file_path: Path) -> str:
     return "sendDocument"
 
 
-def _telegram_dispatch_reason_code(message: OutboundMessage, exception: Exception | None) -> str:
+def _telegram_dispatch_reason_code(
+    message: OutboundMessage, exception: Exception | None
+) -> str:
     if exception is not None:
         reason = str(exception).strip()
         if reason.startswith("telegram_"):
@@ -725,7 +767,6 @@ def _is_telegram_parse_mode_error(response: dict[str, object]) -> bool:
 
 
 def _normalize_telegram_text_for_parse_mode(text: str, parse_mode: str | None) -> str:
-    text = _normalize_telegram_escaped_sequences(text)
     if parse_mode is None:
         return text
     if parse_mode == "HTML":
@@ -737,29 +778,36 @@ def _normalize_telegram_text_for_parse_mode(text: str, parse_mode: str | None) -
     return text
 
 
-def _normalize_telegram_escaped_sequences(text: str) -> str:
-    text = re.sub(r"\\+([nrt])", lambda match: _decode_backslash_escape(match.group(1)), text)
-    return re.sub(r"\\+([_*`\[\]()~>#\+\-=|{}.!])", r"\1", text)
-
-
-def _decode_backslash_escape(character: str) -> str:
-    if character == "n":
-        return "\n"
-    if character == "r":
-        return "\r"
-    if character == "t":
-        return "\t"
-    return character
-
-
 def _escape_telegram_markdown(text: str) -> str:
-    return _escape_with_backslash_prefix(text, {"\\", "_", "*", "`", "[", "]", "(", ")"})
+    return _escape_with_backslash_prefix(
+        text, {"\\", "_", "*", "`", "[", "]", "(", ")"}
+    )
 
 
 def _escape_telegram_markdown_v2(text: str) -> str:
     return _escape_with_backslash_prefix(
         text,
-        {"\\", "_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"},
+        {
+            "\\",
+            "_",
+            "*",
+            "[",
+            "]",
+            "(",
+            ")",
+            "~",
+            "`",
+            ">",
+            "#",
+            "+",
+            "-",
+            "=",
+            "|",
+            "{",
+            "}",
+            ".",
+            "!",
+        },
     )
 
 
@@ -803,7 +851,9 @@ def _describe_telegram_http_error(
         detail_parts.append(f"status={status_code}")
     if reason:
         detail_parts.append(f"reason={reason}")
-    detail_parts.append(f"response_body={_truncate_http_error_body_for_log(response_body)}")
+    detail_parts.append(
+        f"response_body={_truncate_http_error_body_for_log(response_body)}"
+    )
     return " ".join(detail_parts)
 
 

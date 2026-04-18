@@ -12,9 +12,10 @@ from pathlib import Path
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
 from app.handler.runtime import TaskLedgerStore
-from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
+from app.telegram_text import normalize_telegram_outbound_text
+from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 
 
 def _parse_args() -> argparse.Namespace:
@@ -26,15 +27,34 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("task_id", help="Task identifier (for example: task:email:53).")
     parser.add_argument("--message", help="Reply body text.")
-    parser.add_argument("--attachment-path", help="Absolute path to a local file to send as an attachment.")
-    parser.add_argument("--attachment-name", help="Optional attachment filename override.")
-    parser.add_argument("--channel", required=True, help="Outbound channel (for example: email, telegram, github).")
+    parser.add_argument(
+        "--attachment-path",
+        help="Absolute path to a local file to send as an attachment.",
+    )
+    parser.add_argument(
+        "--attachment-name", help="Optional attachment filename override."
+    )
+    parser.add_argument(
+        "--channel",
+        required=True,
+        help="Outbound channel (for example: email, telegram, github).",
+    )
     parser.add_argument("--target", required=True, help="Outbound channel target.")
-    parser.add_argument("--telegram-reaction", help="React to the Telegram source message instead of sending a text message.")
-    parser.add_argument("--telegram-message-id", type=int, help="Telegram message id to react to.")
+    parser.add_argument(
+        "--telegram-reaction",
+        help="React to the Telegram source message instead of sending a text message.",
+    )
+    parser.add_argument(
+        "--telegram-message-id", type=int, help="Telegram message id to react to."
+    )
     parser.add_argument("--event-id", help="Optional stable event id for idempotency.")
-    parser.add_argument("--envelope-id", help="Envelope id (defaults to task_id without 'task:' prefix).")
-    parser.add_argument("--trace-id", help="Trace id (defaults to trace:<envelope_id>).")
+    parser.add_argument(
+        "--envelope-id",
+        help="Envelope id (defaults to task_id without 'task:' prefix).",
+    )
+    parser.add_argument(
+        "--trace-id", help="Trace id (defaults to trace:<envelope_id>)."
+    )
     parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
     parser.add_argument(
         "--config",
@@ -52,7 +72,9 @@ def _resolve_envelope_id(task_id: str, explicit_value: str | None) -> str:
             raise ValueError("envelope_id must not be empty")
         return explicit_value
     if not task_id.startswith("task:"):
-        raise ValueError("envelope_id is required when task_id does not start with 'task:'")
+        raise ValueError(
+            "envelope_id is required when task_id does not start with 'task:'"
+        )
     return task_id[len("task:") :]
 
 
@@ -96,14 +118,18 @@ def _resolve_telegram_message_id(
     if ledger_record is None:
         raise ValueError("telegram_message_id is required")
 
-    message_id = ledger_record.task_message.envelope.reply_channel.metadata.get("message_id")
+    message_id = ledger_record.task_message.envelope.reply_channel.metadata.get(
+        "message_id"
+    )
     if isinstance(message_id, int) and message_id > 0:
         return message_id
 
     raise ValueError("telegram_message_id is required")
 
 
-def _resolve_reply_message(args: argparse.Namespace, config: dict[str, object]) -> OutboundMessage:
+def _resolve_reply_message(
+    args: argparse.Namespace, config: dict[str, object]
+) -> OutboundMessage:
     if args.telegram_reaction is not None:
         if args.channel != "telegram":
             raise ValueError("telegram reactions require --channel telegram")
@@ -143,14 +169,16 @@ def _resolve_reply_message(args: argparse.Namespace, config: dict[str, object]) 
 
     body: str | None = None
     if args.message is not None:
-        body = args.message.strip()
+        body = normalize_telegram_outbound_text(args.message).strip()
         if not body:
             raise ValueError("message must not be empty")
 
     if body is None and attachment is None:
         raise ValueError("message or attachment is required")
 
-    return OutboundMessage(channel=args.channel, target=args.target, body=body, attachment=attachment)
+    return OutboundMessage(
+        channel=args.channel, target=args.target, body=body, attachment=attachment
+    )
 
 
 def main() -> int:
