@@ -289,5 +289,36 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(all_events[0]["phase"], "egress_message")
             self.assertEqual(all_events[1]["phase"], "task_received")
             self.assertGreater(all_events[0]["activity_id"], all_events[1]["activity_id"])
+
+    def test_worker_activity_orders_by_occurred_at_not_insert_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = SQLiteStateStore(db_path)
+
+            store.append_worker_activity(
+                occurred_at=datetime(2026, 4, 27, 19, 0, tzinfo=timezone.utc),
+                task_id="task:im:new",
+                envelope_id="im:new",
+                source="im",
+                phase="task_received",
+                summary="newer chat task received",
+                detail={"reply_channel": "telegram"},
+            )
+            store.append_worker_activity(
+                occurred_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+                task_id="task:cron:old",
+                envelope_id="cron:old",
+                source="cron",
+                phase="egress_incremental",
+                summary="old cron replayed later",
+                detail={"channel": "telegram"},
+            )
+
+            visible = store.list_recent_worker_activity(limit=10)
+            self.assertEqual(
+                [item["task_id"] for item in visible],
+                ["task:im:new", "task:cron:old"],
+            )
+            self.assertGreater(visible[1]["activity_id"], visible[0]["activity_id"])
 if __name__ == "__main__":
     unittest.main()
