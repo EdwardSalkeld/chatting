@@ -87,6 +87,8 @@ class WorkerActivityTests(unittest.TestCase):
             self.assertEqual(
                 snapshot["recent_activity"][1]["phase"], "egress_incremental"
             )
+            self.assertEqual(snapshot["recent_feed"][0]["phase"], "egress_incremental")
+            self.assertEqual(snapshot["recent_feed"][1]["phase"], "task_received")
             self.assertEqual(snapshot["recent_activity"][2]["phase"], "executor_stdout")
             self.assertEqual(
                 snapshot["recent_activity"][2]["detail"]["content"],
@@ -138,7 +140,7 @@ class WorkerActivityTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
                     html_body = response.read().decode("utf-8")
                 self.assertIn("Worker Now", html_body)
-                self.assertIn("Recent Activity", html_body)
+                self.assertIn("Recent Conversations", html_body)
                 self.assertIn("Message Detail", html_body)
                 self.assertIn("task_received", html_body)
                 self.assertIn("hello", html_body)
@@ -150,7 +152,7 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("pause refresh", html_body)
                 self.assertIn("fetch(`/activity.json", html_body)
                 self.assertNotIn('http-equiv="refresh"', html_body)
-                self.assertIn("data-event-id='3'", html_body)
+                self.assertIn("data-event-id='1'", html_body)
                 self.assertIn("Number.isInteger(item.activity_id)", html_body)
 
                 with urllib.request.urlopen(
@@ -202,6 +204,41 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("data-event-id='1'", html_body)
             finally:
                 server.shutdown()
+
+    def test_snapshot_recent_feed_prefers_conversation_events_over_cron_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            monitor = WorkerActivityMonitor(store=store, history_limit=10)
+            task_message = self._build_task_message()
+
+            cron_envelope = TaskEnvelope(
+                id="cron:1",
+                source="cron",
+                received_at=datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc),
+                actor="scheduler",
+                content="Tidy up your workspace.",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(type="log", target="cron"),
+                dedupe_key="cron:1",
+            )
+            cron_task = TaskQueueMessage.from_envelope(
+                cron_envelope,
+                trace_id="trace:cron:1",
+            )
+
+            monitor.record_task_received(task_message=task_message)
+            monitor.record_task_received(task_message=cron_task)
+
+            snapshot = monitor.snapshot()
+            self.assertEqual(
+                [item["source"] for item in snapshot["recent_activity"]],
+                ["cron", "im"],
+            )
+            self.assertEqual(
+                [item["source"] for item in snapshot["recent_feed"]],
+                ["im"],
+            )
 
 
 if __name__ == "__main__":

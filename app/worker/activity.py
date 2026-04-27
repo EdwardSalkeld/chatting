@@ -230,9 +230,14 @@ class WorkerActivityMonitor:
             limit=self._history_limit,
             include_internal=include_internal,
         )
+        conversation_feed = _build_conversation_feed(
+            activity,
+            limit=self._history_limit,
+        )
         return {
             "current_executor": current_executor,
             "recent_activity": activity,
+            "recent_feed": conversation_feed,
             "history_limit": self._history_limit,
             "history_truncated": len(activity) >= self._history_limit,
             "include_internal": include_internal,
@@ -342,11 +347,13 @@ def _render_html(
 ) -> str:
     current_executor = snapshot["current_executor"]
     activity = snapshot["recent_activity"]
+    feed = snapshot.get("recent_feed", activity)
     assert isinstance(current_executor, dict)
     assert isinstance(activity, list)
+    assert isinstance(feed, list)
     activity_json = _json_script_value(snapshot)
-    initial_list_markup = _render_activity_list(activity)
-    initial_detail_markup = _render_detail_panel(activity[0] if activity else None)
+    initial_list_markup = _render_activity_list(feed)
+    initial_detail_markup = _render_detail_panel(feed[0] if feed else None)
     current_state_markup = _render_current_executor(current_executor)
 
     showing_note = ""
@@ -460,7 +467,7 @@ def _render_html(
     <div class="layout">
       <section class="panel list-panel">
         <div class="list-header">
-          <h2>Recent Activity</h2>
+          <h2>Recent Conversations</h2>
           {showing_note}
         </div>
         <ul class="activity-list" id="activity-list">{initial_list_markup}</ul>
@@ -480,7 +487,9 @@ def _render_html(
         const includeInternal = {str(include_internal).lower()};
         let autoRefresh = {str(auto_refresh).lower()};
         let selectedId = null;
-        let currentActivity = Array.isArray(initialSnapshot.recent_activity)
+        let currentActivity = Array.isArray(initialSnapshot.recent_feed)
+          ? initialSnapshot.recent_feed
+          : Array.isArray(initialSnapshot.recent_activity)
           ? initialSnapshot.recent_activity
           : [];
         let timerId = null;
@@ -686,7 +695,9 @@ def _render_html(
             throw new Error(`activity fetch failed: ${{response.status}}`);
           }}
           const snapshot = await response.json();
-          currentActivity = Array.isArray(snapshot.recent_activity)
+          currentActivity = Array.isArray(snapshot.recent_feed)
+            ? snapshot.recent_feed
+            : Array.isArray(snapshot.recent_activity)
             ? snapshot.recent_activity
             : [];
           renderCurrentExecutor(snapshot.current_executor || {{}});
@@ -772,6 +783,17 @@ def _render_current_executor(current_executor: dict[str, object]) -> str:
             "</dl>"
         )
     return f"<div class='detail-grid'>{''.join(blocks)}</div>"
+
+
+def _build_conversation_feed(
+    activity: list[dict[str, object]],
+    *,
+    limit: int,
+) -> list[dict[str, object]]:
+    message_events = [item for item in activity if _is_conversation_event(item)]
+    if message_events:
+        return message_events[:limit]
+    return activity[:limit]
 
 
 def _render_activity_list(activity: list[object]) -> str:
@@ -937,3 +959,22 @@ def _detail_without_message(detail: object) -> object:
     return {
         key: value for key, value in detail.items() if key not in {"body", "content"}
     }
+
+
+def _is_conversation_event(item: dict[str, object]) -> bool:
+    if bool(item.get("is_internal")):
+        return False
+    message = _message_text(item)
+    if message is None:
+        return False
+    phase = str(item.get("phase", ""))
+    if phase == "task_received":
+        source = str(item.get("source", ""))
+        return source not in {"cron", "internal"}
+    if not phase.startswith("egress_"):
+        return False
+    detail = item.get("detail")
+    if not isinstance(detail, dict):
+        return False
+    channel = str(detail.get("channel", ""))
+    return channel not in {"internal", "log"}
