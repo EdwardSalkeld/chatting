@@ -282,10 +282,12 @@ class SQLiteStateStoreTests(unittest.TestCase):
             visible = store.list_recent_worker_activity(limit=10)
             self.assertEqual(len(visible), 1)
             self.assertEqual(visible[0]["phase"], "task_received")
+            self.assertIsInstance(visible[0]["activity_id"], int)
 
             all_events = store.list_recent_worker_activity(limit=10, include_internal=True)
             self.assertEqual(len(all_events), 2)
             self.assertEqual(all_events[0]["phase"], "egress_message")
             self.assertEqual(all_events[1]["phase"], "task_received")
+            self.assertGreater(all_events[0]["activity_id"], all_events[1]["activity_id"])
 if __name__ == "__main__":
     unittest.main()

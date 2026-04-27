@@ -486,6 +486,9 @@ def _render_html(
         let timerId = null;
 
         function eventId(item) {{
+          if (item && Number.isInteger(item.activity_id)) {{
+            return String(item.activity_id);
+          }}
           return [
             item.occurred_at || "",
             item.phase || "",
@@ -872,6 +875,9 @@ def _list_meta_entries(item: dict[str, object]) -> list[tuple[str, str]]:
 
 
 def _event_id(item: dict[str, object]) -> str:
+    activity_id = item.get("activity_id")
+    if isinstance(activity_id, int):
+        return str(activity_id)
     parts = [
         str(item.get("occurred_at", "")),
         str(item.get("phase", "")),
