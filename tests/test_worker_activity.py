@@ -150,6 +150,8 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("pause refresh", html_body)
                 self.assertIn("fetch(`/activity.json", html_body)
                 self.assertNotIn('http-equiv="refresh"', html_body)
+                self.assertIn("data-event-id='3'", html_body)
+                self.assertIn("Number.isInteger(item.activity_id)", html_body)
 
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/?refresh_off=1"
@@ -158,6 +160,46 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("resume refresh", paused_html_body)
                 self.assertIn("Auto-refresh paused.", paused_html_body)
                 self.assertNotIn('http-equiv="refresh"', paused_html_body)
+            finally:
+                server.shutdown()
+
+    def test_activity_html_uses_stable_activity_ids_for_duplicate_like_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            monitor = WorkerActivityMonitor(store=store, history_limit=10)
+            task_message = self._build_task_message()
+
+            monitor.record_executor_output(
+                task_message=task_message,
+                workflow="respond_and_optionally_edit",
+                stream="stdout",
+                content="same output",
+            )
+            monitor.record_executor_output(
+                task_message=task_message,
+                workflow="respond_and_optionally_edit",
+                stream="stdout",
+                content="same output",
+            )
+
+            server = start_worker_activity_server(
+                host="127.0.0.1", port=0, monitor=monitor
+            )
+            port = server.server.server_address[1]
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/activity.json"
+                ) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(
+                    [item["activity_id"] for item in payload["recent_activity"]],
+                    [2, 1],
+                )
+
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
+                    html_body = response.read().decode("utf-8")
+                self.assertIn("data-event-id='2'", html_body)
+                self.assertIn("data-event-id='1'", html_body)
             finally:
                 server.shutdown()
 

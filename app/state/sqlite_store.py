@@ -689,7 +689,7 @@ class SQLiteStateStore:
             if include_internal:
                 rows = connection.execute(
                     """
-                    SELECT occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
                     FROM worker_activity_events
                     ORDER BY activity_id DESC
                     LIMIT ?
@@ -699,7 +699,7 @@ class SQLiteStateStore:
             else:
                 rows = connection.execute(
                     """
-                    SELECT occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
                     FROM worker_activity_events
                     WHERE is_internal = 0
                     ORDER BY activity_id DESC
@@ -709,6 +709,7 @@ class SQLiteStateStore:
                 ).fetchall()
         return [
             {
+                "activity_id": row["activity_id"],
                 "occurred_at": row["occurred_at"],
                 "task_id": row["task_id"],
                 "envelope_id": row["envelope_id"],
