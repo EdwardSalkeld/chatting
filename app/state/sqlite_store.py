@@ -691,7 +691,7 @@ class SQLiteStateStore:
                     """
                     SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
                     FROM worker_activity_events
-                    ORDER BY activity_id DESC
+                    ORDER BY occurred_at DESC, activity_id DESC
                     LIMIT ?
                     """,
                     (limit,),
@@ -702,7 +702,7 @@ class SQLiteStateStore:
                     SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
                     FROM worker_activity_events
                     WHERE is_internal = 0
-                    ORDER BY activity_id DESC
+                    ORDER BY occurred_at DESC, activity_id DESC
                     LIMIT ?
                     """,
                     (limit,),

@@ -84,13 +84,13 @@ class WorkerActivityTests(unittest.TestCase):
             snapshot = monitor.snapshot()
             self.assertEqual(snapshot["current_executor"]["active"], False)
             self.assertEqual(snapshot["recent_activity"][0]["phase"], "task_finished")
+            self.assertEqual(snapshot["recent_activity"][1]["phase"], "executor_stdout")
             self.assertEqual(
-                snapshot["recent_activity"][1]["phase"], "egress_incremental"
-            )
-            self.assertEqual(snapshot["recent_activity"][2]["phase"], "executor_stdout")
-            self.assertEqual(
-                snapshot["recent_activity"][2]["detail"]["content"],
+                snapshot["recent_activity"][1]["detail"]["content"],
                 "codex transcript line",
+            )
+            self.assertEqual(
+                snapshot["recent_activity"][-2]["phase"], "egress_incremental"
             )
             self.assertEqual(
                 snapshot["recent_activity"][-1]["detail"]["content"], "hello"
