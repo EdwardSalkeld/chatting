@@ -55,8 +55,6 @@ uv run python -m app.main_message_handler --config /tmp/message-handler.json
 uv run python -m app.main_worker --config /tmp/worker.json
 ```
 
-Or use the provided systemd unit templates in `deploy/systemd/`.
-
 The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics` by default. You can override the bind host and port with `metrics_host` and `metrics_port` in the message-handler config or the matching CLI flags.
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at `http://127.0.0.1:9465/activity.json`. The bind stays fixed at `9465`; use `activity_history_limit` in worker config if you want a different retention window.
 

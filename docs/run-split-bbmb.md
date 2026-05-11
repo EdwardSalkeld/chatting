@@ -127,27 +127,7 @@ uv run python -m app.main_message_handler --config /tmp/message-handler.json
 
 `gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
 
-## 6) Run as `systemd` services
-
-Use:
-- `deploy/systemd/chatting-message-handler.service`
-- `deploy/systemd/chatting-worker.service`
-
-Env templates:
-- `configs/chatting-message-handler.env.example`
-- `configs/chatting-worker.env.example`
-
-Install pattern mirrors existing live service setup:
-
-```bash
-sudo cp deploy/systemd/chatting-message-handler.service /etc/systemd/system/
-sudo cp deploy/systemd/chatting-worker.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now chatting-message-handler.service
-sudo systemctl enable --now chatting-worker.service
-```
-
-## 7) Publish a visible reply from worker side
+## 6) Publish a visible reply from worker side
 
 Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
 path for both quick acknowledgements and final user-visible answers instead of returning replies in
@@ -178,7 +158,7 @@ uv run python -m app.main_reply task:telegram:53 \
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 
-## 8) Docker worker CLI auth bootstrap
+## 7) Docker worker CLI auth bootstrap
 
 When running with `docker-compose.yml`, the worker image includes both `codex` and `claude` CLIs.
 Auth is still external to the app and must be completed once interactively, then persisted in Docker
