@@ -17,7 +17,6 @@ from app.handler.connectors import (
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.handler.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.worker.executor import CodexExecutor, Executor
-from app.worker.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 from tests.fixtures import (
     CronTrigger,
@@ -135,9 +134,6 @@ class InterfaceContractTests(unittest.TestCase):
             ),
             Connector,
         )
-
-    def test_router_implementation_matches_protocol(self) -> None:
-        self.assertIsInstance(RuleBasedRouter(), Router)
 
     def test_executor_implementations_match_protocol(self) -> None:
         self.assertIsInstance(CodexExecutor(), Executor)

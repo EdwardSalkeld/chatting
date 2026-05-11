@@ -10,8 +10,9 @@ from typing import Any, Callable, Mapping
 
 from app.models import (
     ExecutionResult,
-    RoutedTask,
     SCHEMA_VERSION,
+    TaskEnvelope,
+    parse_context_ref,
 )
 
 
@@ -22,19 +23,22 @@ class CodexExecutor:
     command: tuple[str, ...] = ("codex", "exec", "--json")
     cwd: str | None = None
     env: Mapping[str, str] | None = None
+    timeout_seconds: int = 1800
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
 
-    def execute(self, task: RoutedTask) -> ExecutionResult:
-        payload = json.dumps(_task_payload(task, current_time=self.now_provider()))
+    def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
+        payload = json.dumps(
+            _task_payload(envelope, current_time=self.now_provider())
+        )
         try:
             completed = subprocess.run(
                 self.command,
                 input=payload,
                 capture_output=True,
                 text=True,
-                timeout=task.execution_constraints.timeout_seconds,
+                timeout=self.timeout_seconds,
                 check=False,
                 cwd=self.cwd,
                 env=dict(self.env) if self.env is not None else None,
@@ -60,12 +64,46 @@ class CodexExecutor:
         )
 
 
-def _task_payload(task: RoutedTask, *, current_time: datetime) -> dict[str, Any]:
+def _task_payload(
+    envelope: TaskEnvelope, *, current_time: datetime
+) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
+    workflow = (
+        "scheduled_automation"
+        if envelope.source == "cron"
+        else "respond_and_optionally_edit"
+    )
+    task_dict: dict[str, Any] = {
+        "task_id": f"task:{envelope.id}",
+        "envelope_id": envelope.id,
+        "workflow": workflow,
+        "event_time": envelope.received_at.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "source": envelope.source,
+        "content": envelope.content,
+        "context": [
+            parse_context_ref(ref).to_dict() for ref in envelope.context_refs
+        ],
+        "reply_channel": {
+            "type": envelope.reply_channel.type,
+            "target": envelope.reply_channel.target,
+        },
+    }
+    if envelope.actor is not None:
+        task_dict["actor"] = envelope.actor
+    if envelope.attachments:
+        task_dict["attachments"] = [
+            {"uri": item.uri, "name": item.name} for item in envelope.attachments
+        ]
+    if envelope.prompt_context.has_content():
+        task_dict["prompt_context"] = envelope.prompt_context.to_dict()
+    if envelope.reply_channel.metadata:
+        task_dict["reply_channel"]["metadata"] = envelope.reply_channel.metadata
     return {
         "schema_version": SCHEMA_VERSION,
-        "task": task.to_dict(),
+        "task": task_dict,
         "current_time": current_time.astimezone(timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),

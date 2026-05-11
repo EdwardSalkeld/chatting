@@ -5,12 +5,10 @@ from app.models import (
     AuditEvent,
     AttachmentRef,
     ExecutionResult,
-    ExecutionConstraints,
     OutboundMessage,
     PromptContext,
     ReplyChannel,
     RunRecord,
-    RoutedTask,
     TaskEnvelope,
 )
 
@@ -76,67 +74,6 @@ class TaskEnvelopeTests(unittest.TestCase):
     def test_prompt_context_rejects_blank_instruction(self) -> None:
         with self.assertRaisesRegex(ValueError, "prompt_context.global_instructions"):
             PromptContext(global_instructions=[" "])
-
-
-class RoutedTaskTests(unittest.TestCase):
-    def test_routed_task_serializes_expected_shape(self) -> None:
-        task = RoutedTask(
-            task_id="task_123",
-            envelope_id="evt_123",
-            workflow="respond_and_optionally_edit",
-            priority="normal",
-            execution_constraints=ExecutionConstraints(
-                timeout_seconds=180, max_tokens=12000
-            ),
-            event_time=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-            source="email",
-            actor="alice@example.com",
-            content="Please summarize and reply",
-            attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
-            prompt_context=PromptContext(
-                global_instructions=["Keep replies concise."],
-                task_instructions=["This task is a customer follow-up."],
-            ),
-            reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-        )
-
-        self.assertEqual(
-            task.to_dict(),
-            {
-                "schema_version": "1.0",
-                "task_id": "task_123",
-                "envelope_id": "evt_123",
-                "workflow": "respond_and_optionally_edit",
-                "priority": "normal",
-                "execution_constraints": {
-                    "timeout_seconds": 180,
-                    "max_tokens": 12000,
-                },
-                "event_time": "2026-02-27T16:00:00Z",
-                "source": "email",
-                "actor": "alice@example.com",
-                "content": "Please summarize and reply",
-                "attachments": [{"uri": "file:///tmp/photo.jpg", "name": "photo.jpg"}],
-                "prompt_context": {
-                    "global_instructions": ["Keep replies concise."],
-                    "source_instructions": [],
-                    "reply_channel_instructions": [],
-                    "task_instructions": ["This task is a customer follow-up."],
-                    "assembled_instructions": [
-                        "Keep replies concise.",
-                        "This task is a customer follow-up.",
-                    ],
-                },
-                "reply_channel": {"type": "email", "target": "alice@example.com"},
-            },
-        )
-
-    def test_execution_constraints_must_be_positive(self) -> None:
-        with self.assertRaisesRegex(ValueError, "timeout_seconds"):
-            ExecutionConstraints(timeout_seconds=0, max_tokens=10)
-
-        with self.assertRaisesRegex(ValueError, "max_tokens"):
-            ExecutionConstraints(timeout_seconds=10, max_tokens=0)
 
 
 class ExecutionResultTests(unittest.TestCase):
@@ -291,18 +228,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
                 context_refs=[],
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:1",
-                schema_version="",
-            )
-
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            RoutedTask(
-                task_id="task_1",
-                envelope_id="evt_1",
-                workflow="respond_and_optionally_edit",
-                priority="normal",
-                execution_constraints=ExecutionConstraints(
-                    timeout_seconds=10, max_tokens=1000
-                ),
                 schema_version="",
             )
 
