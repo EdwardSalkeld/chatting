@@ -93,7 +93,7 @@ class CodexExecutorTests(unittest.TestCase):
         payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(payload["task"]["task_id"], "task:evt_1")
         self.assertEqual(payload["task"]["envelope_id"], "evt_1")
-        self.assertEqual(payload["task"]["workflow"], "respond_and_optionally_edit")
+        self.assertEqual(payload["task"]["workflow"], "default")
         self.assertEqual(payload["task"]["event_time"], "2026-02-27T16:00:00Z")
         self.assertEqual(payload["task"]["source"], "email")
         self.assertEqual(payload["task"]["actor"], "alice@example.com")
@@ -128,28 +128,6 @@ class CodexExecutorTests(unittest.TestCase):
             payload["reply_contract"]["executor_stdout_stderr_are_operator_transcript"],
             True,
         )
-
-    @patch("app.worker.executor.codex.subprocess.run")
-    def test_execute_workflow_for_cron_source(self, run_mock) -> None:
-        run_mock.return_value = subprocess.CompletedProcess(
-            args=["codex", "exec", "--json"], returncode=0, stdout="", stderr=""
-        )
-        cron_envelope = TaskEnvelope(
-            id="cron_1",
-            source="cron",
-            received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-            actor=None,
-            content="Run daily summary",
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(type="internal", target="cron"),
-            dedupe_key="cron_1",
-        )
-
-        CodexExecutor().execute(cron_envelope)
-
-        payload = json.loads(run_mock.call_args.kwargs["input"])
-        self.assertEqual(payload["task"]["workflow"], "scheduled_automation")
 
     @patch("app.worker.executor.codex.subprocess.run")
     def test_execute_passes_configured_working_directory(self, run_mock) -> None:

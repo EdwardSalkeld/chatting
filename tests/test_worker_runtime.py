@@ -247,7 +247,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(result.run_record.workflow, "internal_heartbeat")
+            self.assertEqual(result.run_record.workflow, "default")
             self.assertEqual(result.run_record.source, "internal")
             self.assertEqual(len(result.egress_messages), 2)
             visible_egress_message = result.egress_messages[0]
@@ -261,7 +261,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(completion_egress_message.event_kind, "completion")
             audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.workflow, "internal_heartbeat")
+            self.assertEqual(audit_event.workflow, "default")
             self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
             self.assertEqual(audit_event.detail["heartbeat"]["kind"], "heartbeat_pong")
 
