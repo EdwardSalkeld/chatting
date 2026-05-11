@@ -2,14 +2,11 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models import (
-    ActionProposal,
     AuditEvent,
-    ApplyResult,
     AttachmentRef,
     ExecutionResult,
     ExecutionConstraints,
     OutboundMessage,
-    PolicyDecision,
     PromptContext,
     ReplyChannel,
     RunRecord,
@@ -145,9 +142,6 @@ class RoutedTaskTests(unittest.TestCase):
 class ExecutionResultTests(unittest.TestCase):
     def test_execution_result_serializes_expected_shape(self) -> None:
         result = ExecutionResult(
-            actions=[
-                ActionProposal(type="write_file", path="docs/notes.md", content="hello")
-            ],
             errors=[],
             stdout="executor stdout",
             stderr="executor stderr",
@@ -157,9 +151,6 @@ class ExecutionResultTests(unittest.TestCase):
             result.to_dict(),
             {
                 "schema_version": "1.0",
-                "actions": [
-                    {"type": "write_file", "path": "docs/notes.md", "content": "hello"}
-                ],
                 "errors": [],
                 "stdout": "executor stdout",
                 "stderr": "executor stderr",
@@ -209,41 +200,6 @@ class ExecutionResultTests(unittest.TestCase):
             OutboundMessage(channel="telegram", target="12345", body=None)
 
 
-class PolicyDecisionTests(unittest.TestCase):
-    def test_policy_decision_serializes_expected_shape(self) -> None:
-        decision = PolicyDecision(
-            approved_actions=[],
-            blocked_actions=[ActionProposal(type="write_file", path="secrets.txt")],
-            approved_messages=[
-                OutboundMessage(
-                    channel="email", target="alice@example.com", body="Blocked."
-                )
-            ],
-            reason_codes=["action_not_allowed"],
-        )
-
-        self.assertEqual(
-            decision.to_dict(),
-            {
-                "schema_version": "1.0",
-                "approved_actions": [],
-                "blocked_actions": [{"type": "write_file", "path": "secrets.txt"}],
-                "approved_messages": [
-                    {
-                        "channel": "email",
-                        "target": "alice@example.com",
-                        "body": "Blocked.",
-                    }
-                ],
-                "reason_codes": ["action_not_allowed"],
-            },
-        )
-
-    def test_action_requires_type(self) -> None:
-        with self.assertRaisesRegex(ValueError, "type is required"):
-            ActionProposal(type="")
-
-
 class RunRecordTests(unittest.TestCase):
     def test_run_record_serializes_expected_shape(self) -> None:
         record = RunRecord(
@@ -281,33 +237,6 @@ class RunRecordTests(unittest.TestCase):
                 result_status="success",
                 created_at=datetime(2026, 2, 27, 16, 5),
             )
-
-
-class ApplyResultTests(unittest.TestCase):
-    def test_apply_result_serializes_expected_shape(self) -> None:
-        result = ApplyResult(
-            applied_actions=[],
-            skipped_actions=[ActionProposal(type="write_file", path="docs/notes.md")],
-            dispatched_messages=[
-                OutboundMessage(
-                    channel="email", target="alice@example.com", body="Done."
-                )
-            ],
-            reason_codes=["noop_applier_skipped_actions"],
-        )
-
-        self.assertEqual(
-            result.to_dict(),
-            {
-                "schema_version": "1.0",
-                "applied_actions": [],
-                "skipped_actions": [{"type": "write_file", "path": "docs/notes.md"}],
-                "dispatched_messages": [
-                    {"channel": "email", "target": "alice@example.com", "body": "Done."}
-                ],
-                "reason_codes": ["noop_applier_skipped_actions"],
-            },
-        )
 
 
 class AuditEventTests(unittest.TestCase):
@@ -379,26 +308,7 @@ class SchemaVersionValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "schema_version is required"):
             ExecutionResult(
-                actions=[],
                 errors=[],
-                schema_version="",
-            )
-
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[],
-                reason_codes=[],
-                schema_version="",
-            )
-
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            ApplyResult(
-                applied_actions=[],
-                skipped_actions=[],
-                dispatched_messages=[],
-                reason_codes=[],
                 schema_version="",
             )
 
@@ -443,7 +353,6 @@ class SchemaVersionValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
             ExecutionResult(
-                actions=[],
                 errors=[],
                 schema_version="2.0",
             )
@@ -455,118 +364,20 @@ class StringListContractValidationTests(unittest.TestCase):
             ValueError, "errors items must be non-empty strings"
         ):
             ExecutionResult(
-                actions=[],
                 errors=["   "],
             )
 
     def test_execution_result_rejects_non_string_transcript_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "stdout must be a string"):
             ExecutionResult(
-                actions=[],
                 errors=[],
                 stdout=object(),  # type: ignore[arg-type]
             )
 
         with self.assertRaisesRegex(ValueError, "stderr must be a string"):
             ExecutionResult(
-                actions=[],
                 errors=[],
                 stderr=object(),  # type: ignore[arg-type]
-            )
-
-    def test_policy_decision_rejects_blank_reason_codes(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "reason_codes items must be non-empty strings"
-        ):
-            PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[],
-                reason_codes=[""],
-            )
-
-    def test_apply_result_rejects_blank_reason_codes(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "reason_codes items must be non-empty strings"
-        ):
-            ApplyResult(
-                applied_actions=[],
-                skipped_actions=[],
-                dispatched_messages=[],
-                reason_codes=["   "],
-            )
-
-
-class TypedCollectionContractValidationTests(unittest.TestCase):
-    def test_execution_result_rejects_invalid_typed_collections(self) -> None:
-        with self.assertRaisesRegex(ValueError, "actions items must be ActionProposal"):
-            ExecutionResult(
-                actions=[object()],  # type: ignore[list-item]
-                errors=[],
-            )
-
-    def test_policy_decision_rejects_invalid_typed_action_and_message_lists(
-        self,
-    ) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "approved_actions items must be ActionProposal"
-        ):
-            PolicyDecision(
-                approved_actions=[object()],  # type: ignore[list-item]
-                blocked_actions=[],
-                approved_messages=[],
-                reason_codes=[],
-            )
-
-        with self.assertRaisesRegex(
-            ValueError, "blocked_actions items must be ActionProposal"
-        ):
-            PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[object()],  # type: ignore[list-item]
-                approved_messages=[],
-                reason_codes=[],
-            )
-
-        with self.assertRaisesRegex(
-            ValueError, "approved_messages items must be OutboundMessage"
-        ):
-            PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[object()],  # type: ignore[list-item]
-                reason_codes=[],
-            )
-
-    def test_apply_result_rejects_invalid_typed_collections(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "applied_actions items must be ActionProposal"
-        ):
-            ApplyResult(
-                applied_actions=[object()],  # type: ignore[list-item]
-                skipped_actions=[],
-                dispatched_messages=[],
-                reason_codes=[],
-            )
-
-        with self.assertRaisesRegex(
-            ValueError, "skipped_actions items must be ActionProposal"
-        ):
-            ApplyResult(
-                applied_actions=[],
-                skipped_actions=[object()],  # type: ignore[list-item]
-                dispatched_messages=[],
-                reason_codes=[],
-            )
-
-        with self.assertRaisesRegex(
-            ValueError, "dispatched_messages items must be OutboundMessage"
-        ):
-            ApplyResult(
-                applied_actions=[],
-                skipped_actions=[],
-                dispatched_messages=[object()],  # type: ignore[list-item]
-                reason_codes=[],
             )
 
 
@@ -631,10 +442,7 @@ class RequiredStringContractValidationTests(unittest.TestCase):
                 dedupe_key="email:1",
             )
 
-    def test_action_and_message_reject_whitespace_required_strings(self) -> None:
-        with self.assertRaisesRegex(ValueError, "type is required"):
-            ActionProposal(type="   ")
-
+    def test_message_rejects_whitespace_required_strings(self) -> None:
         with self.assertRaisesRegex(ValueError, "body is required"):
             OutboundMessage(channel="email", target="alice@example.com", body="   ")
 

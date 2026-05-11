@@ -388,34 +388,9 @@ class OutboundMessage:
 
 
 @dataclass(frozen=True)
-class ActionProposal:
-    """Action proposal emitted by executor or policy."""
-
-    type: str
-    path: str | None = None
-    content: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_required_string(self.type, field_name="type")
-        if self.path is not None:
-            _validate_required_string(self.path, field_name="path")
-        if self.content is not None:
-            _validate_required_string(self.content, field_name="content")
-
-    def to_dict(self) -> dict[str, str]:
-        payload: dict[str, str] = {"type": self.type}
-        if self.path is not None:
-            payload["path"] = self.path
-        if self.content is not None:
-            payload["content"] = self.content
-        return payload
-
-
-@dataclass(frozen=True)
 class ExecutionResult:
     """Executor outcome plus captured transcript streams."""
 
-    actions: list[ActionProposal]
     errors: list[str]
     stdout: str | None = None
     stderr: str | None = None
@@ -423,11 +398,6 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
-        _validate_typed_list(
-            self.actions,
-            field_name="actions",
-            item_type=ActionProposal,
-        )
         _validate_string_list(self.errors, field_name="errors")
         if self.stdout is not None and not isinstance(self.stdout, str):
             raise ValueError("stdout must be a string")
@@ -437,7 +407,6 @@ class ExecutionResult:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": self.schema_version,
-            "actions": [action.to_dict() for action in self.actions],
             "errors": self.errors,
         }
         if self.stdout is not None:
@@ -445,88 +414,6 @@ class ExecutionResult:
         if self.stderr is not None:
             payload["stderr"] = self.stderr
         return payload
-
-
-@dataclass(frozen=True)
-class PolicyDecision:
-    """Policy output contract for approved and blocked operations."""
-
-    approved_actions: list[ActionProposal]
-    blocked_actions: list[ActionProposal]
-    approved_messages: list[OutboundMessage]
-    reason_codes: list[str]
-    schema_version: str = SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _validate_schema_version(self.schema_version)
-        _validate_typed_list(
-            self.approved_actions,
-            field_name="approved_actions",
-            item_type=ActionProposal,
-        )
-        _validate_typed_list(
-            self.blocked_actions,
-            field_name="blocked_actions",
-            item_type=ActionProposal,
-        )
-        _validate_typed_list(
-            self.approved_messages,
-            field_name="approved_messages",
-            item_type=OutboundMessage,
-        )
-        _validate_string_list(self.reason_codes, field_name="reason_codes")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "approved_actions": [action.to_dict() for action in self.approved_actions],
-            "blocked_actions": [action.to_dict() for action in self.blocked_actions],
-            "approved_messages": [
-                message.to_dict() for message in self.approved_messages
-            ],
-            "reason_codes": self.reason_codes,
-        }
-
-
-@dataclass(frozen=True)
-class ApplyResult:
-    """Result contract produced by applier implementations."""
-
-    applied_actions: list[ActionProposal]
-    skipped_actions: list[ActionProposal]
-    dispatched_messages: list[OutboundMessage]
-    reason_codes: list[str]
-    schema_version: str = SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _validate_schema_version(self.schema_version)
-        _validate_typed_list(
-            self.applied_actions,
-            field_name="applied_actions",
-            item_type=ActionProposal,
-        )
-        _validate_typed_list(
-            self.skipped_actions,
-            field_name="skipped_actions",
-            item_type=ActionProposal,
-        )
-        _validate_typed_list(
-            self.dispatched_messages,
-            field_name="dispatched_messages",
-            item_type=OutboundMessage,
-        )
-        _validate_string_list(self.reason_codes, field_name="reason_codes")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "applied_actions": [action.to_dict() for action in self.applied_actions],
-            "skipped_actions": [action.to_dict() for action in self.skipped_actions],
-            "dispatched_messages": [
-                message.to_dict() for message in self.dispatched_messages
-            ],
-            "reason_codes": self.reason_codes,
-        }
 
 
 @dataclass(frozen=True)

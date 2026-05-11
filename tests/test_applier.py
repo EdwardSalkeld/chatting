@@ -12,57 +12,16 @@ from app.handler.applier import (
     GitHubIssueCommentSender,
     IntegratedApplier,
     MessageDispatchError,
-    NoOpApplier,
     SmtpEmailSender,
     TelegramMessageSender,
 )
 from app.handler.applier.integrated import _default_http_post_json
 from app.models import (
-    ActionProposal,
     AttachmentRef,
     OutboundMessage,
-    PolicyDecision,
     ReplyChannel,
     TaskEnvelope,
 )
-
-
-class NoOpApplierTests(unittest.TestCase):
-    def test_skips_approved_actions_and_dispatches_messages(self) -> None:
-        decision = PolicyDecision(
-            approved_actions=[ActionProposal(type="write_file", path="docs/notes.md")],
-            blocked_actions=[],
-            approved_messages=[
-                OutboundMessage(
-                    channel="email", target="alice@example.com", body="Done."
-                )
-            ],
-            reason_codes=[],
-        )
-
-        result = NoOpApplier().apply(decision)
-
-        self.assertEqual(result.applied_actions, [])
-        self.assertEqual(
-            [action.type for action in result.skipped_actions], ["write_file"]
-        )
-        self.assertEqual(
-            [message.channel for message in result.dispatched_messages],
-            ["email"],
-        )
-        self.assertEqual(result.reason_codes, ["noop_applier_skipped_actions"])
-
-    def test_emits_reason_when_blocked_actions_exist(self) -> None:
-        decision = PolicyDecision(
-            approved_actions=[],
-            blocked_actions=[ActionProposal(type="run_shell", path="rm -rf /")],
-            approved_messages=[],
-            reason_codes=["action_not_allowed"],
-        )
-
-        result = NoOpApplier().apply(decision)
-
-        self.assertEqual(result.reason_codes, ["policy_blocked_actions_present"])
 
 
 @dataclass
@@ -74,212 +33,122 @@ class _RecordingEmailSender:
 
 
 class IntegratedApplierTests(unittest.TestCase):
-    def test_apply_writes_files_and_dispatches_email_and_log_messages(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingEmailSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[
-                    ActionProposal(
-                        type="write_file",
-                        path="docs/generated.txt",
-                        content="hello from applier",
-                    )
-                ],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="email",
-                        target="alice@example.com",
-                        body="Done.",
-                    ),
-                    OutboundMessage(channel="log", target="ops", body="Applied."),
-                ],
-                reason_codes=[],
-            )
+    def test_dispatch_sends_email_message(self) -> None:
+        sender = _RecordingEmailSender(sent=[])
+        message = OutboundMessage(
+            channel="email",
+            target="alice@example.com",
+            body="Done.",
+        )
 
-            result = IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(
-                decision
-            )
+        dispatched = IntegratedApplier(email_sender=sender).dispatch(message)
 
-            written_path = Path(tmpdir) / "docs" / "generated.txt"
-            self.assertTrue(written_path.exists())
-            self.assertEqual(
-                written_path.read_text(encoding="utf-8"), "hello from applier"
-            )
-            self.assertEqual(result.applied_actions, decision.approved_actions)
-            self.assertEqual(result.skipped_actions, [])
-            self.assertEqual(
-                sender.sent,
-                [("alice@example.com", "Done.", None)],
-            )
-            self.assertEqual(
-                [message.channel for message in result.dispatched_messages],
-                ["email", "log"],
-            )
-            self.assertEqual(result.reason_codes, [])
+        self.assertEqual(sender.sent, [("alice@example.com", "Done.", None)])
+        self.assertIsNotNone(dispatched)
+        assert dispatched is not None
+        self.assertEqual(dispatched.channel, "email")
 
-    def test_apply_email_reply_keeps_subject_and_quotes_original(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingEmailSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="email",
-                        target="alice@example.com",
-                        body="Here is the answer.",
-                    )
-                ],
-                reason_codes=[],
-            )
-            envelope = _email_envelope(
-                subject="Quarterly update",
-                body="Can you summarize the key points?",
-            )
+    def test_dispatch_log_channel_records_normalized_message(self) -> None:
+        message = OutboundMessage(channel="log", target="ops", body="Applied.")
 
-            result = IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(
-                decision,
-                envelope=envelope,
-            )
+        dispatched = IntegratedApplier().dispatch(message)
 
-            self.assertEqual(result.reason_codes, [])
-            self.assertEqual(len(sender.sent), 1)
-            target, body, subject = sender.sent[0]
-            self.assertEqual(target, "alice@example.com")
-            self.assertEqual(subject, "Re: Quarterly update")
-            self.assertIn("Here is the answer.", body)
-            self.assertIn("Original message:", body)
-            self.assertIn("> Can you summarize the key points?", body)
+        self.assertEqual(dispatched, message)
 
-    def test_apply_email_reply_strips_subject_line_from_body(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingEmailSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="email",
-                        target="alice@example.com",
-                        body="Subject: Re: Ice-cream\n\nGreat choice. Let's go classic.",
-                    )
-                ],
-                reason_codes=[],
-            )
-            envelope = _email_envelope(
-                subject="Ice-cream",
-                body="Yes please, let's focus on classic",
-            )
+    def test_dispatch_email_reply_keeps_subject_and_quotes_original(self) -> None:
+        sender = _RecordingEmailSender(sent=[])
+        message = OutboundMessage(
+            channel="email",
+            target="alice@example.com",
+            body="Here is the answer.",
+        )
+        envelope = _email_envelope(
+            subject="Quarterly update",
+            body="Can you summarize the key points?",
+        )
 
-            IntegratedApplier(base_dir=tmpdir, email_sender=sender).apply(
-                decision,
-                envelope=envelope,
-            )
+        IntegratedApplier(email_sender=sender).dispatch(message, envelope=envelope)
 
-            _, body, subject = sender.sent[0]
-            self.assertEqual(subject, "Re: Ice-cream")
-            self.assertFalse(body.lstrip().startswith("Subject:"))
-            self.assertIn("Great choice. Let's go classic.", body)
+        self.assertEqual(len(sender.sent), 1)
+        target, body, subject = sender.sent[0]
+        self.assertEqual(target, "alice@example.com")
+        self.assertEqual(subject, "Re: Quarterly update")
+        self.assertIn("Here is the answer.", body)
+        self.assertIn("Original message:", body)
+        self.assertIn("> Can you summarize the key points?", body)
 
-    def test_apply_dispatches_telegram_message_with_sender(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingTelegramSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
+    def test_dispatch_email_reply_strips_subject_line_from_body(self) -> None:
+        sender = _RecordingEmailSender(sent=[])
+        message = OutboundMessage(
+            channel="email",
+            target="alice@example.com",
+            body="Subject: Re: Ice-cream\n\nGreat choice. Let's go classic.",
+        )
+        envelope = _email_envelope(
+            subject="Ice-cream",
+            body="Yes please, let's focus on classic",
+        )
+
+        IntegratedApplier(email_sender=sender).dispatch(message, envelope=envelope)
+
+        _, body, subject = sender.sent[0]
+        self.assertEqual(subject, "Re: Ice-cream")
+        self.assertFalse(body.lstrip().startswith("Subject:"))
+        self.assertIn("Great choice. Let's go classic.", body)
+
+    def test_dispatch_sends_telegram_message(self) -> None:
+        sender = _RecordingTelegramSender(sent=[])
+        message = OutboundMessage(
+            channel="telegram",
+            target="12345",
+            body="Done via telegram.",
+        )
+
+        dispatched = IntegratedApplier(telegram_sender=sender).dispatch(message)
+
+        self.assertEqual(
+            sender.sent,
+            [
+                (
+                    "12345",
                     OutboundMessage(
                         channel="telegram",
                         target="12345",
                         body="Done via telegram.",
-                    )
-                ],
-                reason_codes=[],
-            )
+                    ),
+                )
+            ],
+        )
+        assert dispatched is not None
+        self.assertEqual(dispatched.channel, "telegram")
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                decision
-            )
+    def test_dispatch_sends_telegram_reaction(self) -> None:
+        sender = _RecordingTelegramSender(sent=[])
+        message = OutboundMessage(
+            channel="telegram_reaction",
+            target="12345",
+            body="👍",
+            metadata={"message_id": 321},
+        )
 
-            self.assertEqual(
-                sender.sent,
-                [
-                    (
-                        "12345",
-                        OutboundMessage(
-                            channel="telegram",
-                            target="12345",
-                            body="Done via telegram.",
-                        ),
-                    )
-                ],
-            )
-            self.assertEqual(
-                [message.channel for message in result.dispatched_messages],
-                ["telegram"],
-            )
-            self.assertEqual(result.reason_codes, [])
+        dispatched = IntegratedApplier(telegram_sender=sender).dispatch(message)
 
-    def test_apply_dispatches_telegram_reaction_with_sender(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingTelegramSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="telegram_reaction",
-                        target="12345",
-                        body="👍",
-                        metadata={"message_id": 321},
-                    )
-                ],
-                reason_codes=[],
-            )
+        self.assertEqual(sender.reactions, [("12345", 321, "👍")])
+        self.assertEqual(dispatched, message)
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                decision
-            )
-
-            self.assertEqual(sender.reactions, [("12345", 321, "👍")])
-            self.assertEqual(
-                result.dispatched_messages,
-                [
-                    OutboundMessage(
-                        channel="telegram_reaction",
-                        target="12345",
-                        body="👍",
-                        metadata={"message_id": 321},
-                    )
-                ],
-            )
-            self.assertEqual(result.reason_codes, [])
-
-    def test_apply_dispatches_telegram_photo_attachment(self) -> None:
+    def test_dispatch_sends_telegram_photo_attachment(self) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _RecordingTelegramSender(sent=[])
             image_path = Path(tmpdir) / "menu.png"
             image_path.write_bytes(b"png")
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="telegram",
-                        target="12345",
-                        body="caption",
-                        attachment=AttachmentRef(
-                            uri=image_path.as_uri(), name="menu.png"
-                        ),
-                    )
-                ],
-                reason_codes=[],
+            message = OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body="caption",
+                attachment=AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                decision
-            )
+            dispatched = IntegratedApplier(telegram_sender=sender).dispatch(message)
 
             self.assertEqual(len(sender.sent), 1)
             self.assertEqual(sender.sent[0][0], "12345")
@@ -287,72 +156,51 @@ class IntegratedApplierTests(unittest.TestCase):
                 sender.sent[0][1].attachment,
                 AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
             )
+            assert dispatched is not None
             self.assertEqual(
-                result.dispatched_messages[0].attachment,
+                dispatched.attachment,
                 AttachmentRef(uri=image_path.as_uri(), name="menu.png"),
             )
 
-    def test_apply_dispatches_telegram_document_attachment(self) -> None:
+    def test_dispatch_sends_telegram_document_attachment(self) -> None:
         with TemporaryDirectory() as tmpdir:
             sender = _RecordingTelegramSender(sent=[])
             pdf_path = Path(tmpdir) / "menu.pdf"
             pdf_path.write_bytes(b"%PDF")
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="telegram",
-                        target="12345",
-                        attachment=AttachmentRef(
-                            uri=pdf_path.as_uri(), name="menu.pdf"
-                        ),
-                    )
-                ],
-                reason_codes=[],
+            message = OutboundMessage(
+                channel="telegram",
+                target="12345",
+                attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
             )
 
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                decision
-            )
+            dispatched = IntegratedApplier(telegram_sender=sender).dispatch(message)
 
             self.assertEqual(len(sender.sent), 1)
             self.assertEqual(
                 sender.sent[0][1].attachment,
                 AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
             )
-            self.assertIsNone(result.dispatched_messages[0].body)
+            assert dispatched is not None
+            self.assertIsNone(dispatched.body)
 
-    def test_apply_raises_attachment_dispatch_error_for_missing_file(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = TelegramMessageSender(
-                bot_token="token", http_post_multipart=lambda *_args: {"ok": True}
-            )
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="telegram",
-                        target="12345",
-                        attachment=AttachmentRef(
-                            uri="file:///does/not/exist.pdf", name="missing.pdf"
-                        ),
-                    )
-                ],
-                reason_codes=[],
-            )
+    def test_dispatch_raises_attachment_dispatch_error_for_missing_file(self) -> None:
+        sender = TelegramMessageSender(
+            bot_token="token", http_post_multipart=lambda *_args: {"ok": True}
+        )
+        message = OutboundMessage(
+            channel="telegram",
+            target="12345",
+            attachment=AttachmentRef(
+                uri="file:///does/not/exist.pdf", name="missing.pdf"
+            ),
+        )
 
-            with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                    decision
-                )
+        with self.assertRaises(MessageDispatchError) as context:
+            IntegratedApplier(telegram_sender=sender).dispatch(message)
 
-            self.assertEqual(
-                context.exception.reason_code, "telegram_attachment_missing"
-            )
+        self.assertEqual(context.exception.reason_code, "telegram_attachment_missing")
 
-    def test_apply_raises_attachment_dispatch_error_on_telegram_api_failure(
+    def test_dispatch_raises_attachment_dispatch_error_on_telegram_api_failure(
         self,
     ) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -362,262 +210,126 @@ class IntegratedApplierTests(unittest.TestCase):
                 bot_token="token",
                 http_post_multipart=lambda *_args: {"ok": False},
             )
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="telegram",
-                        target="12345",
-                        body="menu",
-                        attachment=AttachmentRef(
-                            uri=pdf_path.as_uri(), name="menu.pdf"
-                        ),
-                    )
-                ],
-                reason_codes=[],
+            message = OutboundMessage(
+                channel="telegram",
+                target="12345",
+                body="menu",
+                attachment=AttachmentRef(uri=pdf_path.as_uri(), name="menu.pdf"),
             )
 
             with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                    decision
-                )
+                IntegratedApplier(telegram_sender=sender).dispatch(message)
 
             self.assertEqual(
                 context.exception.reason_code, "telegram_attachment_send_failed"
             )
 
-    def test_apply_skips_write_outside_base_dir(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            decision = PolicyDecision(
-                approved_actions=[
-                    ActionProposal(
-                        type="write_file", path="../escape.txt", content="nope"
-                    )
-                ],
-                blocked_actions=[],
-                approved_messages=[],
-                reason_codes=[],
-            )
+    def test_dispatch_returns_none_when_email_sender_not_configured(self) -> None:
+        message = OutboundMessage(
+            channel="email",
+            target="alice@example.com",
+            body="Done.",
+        )
 
-            result = IntegratedApplier(base_dir=tmpdir).apply(decision)
+        self.assertIsNone(IntegratedApplier().dispatch(message))
 
-            self.assertEqual(result.applied_actions, [])
-            self.assertEqual(len(result.skipped_actions), 1)
-            self.assertEqual(result.reason_codes, ["write_file_outside_base_dir"])
+    def test_dispatch_returns_none_when_telegram_sender_not_configured(self) -> None:
+        message = OutboundMessage(channel="telegram", target="12345", body="Done.")
 
-    def test_apply_marks_email_dispatch_unconfigured(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="email",
-                        target="alice@example.com",
-                        body="Done.",
-                    )
-                ],
-                reason_codes=[],
-            )
+        self.assertIsNone(IntegratedApplier().dispatch(message))
 
-            result = IntegratedApplier(base_dir=tmpdir).apply(decision)
+    def test_dispatch_returns_none_when_github_sender_not_configured(self) -> None:
+        message = OutboundMessage(
+            channel="github",
+            target="https://github.com/brokensbone/chatting/issues/12",
+            body="Done.",
+        )
 
-            self.assertEqual(result.dispatched_messages, [])
-            self.assertEqual(result.reason_codes, ["email_dispatch_not_configured"])
+        self.assertIsNone(IntegratedApplier().dispatch(message))
 
-    def test_apply_marks_telegram_dispatch_unconfigured(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="telegram",
-                        target="12345",
-                        body="Done.",
-                    )
-                ],
-                reason_codes=[],
-            )
+    def test_dispatch_sends_github_comment(self) -> None:
+        sender = _RecordingGitHubSender(sent=[])
+        message = OutboundMessage(
+            channel="github",
+            target="https://github.com/brokensbone/chatting/issues/12",
+            body="Done via GitHub.",
+        )
 
-            result = IntegratedApplier(base_dir=tmpdir).apply(decision)
+        dispatched = IntegratedApplier(github_sender=sender).dispatch(message)
 
-            self.assertEqual(result.dispatched_messages, [])
-            self.assertEqual(result.reason_codes, ["telegram_dispatch_not_configured"])
-
-    def test_apply_marks_github_dispatch_unconfigured(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="github",
-                        target="https://github.com/brokensbone/chatting/issues/12",
-                        body="Done.",
-                    )
-                ],
-                reason_codes=[],
-            )
-
-            result = IntegratedApplier(base_dir=tmpdir).apply(decision)
-
-            self.assertEqual(result.dispatched_messages, [])
-            self.assertEqual(result.reason_codes, ["github_dispatch_not_configured"])
-
-    def test_apply_dispatches_github_comment_with_sender(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingGitHubSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="github",
-                        target="https://github.com/brokensbone/chatting/issues/12",
-                        body="Done via GitHub.",
-                    )
-                ],
-                reason_codes=[],
-            )
-
-            result = IntegratedApplier(base_dir=tmpdir, github_sender=sender).apply(
-                decision
-            )
-
-            self.assertEqual(
-                sender.sent,
-                [
-                    (
-                        "https://github.com/brokensbone/chatting/issues/12",
-                        "Done via GitHub.",
-                    )
-                ],
-            )
-            self.assertEqual(
-                [message.channel for message in result.dispatched_messages], ["github"]
-            )
-            self.assertEqual(result.reason_codes, [])
-
-    def test_apply_raises_dispatch_error_with_partial_progress_on_github_failure(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _FailingGitHubSender()
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="github",
-                        target="https://github.com/brokensbone/chatting/issues/12",
-                        body="one",
-                    ),
-                    OutboundMessage(
-                        channel="github",
-                        target="https://github.com/brokensbone/chatting/issues/12",
-                        body="two",
-                    ),
-                ],
-                reason_codes=[],
-            )
-
-            with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, github_sender=sender).apply(decision)
-
-            self.assertEqual(context.exception.reason_code, "github_dispatch_failed")
-            self.assertEqual(
-                context.exception.dispatched_messages,
-                [
-                    OutboundMessage(
-                        channel="github",
-                        target="https://github.com/brokensbone/chatting/issues/12",
-                        body="one",
-                    )
-                ],
-            )
-
-    def test_apply_maps_final_channel_to_envelope_reply_channel_for_telegram(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _RecordingTelegramSender(sent=[])
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(
-                        channel="final",
-                        target="user",
-                        body="Answer from model.",
-                    )
-                ],
-                reason_codes=[],
-            )
-            envelope = TaskEnvelope(
-                id="telegram:test",
-                source="im",
-                received_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
-                actor="8605042448:edsalkeld",
-                content="Question",
-                attachments=[],
-                context_refs=["repo:/home/edward/chatting"],
-                reply_channel=ReplyChannel(type="telegram", target="8605042448"),
-                dedupe_key="telegram:test",
-            )
-
-            result = IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                decision,
-                envelope=envelope,
-            )
-
-            self.assertEqual(
-                sender.sent,
-                [
-                    (
-                        "8605042448",
-                        OutboundMessage(
-                            channel="final", target="user", body="Answer from model."
-                        ),
-                    )
-                ],
-            )
-            self.assertEqual(
-                [message.channel for message in result.dispatched_messages],
-                ["telegram"],
-            )
-            self.assertEqual(
-                [message.target for message in result.dispatched_messages],
-                ["8605042448"],
-            )
-            self.assertEqual(result.reason_codes, [])
-
-    def test_apply_raises_dispatch_error_with_partial_progress_on_telegram_failure(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as tmpdir:
-            sender = _FailingTelegramSender()
-            decision = PolicyDecision(
-                approved_actions=[],
-                blocked_actions=[],
-                approved_messages=[
-                    OutboundMessage(channel="telegram", target="12345", body="👀"),
-                    OutboundMessage(channel="telegram", target="12345", body="working"),
-                ],
-                reason_codes=[],
-            )
-
-            with self.assertRaises(MessageDispatchError) as context:
-                IntegratedApplier(base_dir=tmpdir, telegram_sender=sender).apply(
-                    decision
+        self.assertEqual(
+            sender.sent,
+            [
+                (
+                    "https://github.com/brokensbone/chatting/issues/12",
+                    "Done via GitHub.",
                 )
+            ],
+        )
+        assert dispatched is not None
+        self.assertEqual(dispatched.channel, "github")
 
-            self.assertEqual(context.exception.reason_code, "telegram_dispatch_failed")
-            self.assertEqual(
-                context.exception.dispatched_messages,
-                [OutboundMessage(channel="telegram", target="12345", body="👀")],
-            )
+    def test_dispatch_raises_github_dispatch_error_on_failure(self) -> None:
+        sender = _FailingGitHubSender()
+        message = OutboundMessage(
+            channel="github",
+            target="https://github.com/brokensbone/chatting/issues/12",
+            body="one",
+        )
+
+        with self.assertRaises(MessageDispatchError) as context:
+            IntegratedApplier(github_sender=sender).dispatch(message)
+
+        self.assertEqual(context.exception.reason_code, "github_dispatch_failed")
+
+    def test_dispatch_maps_final_channel_to_envelope_reply_channel_for_telegram(
+        self,
+    ) -> None:
+        sender = _RecordingTelegramSender(sent=[])
+        message = OutboundMessage(
+            channel="final",
+            target="user",
+            body="Answer from model.",
+        )
+        envelope = TaskEnvelope(
+            id="telegram:test",
+            source="im",
+            received_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            actor="8605042448:edsalkeld",
+            content="Question",
+            attachments=[],
+            context_refs=["repo:/home/edward/chatting"],
+            reply_channel=ReplyChannel(type="telegram", target="8605042448"),
+            dedupe_key="telegram:test",
+        )
+
+        dispatched = IntegratedApplier(telegram_sender=sender).dispatch(
+            message, envelope=envelope
+        )
+
+        self.assertEqual(
+            sender.sent,
+            [
+                (
+                    "8605042448",
+                    OutboundMessage(
+                        channel="final", target="user", body="Answer from model."
+                    ),
+                )
+            ],
+        )
+        assert dispatched is not None
+        self.assertEqual(dispatched.channel, "telegram")
+        self.assertEqual(dispatched.target, "8605042448")
+
+    def test_dispatch_raises_telegram_dispatch_error_on_failure(self) -> None:
+        sender = _FailingTelegramSender()
+        message = OutboundMessage(channel="telegram", target="12345", body="working")
+
+        with self.assertRaises(MessageDispatchError) as context:
+            IntegratedApplier(telegram_sender=sender).dispatch(message)
+
+        self.assertEqual(context.exception.reason_code, "telegram_dispatch_failed")
 
 
 class SmtpEmailSenderTests(unittest.TestCase):
@@ -1171,13 +883,9 @@ class _RecordingTelegramSender:
 
 
 class _FailingTelegramSender:
-    def __init__(self) -> None:
-        self._count = 0
-
     def send(self, target: str, message: OutboundMessage) -> None:
-        self._count += 1
-        if self._count == 2:
-            raise RuntimeError("simulated dispatch failure")
+        del target, message
+        raise RuntimeError("simulated dispatch failure")
 
 
 @dataclass
@@ -1189,18 +897,12 @@ class _RecordingGitHubSender:
 
 
 class _FailingGitHubSender:
-    def __init__(self) -> None:
-        self._count = 0
-
-    def send(self, target: str, message: OutboundMessage) -> None:
-        self._count += 1
-        if self._count == 2:
-            raise RuntimeError("simulated dispatch failure")
+    def send(self, target: str, body: str) -> None:
+        del target, body
+        raise RuntimeError("simulated dispatch failure")
 
 
 def _email_envelope(*, subject: str, body: str):
-    from app.models import ReplyChannel, TaskEnvelope
-
     return TaskEnvelope(
         id="email:test",
         source="email",

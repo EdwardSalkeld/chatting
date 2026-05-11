@@ -3,7 +3,6 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.handler.applier import Applier, IntegratedApplier, NoOpApplier
 from app.handler.connectors import (
     AuxiliaryIngressConnector,
     Connector,
@@ -142,10 +141,6 @@ class InterfaceContractTests(unittest.TestCase):
 
     def test_executor_implementations_match_protocol(self) -> None:
         self.assertIsInstance(CodexExecutor(), Executor)
-
-    def test_applier_implementation_matches_protocol(self) -> None:
-        self.assertIsInstance(NoOpApplier(), Applier)
-        self.assertIsInstance(IntegratedApplier(base_dir="."), Applier)
 
     def test_state_store_implementation_matches_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

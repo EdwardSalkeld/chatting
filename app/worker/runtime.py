@@ -232,7 +232,6 @@ def _process_internal_heartbeat(
                 "last_error": None,
                 "last_error_stage": None,
                 "execution_result": {
-                    "actions": [],
                     "errors": [],
                 },
                 "incremental_reply_send_requested_count": 0,

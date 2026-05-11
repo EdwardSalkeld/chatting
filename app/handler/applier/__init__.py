@@ -1,6 +1,5 @@
 """Handler appliers."""
 
-from app.handler.applier.base import Applier
 from app.handler.applier.integrated import (
     EmailSender,
     GitHubIssueCommentSender,
@@ -11,16 +10,13 @@ from app.handler.applier.integrated import (
     TelegramMessageSender,
     TelegramSender,
 )
-from app.handler.applier.noop import NoOpApplier
 
 __all__ = [
-    "Applier",
     "EmailSender",
     "GitHubIssueCommentSender",
     "GitHubSender",
     "IntegratedApplier",
     "MessageDispatchError",
-    "NoOpApplier",
     "SmtpEmailSender",
     "TelegramMessageSender",
     "TelegramSender",
