@@ -15,7 +15,7 @@ from app.internal_heartbeat import (
     is_internal_heartbeat_envelope,
 )
 from app.models import AuditEvent, OutboundMessage, RunRecord
-from app.state import StateStore
+from app.state import SQLiteStateStore
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
@@ -32,7 +32,7 @@ class WorkerProcessResult:
 
 def process_task_message(
     *,
-    store: StateStore,
+    store: SQLiteStateStore,
     task_message: TaskQueueMessage,
     executor_impl: Executor,
     max_attempts: int,
@@ -182,7 +182,7 @@ def process_task_message(
 
 def _process_internal_heartbeat(
     *,
-    store: StateStore,
+    store: SQLiteStateStore,
     task_message: TaskQueueMessage,
 ) -> WorkerProcessResult:
     worker_received_at = datetime.now(timezone.utc)
