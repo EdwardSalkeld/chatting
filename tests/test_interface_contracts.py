@@ -8,7 +8,6 @@ from app.handler.connectors import (
     GitHubIssueAssignmentConnector,
     GitHubPullRequestReviewConnector,
     InternalHeartbeatConnector,
-    SlackConnector,
     TelegramConnector,
     WebhookConnector,
     WebhookEvent,
@@ -55,10 +54,6 @@ class InterfaceContractTests(unittest.TestCase):
             InternalHeartbeatConnector(
                 now_provider=lambda: datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
             ),
-            Connector,
-        )
-        self.assertIsInstance(
-            SlackConnector(fetch_messages=lambda: []),
             Connector,
         )
         with tempfile.TemporaryDirectory() as tmpdir:
