@@ -36,11 +36,9 @@ class WorkerActivityTests(unittest.TestCase):
             monitor.record_executor_started(
                 task_message=task_message,
                 attempt=1,
-                workflow="respond_and_optionally_edit",
             )
             monitor.record_executor_output(
                 task_message=task_message,
-                workflow="respond_and_optionally_edit",
                 stream="stdout",
                 content="codex transcript line",
             )
@@ -74,7 +72,6 @@ class WorkerActivityTests(unittest.TestCase):
             monitor.record_executor_finished(
                 task_message=task_message,
                 run_id="run:telegram:1",
-                workflow="respond_and_optionally_edit",
                 result_status="success",
                 attempt_count=1,
                 reason_codes=[],
@@ -112,11 +109,9 @@ class WorkerActivityTests(unittest.TestCase):
             monitor.record_executor_started(
                 task_message=task_message,
                 attempt=1,
-                workflow="respond_and_optionally_edit",
             )
             monitor.record_executor_output(
                 task_message=task_message,
-                workflow="respond_and_optionally_edit",
                 stream="stderr",
                 content="warning line",
             )
@@ -171,13 +166,11 @@ class WorkerActivityTests(unittest.TestCase):
 
             monitor.record_executor_output(
                 task_message=task_message,
-                workflow="respond_and_optionally_edit",
                 stream="stdout",
                 content="same output",
             )
             monitor.record_executor_output(
                 task_message=task_message,
-                workflow="respond_and_optionally_edit",
                 stream="stdout",
                 content="same output",
             )

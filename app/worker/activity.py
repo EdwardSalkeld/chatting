@@ -62,7 +62,6 @@ class WorkerActivityMonitor:
             task_id=task_message.task_id,
             envelope_id=envelope.id,
             source=envelope.source,
-            workflow=None,
             occurred_at=envelope.received_at,
             is_internal=envelope.source == "internal",
             detail={
@@ -78,7 +77,6 @@ class WorkerActivityMonitor:
         *,
         task_message: TaskQueueMessage,
         attempt: int,
-        workflow: str,
     ) -> None:
         envelope = task_message.envelope
         occurred_at = self._now_fn()
@@ -87,7 +85,6 @@ class WorkerActivityMonitor:
             "task_id": task_message.task_id,
             "envelope_id": envelope.id,
             "source": envelope.source,
-            "workflow": workflow,
             "attempt": attempt,
             "started_at": _isoformat(occurred_at),
             "pid": None,
@@ -101,7 +98,6 @@ class WorkerActivityMonitor:
             task_id=task_message.task_id,
             envelope_id=envelope.id,
             source=envelope.source,
-            workflow=workflow,
             occurred_at=occurred_at,
             is_internal=envelope.source == "internal",
             detail={"attempt": attempt},
@@ -120,7 +116,6 @@ class WorkerActivityMonitor:
         *,
         task_message: TaskQueueMessage,
         run_id: str,
-        workflow: str,
         result_status: str,
         attempt_count: int,
         reason_codes: list[str],
@@ -137,7 +132,6 @@ class WorkerActivityMonitor:
             envelope_id=envelope.id,
             run_id=run_id,
             source=envelope.source,
-            workflow=workflow,
             occurred_at=occurred_at,
             is_internal=envelope.source == "internal",
             detail={
@@ -152,7 +146,6 @@ class WorkerActivityMonitor:
         self,
         *,
         task_message: TaskQueueMessage,
-        workflow: str,
         stream: str,
         content: str,
     ) -> None:
@@ -163,7 +156,6 @@ class WorkerActivityMonitor:
             task_id=task_message.task_id,
             envelope_id=envelope.id,
             source=envelope.source,
-            workflow=workflow,
             is_internal=envelope.source == "internal",
             detail={"stream": stream, "content": content},
         )
@@ -173,7 +165,6 @@ class WorkerActivityMonitor:
         *,
         task_message: TaskQueueMessage,
         attempt: int,
-        workflow: str,
         error: str,
     ) -> None:
         envelope = task_message.envelope
@@ -183,7 +174,6 @@ class WorkerActivityMonitor:
             task_id=task_message.task_id,
             envelope_id=envelope.id,
             source=envelope.source,
-            workflow=workflow,
             is_internal=envelope.source == "internal",
             detail={"attempt": attempt, "error": error},
         )

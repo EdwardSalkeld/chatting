@@ -69,15 +69,10 @@ def _task_payload(
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
-    workflow = (
-        "scheduled_automation"
-        if envelope.source == "cron"
-        else "respond_and_optionally_edit"
-    )
     task_dict: dict[str, Any] = {
         "task_id": f"task:{envelope.id}",
         "envelope_id": envelope.id,
-        "workflow": workflow,
+        "workflow": "default",
         "event_time": envelope.received_at.astimezone(timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
