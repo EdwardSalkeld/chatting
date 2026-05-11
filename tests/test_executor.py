@@ -47,7 +47,6 @@ class CodexExecutorTests(unittest.TestCase):
         result = executor.execute(_task())
 
         self.assertEqual(result.errors, ["executor_timeout"])
-        self.assertEqual(result.actions, [])
         self.assertIsNone(result.stdout)
         self.assertIsNone(result.stderr)
 
@@ -86,7 +85,6 @@ class CodexExecutorTests(unittest.TestCase):
         result = executor.execute(task)
 
         self.assertEqual(result.errors, [])
-        self.assertEqual(result.actions, [])
         self.assertEqual(result.stdout, '{"type":"message","text":"thinking"}\n')
         self.assertEqual(result.stderr, "warning stream")
         run_mock.assert_called_once()

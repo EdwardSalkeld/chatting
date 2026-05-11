@@ -23,7 +23,7 @@ class MultiMessageExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(
-            actions=[], errors=[], stdout="executor stdout", stderr="executor stderr"
+            errors=[], stdout="executor stdout", stderr="executor stderr"
         )
 
 
@@ -46,7 +46,6 @@ class ExecutionErrorExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(
-            actions=[],
             errors=["executor_exit_nonzero:1:insufficient credits"],
         )
 
@@ -56,7 +55,6 @@ class IncrementalReplyExecutor:
     def execute(self, task):
         del task
         return ExecutionResult(
-            actions=[],
             errors=[],
         )
 
@@ -65,14 +63,14 @@ class IncrementalReplyExecutor:
 class NoMessageExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(actions=[], errors=[])
+        return ExecutionResult(errors=[])
 
 
 @dataclass(frozen=True)
 class FinalAliasExecutor:
     def execute(self, task):
         del task
-        return ExecutionResult(actions=[], errors=[])
+        return ExecutionResult(errors=[])
 
 
 class WorkerRuntimeTests(unittest.TestCase):

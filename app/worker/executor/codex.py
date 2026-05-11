@@ -54,7 +54,6 @@ class CodexExecutor:
             )
 
         return ExecutionResult(
-            actions=[],
             errors=[],
             stdout=completed.stdout,
             stderr=completed.stderr,
@@ -86,7 +85,6 @@ def _error_result(
     stderr: str | None = None,
 ) -> ExecutionResult:
     return ExecutionResult(
-        actions=[],
         errors=[error],
         stdout=stdout,
         stderr=stderr,

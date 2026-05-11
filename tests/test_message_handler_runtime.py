@@ -25,35 +25,27 @@ from app.handler.runtime import (
     TelegramAttachmentStore,
     cleanup_telegram_attachments,
 )
-from app.models import ApplyResult, AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.handler.telemetry import _render_prometheus_metrics
 @dataclass
 class _RecordingApplier:
     apply_calls: int = 0
 
-    def apply(self, decision, envelope=None):
-        del decision, envelope
+    def dispatch(self, message, envelope=None):
+        del message, envelope
         self.apply_calls += 1
-        return ApplyResult(
-            applied_actions=[],
-            skipped_actions=[],
-            dispatched_messages=[
-                OutboundMessage(channel="email", target="alice@example.com", body="ok")
-            ],
-            reason_codes=[],
+        return OutboundMessage(
+            channel="email", target="alice@example.com", body="ok"
         )
 @dataclass
 class _DispatchFailingApplier:
     apply_calls: int = 0
 
-    def apply(self, decision, envelope=None):
-        del decision, envelope
+    def dispatch(self, message, envelope=None):
+        del message, envelope
         self.apply_calls += 1
-        raise MessageDispatchError(
-            reason_code="telegram_dispatch_failed",
-            dispatched_messages=[],
-        )
+        raise MessageDispatchError(reason_code="telegram_dispatch_failed")
 @dataclass
 class _RecordingAlertEmailSender:
     sent: list[tuple[str, str, str | None]]
@@ -357,9 +349,9 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
 
             @dataclass
             class _AttachmentApplier:
-                def apply(self, decision, envelope=None):
-                    del decision, envelope
-                    dispatched = OutboundMessage(
+                def dispatch(self, message, envelope=None):
+                    del message, envelope
+                    return OutboundMessage(
                         channel="telegram",
                         target="12345",
                         body="menu attached",
@@ -367,12 +359,6 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
                             uri=attachment_path.resolve().as_uri(),
                             name="menu.pdf",
                         ),
-                    )
-                    return ApplyResult(
-                        applied_actions=[],
-                        skipped_actions=[],
-                        dispatched_messages=[dispatched],
-                        reason_codes=[],
                     )
 
             payload = EgressQueueMessage(
@@ -632,15 +618,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
 
             @dataclass
             class _BodyRecordingApplier:
-                def apply(self, decision, envelope=None):
+                def dispatch(self, message, envelope=None):
                     del envelope
-                    applied_bodies.append(decision.approved_messages[0].body)
-                    return ApplyResult(
-                        applied_actions=[],
-                        skipped_actions=[],
-                        dispatched_messages=decision.approved_messages,
-                        reason_codes=[],
-                    )
+                    applied_bodies.append(message.body)
+                    return message
 
             applier = _BodyRecordingApplier()
             payload = EgressQueueMessage(
@@ -983,19 +964,13 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             class _HeartbeatApplier:
                 apply_calls: int = 0
 
-                def apply(self, decision, envelope=None):
+                def dispatch(self, message, envelope=None):
                     del envelope
                     self.apply_calls += 1
-                    applied_messages.extend(
+                    applied_messages.append(
                         (message.channel, message.target, message.body)
-                        for message in decision.approved_messages
                     )
-                    return ApplyResult(
-                        applied_actions=[],
-                        skipped_actions=[],
-                        dispatched_messages=decision.approved_messages,
-                        reason_codes=[],
-                    )
+                    return message
 
             applier = _HeartbeatApplier()
             queued = build_internal_heartbeat_egress(
@@ -1039,15 +1014,10 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
 
             @dataclass
             class _OrderAwareApplier:
-                def apply(self, decision, envelope=None):
+                def dispatch(self, message, envelope=None):
                     del envelope
-                    applied_bodies.append(decision.approved_messages[0].body)
-                    return ApplyResult(
-                        applied_actions=[],
-                        skipped_actions=[],
-                        dispatched_messages=decision.approved_messages,
-                        reason_codes=[],
-                    )
+                    applied_bodies.append(message.body)
+                    return message
 
             applier = _OrderAwareApplier()
             out_of_order_payload = EgressQueueMessage(
@@ -1147,17 +1117,11 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
             class _TelegramApplier:
                 apply_calls: int = 0
 
-                def apply(self, decision, envelope=None):
-                    del decision, envelope
+                def dispatch(self, message, envelope=None):
+                    del message, envelope
                     self.apply_calls += 1
-                    return ApplyResult(
-                        applied_actions=[],
-                        skipped_actions=[],
-                        dispatched_messages=[
-                            OutboundMessage(channel="telegram", target="12345", body="reply-1"),
-                            OutboundMessage(channel="telegram", target="99999", body="reply-2"),
-                        ],
-                        reason_codes=[],
+                    return OutboundMessage(
+                        channel="telegram", target="12345", body="reply-1"
                     )
 
             applier = _TelegramApplier()
@@ -1205,22 +1169,15 @@ class MessageHandlerRuntimeTests(unittest.TestCase):
 
             @dataclass
             class _TelegramApplier:
-                def apply(self, decision, envelope=None):
-                    del decision, envelope
-                    return ApplyResult(
-                        applied_actions=[],
-                        skipped_actions=[],
-                        dispatched_messages=[
-                            OutboundMessage(
-                                channel="telegram",
-                                target="12345",
-                                attachment=AttachmentRef(
-                                    uri="file:///tmp/menu.pdf",
-                                    name="menu.pdf",
-                                ),
-                            )
-                        ],
-                        reason_codes=[],
+                def dispatch(self, message, envelope=None):
+                    del message, envelope
+                    return OutboundMessage(
+                        channel="telegram",
+                        target="12345",
+                        attachment=AttachmentRef(
+                            uri="file:///tmp/menu.pdf",
+                            name="menu.pdf",
+                        ),
                     )
 
             payload = EgressQueueMessage(

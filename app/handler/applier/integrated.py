@@ -19,10 +19,7 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from app.models import (
-    ActionProposal,
-    ApplyResult,
     OutboundMessage,
-    PolicyDecision,
     TaskEnvelope,
 )
 from app.telegram_text import normalize_telegram_outbound_text
@@ -66,10 +63,9 @@ class GitHubSender(Protocol):
 
 @dataclass(frozen=True)
 class MessageDispatchError(RuntimeError):
-    """Raised when message dispatch fails after one or more successful sends."""
+    """Raised when message dispatch fails."""
 
     reason_code: str
-    dispatched_messages: list[OutboundMessage]
 
     def __str__(self) -> str:
         return self.reason_code
@@ -296,214 +292,142 @@ class GitHubIssueCommentSender:
 
 @dataclass(frozen=True)
 class IntegratedApplier:
-    """Apply approved actions and dispatch approved outbound messages."""
+    """Dispatch outbound messages to configured channels."""
 
-    base_dir: str
     email_sender: EmailSender | None = None
     telegram_sender: TelegramSender | None = None
     github_sender: GitHubSender | None = None
 
-    def apply(
-        self, decision: PolicyDecision, envelope: TaskEnvelope | None = None
-    ) -> ApplyResult:
-        applied_actions: list[ActionProposal] = []
-        skipped_actions: list[ActionProposal] = []
-        dispatched_messages: list[OutboundMessage] = []
-        reason_codes: list[str] = []
-
-        for action in decision.approved_actions:
-            if action.type != "write_file":
-                skipped_actions.append(action)
-                reason_codes.append("unsupported_action_type")
-                continue
-
-            if action.path is None or action.content is None:
-                skipped_actions.append(action)
-                reason_codes.append("write_file_payload_invalid")
-                continue
-
-            try:
-                destination = _resolve_relative_path(self.base_dir, action.path)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(action.content, encoding="utf-8")
-                applied_actions.append(action)
-            except ValueError as error:
-                skipped_actions.append(action)
-                reason_codes.append(str(error))
-
-        for message in decision.approved_messages:
-            dispatch_channel, dispatch_target = _resolve_dispatch_channel_and_target(
-                message=message,
-                envelope=envelope,
-            )
-            normalized_message = OutboundMessage(
-                channel=dispatch_channel,
-                target=dispatch_target,
-                body=message.body,
-                metadata=dict(message.metadata),
-                attachment=message.attachment,
-            )
-
-            if dispatch_channel == "log":
-                LOGGER.info(
-                    "log_dispatch target=%s body=%s", dispatch_target, message.body
-                )
-                dispatched_messages.append(normalized_message)
-                continue
-            if dispatch_channel == "drop":
-                LOGGER.info(
-                    "drop_marker target=%s body=%s", dispatch_target, message.body
-                )
-                dispatched_messages.append(normalized_message)
-                continue
-            if dispatch_channel == "email":
-                if self.email_sender is None:
-                    LOGGER.warning(
-                        "drop_dispatch reason=email_dispatch_not_configured channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    reason_codes.append("email_dispatch_not_configured")
-                    continue
-                try:
-                    reply_subject, reply_body = _format_email_reply(message, envelope)
-                    self.email_sender.send(
-                        dispatch_target,
-                        reply_body,
-                        subject=reply_subject,
-                    )
-                    dispatched_messages.append(normalized_message)
-                except Exception:  # noqa: BLE001
-                    LOGGER.exception(
-                        "drop_dispatch reason=email_dispatch_failed channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    raise MessageDispatchError(
-                        reason_code="email_dispatch_failed",
-                        dispatched_messages=list(dispatched_messages),
-                    ) from None
-                continue
-            if dispatch_channel == "telegram":
-                if self.telegram_sender is None:
-                    LOGGER.warning(
-                        "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    reason_codes.append("telegram_dispatch_not_configured")
-                    continue
-                try:
-                    self.telegram_sender.send(dispatch_target, message)
-                    dispatched_messages.append(normalized_message)
-                except Exception as error:  # noqa: BLE001
-                    error_reason = _telegram_dispatch_reason_code(
-                        message, exception=error
-                    )
-                    LOGGER.exception(
-                        "drop_dispatch reason=%s channel=%s target=%s",
-                        error_reason,
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    raise MessageDispatchError(
-                        reason_code=error_reason,
-                        dispatched_messages=list(dispatched_messages),
-                    ) from None
-                continue
-            if dispatch_channel == "github":
-                if self.github_sender is None:
-                    LOGGER.warning(
-                        "drop_dispatch reason=github_dispatch_not_configured channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    reason_codes.append("github_dispatch_not_configured")
-                    continue
-                try:
-                    if message.body is None:
-                        raise ValueError("github message body is required")
-                    self.github_sender.send(dispatch_target, message.body)
-                    dispatched_messages.append(normalized_message)
-                except Exception:  # noqa: BLE001
-                    LOGGER.exception(
-                        "drop_dispatch reason=github_dispatch_failed channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    raise MessageDispatchError(
-                        reason_code="github_dispatch_failed",
-                        dispatched_messages=list(dispatched_messages),
-                    ) from None
-                continue
-            if dispatch_channel == "telegram_reaction":
-                if self.telegram_sender is None:
-                    LOGGER.warning(
-                        "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    reason_codes.append("telegram_dispatch_not_configured")
-                    continue
-                try:
-                    if message.body is None:
-                        raise ValueError("telegram reaction emoji is required")
-                    self.telegram_sender.react(
-                        dispatch_target,
-                        _resolve_telegram_reaction_message_id(
-                            message=message, envelope=envelope
-                        ),
-                        message.body,
-                    )
-                    dispatched_messages.append(normalized_message)
-                except Exception:  # noqa: BLE001
-                    LOGGER.exception(
-                        "drop_dispatch reason=telegram_dispatch_failed channel=%s target=%s",
-                        dispatch_channel,
-                        dispatch_target,
-                    )
-                    raise MessageDispatchError(
-                        reason_code="telegram_dispatch_failed",
-                        dispatched_messages=list(dispatched_messages),
-                    ) from None
-                continue
-            LOGGER.warning(
-                "drop_dispatch reason=unsupported_message_channel channel=%s target=%s",
-                dispatch_channel,
-                dispatch_target,
-            )
-            reason_codes.append("unsupported_message_channel")
-
-        if decision.blocked_actions:
-            reason_codes.append("policy_blocked_actions_present")
-
-        return ApplyResult(
-            applied_actions=applied_actions,
-            skipped_actions=skipped_actions,
-            dispatched_messages=dispatched_messages,
-            reason_codes=_dedupe_preserving_order(reason_codes),
+    def dispatch(
+        self,
+        message: OutboundMessage,
+        envelope: TaskEnvelope | None = None,
+    ) -> OutboundMessage | None:
+        dispatch_channel, dispatch_target = _resolve_dispatch_channel_and_target(
+            message=message,
+            envelope=envelope,
+        )
+        normalized_message = OutboundMessage(
+            channel=dispatch_channel,
+            target=dispatch_target,
+            body=message.body,
+            metadata=dict(message.metadata),
+            attachment=message.attachment,
         )
 
-
-def _resolve_relative_path(base_dir: str, relative_path: str) -> Path:
-    base_path = Path(base_dir).resolve()
-    destination = (base_path / relative_path).resolve()
-    try:
-        destination.relative_to(base_path)
-    except ValueError as error:
-        raise ValueError("write_file_outside_base_dir") from error
-    return destination
-
-
-def _dedupe_preserving_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    return deduped
+        if dispatch_channel == "log":
+            LOGGER.info(
+                "log_dispatch target=%s body=%s", dispatch_target, message.body
+            )
+            return normalized_message
+        if dispatch_channel == "drop":
+            LOGGER.info(
+                "drop_marker target=%s body=%s", dispatch_target, message.body
+            )
+            return normalized_message
+        if dispatch_channel == "email":
+            if self.email_sender is None:
+                LOGGER.warning(
+                    "drop_dispatch reason=email_dispatch_not_configured channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                return None
+            try:
+                reply_subject, reply_body = _format_email_reply(message, envelope)
+                self.email_sender.send(
+                    dispatch_target,
+                    reply_body,
+                    subject=reply_subject,
+                )
+                return normalized_message
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "drop_dispatch reason=email_dispatch_failed channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                raise MessageDispatchError(
+                    reason_code="email_dispatch_failed",
+                ) from None
+        if dispatch_channel == "telegram":
+            if self.telegram_sender is None:
+                LOGGER.warning(
+                    "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                return None
+            try:
+                self.telegram_sender.send(dispatch_target, message)
+                return normalized_message
+            except Exception as error:  # noqa: BLE001
+                error_reason = _telegram_dispatch_reason_code(
+                    message, exception=error
+                )
+                LOGGER.exception(
+                    "drop_dispatch reason=%s channel=%s target=%s",
+                    error_reason,
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                raise MessageDispatchError(reason_code=error_reason) from None
+        if dispatch_channel == "github":
+            if self.github_sender is None:
+                LOGGER.warning(
+                    "drop_dispatch reason=github_dispatch_not_configured channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                return None
+            try:
+                if message.body is None:
+                    raise ValueError("github message body is required")
+                self.github_sender.send(dispatch_target, message.body)
+                return normalized_message
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "drop_dispatch reason=github_dispatch_failed channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                raise MessageDispatchError(
+                    reason_code="github_dispatch_failed",
+                ) from None
+        if dispatch_channel == "telegram_reaction":
+            if self.telegram_sender is None:
+                LOGGER.warning(
+                    "drop_dispatch reason=telegram_dispatch_not_configured channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                return None
+            try:
+                if message.body is None:
+                    raise ValueError("telegram reaction emoji is required")
+                self.telegram_sender.react(
+                    dispatch_target,
+                    _resolve_telegram_reaction_message_id(
+                        message=message, envelope=envelope
+                    ),
+                    message.body,
+                )
+                return normalized_message
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "drop_dispatch reason=telegram_dispatch_failed channel=%s target=%s",
+                    dispatch_channel,
+                    dispatch_target,
+                )
+                raise MessageDispatchError(
+                    reason_code="telegram_dispatch_failed",
+                ) from None
+        LOGGER.warning(
+            "drop_dispatch reason=unsupported_message_channel channel=%s target=%s",
+            dispatch_channel,
+            dispatch_target,
+        )
+        return None
 
 
 def _format_email_reply(

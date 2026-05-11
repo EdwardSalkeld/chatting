@@ -58,7 +58,7 @@ from app.handler.runtime import (
     TelegramAttachmentStore,
     cleanup_telegram_attachments,
 )
-from app.models import OutboundMessage, PolicyDecision, PromptContext, TaskEnvelope
+from app.models import OutboundMessage, PromptContext, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.handler.telemetry import (
     EgressTelemetryRollup,
@@ -1626,17 +1626,6 @@ def _build_live_connectors_fail_open(
     return connectors, disabled_components
 
 
-def _build_policy_decision_for_message(
-    egress_message: EgressQueueMessage,
-) -> PolicyDecision:
-    return PolicyDecision(
-        approved_actions=[],
-        blocked_actions=[],
-        approved_messages=[egress_message.message],
-        reason_codes=[],
-    )
-
-
 def _build_github_sender() -> GitHubIssueCommentSender | None:
     if shutil.which("gh") is None:
         return None
@@ -1883,16 +1872,16 @@ def _dispatch_unsequenced_egress(
     applier: IntegratedApplier,
     telemetry: EgressTelemetryRollup | None,
 ) -> None:
-    decision = _build_policy_decision_for_message(egress_message)
-    apply_result = applier.apply(
-        decision,
+    dispatched = applier.dispatch(
+        egress_message.message,
         envelope=ledger_record.task_message.envelope,
     )
+    dispatched_messages = [dispatched] if dispatched is not None else []
     _record_outbound_telegram_attachments(
         egress_message=egress_message,
         attachment_store=attachment_store,
         attachment_cleanup_settings=attachment_cleanup_settings,
-        dispatched_messages=apply_result.dispatched_messages,
+        dispatched_messages=dispatched_messages,
     )
     if egress_message.event_id is not None:
         store.mark_dispatched_event_id(
@@ -1911,22 +1900,20 @@ def _dispatch_unsequenced_egress(
             event_kind=egress_message.event_kind,
             latency_ms=max(dispatch_latency_ms, 0),
         )
-    if _should_store_telegram_memory(ledger_record.task_message.envelope):
-        for message in apply_result.dispatched_messages:
-            if message.channel != "telegram":
-                continue
-            if (
-                message.target
-                != ledger_record.task_message.envelope.reply_channel.target
-            ):
-                continue
-            if message.body is None:
-                continue
+    if dispatched is not None and _should_store_telegram_memory(
+        ledger_record.task_message.envelope
+    ):
+        if (
+            dispatched.channel == "telegram"
+            and dispatched.target
+            == ledger_record.task_message.envelope.reply_channel.target
+            and dispatched.body is not None
+        ):
             store.append_conversation_turn(
                 channel="telegram",
-                target=message.target,
+                target=dispatched.target,
                 role="assistant",
-                content=message.body,
+                content=dispatched.body,
                 run_id=egress_message.task_id,
             )
     LOGGER.info(
@@ -2077,10 +2064,9 @@ def _flush_task_egress_in_sequence(
             )
             return
 
-        decision = _build_policy_decision_for_message(egress_message)
         try:
-            apply_result = applier.apply(
-                decision,
+            dispatched = applier.dispatch(
+                egress_message.message,
                 envelope=ledger_record.task_message.envelope,
             )
         except MessageDispatchError as error:
@@ -2107,11 +2093,12 @@ def _flush_task_egress_in_sequence(
                 error=error,
             )
             continue
+        dispatched_messages = [dispatched] if dispatched is not None else []
         _record_outbound_telegram_attachments(
             egress_message=egress_message,
             attachment_store=attachment_store,
             attachment_cleanup_settings=attachment_cleanup_settings,
-            dispatched_messages=apply_result.dispatched_messages,
+            dispatched_messages=dispatched_messages,
         )
         store.mark_dispatched_event_id(
             task_id=task_id,
@@ -2154,20 +2141,19 @@ def _flush_task_egress_in_sequence(
                 _serialize_optional_datetime(heartbeat_received_at),
                 heartbeat_telemetry.latest_latency_ms,
             )
-        if _should_store_telegram_memory(ledger_record.task_message.envelope):
-            for message in apply_result.dispatched_messages:
-                if message.channel != "telegram":
-                    continue
-                if (
-                    message.target
-                    != ledger_record.task_message.envelope.reply_channel.target
-                ):
-                    continue
+        if dispatched is not None and _should_store_telegram_memory(
+            ledger_record.task_message.envelope
+        ):
+            if (
+                dispatched.channel == "telegram"
+                and dispatched.target
+                == ledger_record.task_message.envelope.reply_channel.target
+            ):
                 store.append_conversation_turn(
                     channel="telegram",
-                    target=message.target,
+                    target=dispatched.target,
                     role="assistant",
-                    content=_message_content_for_telegram_memory(message),
+                    content=_message_content_for_telegram_memory(dispatched),
                     run_id=task_id,
                 )
         LOGGER.info(
@@ -2478,7 +2464,6 @@ def main() -> int:
     email_sender = _build_email_sender(args, config)
     error_email_recipient = _resolve_error_email_recipient(args, config)
     applier = IntegratedApplier(
-        base_dir=".",
         email_sender=email_sender,
         telegram_sender=_build_telegram_sender(args, config),
         github_sender=_build_github_sender(),
