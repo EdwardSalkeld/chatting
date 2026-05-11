@@ -15,7 +15,6 @@ from app.internal_heartbeat import (
     is_internal_heartbeat_envelope,
 )
 from app.models import AuditEvent, OutboundMessage, RunRecord
-from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
 from app.state import StateStore
 
@@ -38,7 +37,6 @@ def process_task_message(
     task_message: TaskQueueMessage,
     router: RuleBasedRouter,
     executor_impl: Executor,
-    policy: AllowlistPolicyEngine,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
 ) -> WorkerProcessResult:
@@ -63,13 +61,11 @@ def process_task_message(
     last_error: str | None = None
     last_error_stage: str | None = None
     execution_payload: dict[str, object] | None = None
-    policy_payload: dict[str, object] | None = None
     egress_messages: list[EgressQueueMessage] = []
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
 
-        error_stage = "executor"
         try:
             activity_monitor.record_executor_started(
                 task_message=task_message,
@@ -93,18 +89,12 @@ def process_task_message(
                     content=execution_result.stderr,
                 )
 
-            error_stage = "policy"
-            decision = policy.evaluate(execution_result)
-            policy_payload = decision.to_dict()
-
-            dropped_action_count = len(decision.approved_actions)
-            reason_codes = list(decision.reason_codes)
-            if dropped_action_count > 0:
-                reason_codes.append("approved_actions_not_forwarded_to_egress")
-            reason_codes = _dedupe(reason_codes)
+            reason_codes = (
+                ["executor_reported_errors"] if execution_result.errors else []
+            )
             result_status = _result_status(reason_codes)
 
-            terminal_egress_messages = _build_completion_egress_messages(
+            egress_messages = _build_completion_egress_messages(
                 task_message=task_message,
                 starting_sequence=0,
                 visible_error_body=_build_credit_exhausted_visible_error(
@@ -112,11 +102,10 @@ def process_task_message(
                     last_error=None,
                 ),
             )
-            egress_messages = terminal_egress_messages
             break
         except Exception as exc:  # noqa: BLE001
             last_error = f"{type(exc).__name__}: {exc}"
-            last_error_stage = error_stage
+            last_error_stage = "executor"
             activity_monitor.record_executor_failure(
                 task_message=task_message,
                 attempt=attempt,
@@ -163,7 +152,6 @@ def process_task_message(
                 "last_error": last_error,
                 "last_error_stage": last_error_stage,
                 "execution_result": execution_payload,
-                "policy_decision": policy_payload,
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": 0,
                 "egress_message_count": len(egress_messages),
@@ -246,12 +234,6 @@ def _process_internal_heartbeat(
                 "execution_result": {
                     "actions": [],
                     "errors": [],
-                },
-                "policy_decision": {
-                    "approved_actions": [],
-                    "blocked_actions": [],
-                    "approved_messages": [visible_egress_message.message.to_dict()],
-                    "reason_codes": ["internal_heartbeat"],
                 },
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": 0,
@@ -367,8 +349,6 @@ def _build_completion_egress(
 
 
 def _result_status(reason_codes: list[str]) -> str:
-    if "action_not_allowed" in reason_codes:
-        return "blocked_action"
     if "executor_reported_errors" in reason_codes:
         return "execution_error"
     if "retry_exhausted" in reason_codes:
@@ -403,17 +383,6 @@ def _looks_like_credit_exhaustion(error: str) -> bool:
             "usage limit",
         )
     )
-
-
-def _dedupe(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    return deduped
 
 
 def _event_id_for_sequence(

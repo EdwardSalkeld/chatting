@@ -8,12 +8,10 @@ import json
 from app.broker import TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_envelope
 from app.models import (
-    ActionProposal,
     ExecutionResult,
     ReplyChannel,
     TaskEnvelope,
 )
-from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
@@ -26,18 +24,6 @@ class MultiMessageExecutor:
         del task
         return ExecutionResult(
             actions=[], errors=[], stdout="executor stdout", stderr="executor stderr"
-        )
-
-
-@dataclass(frozen=True)
-class WriteFileExecutor:
-    def execute(self, task):
-        del task
-        return ExecutionResult(
-            actions=[
-                ActionProposal(type="write_file", path="output.txt", content="hello")
-            ],
-            errors=[],
         )
 
 
@@ -126,9 +112,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=MultiMessageExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -150,28 +133,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(activity[1]["phase"], "executor_stderr")
             self.assertEqual(activity[2]["phase"], "executor_stdout")
 
-    def test_process_task_message_marks_dropped_actions_reason_code(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
-                executor_impl=WriteFileExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            audit_event = store.list_audit_events()[0]
-            self.assertIn(
-                "approved_actions_not_forwarded_to_egress",
-                audit_event.detail["reason_codes"],
-            )
-
     def test_process_task_message_retries_and_dead_letters(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
@@ -180,9 +141,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=AlwaysFailExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -203,9 +161,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=CreditsFailExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=1,
                 activity_monitor=self._build_monitor(store),
             )
@@ -230,9 +185,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=ExecutionErrorExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=1,
                 activity_monitor=self._build_monitor(store),
             )
@@ -254,9 +206,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=IncrementalReplyExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -282,9 +231,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=IncrementalReplyExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -306,9 +252,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_internal_heartbeat_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=AlwaysFailExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -342,9 +285,6 @@ class WorkerRuntimeTests(unittest.TestCase):
                 task_message=self._build_task_message(),
                 router=RuleBasedRouter(),
                 executor_impl=NoMessageExecutor(),
-                policy=AllowlistPolicyEngine(
-                    allowed_action_types=frozenset({"write_file"})
-                ),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )

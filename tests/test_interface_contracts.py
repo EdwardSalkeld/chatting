@@ -18,7 +18,6 @@ from app.handler.connectors import (
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.handler.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.worker.executor import CodexExecutor, Executor
-from app.worker.policy import AllowlistPolicyEngine, PolicyEngine
 from app.worker.router import Router, RuleBasedRouter
 from app.state import SQLiteStateStore, StateStore
 from tests.fixtures import (
@@ -143,9 +142,6 @@ class InterfaceContractTests(unittest.TestCase):
 
     def test_executor_implementations_match_protocol(self) -> None:
         self.assertIsInstance(CodexExecutor(), Executor)
-
-    def test_policy_implementation_matches_protocol(self) -> None:
-        self.assertIsInstance(AllowlistPolicyEngine(), PolicyEngine)
 
     def test_applier_implementation_matches_protocol(self) -> None:
         self.assertIsInstance(NoOpApplier(), Applier)
