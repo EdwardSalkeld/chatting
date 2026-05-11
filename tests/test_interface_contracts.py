@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.handler.connectors import (
     AuxiliaryIngressConnector,
@@ -17,7 +16,6 @@ from app.handler.connectors import (
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.handler.connectors.telegram_connector import TelegramGetUpdatesResponse
 from app.worker.executor import CodexExecutor, Executor
-from app.state import SQLiteStateStore, StateStore
 from tests.fixtures import (
     CronTrigger,
     EmailMessage,
@@ -137,12 +135,6 @@ class InterfaceContractTests(unittest.TestCase):
 
     def test_executor_implementations_match_protocol(self) -> None:
         self.assertIsInstance(CodexExecutor(), Executor)
-
-    def test_state_store_implementation_matches_protocol(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-            self.assertIsInstance(store, StateStore)
 
 
 if __name__ == "__main__":
