@@ -15,7 +15,6 @@ from app.internal_heartbeat import (
     is_internal_heartbeat_envelope,
 )
 from app.models import AuditEvent, OutboundMessage, RunRecord
-from app.worker.router import RuleBasedRouter
 from app.state import StateStore
 
 if TYPE_CHECKING:
@@ -35,7 +34,6 @@ def process_task_message(
     *,
     store: StateStore,
     task_message: TaskQueueMessage,
-    router: RuleBasedRouter,
     executor_impl: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
@@ -52,7 +50,11 @@ def process_task_message(
         )
 
     run_id = f"run:{task_message.task_id}:{time.time_ns()}"
-    task = router.route(envelope)
+    workflow = (
+        "scheduled_automation"
+        if envelope.source == "cron"
+        else "respond_and_optionally_edit"
+    )
     started = time.perf_counter()
 
     reason_codes: list[str] = []
@@ -70,21 +72,21 @@ def process_task_message(
             activity_monitor.record_executor_started(
                 task_message=task_message,
                 attempt=attempt,
-                workflow=task.workflow,
+                workflow=workflow,
             )
-            execution_result = executor_impl.execute(task)
+            execution_result = executor_impl.execute(envelope)
             execution_payload = execution_result.to_dict()
             if execution_result.stdout:
                 activity_monitor.record_executor_output(
                     task_message=task_message,
-                    workflow=task.workflow,
+                    workflow=workflow,
                     stream="stdout",
                     content=execution_result.stdout,
                 )
             if execution_result.stderr:
                 activity_monitor.record_executor_output(
                     task_message=task_message,
-                    workflow=task.workflow,
+                    workflow=workflow,
                     stream="stderr",
                     content=execution_result.stderr,
                 )
@@ -109,7 +111,7 @@ def process_task_message(
             activity_monitor.record_executor_failure(
                 task_message=task_message,
                 attempt=attempt,
-                workflow=task.workflow,
+                workflow=workflow,
                 error=last_error,
             )
             if attempt == max_attempts:
@@ -129,7 +131,7 @@ def process_task_message(
         run_id=run_id,
         envelope_id=envelope.id,
         source=envelope.source,
-        workflow=task.workflow,
+        workflow=workflow,
         latency_ms=latency_ms,
         result_status=result_status,
         created_at=datetime.now(timezone.utc),
@@ -174,7 +176,7 @@ def process_task_message(
     activity_monitor.record_executor_finished(
         task_message=task_message,
         run_id=run_record.run_id,
-        workflow=task.workflow,
+        workflow=workflow,
         result_status=run_record.result_status,
         attempt_count=attempt_count,
         reason_codes=reason_codes,

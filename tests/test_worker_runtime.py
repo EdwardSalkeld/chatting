@@ -12,7 +12,6 @@ from app.models import (
     ReplyChannel,
     TaskEnvelope,
 )
-from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
 from app.worker.runtime import process_task_message
@@ -108,7 +107,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=MultiMessageExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
@@ -137,7 +135,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=AlwaysFailExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
@@ -157,7 +154,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=CreditsFailExecutor(),
                 max_attempts=1,
                 activity_monitor=self._build_monitor(store),
@@ -181,7 +177,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=ExecutionErrorExecutor(),
                 max_attempts=1,
                 activity_monitor=self._build_monitor(store),
@@ -202,7 +197,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=IncrementalReplyExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
@@ -227,7 +221,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=IncrementalReplyExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
@@ -248,7 +241,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_internal_heartbeat_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=AlwaysFailExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
@@ -281,7 +273,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                router=RuleBasedRouter(),
                 executor_impl=NoMessageExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),

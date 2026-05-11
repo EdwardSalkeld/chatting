@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 SOURCE_TYPES = ("cron", "email", "im", "webhook", "internal")
-PRIORITY_TYPES = ("low", "normal", "high")
 SCHEMA_VERSION = "1.0"
 
 
@@ -189,20 +188,6 @@ class PromptContext:
 
 
 @dataclass(frozen=True)
-class ExecutionConstraints:
-    """Execution budget and timeout for a routed task."""
-
-    timeout_seconds: int
-    max_tokens: int
-
-    def __post_init__(self) -> None:
-        if self.timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
-        if self.max_tokens <= 0:
-            raise ValueError("max_tokens must be positive")
-
-
-@dataclass(frozen=True)
 class TaskEnvelope:
     """Normalized input event schema."""
 
@@ -256,94 +241,6 @@ class TaskEnvelope:
         }
         if self.prompt_context.has_content():
             payload["prompt_context"] = self.prompt_context.to_dict()
-        return payload
-
-
-@dataclass(frozen=True)
-class RoutedTask:
-    """Task created by router from the canonical envelope."""
-
-    task_id: str
-    envelope_id: str
-    workflow: str
-    priority: Literal["low", "normal", "high"]
-    execution_constraints: ExecutionConstraints
-    event_time: datetime | None = None
-    source: Literal["cron", "email", "im", "webhook", "internal"] | None = None
-    actor: str | None = None
-    content: str | None = None
-    attachments: list[AttachmentRef] = field(default_factory=list)
-    context: list[ContextRef] = field(default_factory=list)
-    prompt_context: PromptContext = field(default_factory=PromptContext)
-    reply_channel: ReplyChannel | None = None
-    schema_version: str = SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _validate_schema_version(self.schema_version)
-        if self.priority not in PRIORITY_TYPES:
-            raise ValueError(f"priority must be one of {PRIORITY_TYPES}")
-        _validate_required_string(self.task_id, field_name="task_id")
-        _validate_required_string(self.envelope_id, field_name="envelope_id")
-        _validate_required_string(self.workflow, field_name="workflow")
-        if self.event_time is not None and self.event_time.tzinfo is None:
-            raise ValueError("event_time must be timezone-aware")
-        if self.source is not None and self.source not in SOURCE_TYPES:
-            raise ValueError(f"source must be one of {SOURCE_TYPES}")
-        if self.actor is not None:
-            _validate_required_string(self.actor, field_name="actor")
-        if self.content is not None:
-            _validate_required_string(self.content, field_name="content")
-        _validate_attachments(self.attachments)
-        _validate_typed_list(self.context, field_name="context", item_type=ContextRef)
-        _validate_prompt_context(self.prompt_context)
-        if self.reply_channel is not None:
-            _validate_required_string(
-                self.reply_channel.type, field_name="reply_channel.type"
-            )
-            _validate_required_string(
-                self.reply_channel.target, field_name="reply_channel.target"
-            )
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "schema_version": self.schema_version,
-            "task_id": self.task_id,
-            "envelope_id": self.envelope_id,
-            "workflow": self.workflow,
-            "priority": self.priority,
-            "execution_constraints": {
-                "timeout_seconds": self.execution_constraints.timeout_seconds,
-                "max_tokens": self.execution_constraints.max_tokens,
-            },
-        }
-        if self.event_time is not None:
-            payload["event_time"] = (
-                self.event_time.astimezone(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-        if self.source is not None:
-            payload["source"] = self.source
-        if self.actor is not None:
-            payload["actor"] = self.actor
-        if self.content is not None:
-            payload["content"] = self.content
-        if self.attachments:
-            payload["attachments"] = [
-                {"uri": item.uri, "name": item.name} for item in self.attachments
-            ]
-        if self.context:
-            payload["context"] = [ref.to_dict() for ref in self.context]
-        if self.prompt_context.has_content():
-            payload["prompt_context"] = self.prompt_context.to_dict()
-        if self.reply_channel is not None:
-            reply_channel_dict: dict[str, Any] = {
-                "type": self.reply_channel.type,
-                "target": self.reply_channel.target,
-            }
-            if self.reply_channel.metadata:
-                reply_channel_dict["metadata"] = self.reply_channel.metadata
-            payload["reply_channel"] = reply_channel_dict
         return payload
 
 
