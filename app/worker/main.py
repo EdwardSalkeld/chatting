@@ -29,7 +29,6 @@ from app.worker.activity import (
     start_worker_activity_server,
 )
 from app.worker.executor import CodexExecutor, Executor
-from app.worker.policy import AllowlistPolicyEngine
 from app.worker.router import RuleBasedRouter
 from app.state import SQLiteStateStore
 from app.worker.runtime import process_task_message
@@ -368,7 +367,6 @@ def main() -> int:
     broker.ensure_queue(EGRESS_QUEUE_NAME)
 
     router = RuleBasedRouter()
-    policy = AllowlistPolicyEngine(allowed_action_types=frozenset({"write_file"}))
     executor = _build_executor(args, config)
     replay_done = False
 
@@ -403,7 +401,6 @@ def main() -> int:
                     task_message=task_message,
                     router=router,
                     executor_impl=executor,
-                    policy=policy,
                     max_attempts=max_attempts,
                     activity_monitor=activity_monitor,
                 )
