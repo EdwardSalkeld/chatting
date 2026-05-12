@@ -1,7 +1,6 @@
 # Connector: Webhook
 
 Modules:
-- `app.handler.connectors.webhook_connector`
 - `app.handler.connectors.auxiliary_ingress_connector`
 - `app.main_auxiliary_ingress`
 
@@ -12,23 +11,14 @@ into canonical webhook envelopes.
 
 ## Integration state
 
-- The legacy in-process `WebhookConnector` remains available for tests/private integrations.
-- Split mode now supports BBMB-backed auxiliary ingress with:
-  - `app.main_auxiliary_ingress` listening on configured secret paths from `ingress_routes`
-  - `AuxiliaryIngressConnector` draining every configured auxiliary queue
-  - worker-visible task content set to the JSON body only
+Split mode supports BBMB-backed auxiliary ingress with:
+- `app.main_auxiliary_ingress` listening on configured secret paths from `ingress_routes`
+- `AuxiliaryIngressConnector` draining configured handler-side queue names from `auxiliary_ingress_queues`
+- worker-visible task content set to the JSON body only
 
-## Input model
+## Queue payload
 
-`WebhookEvent` fields:
-- `event_id`
-- `actor`
-- `content`
-- `received_at` (timezone-aware datetime)
-- `reply_target`
-- `context_refs`
-
-Auxiliary ingress queue payload fields:
+Auxiliary ingress queue message fields:
 - `event_id`
 - `received_at` (timezone-aware datetime)
 - `body` (any valid JSON value)
@@ -37,6 +27,5 @@ Auxiliary ingress queue payload fields:
 
 - `source`: `webhook`
 - `id` / `dedupe_key`: `webhook:<event_id>`
-- `reply_channel`: `webhook:<reply_target>` for in-process events, or `webhook:<queue_name>` for
-  auxiliary ingress
+- `reply_channel`: `webhook:<queue_name>`
 - `content`: exact JSON body rendered as text, without request-path or header metadata

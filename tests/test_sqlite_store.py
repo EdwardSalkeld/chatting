@@ -26,7 +26,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertTrue(store.seen("email", "same-id"))
             self.assertFalse(store.seen("cron", "same-id"))
 
-    def test_initialization_migrates_legacy_idempotency_schema(self) -> None:
+    def test_initialization_rejects_legacy_idempotency_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             connection = sqlite3.connect(db_path)
@@ -45,37 +45,8 @@ class SQLiteStateStoreTests(unittest.TestCase):
             connection.commit()
             connection.close()
 
-            store = SQLiteStateStore(str(db_path))
-
-            self.assertTrue(store.seen("legacy", "legacy-key"))
-            self.assertFalse(store.seen("email", "legacy-key"))
-            store.mark_seen("email", "legacy-key")
-            self.assertTrue(store.seen("email", "legacy-key"))
-
-    def test_initialization_drops_legacy_admin_tables(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "state.db"
-            connection = sqlite3.connect(db_path)
-            connection.execute("CREATE TABLE pending_approvals (approval_id INTEGER PRIMARY KEY)")
-            connection.execute("CREATE TABLE current_config (config_path TEXT PRIMARY KEY)")
-            connection.execute("CREATE TABLE config_versions (version_id INTEGER PRIMARY KEY)")
-            connection.commit()
-            connection.close()
-
-            SQLiteStateStore(str(db_path))
-
-            connection = sqlite3.connect(db_path)
-            tables = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                ).fetchall()
-            }
-            connection.close()
-
-            self.assertNotIn("pending_approvals", tables)
-            self.assertNotIn("current_config", tables)
-            self.assertNotIn("config_versions", tables)
+            with self.assertRaisesRegex(ValueError, "unsupported idempotency_keys schema"):
+                SQLiteStateStore(str(db_path))
 
     def test_append_run_persists_and_lists_run_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

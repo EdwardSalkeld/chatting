@@ -23,7 +23,6 @@ from app.handler.connectors.telegram_connector import (
     TelegramConnector,
     TelegramGetUpdatesResponse,
 )
-from app.handler.connectors.webhook_connector import WebhookConnector, WebhookEvent
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.models import PromptContext
 from tests.fixtures import (
@@ -1274,49 +1273,6 @@ class TelegramConnectorTests(unittest.TestCase):
                 "map_url": "https://maps.google.com/?q=51.507351,-0.127758",
             },
         )
-
-
-class WebhookConnectorTests(unittest.TestCase):
-    def test_poll_drains_enqueued_webhook_events(self) -> None:
-        connector = WebhookConnector()
-        connector.enqueue(
-            WebhookEvent(
-                event_id="evt-1",
-                actor="svc:deploy",
-                content="Deploy finished",
-                received_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
-                reply_target="https://example.com/reply",
-                context_refs=["repo:/home/edward/chatting"],
-            )
-        )
-
-        first = connector.poll()
-        second = connector.poll()
-
-        self.assertEqual(len(first), 1)
-        self.assertEqual(first[0].source, "webhook")
-        self.assertEqual(first[0].reply_channel.type, "webhook")
-        self.assertEqual(first[0].reply_channel.target, "https://example.com/reply")
-        self.assertEqual(first[0].dedupe_key, "webhook:evt-1")
-        self.assertEqual(second, [])
-
-    def test_poll_rejects_naive_received_time(self) -> None:
-        connector = WebhookConnector(
-            events=[
-                WebhookEvent(
-                    event_id="evt-1",
-                    actor="svc:deploy",
-                    content="Deploy finished",
-                    received_at=datetime(2026, 3, 1, 12, 0),
-                    reply_target="https://example.com/reply",
-                    context_refs=[],
-                )
-            ]
-        )
-
-        with self.assertRaisesRegex(ValueError, "timezone-aware"):
-            connector.poll()
-
 
 class AuxiliaryIngressConnectorTests(unittest.TestCase):
     def test_poll_drains_queue_and_renders_body_only_content(self) -> None:

@@ -150,7 +150,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "metrics_port": handler_metrics_port,
                         "auxiliary_ingress_enabled": True,
                         "auxiliary_ingress_bbmb_address": auxiliary_bbmb_address,
-                        "auxiliary_ingress_routes": ["generic-post:12334"],
+                        "auxiliary_ingress_queues": ["generic-post"],
                     }
                 ),
                 encoding="utf-8",
