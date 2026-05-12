@@ -414,6 +414,16 @@ Validation:
 - Go tests load each fixture and parse it with `internal/contracts`
 - re-serializing should preserve the contract-relevant shape
 
+### 1a. Go Handler CI Test Wiring
+
+Status: complete. The main CI workflow runs `go test ./...` under `go/handler`
+using the module Go version from `go/handler/go.mod`.
+
+Validation:
+- CI installs Go for pull requests and pushes to `main`
+- Go handler unit tests run alongside the existing Python unit suite
+- local verification remains `cd go/handler && go test ./...`
+
 ### 2. E2E Implementation Selector
 
 Extend the E2E harness so tests can choose a handler implementation:
