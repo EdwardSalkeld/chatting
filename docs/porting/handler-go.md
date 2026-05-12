@@ -393,6 +393,242 @@ Rollback should stay operationally simple:
 
 Swapping back should not require DB migration reversal or transport changes.
 
+## PR Breakdown
+
+Use this section as the task queue for individual Codex iterations. Each item should be small
+enough to land as one PR and should leave the repo in a working state.
+
+### 1. Contract Golden Fixtures
+
+Add golden JSON fixtures under `tests/fixtures/contracts/` for:
+- one `chatting.task.v1`
+- one sequenced `chatting.egress.v2` message
+- one unsequenced incremental `chatting.egress.v2` message
+- one `chatting.auxiliary_ingress.v1`
+
+Validation:
+- Python tests load each fixture and parse it with the current Python contract code
+- Go tests load each fixture and parse it with `internal/contracts`
+- re-serializing should preserve the contract-relevant shape
+
+### 2. E2E Implementation Selector
+
+Extend the E2E harness so tests can choose a handler implementation:
+- `python`
+- `go`
+
+The default should remain `python`.
+
+Validation:
+- existing Python-handler E2E tests still pass unchanged
+- selecting `go` should fail clearly until the Go runtime exists, not silently fall back to Python
+- the selector should be documented in the test helpers or E2E docs
+
+### 3. Go BBMB Client
+
+Implement `internal/bbmb` with:
+- publish JSON
+- pickup JSON
+- ack
+- ensure queue if the BBMB protocol requires it
+
+Validation:
+- unit tests use a fake BBMB server or protocol-level test double
+- publish/pickup/ack behavior matches the Python `BBMBQueueAdapter` expectations
+- malformed payloads and empty pickups are handled explicitly
+
+### 4. Go Config Loader
+
+Implement `internal/config` for the minimal handler runtime config:
+- `bbmb_address`
+- `db_path`
+- `max_loops`
+- `poll_interval_seconds`
+- `poll_timeout_seconds`
+- `metrics_host`
+- `metrics_port`
+- `allowed_egress_channels`
+
+Validation:
+- unknown keys are rejected
+- defaults match Python for supported keys
+- invalid types and blank strings fail with useful errors
+- the binary can parse `--config`
+
+### 5. SQLite Dedupe And Task Ledger
+
+Implement handler state for:
+- `idempotency_keys`
+- `task_ledger`
+- `completed_task_ledger`
+
+Validation:
+- Go tests create a temp SQLite DB and exercise dedupe round trips
+- task records written by Go can be read by Python tests, or are byte-compatible at the table level
+- completion state blocks future egress for the same task/envelope pair
+
+### 6. SQLite Egress State
+
+Implement handler state for:
+- `dispatched_event_ids`
+- `staged_egress_events`
+- `egress_sequence_state`
+
+Validation:
+- duplicate event IDs are recognized
+- staged events can be fetched by expected sequence
+- expected sequence advances only when an event is marked dispatched
+- completion events can be staged and applied in order
+
+### 7. Go Egress Engine
+
+Implement `internal/egress` with a fake dispatcher:
+- parse `chatting.egress.v2`
+- reject invalid payloads
+- reject unknown tasks
+- reject completed tasks
+- enforce allowed channels
+- dispatch unsequenced incrementals immediately
+- stage and flush sequenced events in order
+- apply completion
+
+Validation:
+- unit tests cover each decision branch above
+- tests use fake state and fake dispatchers where possible
+- SQLite-backed integration tests cover staging and dedupe persistence
+
+### 8. Handler Runtime Skeleton
+
+Wire:
+- config loader
+- BBMB client
+- SQLite state
+- egress loop
+- signal/shutdown handling
+
+No ingress connectors are required yet except optional heartbeat in the next step.
+
+Validation:
+- `chatting-handler --version` works
+- `chatting-handler --config <file>` starts and exits cleanly with `max_loops`
+- egress queue draining can be exercised with a fake or local BBMB instance
+
+### 9. Internal Heartbeat Connector
+
+Implement the heartbeat task source and heartbeat egress recognition.
+
+Validation:
+- Go handler publishes an internal heartbeat task
+- Python worker responds to that task
+- Go handler accepts the heartbeat log pong even if `log` is not allowlisted
+- completion closes the heartbeat task
+
+### 10. Auxiliary Ingress Queue Connector
+
+Implement the handler-side consumer for `chatting.auxiliary_ingress.v1`.
+
+Validation:
+- Go handler consumes configured auxiliary ingress queue names
+- JSON body is rendered into worker-visible task content like Python
+- dedupe and ack behavior match Python
+- a Go-handler/Python-worker E2E auxiliary ingress test passes
+
+### 11. Schedule Connector
+
+Implement interval schedule jobs.
+
+Validation:
+- schedule file parsing matches Python-supported keys
+- unknown schedule keys are rejected
+- a scheduled task is published with matching prompt context and context refs
+- a Go-handler/Python-worker schedule smoke test passes
+
+### 12. Metrics Endpoint
+
+Implement basic Prometheus-style handler metrics.
+
+Validation:
+- `/metrics` serves successfully
+- ingress loop counters and egress counters update
+- metric names remain stable enough for current docs/tests
+
+### 13. SMTP Dispatch
+
+Implement email dispatch.
+
+Validation:
+- fake SMTP sender/unit tests cover subject/body formatting
+- reply subject behavior matches Python for email envelopes
+- dispatch failure records the same high-level failure outcome as Python
+
+### 14. IMAP Ingress
+
+Implement IMAP polling and email normalization.
+
+Validation:
+- fake IMAP tests cover message normalization
+- invalid/missing email dates fall back consistently
+- Go-handler/Python-worker email E2E passes against the existing fake email setup
+
+### 15. Telegram Dispatch
+
+Implement Telegram text, reaction, and attachment dispatch.
+
+Validation:
+- fake HTTP tests cover sendMessage, setMessageReaction, sendPhoto/sendDocument
+- parse-mode fallback behavior matches Python
+- attachment URI validation matches Python behavior
+
+### 16. Telegram Ingress And Attachments
+
+Implement Telegram getUpdates polling, update normalization, attachment download, conversation memory,
+and attachment cleanup state.
+
+Validation:
+- fake Telegram update tests cover text, channel posts, reactions, photos, and location payloads
+- allowlist behavior matches Python
+- conversation memory is included for Telegram tasks
+- attachment cleanup tests match Python semantics
+
+### 17. GitHub Checkpoint Store
+
+Implement GitHub checkpoint persistence.
+
+Validation:
+- scope keys match Python
+- checkpoints round trip through SQLite
+- events before or equal to checkpoint are not re-emitted
+
+### 18. GitHub Polling
+
+Implement GitHub issue assignment and pull request review polling.
+
+Validation:
+- GraphQL request variables match Python behavior
+- repository wildcard expansion works
+- event normalization fixtures match Python output
+- checkpointed polling emits only new events
+
+### 19. GitHub Dispatch
+
+Implement GitHub comment dispatch.
+
+Validation:
+- target parsing accepts the same issue/PR URL and `owner/repo#number` forms as Python
+- fake command/client tests cover successful and failed dispatch
+- GitHub egress failure handling matches Python at the handler level
+
+### 20. Go Handler Drop-In E2E
+
+Run the full handler-oriented E2E suite with:
+- Go handler
+- Python worker
+
+Validation:
+- all handler scenarios pass through the implementation selector
+- Python handler remains the default
+- rollback is still just changing the selected handler command
+
 ## Initial Open Questions
 
 - Which handler config keys must remain byte-for-byte identical between Python and Go?
