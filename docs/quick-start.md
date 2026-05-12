@@ -7,11 +7,9 @@
 
 ## Prerequisites
 
-- Python 3.13+
-- `uv`
+- Docker with Compose support
 - Access to a shell
-- `bbmb-server` available
-- Optional: Codex CLI if you want real executor mode (`codex exec --json` is the default transcript-friendly launch)
+- Optional: Codex or Claude credentials if you want real executor mode
 
 ## 1) Clone and enter repo
 
@@ -20,52 +18,75 @@ git clone <your-repo-url>
 cd chatting
 ```
 
-## 2) Sync the local environment
+## 2) Create runtime config
+
+```bash
+mkdir -p configs/handler configs/worker
+cp configs/handler.json.example configs/handler/handler.json
+cp configs/worker.json.example configs/worker/worker.json
+cp configs/handler.env.example configs/handler/handler.env
+cp configs/worker.env.example configs/worker/worker.env
+```
+
+Edit the copied files before starting the stack:
+- `configs/handler/handler.json`: connector settings, egress channels, metrics, and integration paths
+- `configs/handler/handler.env`: IMAP, SMTP, Telegram, and other integration secrets
+- `configs/worker/worker.json`: executor settings and mounted workspace path
+- `configs/worker/worker.env`: executor provider secrets
+
+The Docker examples use container paths and Docker DNS:
+- handler DB: `/data/handler.db`
+- worker DB: `/data/worker.db`
+- BBMB: `bbmb:9876`
+
+## 3) Set the workspace mount
+
+```bash
+export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
+```
+
+## 4) Start chatting
+
+```bash
+docker compose up -d --build
+```
+
+The compose stack starts:
+- `bbmb`
+- `handler`
+- `worker`
+
+The message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
+The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
+`http://127.0.0.1:9465/activity.json`.
+
+## 5) Bootstrap CLI auth
+
+When using real executor mode, authenticate the CLIs once inside the worker container. Auth state is
+persisted in Docker volumes.
+
+```bash
+docker compose run --rm worker codex login
+docker compose run --rm worker claude login
+```
+
+## 6) Run tests
+
+Local tests are separate from the Docker runtime path and require Python 3.13+ plus `uv`.
 
 ```bash
 uv sync
-```
-
-## 3) Run tests once
-
-```bash
 uv run python -m unittest discover -s tests
 ```
-
-## 4) Configure split mode
-
-```bash
-cp configs/message-handler-runtime.example.json /tmp/message-handler.json
-cp configs/worker-runtime.example.json /tmp/worker.json
-# edit bbmb_address and connector/executor settings as needed
-```
-
-## 5) Start BBMB
-
-```bash
-bbmb-server
-```
-
-By default `chatting` expects BBMB on `127.0.0.1:9876`.
-
-## 6) Start chatting services
-
-```bash
-uv run python -m app.main_message_handler --config /tmp/message-handler.json
-uv run python -m app.main_worker --config /tmp/worker.json
-```
-
-The message handler also exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics` by default. You can override the bind host and port with `metrics_host` and `metrics_port` in the message-handler config or the matching CLI flags.
-The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at `http://127.0.0.1:9465/activity.json`. The bind stays fixed at `9465`; use `activity_history_limit` in worker config if you want a different retention window.
 
 ## 7) Query state and metrics
 
 Use the worker page for a quick operator view, or query SQLite directly when you need deeper history:
 
 ```bash
-sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
-sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 20;"
-sqlite3 /tmp/chatting-message-handler.db "select result_status, count(*) from run_records group by result_status order by result_status;"
+docker compose exec handler sqlite3 /data/handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
+docker compose exec handler sqlite3 /data/handler.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 20;"
+docker compose exec handler sqlite3 /data/handler.db "select result_status, count(*) from run_records group by result_status order by result_status;"
 ```
 
 ## Notes
