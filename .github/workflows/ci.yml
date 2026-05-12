@@ -45,6 +45,12 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/handler/go.mod
+          cache-dependency-path: go/handler/go.mod
+
       - name: Sync dependencies
         run: uv sync --locked
 
@@ -52,3 +58,7 @@ jobs:
         env:
           CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
         run: uv run python -m unittest discover -s tests
+
+      - name: Run Go handler tests
+        working-directory: go/handler
+        run: go test ./...
