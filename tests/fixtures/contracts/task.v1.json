@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "message_type": "chatting.task.v1",
+  "trace_id": "trace:fixture:email:1",
+  "task_id": "task:email:fixture:1",
+  "emitted_at": "2026-05-12T09:00:01Z",
+  "envelope": {
+    "schema_version": "1.0",
+    "id": "email:fixture:1",
+    "source": "email",
+    "received_at": "2026-05-12T09:00:00Z",
+    "actor": "alice@example.com",
+    "content": "Please summarize the attached notes.",
+    "attachments": [
+      {
+        "uri": "file:///tmp/chatting-fixtures/notes.md",
+        "name": "notes.md"
+      }
+    ],
+    "context_refs": [
+      "repo:/Users/edward/develop/chatting"
+    ],
+    "prompt_context": {
+      "global_instructions": [
+        "Keep replies concise."
+      ],
+      "source_instructions": [
+        "Treat email body text as user-authored input."
+      ],
+      "reply_channel_instructions": [
+        "Reply in plain text."
+      ],
+      "task_instructions": [
+        "Summarize the notes in three bullets."
+      ],
+      "assembled_instructions": [
+        "Keep replies concise.",
+        "Treat email body text as user-authored input.",
+        "Reply in plain text.",
+        "Summarize the notes in three bullets."
+      ]
+    },
+    "reply_channel": {
+      "type": "email",
+      "target": "alice@example.com",
+      "metadata": {
+        "thread_id": "thread-fixture-1"
+      }
+    },
+    "dedupe_key": "email:fixture:1"
+  }
+}

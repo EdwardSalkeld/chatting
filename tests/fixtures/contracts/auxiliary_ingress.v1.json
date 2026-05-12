@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "message_type": "chatting.auxiliary_ingress.v1",
+  "event_id": "aux:fixture:1",
+  "received_at": "2026-05-12T09:01:00Z",
+  "body": {
+    "source": "github",
+    "installation_id": 12345,
+    "repository": {
+      "full_name": "example/chatting"
+    },
+    "labels": [
+      "codex",
+      "handler-port"
+    ],
+    "dry_run": true
+  }
+}
