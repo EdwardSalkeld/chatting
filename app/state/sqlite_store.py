@@ -37,7 +37,6 @@ class SQLiteStateStore:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection:
             self._initialize_idempotency_table(connection)
-            self._drop_legacy_admin_tables(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_records (
@@ -149,11 +148,6 @@ class SQLiteStateStore:
             )
             connection.commit()
 
-    def _drop_legacy_admin_tables(self, connection: sqlite3.Connection) -> None:
-        connection.execute("DROP TABLE IF EXISTS pending_approvals")
-        connection.execute("DROP TABLE IF EXISTS current_config")
-        connection.execute("DROP TABLE IF EXISTS config_versions")
-
     def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
         idempotency_columns = connection.execute(
             "PRAGMA table_info(idempotency_keys)"
@@ -175,26 +169,10 @@ class SQLiteStateStore:
         if column_names == {"source", "dedupe_key", "seen_at"}:
             return
 
-        # Migrate legacy schema keyed only by dedupe_key.
-        connection.execute("ALTER TABLE idempotency_keys RENAME TO idempotency_keys_legacy")
-        connection.execute(
-            """
-            CREATE TABLE idempotency_keys (
-                source TEXT NOT NULL,
-                dedupe_key TEXT NOT NULL,
-                seen_at TEXT NOT NULL,
-                PRIMARY KEY (source, dedupe_key)
-            )
-            """
+        raise ValueError(
+            "unsupported idempotency_keys schema; expected columns "
+            "{source, dedupe_key, seen_at}"
         )
-        connection.execute(
-            """
-            INSERT INTO idempotency_keys (source, dedupe_key, seen_at)
-            SELECT 'legacy', dedupe_key, seen_at
-            FROM idempotency_keys_legacy
-            """
-        )
-        connection.execute("DROP TABLE idempotency_keys_legacy")
 
     def seen(self, source: str, dedupe_key: str) -> bool:
         if not source:

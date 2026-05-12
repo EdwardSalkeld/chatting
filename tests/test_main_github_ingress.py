@@ -74,7 +74,7 @@ class MainGitHubIngressTests(unittest.TestCase):
             "bbmb_address": "127.0.0.1:9876",
             "auxiliary_ingress_bbmb_address": "127.0.0.1:9988",
             "auxiliary_ingress_enabled": True,
-            "auxiliary_ingress_routes": ["generic-post:12334", "new-service:/two"],
+            "auxiliary_ingress_queues": ["generic-post", "new-service"],
             "auxiliary_ingress_context_refs": ["repo:/workspace/chatting"],
         }
         broker = _FakeBroker()
@@ -85,7 +85,7 @@ class MainGitHubIngressTests(unittest.TestCase):
                     bbmb_address=None,
                     auxiliary_ingress_bbmb_address=None,
                     auxiliary_ingress_enabled=False,
-                    auxiliary_ingress_route=[],
+                    auxiliary_ingress_queue=[],
                     auxiliary_ingress_context_ref=[],
                     schedule_file=None,
                     imap_host=None,

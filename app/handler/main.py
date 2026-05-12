@@ -73,6 +73,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
     {
         "bbmb_address",
         "auxiliary_ingress_bbmb_address",
+        "auxiliary_ingress_queues",
         "db_path",
         "max_loops",
         "poll_interval_seconds",
@@ -81,7 +82,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "metrics_port",
         "allowed_egress_channels",
         "auxiliary_ingress_enabled",
-        "auxiliary_ingress_routes",
         "auxiliary_ingress_context_refs",
         "prompt_context",
         "schedule_file",
@@ -273,10 +273,10 @@ def _parse_args() -> argparse.Namespace:
         help="Enable auxiliary BBMB-backed JSON ingress.",
     )
     parser.add_argument(
-        "--auxiliary-ingress-route",
+        "--auxiliary-ingress-queue",
         action="append",
         default=[],
-        help="Auxiliary ingress route in queue_name:path form; handler consumes queue_name.",
+        help="Auxiliary ingress queue name to consume (repeatable).",
     )
     parser.add_argument(
         "--auxiliary-ingress-context-ref",
@@ -361,13 +361,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--github-assignee-login",
         help="GitHub login to filter assigned issues and authored pull request reviews for.",
-    )
-    parser.add_argument(
-        "--github-reply-channel-type", help="Reply channel type for generated tasks."
-    )
-    parser.add_argument(
-        "--github-reply-channel-target",
-        help="Reply channel target for generated tasks.",
     )
     parser.add_argument(
         "--github-context-ref",
@@ -701,59 +694,34 @@ def _resolve_auxiliary_ingress_context_refs(
     return [value.strip() for value in merged_values]
 
 
-def _parse_auxiliary_ingress_route(raw_value: str) -> tuple[str, str]:
-    raw = raw_value.strip()
-    if not raw:
-        raise ValueError("auxiliary_ingress_routes entries must not be empty")
-    queue_name, separator, path_value = raw.partition(":")
-    if not separator:
-        raise ValueError(
-            "auxiliary_ingress_routes entries must use queue_name:path format"
-        )
-    queue_name = queue_name.strip()
-    if not queue_name:
-        raise ValueError("auxiliary_ingress_routes queue_name must not be empty")
-    if not path_value.strip():
-        raise ValueError("auxiliary_ingress_routes path must not be empty")
-    return queue_name, path_value.strip()
-
-
 def _resolve_auxiliary_ingress_queue_names(
     args: argparse.Namespace,
     config: dict[str, object],
 ) -> list[str]:
     queue_names: list[str] = []
-    raw_config_routes = config.get("auxiliary_ingress_routes")
-    if raw_config_routes is not None:
-        if not isinstance(raw_config_routes, list) or not all(
-            isinstance(item, str) for item in raw_config_routes
+    raw_config_queue_names = config.get("auxiliary_ingress_queues")
+    if raw_config_queue_names is not None:
+        if not isinstance(raw_config_queue_names, list) or not all(
+            isinstance(item, str) for item in raw_config_queue_names
         ):
             raise ValueError(
-                "config auxiliary_ingress_routes must be a list of queue_name:path strings"
+                "config auxiliary_ingress_queues must be a list of queue names"
             )
-        queue_names.extend(
-            queue_name
-            for queue_name, _path in (
-                _parse_auxiliary_ingress_route(item) for item in raw_config_routes
-            )
-        )
+        queue_names.extend(raw_config_queue_names)
 
-    queue_names.extend(
-        queue_name
-        for queue_name, _path in (
-            _parse_auxiliary_ingress_route(item)
-            for item in getattr(args, "auxiliary_ingress_route", [])
-        )
-    )
+    queue_names.extend(getattr(args, "auxiliary_ingress_queue", []))
 
     if not queue_names:
         raise ValueError(
-            "auxiliary ingress requires auxiliary_ingress_routes or --auxiliary-ingress-route"
+            "auxiliary ingress requires auxiliary_ingress_queues or --auxiliary-ingress-queue"
         )
 
     deduped: list[str] = []
     seen: set[str] = set()
     for queue_name in queue_names:
+        queue_name = queue_name.strip()
+        if not queue_name:
+            raise ValueError("auxiliary_ingress_queue entries must not be empty")
         if queue_name in seen:
             continue
         seen.add(queue_name)
@@ -1500,13 +1468,13 @@ def _build_live_connectors_fail_open(
         "auxiliary_ingress": (
             (
                 "auxiliary_ingress_enabled",
-                "auxiliary_ingress_route",
+                "auxiliary_ingress_queue",
                 "auxiliary_ingress_context_ref",
                 "context_ref",
             ),
             (
                 "auxiliary_ingress_enabled",
-                "auxiliary_ingress_routes",
+                "auxiliary_ingress_queues",
                 "auxiliary_ingress_context_refs",
                 "prompt_context",
                 "context_ref",
@@ -1544,7 +1512,7 @@ def _build_live_connectors_fail_open(
             "imap_mailbox": None,
             "imap_search": None,
             "auxiliary_ingress_enabled": False,
-            "auxiliary_ingress_route": [],
+            "auxiliary_ingress_queue": [],
             "auxiliary_ingress_context_ref": [],
             "telegram_enabled": False,
             "telegram_bot_token_env": None,
