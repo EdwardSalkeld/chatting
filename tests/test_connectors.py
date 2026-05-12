@@ -23,7 +23,6 @@ from app.handler.connectors.telegram_connector import (
     TelegramConnector,
     TelegramGetUpdatesResponse,
 )
-from app.handler.connectors.slack_connector import SlackConnector
 from app.handler.connectors.webhook_connector import WebhookConnector, WebhookEvent
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.models import PromptContext
@@ -1275,49 +1274,6 @@ class TelegramConnectorTests(unittest.TestCase):
                 "map_url": "https://maps.google.com/?q=51.507351,-0.127758",
             },
         )
-
-
-class SlackConnectorTests(unittest.TestCase):
-    def test_poll_normalizes_messages_to_im_envelopes(self) -> None:
-        connector = SlackConnector(
-            fetch_messages=lambda: [
-                {
-                    "id": "m-1",
-                    "user": "U123",
-                    "channel": "C999",
-                    "text": "Ship it",
-                    "ts": "1772272800.100",
-                }
-            ],
-            context_refs=["repo:/home/edward/chatting"],
-            allowed_channel_ids=["C999"],
-        )
-
-        envelopes = connector.poll()
-
-        self.assertEqual(len(envelopes), 1)
-        envelope = envelopes[0]
-        self.assertEqual(envelope.source, "im")
-        self.assertEqual(envelope.id, "slack:m-1")
-        self.assertEqual(envelope.actor, "U123")
-        self.assertEqual(envelope.reply_channel.type, "slack")
-        self.assertEqual(envelope.reply_channel.target, "C999")
-        self.assertEqual(envelope.dedupe_key, "slack:m-1")
-
-    def test_poll_skips_disallowed_channels_and_invalid_payloads(self) -> None:
-        connector = SlackConnector(
-            fetch_messages=lambda: [
-                {"id": "m-1", "user": "U123", "channel": "C111", "text": "Hi"},
-                {"id": "m-2", "user": "U123", "channel": "C999", "text": "   "},
-                {"id": "m-3", "user": "U123", "channel": "C999", "text": "ok"},
-            ],
-            allowed_channel_ids=["C999"],
-        )
-
-        envelopes = connector.poll()
-
-        self.assertEqual(len(envelopes), 1)
-        self.assertEqual(envelopes[0].id, "slack:m-3")
 
 
 class WebhookConnectorTests(unittest.TestCase):

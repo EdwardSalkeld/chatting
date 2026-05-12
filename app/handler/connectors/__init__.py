@@ -16,7 +16,6 @@ from app.handler.connectors.interval_schedule_connector import (
     IntervalScheduleConnector,
     IntervalScheduleJob,
 )
-from app.handler.connectors.slack_connector import SlackConnector
 from app.handler.connectors.telegram_connector import TelegramConnector
 from app.handler.connectors.webhook_connector import WebhookConnector, WebhookEvent
 
@@ -29,7 +28,6 @@ __all__ = [
     "InternalHeartbeatConnector",
     "IntervalScheduleConnector",
     "IntervalScheduleJob",
-    "SlackConnector",
     "TelegramConnector",
     "WebhookConnector",
     "WebhookEvent",
