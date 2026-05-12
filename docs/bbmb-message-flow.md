@@ -233,7 +233,7 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
   Enable and scope Telegram ingress.
 - `cron_prompt_context`
   Extra prompt guidance only for scheduled jobs.
-- `context_ref` / `context_refs`
+- `context_refs`
   Default context refs attached to some ingress sources.
 - `github_repositories`, `github_assignee_login`, `github_context_refs`,
   Enable and shape GitHub assignment ingress.

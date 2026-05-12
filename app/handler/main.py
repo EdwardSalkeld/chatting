@@ -93,7 +93,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "imap_search",
         "imap_use_ssl",
         "email_prompt_context",
-        "context_ref",
         "context_refs",
         "smtp_host",
         "smtp_port",
@@ -654,26 +653,19 @@ def _resolve_required_str(
 def _resolve_context_refs(
     args_values: list[str], config: dict[str, object]
 ) -> list[str]:
-    raw_config_values = config.get("context_ref")
-    if raw_config_values is None:
-        raw_config_values = config.get("context_refs")
-
+    raw_config_values = config.get("context_refs")
     if raw_config_values is None:
         config_values: list[str] = []
     else:
         if not isinstance(raw_config_values, list):
-            raise ValueError(
-                "config context_ref/context_refs must be a list of strings"
-            )
+            raise ValueError("config context_refs must be a list of strings")
         if not all(isinstance(item, str) for item in raw_config_values):
-            raise ValueError(
-                "config context_ref/context_refs must be a list of strings"
-            )
+            raise ValueError("config context_refs must be a list of strings")
         config_values = list(raw_config_values)
 
     merged_values = [*config_values, *args_values]
     if any(not value.strip() for value in merged_values):
-        raise ValueError("context_ref/context_refs entries must not be empty")
+        raise ValueError("context_refs entries must not be empty")
     return merged_values
 
 
@@ -1466,7 +1458,6 @@ def _build_live_connectors_fail_open(
                 "imap_mailbox",
                 "imap_search",
                 "imap_use_ssl",
-                "context_ref",
                 "context_refs",
             ),
         ),
@@ -1493,7 +1484,6 @@ def _build_live_connectors_fail_open(
                 "prompt_context",
                 "telegram_prompt_context",
                 "telegram_context_refs",
-                "context_ref",
                 "context_refs",
             ),
         ),
@@ -1509,7 +1499,6 @@ def _build_live_connectors_fail_open(
                 "auxiliary_ingress_routes",
                 "auxiliary_ingress_context_refs",
                 "prompt_context",
-                "context_ref",
                 "context_refs",
                 "bbmb_address",
                 "auxiliary_ingress_bbmb_address",

@@ -80,7 +80,7 @@ sqlite3 /tmp/chatting-state.db "select result_status, count(*), avg(latency_ms) 
   set `CHATTING_TELEGRAM_BOT_TOKEN` (or matching `telegram_bot_token_env`).
 - `config contains unknown keys`:
   remove typo keys from JSON config.
-- `context_ref/context_refs entries must not be empty`:
+- `context_refs entries must not be empty`:
   remove blank strings from context refs.
 - `schedule job ... unknown keys` or type errors:
   validate schedule JSON against strict message-handler schedule-file parsing.
