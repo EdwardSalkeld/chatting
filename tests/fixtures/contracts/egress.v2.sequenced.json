@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "message_type": "chatting.egress.v2",
+  "task_id": "task:email:fixture:1",
+  "envelope_id": "email:fixture:1",
+  "trace_id": "trace:fixture:email:1",
+  "event_id": "evt:task:email:fixture:1:0",
+  "event_kind": "message",
+  "sequence": 0,
+  "emitted_at": "2026-05-12T09:00:05Z",
+  "message": {
+    "channel": "email",
+    "target": "alice@example.com",
+    "body": "Here is the requested summary.",
+    "metadata": {
+      "thread_id": "thread-fixture-1"
+    }
+  }
+}

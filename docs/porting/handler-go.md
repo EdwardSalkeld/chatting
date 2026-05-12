@@ -400,6 +400,9 @@ enough to land as one PR and should leave the repo in a working state.
 
 ### 1. Contract Golden Fixtures
 
+Status: complete. Shared fixtures now live under `tests/fixtures/contracts/`, and
+both the Python and Go contract tests load and round-trip them.
+
 Add golden JSON fixtures under `tests/fixtures/contracts/` for:
 - one `chatting.task.v1`
 - one sequenced `chatting.egress.v2` message
