@@ -1,6 +1,7 @@
 # Running Split Mode With BBMB
 
-`chatting` runs as three services by default, or four when auxiliary webhook ingress is enabled:
+`chatting` runs under Docker Compose as three services by default, or four when auxiliary webhook
+ingress is enabled:
 - `message-handler` on the integration host (connectors + outbound dispatch)
 - `worker` on the execution host (routing + executor + policy)
 - `bbmb-server` in the middle (message bus)
@@ -25,35 +26,36 @@ For a worked message example and the full message-handler <-> worker conversatio
 
 ## Topology
 
-- Host A (integration host): `uv run python -m app.main_message_handler`
-- Host B (execution host): `uv run python -m app.main_worker`
-- Host C (or A/B): `bbmb-server` on `:9876`
-- Host D optional (web-facing host): `uv run python -m app.main_auxiliary_ingress`
+- `handler`: `python -m app.main_message_handler`
+- `worker`: `python -m app.main_worker`
+- `bbmb`: `bbmb-server` on `:9876`
+- optional `auxiliary-ingress`: `python -m app.main_auxiliary_ingress`
 
-All hosts must have network reachability to the BBMB TCP endpoint.
+All app services must have network reachability to the BBMB TCP endpoint. In the default compose
+stack, that address is `bbmb:9876`.
 
-## 1) Start BBMB
+## 1) Prepare config
 
 ```bash
-bbmb-server
+mkdir -p configs/handler configs/worker
+cp configs/handler.json.example configs/handler/handler.json
+cp configs/worker.json.example configs/worker/worker.json
+cp configs/handler.env.example configs/handler/handler.env
+cp configs/worker.env.example configs/worker/worker.env
 ```
 
-If BBMB is listening somewhere else, set `bbmb_address` in both runtime configs.
+Edit the copied configs and env files for the target integrations and executor provider secrets.
 
-## 2) Configure message-handler
+## 2) Set the worker workspace mount
 
 ```bash
-uv sync
-cp configs/message-handler-runtime.example.json /tmp/message-handler.json
-# edit bbmb_address and connector settings
-uv run python -m app.main_message_handler --config /tmp/message-handler.json
+export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
 ```
 
-Optional env-based config path:
+## 3) Start the stack
 
 ```bash
-export CHATTING_MESSAGE_HANDLER_CONFIG_PATH=/tmp/message-handler.json
-uv run python -m app.main_message_handler
+docker compose up -d --build
 ```
 
 Optional auxiliary ingress connector settings in message-handler config:
@@ -61,28 +63,13 @@ Optional auxiliary ingress connector settings in message-handler config:
 - `auxiliary_ingress_routes`
 - `auxiliary_ingress_context_refs`
 
-## 3) Configure worker
-
-```bash
-cp configs/worker-runtime.example.json /tmp/worker.json
-# edit bbmb_address and executor settings
-uv run python -m app.main_worker --config /tmp/worker.json
-```
-
-If the service/user shell working directory is not where you want Codex to run, set
-`codex_working_dir` in worker config (or pass `--codex-working-dir`) to control only
-the Codex subprocess cwd without changing the worker service `WorkingDirectory`.
+If the container working directory is not where you want Codex to run, set `codex_working_dir` in
+worker config to control only the Codex subprocess cwd without changing the worker service working
+directory.
 
 The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
 with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 `activity_history_limit` to change the retention window.
-
-Optional env-based config path:
-
-```bash
-export CHATTING_WORKER_CONFIG_PATH=/tmp/worker.json
-uv run python -m app.main_worker
-```
 
 ## 3.5) Optional auxiliary webhook ingress
 
@@ -119,11 +106,9 @@ queues, add `auxiliary_ingress_routes` with the same values to the message-handl
 
 ## 5) Configure GitHub assignment polling (in message-handler)
 
-```bash
-# edit message-handler config: github_repositories (owner/repo or owner/*)
-# optional: github_assignee_login (defaults to authenticated gh user)
-uv run python -m app.main_message_handler --config /tmp/message-handler.json
-```
+Edit message-handler config:
+- `github_repositories` (`owner/repo` or `owner/*`)
+- optional `github_assignee_login` (defaults to authenticated `gh` user)
 
 `gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
 
@@ -134,11 +119,11 @@ path for both quick acknowledgements and final user-visible answers instead of r
 their stdout/stderr transcript:
 
 ```bash
-uv run python -m app.main_reply task:email:53 \
+docker compose exec worker python -m app.main_reply task:email:53 \
   --message "working on it" \
   --channel email \
   --target alice@example.com \
-  --config /tmp/worker.json
+  --config /config/worker.json
 ```
 
 Notes:
@@ -149,11 +134,11 @@ Notes:
 - Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
 
 ```bash
-uv run python -m app.main_reply task:telegram:53 \
+docker compose exec worker python -m app.main_reply task:telegram:53 \
   --channel telegram \
   --target 8605042448 \
   --telegram-reaction "👍" \
-  --config /tmp/worker.json
+  --config /config/worker.json
 ```
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
@@ -165,20 +150,14 @@ Auth is still external to the app and must be completed once interactively, then
 volumes.
 
 The compose file mounts:
-- `codex-auth` -> `/root/.codex`
-- `claude-auth` -> `/root/.claude`
+- `codex-auth` -> `/home/chatting/.codex`
+- `claude-auth` -> `/home/chatting/.claude`
 
 One-time bootstrap:
 
 ```bash
 docker compose run --rm worker codex login
 docker compose run --rm worker claude login
-```
-
-Then run the stack normally:
-
-```bash
-docker compose up -d
 ```
 
 The compose stack publishes the worker activity UI on `9465`.
