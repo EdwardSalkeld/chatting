@@ -11,6 +11,8 @@ import time
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
+
+from tests.e2e.handler_selector import message_handler_command
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
@@ -148,13 +150,7 @@ class EmailE2ETests(unittest.TestCase):
                     env=env,
                 )
                 handler_proc = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "app.main_message_handler",
-                        "--config",
-                        str(handler_config_path),
-                    ],
+                    message_handler_command(handler_config_path),
                     cwd=repo_root,
                     stdout=handler_log_fh,
                     stderr=subprocess.STDOUT,

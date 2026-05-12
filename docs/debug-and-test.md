@@ -37,6 +37,15 @@ uv run python -m unittest tests.test_worker_runtime tests.test_message_handler_r
 ```bash
 uv run python -m unittest tests.test_split_mode_e2e -v
 ```
+
+Select the handler implementation used by E2E tests:
+
+```bash
+CHATTING_E2E_HANDLER_IMPLEMENTATION=python uv run python -m unittest tests.test_split_mode_e2e -v
+```
+
+Supported values are `python` and `go`. The default is `python`. Selecting `go`
+currently fails clearly because the Go handler runtime is not implemented yet.
 This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
 
 ## Useful runtime inspection commands
