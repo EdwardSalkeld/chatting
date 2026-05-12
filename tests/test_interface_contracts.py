@@ -9,8 +9,6 @@ from app.handler.connectors import (
     GitHubPullRequestReviewConnector,
     InternalHeartbeatConnector,
     TelegramConnector,
-    WebhookConnector,
-    WebhookEvent,
 )
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
 from app.handler.connectors.telegram_connector import TelegramGetUpdatesResponse
@@ -94,22 +92,6 @@ class InterfaceContractTests(unittest.TestCase):
             ),
             Connector,
         )
-        self.assertIsInstance(
-            WebhookConnector(
-                events=[
-                    WebhookEvent(
-                        event_id="evt-1",
-                        actor="svc:test",
-                        content="hello",
-                        received_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
-                        reply_target="https://example.com",
-                        context_refs=[],
-                    )
-                ]
-            ),
-            Connector,
-        )
-
         class _AuxiliaryIngressBroker:
             def pickup_json(
                 self, queue_name: str, timeout_seconds: int, wait_seconds: int

@@ -60,7 +60,7 @@ docker compose up -d --build
 
 Optional auxiliary ingress connector settings in message-handler config:
 - `auxiliary_ingress_enabled`
-- `auxiliary_ingress_routes`
+- `auxiliary_ingress_queues`
 - `auxiliary_ingress_context_refs`
 
 If the container working directory is not where you want Codex to run, set `codex_working_dir` in
@@ -93,7 +93,8 @@ Example config-driven setup:
 
 With that config, auxiliary ingress listens on `/12334` and `/secret-two`, and publishes those
 JSON bodies to `generic-post` and `new-service` respectively. To make the handler poll those same
-queues, add `auxiliary_ingress_routes` with the same values to the message-handler config.
+queues, add `auxiliary_ingress_queues: ["generic-post", "new-service"]` to the message-handler
+config.
 
 ## 4) Security boundary expectations
 
