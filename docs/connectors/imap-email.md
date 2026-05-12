@@ -16,7 +16,7 @@ Poll an IMAP mailbox and normalize messages to canonical email envelopes.
 - `imap_password_env` (default `CHATTING_IMAP_PASSWORD`)
 - `imap_mailbox` (default `INBOX`)
 - `imap_search` (default `UNSEEN`)
-- `context_ref` / `context_refs`
+- `context_refs`
 
 ## Output mapping
 

@@ -69,6 +69,19 @@ class MainGitHubIngressTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown keys"):
                 _load_config(str(config_path))
 
+    def test_load_config_rejects_legacy_context_ref_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "message-handler.json"
+            config_path.write_text(
+                json.dumps({"context_ref": ["repo:/workspace/chatting"]}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "config contains unknown keys: context_ref"
+            ):
+                _load_config(str(config_path))
+
     def test_build_live_connectors_supports_auxiliary_ingress(self) -> None:
         config = {
             "bbmb_address": "127.0.0.1:9876",
