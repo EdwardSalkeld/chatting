@@ -426,6 +426,10 @@ Validation:
 
 ### 2. E2E Implementation Selector
 
+Status: complete. E2E tests select the handler implementation with
+`CHATTING_E2E_HANDLER_IMPLEMENTATION`; `python` remains the default, and `go`
+fails explicitly until the Go runtime is implemented.
+
 Extend the E2E harness so tests can choose a handler implementation:
 - `python`
 - `go`

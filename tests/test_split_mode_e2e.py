@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.state import SQLiteStateStore
+from tests.e2e.handler_selector import message_handler_command
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
@@ -116,13 +117,7 @@ class SplitModeE2ETests(unittest.TestCase):
                     text=True,
                 )
                 handler_proc = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "app.main_message_handler",
-                        "--config",
-                        str(handler_config_path),
-                    ],
+                    message_handler_command(handler_config_path),
                     cwd=repo_root,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

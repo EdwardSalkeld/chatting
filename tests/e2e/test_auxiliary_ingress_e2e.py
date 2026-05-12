@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from app.state import SQLiteStateStore
+from tests.e2e.handler_selector import message_handler_command
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -238,13 +239,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                     env=env,
                 )
                 handler_proc = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "app.main_message_handler",
-                        "--config",
-                        str(handler_config_path),
-                    ],
+                    message_handler_command(handler_config_path),
                     cwd=repo_root,
                     stdout=handler_log_fh,
                     stderr=subprocess.STDOUT,
