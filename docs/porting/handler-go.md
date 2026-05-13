@@ -520,6 +520,13 @@ Validation:
 
 ### 7. Go Egress Engine
 
+Status: complete. `internal/egress` now decodes and validates
+`chatting.egress.v2` payloads, rejects unknown/completed/disallowed egress,
+dedupes dispatched event IDs, dispatches unsequenced incremental events, stages
+sequenced events, flushes them in order, and applies sequenced completion events.
+Tests cover the decision branches with fake state/dispatchers and exercise
+ordered staging plus replay dedupe against SQLite-backed state.
+
 Implement `internal/egress` with a fake dispatcher:
 - parse `chatting.egress.v2`
 - reject invalid payloads
@@ -676,6 +683,6 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add SQLite egress staging and dispatch state.
-2. Build the Go egress engine before tackling the more complex connectors.
-3. Wire the runtime skeleton once egress state and core egress behavior exist.
+1. Wire the handler runtime skeleton around config, BBMB, SQLite state, and the egress loop.
+2. Add the internal heartbeat connector and heartbeat egress recognition.
+3. Add auxiliary ingress queue consumption for the first Go-handler/Python-worker E2E path.
