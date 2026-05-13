@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,22 +32,26 @@ func TestRunPrintsVersion(t *testing.T) {
 func TestRunParsesConfigFlagBeforeBootstrapExit(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "handler.json")
-	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db"}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db", "max_loops": 1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	factory := &fakeRunnerFactory{}
 
-	status := run([]string{"--config", configPath}, &stdout, &stderr, nil)
+	status := runWithFactory(context.Background(), []string{"--config", configPath}, &stdout, &stderr, nil, factory.newRunner)
 
-	if status != 2 {
+	if status != 0 {
 		t.Fatalf("status = %d", status)
 	}
-	if !strings.Contains(stderr.String(), "runtime not implemented yet") {
+	if stderr.String() != "" {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
-	if strings.Contains(stderr.String(), "config error") {
-		t.Fatalf("stderr = %q", stderr.String())
+	if !factory.called {
+		t.Fatal("runner factory was not called")
+	}
+	if factory.config.DBPath != "/tmp/handler.db" {
+		t.Fatalf("db path = %q", factory.config.DBPath)
 	}
 }
 
@@ -74,23 +80,83 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 func TestRunUsesConfigPathFromEnvironment(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "handler.json")
-	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db"}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db", "max_loops": 1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	factory := &fakeRunnerFactory{}
 
-	status := run(
+	status := runWithFactory(
+		context.Background(),
 		nil,
 		&stdout,
 		&stderr,
 		map[string]string{handlerconfig.MessageHandlerConfigPathEnvVar: configPath},
+		factory.newRunner,
 	)
+
+	if status != 0 {
+		t.Fatalf("status = %d", status)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunReportsRuntimeSetupError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	factory := &fakeRunnerFactory{err: errors.New("boom")}
+
+	status := runWithFactory(context.Background(), nil, &stdout, &stderr, nil, factory.newRunner)
 
 	if status != 2 {
 		t.Fatalf("status = %d", status)
 	}
-	if !strings.Contains(stderr.String(), "runtime not implemented yet") {
+	if !strings.Contains(stderr.String(), "runtime setup error: boom") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
+}
+
+func TestRunReportsRuntimeError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	factory := &fakeRunnerFactory{runner: &fakeRunner{err: errors.New("failed")}}
+
+	status := runWithFactory(context.Background(), nil, &stdout, &stderr, nil, factory.newRunner)
+
+	if status != 1 {
+		t.Fatalf("status = %d", status)
+	}
+	if !strings.Contains(stderr.String(), "runtime error: failed") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+type fakeRunnerFactory struct {
+	called bool
+	config handlerconfig.Config
+	runner runner
+	err    error
+}
+
+func (factory *fakeRunnerFactory) newRunner(ctx context.Context, config handlerconfig.Config) (runner, error) {
+	factory.called = true
+	factory.config = config
+	if factory.err != nil {
+		return nil, factory.err
+	}
+	if factory.runner != nil {
+		return factory.runner, nil
+	}
+	return &fakeRunner{}, nil
+}
+
+type fakeRunner struct {
+	err error
+}
+
+func (runner *fakeRunner) Run(ctx context.Context) error {
+	return runner.err
 }

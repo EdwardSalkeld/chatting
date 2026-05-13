@@ -44,6 +44,6 @@ def message_handler_command(
         ]
     raise NotImplementedError(
         f"{HANDLER_IMPLEMENTATION_ENV}=go was selected, but the Go handler "
-        "runtime is not implemented yet. This is intentional and must not "
-        "fall back to the Python handler."
+        "drop-in E2E path is not implemented yet. This is intentional and "
+        "must not fall back to the Python handler."
     )
