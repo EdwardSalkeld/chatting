@@ -566,6 +566,13 @@ Validation:
 
 ### 9. Internal Heartbeat Connector
 
+Status: complete. The Go handler now wires an always-on internal heartbeat
+connector into the runtime loop, records heartbeat tasks in SQLite before
+publishing them to `chatting.tasks.v1`, and recognizes the internal
+`log/heartbeat` pong as an allowlist exception. Tests cover heartbeat envelope
+shape, runtime publication/dedupe behavior, and egress acceptance when `log` is
+not otherwise allowlisted.
+
 Implement the heartbeat task source and heartbeat egress recognition.
 
 Validation:
@@ -689,6 +696,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add the internal heartbeat connector and heartbeat egress recognition.
-2. Add auxiliary ingress queue consumption for the first Go-handler/Python-worker E2E path.
-3. Add interval schedule connector support.
+1. Add auxiliary ingress queue consumption for the first Go-handler/Python-worker E2E path.
+2. Add interval schedule connector support.

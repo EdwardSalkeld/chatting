@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
@@ -64,6 +65,33 @@ func TestHandleDropsDisallowedChannel(t *testing.T) {
 	}
 	if result.Status != StatusDropped || result.Reason != "disallowed_channel" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestHandleAllowsInternalHeartbeatLogPongWhenLogDisallowed(t *testing.T) {
+	task := contracts.NewTaskQueueMessage(
+		heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z")),
+		"trace:internal-heartbeat:1",
+		mustTime(t, "2026-03-09T12:00:01Z"),
+	)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{}
+	engine := newTestEngine(t, state, dispatcher)
+	message := testEgressMessage(t, task, intPtr(0), "evt:heartbeat:0", "message")
+	message.Message.Channel = "log"
+	message.Message.Target = "heartbeat"
+	message.Message.Body = stringPtr(`{"kind":"heartbeat_pong"}`)
+
+	result, err := engine.Handle(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusDispatched {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(dispatcher.messages) != 1 {
+		t.Fatalf("dispatch count = %d", len(dispatcher.messages))
 	}
 }
 

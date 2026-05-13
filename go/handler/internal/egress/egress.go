@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
@@ -121,7 +122,7 @@ func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueM
 		return Result{Status: StatusDropped, Reason: "unknown_task"}, nil
 	}
 
-	if !engine.channelAllowed(message) {
+	if !engine.channelAllowed(message, task) {
 		return Result{Status: StatusDropped, Reason: "disallowed_channel"}, nil
 	}
 
@@ -205,7 +206,7 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			return Result{Status: StatusCompleted}, nil
 		}
 
-		if !engine.channelAllowed(message) {
+		if !engine.channelAllowed(message, task) {
 			return Result{}, fmt.Errorf("staged event %s has disallowed channel %q", staged.EventID, message.Message.Channel)
 		}
 		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
@@ -225,8 +226,11 @@ func (engine *Engine) dispatchAndMark(ctx context.Context, task *TaskRecord, mes
 	return engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID)
 }
 
-func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage) bool {
+func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage, task *TaskRecord) bool {
 	if message.EventKind == "completion" {
+		return true
+	}
+	if task != nil && heartbeat.IsLogPong(message.Message, task.TaskMessage.Envelope) {
 		return true
 	}
 	return engine.allowedChannels[message.Message.Channel]

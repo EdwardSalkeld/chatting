@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func TestRunPrintsVersion(t *testing.T) {
@@ -134,6 +137,27 @@ func TestRunReportsRuntimeError(t *testing.T) {
 	}
 }
 
+func TestUnsupportedDispatcherAcceptsInternalHeartbeatLogPong(t *testing.T) {
+	body := `{"kind":"heartbeat_pong"}`
+	message := contracts.OutboundMessage{
+		Channel: "log",
+		Target:  "heartbeat",
+		Body:    &body,
+	}
+
+	dispatched, err := unsupportedDispatcher{}.Dispatch(
+		context.Background(),
+		message,
+		heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatched == nil || dispatched.Channel != "log" || dispatched.Target != "heartbeat" {
+		t.Fatalf("dispatched = %#v", dispatched)
+	}
+}
+
 type fakeRunnerFactory struct {
 	called bool
 	config handlerconfig.Config
@@ -159,4 +183,13 @@ type fakeRunner struct {
 
 func (runner *fakeRunner) Run(ctx context.Context) error {
 	return runner.err
+}
+
+func mustTime(t *testing.T, raw string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
