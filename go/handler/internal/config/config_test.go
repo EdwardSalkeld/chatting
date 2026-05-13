@@ -31,6 +31,8 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"metrics_port": 9555,
 		"allowed_egress_channels": ["log", "email"],
 		"global_prompt_context": ["Keep replies terse."],
+		"cron_prompt_context": ["This is a scheduled automation task."],
+		"schedule_file": "/tmp/schedule.json",
 		"auxiliary_ingress_enabled": true,
 		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
 		"auxiliary_ingress_queues": ["generic-post"],
@@ -66,6 +68,12 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config.GlobalPromptContext, []string{"Keep replies terse."}) {
 		t.Fatalf("GlobalPromptContext = %#v", config.GlobalPromptContext)
+	}
+	if !reflect.DeepEqual(config.CronPromptContext, []string{"This is a scheduled automation task."}) {
+		t.Fatalf("CronPromptContext = %#v", config.CronPromptContext)
+	}
+	if config.ScheduleFile != "/tmp/schedule.json" {
+		t.Fatalf("ScheduleFile = %q", config.ScheduleFile)
 	}
 	if !config.AuxiliaryIngressEnabled {
 		t.Fatal("AuxiliaryIngressEnabled = false")
