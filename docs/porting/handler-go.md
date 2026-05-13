@@ -483,6 +483,12 @@ Validation:
 
 ### 5. SQLite Dedupe And Task Ledger
 
+Status: complete. `internal/state/sqlite` now creates Python-compatible
+`idempotency_keys`, `task_ledger`, and `completed_task_ledger` tables, supports
+source-scoped dedupe checks, task record round trips, and completion checks that
+close the matching task/envelope pair. Tests cover Go round trips and verify
+Python `TaskLedgerStore` can read task rows written by Go.
+
 Implement handler state for:
 - `idempotency_keys`
 - `task_ledger`
@@ -664,6 +670,6 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add SQLite dedupe and task ledger state.
-2. Add SQLite egress staging and dispatch state.
-3. Build the Go egress engine before tackling the more complex connectors.
+1. Add SQLite egress staging and dispatch state.
+2. Build the Go egress engine before tackling the more complex connectors.
+3. Wire the runtime skeleton once egress state and core egress behavior exist.
