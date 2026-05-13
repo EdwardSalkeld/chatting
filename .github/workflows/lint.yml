@@ -12,6 +12,31 @@ permissions:
   contents: read
 
 jobs:
+  gofmt:
+    name: Go Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/handler/go.mod
+          cache-dependency-path: go/handler/go.mod
+
+      - name: Check gofmt
+        working-directory: go/handler
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            echo "Go files need gofmt:"
+            echo "$files"
+            exit 1
+          fi
+
   ruff:
     name: Ruff
     runs-on: ubuntu-latest
