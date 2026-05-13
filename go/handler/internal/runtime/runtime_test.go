@@ -10,6 +10,8 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
@@ -108,6 +110,91 @@ func TestDrainEgressDoesNotAckWhenHandlerFails(t *testing.T) {
 	}
 }
 
+func TestRunPublishesInternalHeartbeatTask(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	handler := &fakeEgressHandler{}
+	config := handlerconfig.Defaults()
+	config.MaxLoops = 1
+	runner, err := NewRunner(
+		config,
+		broker,
+		handler,
+		WithIngress(state, heartbeat.New(func() time.Time {
+			return mustTime(t, "2026-03-09T12:00:00Z")
+		})),
+		WithNow(func() time.Time {
+			return mustTime(t, "2026-03-09T12:00:01Z")
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(broker.published) != 1 {
+		t.Fatalf("published = %#v", broker.published)
+	}
+	published := broker.published[0]
+	if published.queue != TaskQueueName {
+		t.Fatalf("publish queue = %q", published.queue)
+	}
+	raw, err := json.Marshal(published.payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskMessage, err := contracts.DecodeTaskQueueMessage(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskMessage.Envelope.Source != "internal" {
+		t.Fatalf("source = %q", taskMessage.Envelope.Source)
+	}
+	if taskMessage.Envelope.ReplyChannel.Type != "internal" || taskMessage.Envelope.ReplyChannel.Target != "heartbeat" {
+		t.Fatalf("reply channel = %#v", taskMessage.Envelope.ReplyChannel)
+	}
+	if _, ok := state.tasks[taskMessage.TaskID]; !ok {
+		t.Fatalf("task was not recorded: %#v", state.tasks)
+	}
+	if !state.seen[taskMessage.Envelope.Source][taskMessage.Envelope.DedupeKey] {
+		t.Fatalf("dedupe key was not marked seen: %#v", state.seen)
+	}
+}
+
+func TestPublishIngressSkipsSeenEnvelope(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	connector := heartbeat.New(func() time.Time {
+		return mustTime(t, "2026-03-09T12:00:00Z")
+	})
+	envelope := heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	state.seen[envelope.Source] = map[string]bool{envelope.DedupeKey: true}
+	runner, err := NewRunner(
+		handlerconfig.Defaults(),
+		broker,
+		&fakeEgressHandler{},
+		WithIngress(state, connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := runner.PublishIngress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if published != 0 {
+		t.Fatalf("published = %d", published)
+	}
+	if len(broker.published) != 0 {
+		t.Fatalf("broker published = %#v", broker.published)
+	}
+}
+
 func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 	broker := &fakeBroker{}
 	handler := &fakeEgressHandler{}
@@ -139,16 +226,27 @@ type ackCall struct {
 	guid  string
 }
 
+type publishCall struct {
+	queue   string
+	payload map[string]any
+}
+
 type fakeBroker struct {
-	ensured []string
-	picked  []*bbmb.PickedMessage
-	pickups []pickupCall
-	acks    []ackCall
+	ensured   []string
+	published []publishCall
+	picked    []*bbmb.PickedMessage
+	pickups   []pickupCall
+	acks      []ackCall
 }
 
 func (broker *fakeBroker) EnsureQueue(ctx context.Context, queueName string) error {
 	broker.ensured = append(broker.ensured, queueName)
 	return nil
+}
+
+func (broker *fakeBroker) PublishJSON(ctx context.Context, queueName string, payload map[string]any) (string, error) {
+	broker.published = append(broker.published, publishCall{queue: queueName, payload: payload})
+	return "guid-published", nil
 }
 
 func (broker *fakeBroker) PickupJSON(ctx context.Context, queueName string, timeoutSeconds int, waitSeconds int) (*bbmb.PickedMessage, error) {
@@ -178,4 +276,42 @@ type fakeEgressHandler struct {
 func (handler *fakeEgressHandler) HandleRaw(ctx context.Context, raw []byte) error {
 	handler.rawPayloads = append(handler.rawPayloads, raw)
 	return handler.err
+}
+
+type fakeIngressState struct {
+	seen  map[string]map[string]bool
+	tasks map[string]contracts.TaskQueueMessage
+}
+
+func newFakeIngressState() *fakeIngressState {
+	return &fakeIngressState{
+		seen:  map[string]map[string]bool{},
+		tasks: map[string]contracts.TaskQueueMessage{},
+	}
+}
+
+func (state *fakeIngressState) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
+	return state.seen[source][dedupeKey], nil
+}
+
+func (state *fakeIngressState) MarkSeen(ctx context.Context, source string, dedupeKey string) error {
+	if state.seen[source] == nil {
+		state.seen[source] = map[string]bool{}
+	}
+	state.seen[source][dedupeKey] = true
+	return nil
+}
+
+func (state *fakeIngressState) RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error {
+	state.tasks[taskMessage.TaskID] = taskMessage
+	return nil
+}
+
+func mustTime(t *testing.T, raw string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }

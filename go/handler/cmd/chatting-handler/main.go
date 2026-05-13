@@ -13,6 +13,7 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
@@ -101,7 +102,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
 		_, err := engine.HandleRaw(ctx, raw)
 		return err
-	}))
+	}), handlerruntime.WithIngress(store, heartbeat.New(nil)))
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -118,6 +119,9 @@ func (fn egressHandlerFunc) HandleRaw(ctx context.Context, raw []byte) error {
 type unsupportedDispatcher struct{}
 
 func (unsupportedDispatcher) Dispatch(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error) {
+	if heartbeat.IsLogPong(message, envelope) {
+		return &message, nil
+	}
 	return nil, errors.New("dispatch is not implemented in the Go handler yet")
 }
 

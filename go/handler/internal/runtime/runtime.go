@@ -9,6 +9,7 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 const (
@@ -20,6 +21,7 @@ const (
 
 type Broker interface {
 	EnsureQueue(ctx context.Context, queueName string) error
+	PublishJSON(ctx context.Context, queueName string, payload map[string]any) (string, error)
 	PickupJSON(ctx context.Context, queueName string, timeoutSeconds int, waitSeconds int) (*bbmb.PickedMessage, error)
 	Ack(ctx context.Context, queueName string, guid string) error
 }
@@ -28,26 +30,69 @@ type EgressHandler interface {
 	HandleRaw(ctx context.Context, raw []byte) error
 }
 
-type Runner struct {
-	config handlerconfig.Config
-	broker Broker
-	egress EgressHandler
-	sleep  func(context.Context, time.Duration) error
+type IngressState interface {
+	Seen(ctx context.Context, source string, dedupeKey string) (bool, error)
+	MarkSeen(ctx context.Context, source string, dedupeKey string) error
+	RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error
 }
 
-func NewRunner(config handlerconfig.Config, broker Broker, egress EgressHandler) (*Runner, error) {
+type Connector interface {
+	Poll(ctx context.Context) ([]contracts.TaskEnvelope, error)
+}
+
+type Runner struct {
+	config       handlerconfig.Config
+	broker       Broker
+	egress       EgressHandler
+	ingressState IngressState
+	connectors   []Connector
+	now          func() time.Time
+	sleep        func(context.Context, time.Duration) error
+}
+
+type Option func(*Runner)
+
+func WithIngress(state IngressState, connectors ...Connector) Option {
+	return func(runner *Runner) {
+		runner.ingressState = state
+		runner.connectors = append(runner.connectors, connectors...)
+	}
+}
+
+func WithNow(now func() time.Time) Option {
+	return func(runner *Runner) {
+		if now != nil {
+			runner.now = now
+		}
+	}
+}
+
+func NewRunner(config handlerconfig.Config, broker Broker, egress EgressHandler, options ...Option) (*Runner, error) {
 	if broker == nil {
 		return nil, errors.New("broker is required")
 	}
 	if egress == nil {
 		return nil, errors.New("egress handler is required")
 	}
-	return &Runner{
+	runner := &Runner{
 		config: config,
 		broker: broker,
 		egress: egress,
+		now:    func() time.Time { return time.Now().UTC() },
 		sleep:  sleep,
-	}, nil
+	}
+	for _, option := range options {
+		option(runner)
+	}
+	if len(runner.connectors) > 0 && runner.ingressState == nil {
+		return nil, errors.New("ingress state is required when connectors are configured")
+	}
+	for _, connector := range runner.connectors {
+		if connector == nil {
+			return nil, errors.New("connector is required")
+		}
+	}
+	return runner, nil
 }
 
 func (runner *Runner) Run(ctx context.Context) error {
@@ -67,6 +112,9 @@ func (runner *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 		loopCount++
+		if _, err := runner.PublishIngress(ctx); err != nil {
+			return err
+		}
 		if _, err := runner.DrainEgress(ctx); err != nil {
 			return err
 		}
@@ -77,6 +125,48 @@ func (runner *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
+	if len(runner.connectors) == 0 {
+		return 0, nil
+	}
+	published := 0
+	for _, connector := range runner.connectors {
+		envelopes, err := connector.Poll(ctx)
+		if err != nil {
+			return published, err
+		}
+		for _, envelope := range envelopes {
+			seen, err := runner.ingressState.Seen(ctx, envelope.Source, envelope.DedupeKey)
+			if err != nil {
+				return published, err
+			}
+			if seen {
+				continue
+			}
+			taskMessage := contracts.NewTaskQueueMessage(
+				envelope,
+				"trace:"+envelope.ID,
+				runner.now(),
+			)
+			if err := runner.ingressState.RecordTask(ctx, taskMessage); err != nil {
+				return published, err
+			}
+			payload, err := taskMessageMap(taskMessage)
+			if err != nil {
+				return published, err
+			}
+			if _, err := runner.broker.PublishJSON(ctx, TaskQueueName, payload); err != nil {
+				return published, err
+			}
+			if err := runner.ingressState.MarkSeen(ctx, envelope.Source, envelope.DedupeKey); err != nil {
+				return published, err
+			}
+			published++
+		}
+	}
+	return published, nil
 }
 
 func (runner *Runner) DrainEgress(ctx context.Context) (int, error) {
@@ -108,6 +198,18 @@ func (runner *Runner) DrainEgress(ctx context.Context) (int, error) {
 		drained++
 		waitSeconds = egressDrainWaitSeconds
 	}
+}
+
+func taskMessageMap(taskMessage contracts.TaskQueueMessage) (map[string]any, error) {
+	encoded, err := json.Marshal(taskMessage)
+	if err != nil {
+		return nil, err
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func sleep(ctx context.Context, duration time.Duration) error {
