@@ -600,6 +600,12 @@ Validation:
 
 ### 11. Schedule Connector
 
+Status: complete. The Go handler now loads strict interval schedule files,
+rejects unknown or invalid job keys, evaluates five-field cron schedules in the
+configured timezone, publishes Python-compatible `cron` task envelopes with
+global/source/task prompt context, and participates in the existing
+Go-handler/Python-worker split-mode schedule smoke path.
+
 Implement interval schedule jobs.
 
 Validation:
@@ -703,5 +709,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add interval schedule connector support.
-2. Add basic Prometheus-style metrics for the Go runtime.
+1. Add basic Prometheus-style metrics for the Go runtime.
+2. Add SMTP dispatch.

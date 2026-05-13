@@ -15,6 +15,7 @@ import (
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/auxiliary"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
@@ -101,6 +102,24 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		return nil, err
 	}
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
+	if config.ScheduleFile != "" {
+		jobs, err := schedule.LoadJobs(config.ScheduleFile)
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		connector, err := schedule.New(
+			jobs,
+			config.GlobalPromptContext,
+			config.CronPromptContext,
+			nil,
+		)
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		connectors = append(connectors, connector)
+	}
 	auxiliaryAdapter := adapter
 	if config.AuxiliaryIngressEnabled {
 		auxiliaryAddress := config.AuxiliaryIngressBBMBAddress

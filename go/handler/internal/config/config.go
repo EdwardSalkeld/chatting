@@ -33,6 +33,8 @@ var allowedKeys = map[string]bool{
 	"metrics_port":            true,
 	"allowed_egress_channels": true,
 	"global_prompt_context":   true,
+	"cron_prompt_context":     true,
+	"schedule_file":           true,
 
 	"auxiliary_ingress_enabled":      true,
 	"auxiliary_ingress_bbmb_address": true,
@@ -50,6 +52,8 @@ type Config struct {
 	MetricsPort           int
 	AllowedEgressChannels []string
 	GlobalPromptContext   []string
+	CronPromptContext     []string
+	ScheduleFile          string
 
 	AuxiliaryIngressEnabled     bool
 	AuxiliaryIngressBBMBAddress string
@@ -68,6 +72,8 @@ func Defaults() Config {
 		MetricsPort:           DefaultMetricsPort,
 		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "log"},
 		GlobalPromptContext:   []string{},
+		CronPromptContext:     []string{},
+		ScheduleFile:          "",
 
 		AuxiliaryIngressEnabled:     false,
 		AuxiliaryIngressBBMBAddress: "",
@@ -183,6 +189,18 @@ func Load(raw []byte) (Config, error) {
 	}
 	if rawValue, ok := payload["global_prompt_context"]; ok && !isNull(rawValue) {
 		config.GlobalPromptContext, err = decodeStringList(rawValue, "global_prompt_context")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["cron_prompt_context"]; ok && !isNull(rawValue) {
+		config.CronPromptContext, err = decodeStringList(rawValue, "cron_prompt_context")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["schedule_file"]; ok && !isNull(rawValue) {
+		config.ScheduleFile, err = decodeNonEmptyString(rawValue, "schedule_file")
 		if err != nil {
 			return Config{}, err
 		}
