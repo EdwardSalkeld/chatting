@@ -544,6 +544,12 @@ Validation:
 
 ### 8. Handler Runtime Skeleton
 
+Status: complete. The Go handler command now wires config, BBMB, SQLite state,
+the strict egress engine, queue setup, bounded loop execution, cancellation, and
+egress pickup/ack draining. Real outbound dispatch remains deliberately
+unimplemented until the dispatch-specific PRs, so this slice starts and drains
+runtime plumbing without claiming connector or side-effect parity.
+
 Wire:
 - config loader
 - BBMB client
@@ -683,6 +689,6 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Wire the handler runtime skeleton around config, BBMB, SQLite state, and the egress loop.
-2. Add the internal heartbeat connector and heartbeat egress recognition.
-3. Add auxiliary ingress queue consumption for the first Go-handler/Python-worker E2E path.
+1. Add the internal heartbeat connector and heartbeat egress recognition.
+2. Add auxiliary ingress queue consumption for the first Go-handler/Python-worker E2E path.
+3. Add interval schedule connector support.

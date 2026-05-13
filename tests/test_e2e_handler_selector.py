@@ -30,10 +30,10 @@ class E2EHandlerSelectorTests(unittest.TestCase):
             ],
         )
 
-    def test_go_selection_fails_clearly_until_runtime_exists(self) -> None:
+    def test_go_selection_fails_clearly_until_e2e_path_exists(self) -> None:
         with self.assertRaisesRegex(
             NotImplementedError,
-            "Go handler runtime is not implemented yet",
+            "Go handler drop-in E2E path is not implemented yet",
         ):
             message_handler_command(
                 Path("/tmp/handler.json"),
