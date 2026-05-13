@@ -13,6 +13,7 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/auxiliary"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
@@ -99,10 +100,43 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		_ = store.Close()
 		return nil, err
 	}
+	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
+	auxiliaryAdapter := adapter
+	if config.AuxiliaryIngressEnabled {
+		auxiliaryAddress := config.AuxiliaryIngressBBMBAddress
+		if auxiliaryAddress == "" {
+			auxiliaryAddress = config.BBMBAddress
+		}
+		if auxiliaryAddress != config.BBMBAddress {
+			auxiliaryAdapter, err = bbmb.NewAdapter(auxiliaryAddress)
+			if err != nil {
+				_ = store.Close()
+				return nil, err
+			}
+		}
+		prompt := contracts.PromptContext{GlobalInstructions: config.GlobalPromptContext}
+		for _, queueName := range config.AuxiliaryIngressQueues {
+			if err := auxiliaryAdapter.EnsureQueue(ctx, queueName); err != nil {
+				_ = store.Close()
+				return nil, err
+			}
+			connector, err := auxiliary.New(
+				auxiliaryAdapter,
+				queueName,
+				config.AuxiliaryIngressContextRefs,
+				prompt,
+			)
+			if err != nil {
+				_ = store.Close()
+				return nil, err
+			}
+			connectors = append(connectors, connector)
+		}
+	}
 	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
 		_, err := engine.HandleRaw(ctx, raw)
 		return err
-	}), handlerruntime.WithIngress(store, heartbeat.New(nil)))
+	}), handlerruntime.WithIngress(store, connectors...))
 	if err != nil {
 		_ = store.Close()
 		return nil, err

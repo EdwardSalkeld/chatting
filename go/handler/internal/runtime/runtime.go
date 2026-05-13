@@ -40,6 +40,11 @@ type Connector interface {
 	Poll(ctx context.Context) ([]contracts.TaskEnvelope, error)
 }
 
+type AckingConnector interface {
+	Connector
+	AckEnvelope(ctx context.Context, envelopeID string) error
+}
+
 type Runner struct {
 	config       handlerconfig.Config
 	broker       Broker
@@ -143,6 +148,9 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 				return published, err
 			}
 			if seen {
+				if err := ackEnvelope(ctx, connector, envelope.ID); err != nil {
+					return published, err
+				}
 				continue
 			}
 			taskMessage := contracts.NewTaskQueueMessage(
@@ -163,10 +171,21 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 			if err := runner.ingressState.MarkSeen(ctx, envelope.Source, envelope.DedupeKey); err != nil {
 				return published, err
 			}
+			if err := ackEnvelope(ctx, connector, envelope.ID); err != nil {
+				return published, err
+			}
 			published++
 		}
 	}
 	return published, nil
+}
+
+func ackEnvelope(ctx context.Context, connector Connector, envelopeID string) error {
+	acking, ok := connector.(AckingConnector)
+	if !ok {
+		return nil
+	}
+	return acking.AckEnvelope(ctx, envelopeID)
 }
 
 func (runner *Runner) DrainEgress(ctx context.Context) (int, error) {

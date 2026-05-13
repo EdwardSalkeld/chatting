@@ -195,6 +195,66 @@ func TestPublishIngressSkipsSeenEnvelope(t *testing.T) {
 	}
 }
 
+func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	envelope := heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
+	runner, err := NewRunner(
+		handlerconfig.Defaults(),
+		broker,
+		&fakeEgressHandler{},
+		WithIngress(state, connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := runner.PublishIngress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if published != 1 {
+		t.Fatalf("published = %d", published)
+	}
+	if got, want := connector.acked, []string{envelope.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("acked = %#v, want %#v", got, want)
+	}
+}
+
+func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	envelope := heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	state.seen[envelope.Source] = map[string]bool{envelope.DedupeKey: true}
+	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
+	runner, err := NewRunner(
+		handlerconfig.Defaults(),
+		broker,
+		&fakeEgressHandler{},
+		WithIngress(state, connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := runner.PublishIngress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if published != 0 {
+		t.Fatalf("published = %d", published)
+	}
+	if len(broker.published) != 0 {
+		t.Fatalf("broker published = %#v", broker.published)
+	}
+	if got, want := connector.acked, []string{envelope.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("acked = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 	broker := &fakeBroker{}
 	handler := &fakeEgressHandler{}
@@ -314,4 +374,18 @@ func mustTime(t *testing.T, raw string) time.Time {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+type fakeAckingConnector struct {
+	envelopes []contracts.TaskEnvelope
+	acked     []string
+}
+
+func (connector *fakeAckingConnector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
+	return connector.envelopes, nil
+}
+
+func (connector *fakeAckingConnector) AckEnvelope(ctx context.Context, envelopeID string) error {
+	connector.acked = append(connector.acked, envelopeID)
+	return nil
 }
