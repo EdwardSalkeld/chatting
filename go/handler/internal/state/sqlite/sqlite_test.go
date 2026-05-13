@@ -134,6 +134,132 @@ func TestRecordTaskClearsPreviousCompletion(t *testing.T) {
 	}
 }
 
+func TestDispatchedEventIDCheckpointRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	dispatched, err := store.HasDispatchedEventID(ctx, "task:email:1", "evt:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatched {
+		t.Fatal("new event id was already dispatched")
+	}
+	if err := store.MarkDispatchedEventID(ctx, "task:email:1", "evt:1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDispatchedEventID(ctx, "task:email:1", "evt:1"); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatched, err = store.HasDispatchedEventID(ctx, "task:email:1", "evt:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dispatched {
+		t.Fatal("event id was not marked dispatched")
+	}
+	otherTaskDispatched, err := store.HasDispatchedEventID(ctx, "task:email:other", "evt:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherTaskDispatched {
+		t.Fatal("event id checkpoint leaked across tasks")
+	}
+}
+
+func TestStagedEgressEventsAdvanceSequenceWhenMarkedDispatched(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	taskMessage := testTaskMessage(t)
+	second := testEgressMessage(t, taskMessage, 1, "evt:task:email:1:1", "second", "message")
+	first := testEgressMessage(t, taskMessage, 0, "evt:task:email:1:0", "first", "message")
+
+	if err := store.StageEgressEvent(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := store.ExpectedSequence(ctx, taskMessage.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected != 0 {
+		t.Fatalf("expected sequence after staging second = %d", expected)
+	}
+	stagedSecond, err := store.GetStagedEventBySequence(ctx, taskMessage.TaskID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stagedSecond == nil {
+		t.Fatal("second event was not staged")
+	}
+	if gotBody := derefString(stagedSecond.EgressMessage.Message.Body); gotBody != "second" {
+		t.Fatalf("staged second body = %q", gotBody)
+	}
+	if err := store.StageEgressEvent(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkStagedEventDispatched(ctx, first.TaskID, first.EventID, *first.Sequence); err != nil {
+		t.Fatal(err)
+	}
+
+	expected, err = store.ExpectedSequence(ctx, taskMessage.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected != 1 {
+		t.Fatalf("expected sequence after dispatching first = %d", expected)
+	}
+	stagedFirst, err := store.GetStagedEventBySequence(ctx, taskMessage.TaskID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stagedFirst != nil {
+		t.Fatalf("first event remained staged: %#v", stagedFirst)
+	}
+	if err := store.MarkStagedEventDispatched(ctx, second.TaskID, second.EventID, *second.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	expected, err = store.ExpectedSequence(ctx, taskMessage.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected != 2 {
+		t.Fatalf("expected sequence after dispatching second = %d", expected)
+	}
+}
+
+func TestCompletionEventsCanBeStagedAndCompletionClearsEgressState(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	taskMessage := testTaskMessage(t)
+	completion := testEgressMessage(t, taskMessage, 0, "evt:task:email:1:completion", "done", "completion")
+
+	if err := store.RecordTask(ctx, taskMessage); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StageEgressEvent(ctx, completion); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID, taskMessage.TraceID); err != nil {
+		t.Fatal(err)
+	}
+
+	staged, err := store.GetStagedEventBySequence(ctx, taskMessage.TaskID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staged != nil {
+		t.Fatalf("completion did not clear staged event: %#v", staged)
+	}
+	expected, err := store.ExpectedSequence(ctx, taskMessage.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected != 0 {
+		t.Fatalf("completion did not clear sequence state, got %d", expected)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	return openStoreAt(t, filepath.Join(t.TempDir(), "state.db"))
@@ -180,6 +306,40 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 		},
 		DedupeKey: "email:1",
 	}, "trace:email:1", mustTime(t, "2026-03-06T11:00:01Z"))
+}
+
+func testEgressMessage(
+	t *testing.T,
+	taskMessage contracts.TaskQueueMessage,
+	sequence int,
+	eventID string,
+	body string,
+	eventKind string,
+) contracts.EgressQueueMessage {
+	t.Helper()
+	return contracts.EgressQueueMessage{
+		SchemaVersion: contracts.SchemaVersion,
+		MessageType:   contracts.EgressMessageTypeV2,
+		TaskID:        taskMessage.TaskID,
+		EnvelopeID:    taskMessage.Envelope.ID,
+		TraceID:       taskMessage.TraceID,
+		EventID:       eventID,
+		EventKind:     eventKind,
+		EmittedAt:     contracts.NewTimestamp(mustTime(t, "2026-03-06T12:00:00Z")),
+		Message: contracts.OutboundMessage{
+			Channel: "email",
+			Target:  "alice@example.com",
+			Body:    &body,
+		},
+		Sequence: &sequence,
+	}
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func assertTaskLedgerSchemaAndPayload(t *testing.T, dbPath string, taskMessage contracts.TaskQueueMessage) {

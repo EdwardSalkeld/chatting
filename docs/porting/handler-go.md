@@ -501,6 +501,12 @@ Validation:
 
 ### 6. SQLite Egress State
 
+Status: complete. `internal/state/sqlite` now creates Python-compatible
+`dispatched_event_ids`, `staged_egress_events`, and `egress_sequence_state`
+tables, supports event-id dispatch dedupe, stages sequenced egress payloads,
+fetches events by expected sequence, advances sequence state only when staged
+events are marked dispatched, and clears staged/sequence state on completion.
+
 Implement handler state for:
 - `dispatched_event_ids`
 - `staged_egress_events`
