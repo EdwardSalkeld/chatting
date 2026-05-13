@@ -460,6 +460,11 @@ Validation:
 
 ### 4. Go Config Loader
 
+Status: complete. `internal/config` now loads the minimal handler runtime config
+with Python-compatible defaults for supported keys, strict unknown-key rejection,
+validation for blank strings and invalid numeric/list values, and `--config`/env
+path wiring in the Go handler binary.
+
 Implement `internal/config` for the minimal handler runtime config:
 - `bbmb_address`
 - `db_path`
@@ -659,7 +664,6 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Implement the minimal Go handler config loader.
-2. Add SQLite dedupe and task ledger state.
-3. Add SQLite egress staging and dispatch state.
-4. Build the Go egress engine before tackling the more complex connectors.
+1. Add SQLite dedupe and task ledger state.
+2. Add SQLite egress staging and dispatch state.
+3. Build the Go egress engine before tackling the more complex connectors.
