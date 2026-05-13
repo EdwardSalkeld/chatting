@@ -583,6 +583,13 @@ Validation:
 
 ### 10. Auxiliary Ingress Queue Connector
 
+Status: complete. The Go handler now supports configured auxiliary ingress BBMB
+queues, drains `chatting.auxiliary_ingress.v1` payloads into Python-compatible
+webhook task envelopes, records and publishes them through the shared runtime
+path, and acks source messages only after publication or when already deduped.
+The E2E handler selector can now launch the Go handler for the auxiliary
+Go-handler/Python-worker path.
+
 Implement the handler-side consumer for `chatting.auxiliary_ingress.v1`.
 
 Validation:
@@ -696,5 +703,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add auxiliary ingress queue consumption for the first Go-handler/Python-worker E2E path.
-2. Add interval schedule connector support.
+1. Add interval schedule connector support.
+2. Add basic Prometheus-style metrics for the Go runtime.

@@ -29,7 +29,12 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"poll_timeout_seconds": 3,
 		"metrics_host": "0.0.0.0",
 		"metrics_port": 9555,
-		"allowed_egress_channels": ["log", "email"]
+		"allowed_egress_channels": ["log", "email"],
+		"global_prompt_context": ["Keep replies terse."],
+		"auxiliary_ingress_enabled": true,
+		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
+		"auxiliary_ingress_queues": ["generic-post"],
+		"auxiliary_ingress_context_refs": ["repo:/workspace/chatting"]
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +63,21 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config.AllowedEgressChannels, []string{"log", "email"}) {
 		t.Fatalf("AllowedEgressChannels = %#v", config.AllowedEgressChannels)
+	}
+	if !reflect.DeepEqual(config.GlobalPromptContext, []string{"Keep replies terse."}) {
+		t.Fatalf("GlobalPromptContext = %#v", config.GlobalPromptContext)
+	}
+	if !config.AuxiliaryIngressEnabled {
+		t.Fatal("AuxiliaryIngressEnabled = false")
+	}
+	if config.AuxiliaryIngressBBMBAddress != "10.0.0.2:9998" {
+		t.Fatalf("AuxiliaryIngressBBMBAddress = %q", config.AuxiliaryIngressBBMBAddress)
+	}
+	if !reflect.DeepEqual(config.AuxiliaryIngressQueues, []string{"generic-post"}) {
+		t.Fatalf("AuxiliaryIngressQueues = %#v", config.AuxiliaryIngressQueues)
+	}
+	if !reflect.DeepEqual(config.AuxiliaryIngressContextRefs, []string{"repo:/workspace/chatting"}) {
+		t.Fatalf("AuxiliaryIngressContextRefs = %#v", config.AuxiliaryIngressContextRefs)
 	}
 }
 
@@ -135,6 +155,21 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "non-string allowed channels",
 			raw:     `{"allowed_egress_channels": ["log", 5]}`,
 			message: "config allowed_egress_channels must be a list of strings",
+		},
+		{
+			name:    "non-bool auxiliary enabled",
+			raw:     `{"auxiliary_ingress_enabled": "yes"}`,
+			message: "config auxiliary_ingress_enabled must be a boolean",
+		},
+		{
+			name:    "enabled auxiliary without queues",
+			raw:     `{"auxiliary_ingress_enabled": true}`,
+			message: "auxiliary ingress requires auxiliary_ingress_queues",
+		},
+		{
+			name:    "blank auxiliary queue",
+			raw:     `{"auxiliary_ingress_queues": ["generic-post", ""]}`,
+			message: "auxiliary_ingress_queues entries must not be empty",
 		},
 	}
 

@@ -42,8 +42,10 @@ def message_handler_command(
             "--config",
             str(config_path),
         ]
-    raise NotImplementedError(
-        f"{HANDLER_IMPLEMENTATION_ENV}=go was selected, but the Go handler "
-        "drop-in E2E path is not implemented yet. This is intentional and "
-        "must not fall back to the Python handler."
-    )
+    return [
+        "sh",
+        "-c",
+        'cd go/handler && exec go run ./cmd/chatting-handler --config "$1"',
+        "chatting-handler",
+        str(config_path),
+    ]

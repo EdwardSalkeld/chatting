@@ -32,6 +32,12 @@ var allowedKeys = map[string]bool{
 	"metrics_host":            true,
 	"metrics_port":            true,
 	"allowed_egress_channels": true,
+	"global_prompt_context":   true,
+
+	"auxiliary_ingress_enabled":      true,
+	"auxiliary_ingress_bbmb_address": true,
+	"auxiliary_ingress_queues":       true,
+	"auxiliary_ingress_context_refs": true,
 }
 
 type Config struct {
@@ -43,6 +49,12 @@ type Config struct {
 	MetricsHost           string
 	MetricsPort           int
 	AllowedEgressChannels []string
+	GlobalPromptContext   []string
+
+	AuxiliaryIngressEnabled     bool
+	AuxiliaryIngressBBMBAddress string
+	AuxiliaryIngressQueues      []string
+	AuxiliaryIngressContextRefs []string
 }
 
 func Defaults() Config {
@@ -55,6 +67,12 @@ func Defaults() Config {
 		MetricsHost:           DefaultMetricsHost,
 		MetricsPort:           DefaultMetricsPort,
 		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "log"},
+		GlobalPromptContext:   []string{},
+
+		AuxiliaryIngressEnabled:     false,
+		AuxiliaryIngressBBMBAddress: "",
+		AuxiliaryIngressQueues:      []string{},
+		AuxiliaryIngressContextRefs: []string{},
 	}
 }
 
@@ -163,6 +181,39 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if rawValue, ok := payload["global_prompt_context"]; ok && !isNull(rawValue) {
+		config.GlobalPromptContext, err = decodeStringList(rawValue, "global_prompt_context")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["auxiliary_ingress_enabled"]; ok && !isNull(rawValue) {
+		config.AuxiliaryIngressEnabled, err = decodeBool(rawValue, "auxiliary_ingress_enabled")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["auxiliary_ingress_bbmb_address"]; ok && !isNull(rawValue) {
+		config.AuxiliaryIngressBBMBAddress, err = decodeNonEmptyString(rawValue, "auxiliary_ingress_bbmb_address")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["auxiliary_ingress_queues"]; ok && !isNull(rawValue) {
+		config.AuxiliaryIngressQueues, err = decodeStringList(rawValue, "auxiliary_ingress_queues")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["auxiliary_ingress_context_refs"]; ok && !isNull(rawValue) {
+		config.AuxiliaryIngressContextRefs, err = decodeStringList(rawValue, "auxiliary_ingress_context_refs")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if config.AuxiliaryIngressEnabled && len(config.AuxiliaryIngressQueues) == 0 {
+		return Config{}, errors.New("auxiliary ingress requires auxiliary_ingress_queues")
+	}
 	return config, nil
 }
 
@@ -209,17 +260,43 @@ func decodePositiveFloat(raw json.RawMessage, name string) (float64, error) {
 }
 
 func decodeAllowedEgressChannels(raw json.RawMessage) ([]string, error) {
-	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, errors.New("config allowed_egress_channels must be a list of strings")
-	}
-	for _, value := range values {
-		if strings.TrimSpace(value) == "" {
-			return nil, errors.New("allowed_egress_channel entries must not be empty")
-		}
+	values, err := decodeStringList(raw, "allowed_egress_channels")
+	if err != nil {
+		return nil, err
 	}
 	if len(values) == 0 {
 		return Defaults().AllowedEgressChannels, nil
 	}
 	return values, nil
+}
+
+func decodeStringList(raw json.RawMessage, name string) ([]string, error) {
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, fmt.Errorf("config %s must be a list of strings", name)
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("%s entries must not be empty", singularListName(name))
+		}
+	}
+	if values == nil {
+		return []string{}, nil
+	}
+	return values, nil
+}
+
+func singularListName(name string) string {
+	if name == "allowed_egress_channels" {
+		return "allowed_egress_channel"
+	}
+	return name
+}
+
+func decodeBool(raw json.RawMessage, name string) (bool, error) {
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, fmt.Errorf("config %s must be a boolean", name)
+	}
+	return value, nil
 }
