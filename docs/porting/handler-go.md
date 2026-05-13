@@ -443,6 +443,10 @@ Validation:
 
 ### 3. Go BBMB Client
 
+Status: complete. `internal/bbmb` now provides the Go BBMB JSON client for queue
+ensure, publish, pickup, and ack, with protocol-level fake-server tests covering
+normal operation, empty pickups, malformed payloads, and ack behavior.
+
 Implement `internal/bbmb` with:
 - publish JSON
 - pickup JSON
@@ -655,7 +659,7 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add contract fixtures for `chatting.task.v1`, `chatting.egress.v2`, and `chatting.auxiliary_ingress.v1`.
-2. Add implementation selection to the E2E harness.
-3. Scaffold the Go handler tree and define the contract structs first.
+1. Implement the minimal Go handler config loader.
+2. Add SQLite dedupe and task ledger state.
+3. Add SQLite egress staging and dispatch state.
 4. Build the Go egress engine before tackling the more complex connectors.
