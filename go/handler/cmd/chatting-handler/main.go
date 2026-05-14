@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
@@ -152,15 +154,25 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			connectors = append(connectors, connector)
 		}
 	}
-	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
-		_, err := engine.HandleRaw(ctx, raw)
-		return err
-	}), handlerruntime.WithIngress(store, connectors...))
+	metricRecorder := metrics.New(time.Time{}, nil)
+	metricsServer, err := metrics.StartServer(metricRecorder, config.MetricsHost, config.MetricsPort)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
-	return &closingRunner{runner: runner, closer: store}, nil
+	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
+		result, err := engine.HandleRaw(ctx, raw)
+		if err == nil {
+			metricRecorder.RecordEgressResult(result.Status, result.Reason)
+		}
+		return err
+	}), handlerruntime.WithIngress(store, connectors...), handlerruntime.WithMetrics(metricRecorder))
+	if err != nil {
+		_ = metricsServer.Close()
+		_ = store.Close()
+		return nil, err
+	}
+	return &closingRunner{runner: runner, closers: []closer{metricsServer, store}}, nil
 }
 
 type egressHandlerFunc func(context.Context, []byte) error
@@ -183,11 +195,15 @@ type closer interface {
 }
 
 type closingRunner struct {
-	runner runner
-	closer closer
+	runner  runner
+	closers []closer
 }
 
 func (runner *closingRunner) Run(ctx context.Context) error {
-	defer runner.closer.Close()
+	defer func() {
+		for _, closer := range runner.closers {
+			_ = closer.Close()
+		}
+	}()
 	return runner.runner.Run(ctx)
 }

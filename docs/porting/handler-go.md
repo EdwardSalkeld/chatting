@@ -616,6 +616,12 @@ Validation:
 
 ### 12. Metrics Endpoint
 
+Status: complete. The Go handler now starts a Prometheus-style `/metrics`
+server from the existing `metrics_host`/`metrics_port` config, tracks runtime
+loop and ingress-publish counters, records egress result counters from the
+egress engine, and renders the current Python metric names with zeroed
+placeholders for connectors not ported yet.
+
 Implement basic Prometheus-style handler metrics.
 
 Validation:
@@ -709,5 +715,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add basic Prometheus-style metrics for the Go runtime.
-2. Add SMTP dispatch.
+1. Add SMTP dispatch.
+2. Add IMAP ingress.

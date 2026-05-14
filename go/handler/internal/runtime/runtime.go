@@ -10,6 +10,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 )
 
 const (
@@ -51,6 +52,7 @@ type Runner struct {
 	egress       EgressHandler
 	ingressState IngressState
 	connectors   []Connector
+	metrics      *metrics.Recorder
 	now          func() time.Time
 	sleep        func(context.Context, time.Duration) error
 }
@@ -69,6 +71,12 @@ func WithNow(now func() time.Time) Option {
 		if now != nil {
 			runner.now = now
 		}
+	}
+}
+
+func WithMetrics(recorder *metrics.Recorder) Option {
+	return func(runner *Runner) {
+		runner.metrics = recorder
 	}
 }
 
@@ -117,11 +125,15 @@ func (runner *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 		loopCount++
-		if _, err := runner.PublishIngress(ctx); err != nil {
+		published, err := runner.PublishIngress(ctx)
+		if err != nil {
 			return err
 		}
 		if _, err := runner.DrainEgress(ctx); err != nil {
 			return err
+		}
+		if runner.metrics != nil {
+			runner.metrics.RecordLoop(published, runner.now())
 		}
 		if runner.config.MaxLoops > 0 && loopCount >= runner.config.MaxLoops {
 			return nil
@@ -202,6 +214,9 @@ func (runner *Runner) DrainEgress(ctx context.Context) (int, error) {
 			return drained, err
 		}
 		if picked == nil {
+			if runner.metrics != nil {
+				runner.metrics.RecordEgressLoop(runner.now())
+			}
 			return drained, nil
 		}
 		raw, err := json.Marshal(picked.Payload)
