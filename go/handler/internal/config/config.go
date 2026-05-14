@@ -35,6 +35,13 @@ var allowedKeys = map[string]bool{
 	"global_prompt_context":   true,
 	"cron_prompt_context":     true,
 	"schedule_file":           true,
+	"smtp_host":               true,
+	"smtp_port":               true,
+	"smtp_username":           true,
+	"smtp_password_env":       true,
+	"smtp_from":               true,
+	"smtp_starttls":           true,
+	"smtp_use_ssl":            true,
 
 	"auxiliary_ingress_enabled":      true,
 	"auxiliary_ingress_bbmb_address": true,
@@ -54,6 +61,13 @@ type Config struct {
 	GlobalPromptContext   []string
 	CronPromptContext     []string
 	ScheduleFile          string
+	SMTPHost              string
+	SMTPPort              int
+	SMTPUsername          string
+	SMTPPasswordEnv       string
+	SMTPFrom              string
+	SMTPStartTLS          bool
+	SMTPUseSSL            bool
 
 	AuxiliaryIngressEnabled     bool
 	AuxiliaryIngressBBMBAddress string
@@ -74,6 +88,13 @@ func Defaults() Config {
 		GlobalPromptContext:   []string{},
 		CronPromptContext:     []string{},
 		ScheduleFile:          "",
+		SMTPHost:              "",
+		SMTPPort:              465,
+		SMTPUsername:          "",
+		SMTPPasswordEnv:       "CHATTING_SMTP_PASSWORD",
+		SMTPFrom:              "",
+		SMTPStartTLS:          false,
+		SMTPUseSSL:            true,
 
 		AuxiliaryIngressEnabled:     false,
 		AuxiliaryIngressBBMBAddress: "",
@@ -205,6 +226,51 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if rawValue, ok := payload["smtp_host"]; ok && !isNull(rawValue) {
+		config.SMTPHost, err = decodeNonEmptyString(rawValue, "smtp_host")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["smtp_port"]; ok && !isNull(rawValue) {
+		config.SMTPPort, err = decodePositiveInt(rawValue, "smtp_port")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["smtp_username"]; ok && !isNull(rawValue) {
+		config.SMTPUsername, err = decodeNonEmptyString(rawValue, "smtp_username")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["smtp_password_env"]; ok && !isNull(rawValue) {
+		config.SMTPPasswordEnv, err = decodeNonEmptyString(rawValue, "smtp_password_env")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["smtp_from"]; ok && !isNull(rawValue) {
+		config.SMTPFrom, err = decodeNonEmptyString(rawValue, "smtp_from")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["smtp_starttls"]; ok && !isNull(rawValue) {
+		config.SMTPStartTLS, err = decodeBool(rawValue, "smtp_starttls")
+		if err != nil {
+			return Config{}, err
+		}
+		if _, ok := payload["smtp_use_ssl"]; !ok {
+			config.SMTPUseSSL = !config.SMTPStartTLS
+		}
+	}
+	if rawValue, ok := payload["smtp_use_ssl"]; ok && !isNull(rawValue) {
+		config.SMTPUseSSL, err = decodeBool(rawValue, "smtp_use_ssl")
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if rawValue, ok := payload["auxiliary_ingress_enabled"]; ok && !isNull(rawValue) {
 		config.AuxiliaryIngressEnabled, err = decodeBool(rawValue, "auxiliary_ingress_enabled")
 		if err != nil {
@@ -231,6 +297,17 @@ func Load(raw []byte) (Config, error) {
 	}
 	if config.AuxiliaryIngressEnabled && len(config.AuxiliaryIngressQueues) == 0 {
 		return Config{}, errors.New("auxiliary ingress requires auxiliary_ingress_queues")
+	}
+	if config.SMTPHost != "" {
+		if config.SMTPFrom == "" {
+			config.SMTPFrom = config.SMTPUsername
+		}
+		if config.SMTPFrom == "" {
+			return Config{}, errors.New("smtp_from or smtp_username is required when smtp_host is set")
+		}
+		if config.SMTPUsername != "" && config.SMTPPasswordEnv == "" {
+			return Config{}, errors.New("smtp_password_env is required when smtp_username is set")
+		}
 	}
 	return config, nil
 }

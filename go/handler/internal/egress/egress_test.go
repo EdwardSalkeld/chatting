@@ -68,6 +68,28 @@ func TestHandleDropsDisallowedChannel(t *testing.T) {
 	}
 }
 
+func TestHandleAllowsFinalChannelWhenEnvelopeReplyChannelAllowed(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{}
+	engine := newTestEngine(t, state, dispatcher)
+	message := testEgressMessage(t, task, nil, "evt:final:1", "incremental")
+	message.Message.Channel = "final"
+	message.Message.Target = "unused"
+
+	result, err := engine.Handle(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusDispatched {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(dispatcher.messages) != 1 {
+		t.Fatalf("dispatch count = %d", len(dispatcher.messages))
+	}
+}
+
 func TestHandleAllowsInternalHeartbeatLogPongWhenLogDisallowed(t *testing.T) {
 	task := contracts.NewTaskQueueMessage(
 		heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z")),

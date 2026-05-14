@@ -158,6 +158,23 @@ func TestUnsupportedDispatcherAcceptsInternalHeartbeatLogPong(t *testing.T) {
 	}
 }
 
+func TestBuildDispatcherRequiresSMTPPasswordEnvWhenUsernameConfigured(t *testing.T) {
+	t.Setenv("MISSING_SMTP_PASSWORD", "")
+	_, err := buildDispatcher(handlerconfig.Config{
+		SMTPHost:        "smtp.example.com",
+		SMTPPort:        587,
+		SMTPUsername:    "bot@example.com",
+		SMTPPasswordEnv: "MISSING_SMTP_PASSWORD",
+		SMTPFrom:        "bot@example.com",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "missing SMTP password env var: MISSING_SMTP_PASSWORD") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 type fakeRunnerFactory struct {
 	called bool
 	config handlerconfig.Config

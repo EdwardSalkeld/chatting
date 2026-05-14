@@ -233,5 +233,8 @@ func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage, task 
 	if task != nil && heartbeat.IsLogPong(message.Message, task.TaskMessage.Envelope) {
 		return true
 	}
+	if task != nil && message.Message.Channel == "final" {
+		return engine.allowedChannels[task.TaskMessage.Envelope.ReplyChannel.Type]
+	}
 	return engine.allowedChannels[message.Message.Channel]
 }
