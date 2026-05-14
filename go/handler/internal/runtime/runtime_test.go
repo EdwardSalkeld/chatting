@@ -12,6 +12,7 @@ import (
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 )
 
 func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
@@ -275,6 +276,46 @@ func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 	}
 }
 
+func TestRunRecordsLoopAndEgressMetrics(t *testing.T) {
+	broker := &fakeBroker{
+		picked: []*bbmb.PickedMessage{
+			{GUID: "guid-1", Payload: map[string]any{"message_type": "chatting.egress.v2", "task_id": "task:1"}},
+		},
+	}
+	handler := &fakeEgressHandler{}
+	recorder := metrics.New(mustTime(t, "2026-03-09T12:00:00Z"), &fakeMetricsClock{now: mustTime(t, "2026-03-09T12:00:03Z")})
+	config := handlerconfig.Defaults()
+	config.MaxLoops = 1
+	config.PollIntervalSeconds = 100
+	runner, err := NewRunner(
+		config,
+		broker,
+		handler,
+		WithMetrics(recorder),
+		WithNow(func() time.Time {
+			return mustTime(t, "2026-03-09T12:00:02Z")
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := recorder.Snapshot()
+	if snapshot["loops_total"] != 1 {
+		t.Fatalf("loops_total = %v", snapshot["loops_total"])
+	}
+	if snapshot["egress_loops_total"] != 1 {
+		t.Fatalf("egress_loops_total = %v", snapshot["egress_loops_total"])
+	}
+	if snapshot["last_loop_completed_timestamp_seconds"] != float64(mustTime(t, "2026-03-09T12:00:02Z").Unix()) {
+		t.Fatalf("last_loop_completed_timestamp_seconds = %v", snapshot["last_loop_completed_timestamp_seconds"])
+	}
+}
+
 type pickupCall struct {
 	queue          string
 	timeoutSeconds int
@@ -388,4 +429,16 @@ func (connector *fakeAckingConnector) Poll(ctx context.Context) ([]contracts.Tas
 func (connector *fakeAckingConnector) AckEnvelope(ctx context.Context, envelopeID string) error {
 	connector.acked = append(connector.acked, envelopeID)
 	return nil
+}
+
+type fakeMetricsClock struct {
+	now time.Time
+}
+
+func (clock *fakeMetricsClock) Now() time.Time {
+	return clock.now
+}
+
+func (clock *fakeMetricsClock) Since(start time.Time) time.Duration {
+	return clock.now.Sub(start)
 }
