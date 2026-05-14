@@ -33,6 +33,13 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"global_prompt_context": ["Keep replies terse."],
 		"cron_prompt_context": ["This is a scheduled automation task."],
 		"schedule_file": "/tmp/schedule.json",
+		"smtp_host": "smtp.example.com",
+		"smtp_port": 587,
+		"smtp_username": "bot@example.com",
+		"smtp_password_env": "SMTP_PASSWORD",
+		"smtp_from": "replies@example.com",
+		"smtp_starttls": true,
+		"smtp_use_ssl": false,
 		"auxiliary_ingress_enabled": true,
 		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
 		"auxiliary_ingress_queues": ["generic-post"],
@@ -74,6 +81,27 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if config.ScheduleFile != "/tmp/schedule.json" {
 		t.Fatalf("ScheduleFile = %q", config.ScheduleFile)
+	}
+	if config.SMTPHost != "smtp.example.com" {
+		t.Fatalf("SMTPHost = %q", config.SMTPHost)
+	}
+	if config.SMTPPort != 587 {
+		t.Fatalf("SMTPPort = %d", config.SMTPPort)
+	}
+	if config.SMTPUsername != "bot@example.com" {
+		t.Fatalf("SMTPUsername = %q", config.SMTPUsername)
+	}
+	if config.SMTPPasswordEnv != "SMTP_PASSWORD" {
+		t.Fatalf("SMTPPasswordEnv = %q", config.SMTPPasswordEnv)
+	}
+	if config.SMTPFrom != "replies@example.com" {
+		t.Fatalf("SMTPFrom = %q", config.SMTPFrom)
+	}
+	if !config.SMTPStartTLS {
+		t.Fatal("SMTPStartTLS = false")
+	}
+	if config.SMTPUseSSL {
+		t.Fatal("SMTPUseSSL = true")
 	}
 	if !config.AuxiliaryIngressEnabled {
 		t.Fatal("AuxiliaryIngressEnabled = false")
@@ -168,6 +196,21 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "non-bool auxiliary enabled",
 			raw:     `{"auxiliary_ingress_enabled": "yes"}`,
 			message: "config auxiliary_ingress_enabled must be a boolean",
+		},
+		{
+			name:    "smtp without sender",
+			raw:     `{"smtp_host": "smtp.example.com"}`,
+			message: "smtp_from or smtp_username is required when smtp_host is set",
+		},
+		{
+			name:    "smtp bad port",
+			raw:     `{"smtp_host": "smtp.example.com", "smtp_from": "bot@example.com", "smtp_port": 0}`,
+			message: "config smtp_port must be a positive integer",
+		},
+		{
+			name:    "smtp starttls wrong type",
+			raw:     `{"smtp_starttls": "yes"}`,
+			message: "config smtp_starttls must be a boolean",
 		},
 		{
 			name:    "enabled auxiliary without queues",

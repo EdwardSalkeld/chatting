@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
@@ -94,9 +94,14 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	if err != nil {
 		return nil, err
 	}
+	dispatcher, err := buildDispatcher(config)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	engine, err := egress.New(
 		egress.NewSQLiteState(store),
-		unsupportedDispatcher{},
+		dispatcher,
 		egress.WithAllowedChannels(config.AllowedEgressChannels),
 	)
 	if err != nil {
@@ -175,6 +180,33 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	return &closingRunner{runner: runner, closers: []closer{metricsServer, store}}, nil
 }
 
+func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {
+	if config.SMTPHost == "" {
+		return dispatch.Dispatcher{}, nil
+	}
+	password := ""
+	if config.SMTPUsername != "" {
+		password = os.Getenv(config.SMTPPasswordEnv)
+		if password == "" {
+			return nil, fmt.Errorf("missing SMTP password env var: %s", config.SMTPPasswordEnv)
+		}
+	}
+	sender, err := dispatch.NewSMTPEmailSender(dispatch.SMTPConfig{
+		Host:        config.SMTPHost,
+		Port:        config.SMTPPort,
+		FromAddress: config.SMTPFrom,
+		Username:    config.SMTPUsername,
+		Password:    password,
+		UseSSL:      config.SMTPUseSSL,
+		StartTLS:    config.SMTPStartTLS,
+		Timeout:     10 * time.Second,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dispatch.Dispatcher{EmailSender: sender}, nil
+}
+
 type egressHandlerFunc func(context.Context, []byte) error
 
 func (fn egressHandlerFunc) HandleRaw(ctx context.Context, raw []byte) error {
@@ -184,10 +216,7 @@ func (fn egressHandlerFunc) HandleRaw(ctx context.Context, raw []byte) error {
 type unsupportedDispatcher struct{}
 
 func (unsupportedDispatcher) Dispatch(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error) {
-	if heartbeat.IsLogPong(message, envelope) {
-		return &message, nil
-	}
-	return nil, errors.New("dispatch is not implemented in the Go handler yet")
+	return dispatch.Dispatcher{}.Dispatch(ctx, message, envelope)
 }
 
 type closer interface {

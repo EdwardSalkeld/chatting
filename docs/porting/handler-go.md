@@ -631,6 +631,11 @@ Validation:
 
 ### 13. SMTP Dispatch
 
+Status: complete. The Go handler now accepts the Python handler SMTP config keys,
+wires an SMTP-backed email sender into the egress dispatcher, preserves reply
+subject/body formatting for email-originated tasks, and treats unconfigured email
+dispatch as a dropped/no-op dispatch like the Python applier.
+
 Implement email dispatch.
 
 Validation:
