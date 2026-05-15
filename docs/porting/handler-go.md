@@ -645,6 +645,12 @@ Validation:
 
 ### 14. IMAP Ingress
 
+Status: complete. The Go handler now accepts the Python handler IMAP config keys,
+wires an IMAP-backed email connector into ingress, normalizes messages into
+Python-compatible email task envelopes, preserves global/email prompt context and
+context refs, and falls back to handler time when email dates are missing or
+invalid.
+
 Implement IMAP polling and email normalization.
 
 Validation:
@@ -720,5 +726,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add SMTP dispatch.
-2. Add IMAP ingress.
+1. Add Telegram dispatch.
+2. Add Telegram ingress and attachment tracking.

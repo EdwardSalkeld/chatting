@@ -32,7 +32,16 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"allowed_egress_channels": ["log", "email"],
 		"global_prompt_context": ["Keep replies terse."],
 		"cron_prompt_context": ["This is a scheduled automation task."],
+		"email_prompt_context": ["Use a clear subject."],
+		"context_refs": ["repo:/workspace/chatting"],
 		"schedule_file": "/tmp/schedule.json",
+		"imap_host": "imap.example.com",
+		"imap_port": 143,
+		"imap_username": "inbox@example.com",
+		"imap_password_env": "IMAP_PASSWORD",
+		"imap_mailbox": "Tasks",
+		"imap_search": "ALL",
+		"imap_use_ssl": false,
 		"smtp_host": "smtp.example.com",
 		"smtp_port": 587,
 		"smtp_username": "bot@example.com",
@@ -79,8 +88,35 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	if !reflect.DeepEqual(config.CronPromptContext, []string{"This is a scheduled automation task."}) {
 		t.Fatalf("CronPromptContext = %#v", config.CronPromptContext)
 	}
+	if !reflect.DeepEqual(config.EmailPromptContext, []string{"Use a clear subject."}) {
+		t.Fatalf("EmailPromptContext = %#v", config.EmailPromptContext)
+	}
+	if !reflect.DeepEqual(config.ContextRefs, []string{"repo:/workspace/chatting"}) {
+		t.Fatalf("ContextRefs = %#v", config.ContextRefs)
+	}
 	if config.ScheduleFile != "/tmp/schedule.json" {
 		t.Fatalf("ScheduleFile = %q", config.ScheduleFile)
+	}
+	if config.IMAPHost != "imap.example.com" {
+		t.Fatalf("IMAPHost = %q", config.IMAPHost)
+	}
+	if config.IMAPPort != 143 {
+		t.Fatalf("IMAPPort = %d", config.IMAPPort)
+	}
+	if config.IMAPUsername != "inbox@example.com" {
+		t.Fatalf("IMAPUsername = %q", config.IMAPUsername)
+	}
+	if config.IMAPPasswordEnv != "IMAP_PASSWORD" {
+		t.Fatalf("IMAPPasswordEnv = %q", config.IMAPPasswordEnv)
+	}
+	if config.IMAPMailbox != "Tasks" {
+		t.Fatalf("IMAPMailbox = %q", config.IMAPMailbox)
+	}
+	if config.IMAPSearch != "ALL" {
+		t.Fatalf("IMAPSearch = %q", config.IMAPSearch)
+	}
+	if config.IMAPUseSSL {
+		t.Fatal("IMAPUseSSL = true")
 	}
 	if config.SMTPHost != "smtp.example.com" {
 		t.Fatalf("SMTPHost = %q", config.SMTPHost)
@@ -196,6 +232,21 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "non-bool auxiliary enabled",
 			raw:     `{"auxiliary_ingress_enabled": "yes"}`,
 			message: "config auxiliary_ingress_enabled must be a boolean",
+		},
+		{
+			name:    "imap without username",
+			raw:     `{"imap_host": "imap.example.com"}`,
+			message: "imap_username is required when imap_host is set",
+		},
+		{
+			name:    "imap bad port",
+			raw:     `{"imap_host": "imap.example.com", "imap_username": "bot@example.com", "imap_port": 0}`,
+			message: "config imap_port must be a positive integer",
+		},
+		{
+			name:    "imap ssl wrong type",
+			raw:     `{"imap_use_ssl": "no"}`,
+			message: "config imap_use_ssl must be a boolean",
 		},
 		{
 			name:    "smtp without sender",
