@@ -34,7 +34,16 @@ var allowedKeys = map[string]bool{
 	"allowed_egress_channels": true,
 	"global_prompt_context":   true,
 	"cron_prompt_context":     true,
+	"email_prompt_context":    true,
+	"context_refs":            true,
 	"schedule_file":           true,
+	"imap_host":               true,
+	"imap_port":               true,
+	"imap_username":           true,
+	"imap_password_env":       true,
+	"imap_mailbox":            true,
+	"imap_search":             true,
+	"imap_use_ssl":            true,
 	"smtp_host":               true,
 	"smtp_port":               true,
 	"smtp_username":           true,
@@ -60,7 +69,16 @@ type Config struct {
 	AllowedEgressChannels []string
 	GlobalPromptContext   []string
 	CronPromptContext     []string
+	EmailPromptContext    []string
+	ContextRefs           []string
 	ScheduleFile          string
+	IMAPHost              string
+	IMAPPort              int
+	IMAPUsername          string
+	IMAPPasswordEnv       string
+	IMAPMailbox           string
+	IMAPSearch            string
+	IMAPUseSSL            bool
 	SMTPHost              string
 	SMTPPort              int
 	SMTPUsername          string
@@ -87,7 +105,16 @@ func Defaults() Config {
 		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "log"},
 		GlobalPromptContext:   []string{},
 		CronPromptContext:     []string{},
+		EmailPromptContext:    []string{},
+		ContextRefs:           []string{},
 		ScheduleFile:          "",
+		IMAPHost:              "",
+		IMAPPort:              993,
+		IMAPUsername:          "",
+		IMAPPasswordEnv:       "CHATTING_IMAP_PASSWORD",
+		IMAPMailbox:           "INBOX",
+		IMAPSearch:            "UNSEEN",
+		IMAPUseSSL:            true,
 		SMTPHost:              "",
 		SMTPPort:              465,
 		SMTPUsername:          "",
@@ -220,8 +247,62 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if rawValue, ok := payload["email_prompt_context"]; ok && !isNull(rawValue) {
+		config.EmailPromptContext, err = decodeStringList(rawValue, "email_prompt_context")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["context_refs"]; ok && !isNull(rawValue) {
+		config.ContextRefs, err = decodeStringList(rawValue, "context_refs")
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if rawValue, ok := payload["schedule_file"]; ok && !isNull(rawValue) {
 		config.ScheduleFile, err = decodeNonEmptyString(rawValue, "schedule_file")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_host"]; ok && !isNull(rawValue) {
+		config.IMAPHost, err = decodeNonEmptyString(rawValue, "imap_host")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_port"]; ok && !isNull(rawValue) {
+		config.IMAPPort, err = decodePositiveInt(rawValue, "imap_port")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_username"]; ok && !isNull(rawValue) {
+		config.IMAPUsername, err = decodeNonEmptyString(rawValue, "imap_username")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_password_env"]; ok && !isNull(rawValue) {
+		config.IMAPPasswordEnv, err = decodeNonEmptyString(rawValue, "imap_password_env")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_mailbox"]; ok && !isNull(rawValue) {
+		config.IMAPMailbox, err = decodeNonEmptyString(rawValue, "imap_mailbox")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_search"]; ok && !isNull(rawValue) {
+		config.IMAPSearch, err = decodeNonEmptyString(rawValue, "imap_search")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["imap_use_ssl"]; ok && !isNull(rawValue) {
+		config.IMAPUseSSL, err = decodeBool(rawValue, "imap_use_ssl")
 		if err != nil {
 			return Config{}, err
 		}
@@ -297,6 +378,14 @@ func Load(raw []byte) (Config, error) {
 	}
 	if config.AuxiliaryIngressEnabled && len(config.AuxiliaryIngressQueues) == 0 {
 		return Config{}, errors.New("auxiliary ingress requires auxiliary_ingress_queues")
+	}
+	if config.IMAPHost != "" {
+		if config.IMAPUsername == "" {
+			return Config{}, errors.New("imap_username is required when imap_host is set")
+		}
+		if config.IMAPPasswordEnv == "" {
+			return Config{}, errors.New("imap_password_env is required when imap_host is set")
+		}
 	}
 	if config.SMTPHost != "" {
 		if config.SMTPFrom == "" {

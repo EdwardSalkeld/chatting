@@ -15,6 +15,7 @@ import (
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/auxiliary"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
@@ -121,6 +122,32 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			config.CronPromptContext,
 			nil,
 		)
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		connectors = append(connectors, connector)
+	}
+	if config.IMAPHost != "" {
+		password := os.Getenv(config.IMAPPasswordEnv)
+		if password == "" {
+			_ = store.Close()
+			return nil, fmt.Errorf("missing IMAP password env var: %s", config.IMAPPasswordEnv)
+		}
+		connector, err := imap.New(imap.Config{
+			Host:            config.IMAPHost,
+			Port:            config.IMAPPort,
+			Username:        config.IMAPUsername,
+			Password:        password,
+			Mailbox:         config.IMAPMailbox,
+			SearchCriterion: config.IMAPSearch,
+			ContextRefs:     config.ContextRefs,
+			PromptContext: contracts.PromptContext{
+				GlobalInstructions:       config.GlobalPromptContext,
+				ReplyChannelInstructions: config.EmailPromptContext,
+			},
+			UseSSL: config.IMAPUseSSL,
+		})
 		if err != nil {
 			_ = store.Close()
 			return nil, err
