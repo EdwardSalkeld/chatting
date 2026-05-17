@@ -33,6 +33,19 @@ class TelegramFileMetadata:
     file_path: str
 
 
+@dataclass(frozen=True)
+class TelegramChatObservation:
+    """Telegram chat metadata observed while polling updates."""
+
+    chat_id: str
+    chat_type: str | None
+    title: str | None
+    username: str | None
+    update_id: int
+    update_kind: str
+    message_date: datetime | None
+
+
 class TelegramConnector:
     """Poll Telegram updates and normalize supported messages into envelopes."""
 
@@ -53,6 +66,7 @@ class TelegramConnector:
         http_get_json: Callable[[str, float], TelegramGetUpdatesResponse] | None = None,
         resolve_file_metadata: Callable[[str, float], TelegramFileMetadata] | None = None,
         download_file_bytes: Callable[[str, float], bytes] | None = None,
+        observe_chat: Callable[[TelegramChatObservation], None] | None = None,
     ) -> None:
         if not bot_token:
             raise ValueError("bot_token is required")
@@ -90,6 +104,7 @@ class TelegramConnector:
         self._http_get_json = http_get_json or _default_http_get_json
         self._resolve_file_metadata = resolve_file_metadata or _default_resolve_file_metadata
         self._download_file_bytes = download_file_bytes or _default_download_file_bytes
+        self._observe_chat = observe_chat
         self._next_offset: int | None = None
 
     def poll(self) -> list[TaskEnvelope]:
@@ -135,6 +150,13 @@ class TelegramConnector:
         channel_post_payload = update.get("channel_post")
         if isinstance(channel_post_payload, dict):
             return self._normalize_channel_post(update_id=update_id, payload=channel_post_payload)
+        my_chat_member_payload = update.get("my_chat_member")
+        if isinstance(my_chat_member_payload, dict):
+            self._observe_chat_from_payload(
+                update_id=update_id,
+                update_kind="my_chat_member",
+                payload=my_chat_member_payload,
+            )
         return None
 
     def _normalize_message(self, *, update_id: int, payload: dict[str, object]) -> TaskEnvelope | None:
@@ -145,6 +167,7 @@ class TelegramConnector:
         chat_id_value = _extract_chat_id(chat)
         if chat_id_value is None:
             return None
+        self._observe_chat_from_payload(update_id=update_id, update_kind="message", payload=payload)
         if self._allowed_chat_ids and chat_id_value not in self._allowed_chat_ids:
             return None
         return self._build_envelope(
@@ -167,6 +190,7 @@ class TelegramConnector:
         chat_id_value = _extract_chat_id(chat)
         if chat_id_value is None:
             return None
+        self._observe_chat_from_payload(update_id=update_id, update_kind="channel_post", payload=payload)
         if chat.get("type") != "channel":
             return None
         if not self._allowed_channel_ids:
@@ -237,6 +261,33 @@ class TelegramConnector:
             ),
             dedupe_key=event_id,
             prompt_context=self._prompt_context,
+        )
+
+    def _observe_chat_from_payload(
+        self,
+        *,
+        update_id: int,
+        update_kind: str,
+        payload: dict[str, object],
+    ) -> None:
+        if self._observe_chat is None:
+            return
+        chat = payload.get("chat")
+        if not isinstance(chat, dict):
+            return
+        chat_id_value = _extract_chat_id(chat)
+        if chat_id_value is None:
+            return
+        self._observe_chat(
+            TelegramChatObservation(
+                chat_id=chat_id_value,
+                chat_type=_extract_optional_str(chat.get("type")),
+                title=_extract_optional_str(chat.get("title")),
+                username=_extract_optional_str(chat.get("username")),
+                update_id=update_id,
+                update_kind=update_kind,
+                message_date=_parse_optional_message_timestamp(payload.get("date")),
+            )
         )
 
     def _extract_attachments(
@@ -312,6 +363,12 @@ def _extract_actor(raw_sender: object) -> str | None:
         return username
     if isinstance(sender_id, int):
         return str(sender_id)
+    return None
+
+
+def _extract_optional_str(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None
 
 
@@ -439,6 +496,12 @@ def _parse_message_timestamp(value: object) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_optional_message_timestamp(value: object) -> datetime | None:
+    if isinstance(value, int):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    return None
+
+
 def _default_http_get_json(url: str, timeout_seconds: float) -> TelegramGetUpdatesResponse:
     request = urllib.request.Request(url=url, method="GET")
     try:
@@ -489,4 +552,9 @@ def _default_download_file_bytes(url: str, timeout_seconds: float) -> bytes:
         raise RuntimeError("telegram_http_error") from error
 
 
-__all__ = ["TelegramConnector", "TelegramFileMetadata", "TelegramGetUpdatesResponse"]
+__all__ = [
+    "TelegramChatObservation",
+    "TelegramConnector",
+    "TelegramFileMetadata",
+    "TelegramGetUpdatesResponse",
+]

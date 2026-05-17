@@ -57,6 +57,19 @@ class TelegramAttachmentRecord:
 
 
 @dataclass(frozen=True)
+class TelegramChatRecord:
+    chat_id: str
+    chat_type: str | None
+    title: str | None
+    username: str | None
+    first_seen_at: datetime
+    last_retrieved_at: datetime
+    last_message_at: datetime | None
+    last_update_id: int
+    last_update_kind: str
+
+
+@dataclass(frozen=True)
 class TelegramAttachmentCleanupResult:
     deleted_count: int = 0
     missing_count: int = 0
@@ -598,6 +611,122 @@ class TelegramAttachmentStore:
         return [_attachment_record_from_row(row) for row in rows]
 
 
+class TelegramChatRegistryStore:
+    """Persist Telegram chats observed during handler polling."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self) -> None:
+        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_chat_registry (
+                    chat_id TEXT PRIMARY KEY,
+                    chat_type TEXT,
+                    title TEXT,
+                    username TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_retrieved_at TEXT NOT NULL,
+                    last_message_at TEXT,
+                    last_update_id INTEGER NOT NULL,
+                    last_update_kind TEXT NOT NULL
+                )
+                """
+            )
+            connection.commit()
+
+    def record_chat(
+        self,
+        *,
+        chat_id: str,
+        chat_type: str | None,
+        title: str | None,
+        username: str | None,
+        update_id: int,
+        update_kind: str,
+        message_date: datetime | None,
+        retrieved_at: datetime | None = None,
+    ) -> None:
+        if not chat_id:
+            raise ValueError("chat_id is required")
+        if not update_kind:
+            raise ValueError("update_kind is required")
+        if message_date is not None and message_date.tzinfo is None:
+            raise ValueError("message_date must be timezone-aware")
+        observed_at = retrieved_at or datetime.now(timezone.utc)
+        if observed_at.tzinfo is None:
+            raise ValueError("retrieved_at must be timezone-aware")
+        serialized_observed_at = _serialize_rfc3339_utc(observed_at)
+        serialized_message_date = (
+            _serialize_rfc3339_utc(message_date) if message_date is not None else None
+        )
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO telegram_chat_registry (
+                    chat_id,
+                    chat_type,
+                    title,
+                    username,
+                    first_seen_at,
+                    last_retrieved_at,
+                    last_message_at,
+                    last_update_id,
+                    last_update_kind
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    chat_type = COALESCE(excluded.chat_type, telegram_chat_registry.chat_type),
+                    title = COALESCE(excluded.title, telegram_chat_registry.title),
+                    username = COALESCE(excluded.username, telegram_chat_registry.username),
+                    last_retrieved_at = excluded.last_retrieved_at,
+                    last_message_at = COALESCE(excluded.last_message_at, telegram_chat_registry.last_message_at),
+                    last_update_id = excluded.last_update_id,
+                    last_update_kind = excluded.last_update_kind
+                """,
+                (
+                    chat_id,
+                    chat_type,
+                    title,
+                    username,
+                    serialized_observed_at,
+                    serialized_observed_at,
+                    serialized_message_date,
+                    update_id,
+                    update_kind,
+                ),
+            )
+            connection.commit()
+
+    def list_chats(self) -> list[TelegramChatRecord]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    chat_id,
+                    chat_type,
+                    title,
+                    username,
+                    first_seen_at,
+                    last_retrieved_at,
+                    last_message_at,
+                    last_update_id,
+                    last_update_kind
+                FROM telegram_chat_registry
+                ORDER BY last_retrieved_at DESC, chat_id ASC
+                """
+            ).fetchall()
+        return [_telegram_chat_record_from_row(row) for row in rows]
+
+
 def cleanup_telegram_attachments(
     *,
     attachment_store: TelegramAttachmentStore,
@@ -723,6 +852,23 @@ def _attachment_record_from_row(row: sqlite3.Row) -> TelegramAttachmentRecord:
     )
 
 
+def _telegram_chat_record_from_row(row: sqlite3.Row) -> TelegramChatRecord:
+    last_message_at = row["last_message_at"]
+    return TelegramChatRecord(
+        chat_id=row["chat_id"],
+        chat_type=row["chat_type"],
+        title=row["title"],
+        username=row["username"],
+        first_seen_at=_parse_rfc3339_utc(row["first_seen_at"]),
+        last_retrieved_at=_parse_rfc3339_utc(row["last_retrieved_at"]),
+        last_message_at=(
+            _parse_rfc3339_utc(last_message_at) if last_message_at is not None else None
+        ),
+        last_update_id=int(row["last_update_id"]),
+        last_update_kind=row["last_update_kind"],
+    )
+
+
 def _tracked_attachment_path(*, attachment_uri: str, attachment_root_dir: Path) -> Path | None:
     parsed = urlparse(attachment_uri)
     if parsed.scheme != "file":
@@ -749,5 +895,7 @@ __all__ = [
     "TelegramAttachmentCleanupResult",
     "TelegramAttachmentRecord",
     "TelegramAttachmentStore",
+    "TelegramChatRecord",
+    "TelegramChatRegistryStore",
     "cleanup_telegram_attachments",
 ]
