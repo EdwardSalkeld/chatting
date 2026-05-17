@@ -21,6 +21,7 @@ from app.handler.connectors.auxiliary_ingress_connector import AuxiliaryIngressC
 from app.handler.connectors.telegram_connector import (
     TelegramFileMetadata,
     TelegramConnector,
+    TelegramChatObservation,
     TelegramGetUpdatesResponse,
 )
 from app.handler.github_ingress import GitHubAssignmentCheckpointStore
@@ -1004,6 +1005,94 @@ class TelegramConnectorTests(unittest.TestCase):
 
         self.assertEqual(len(envelopes), 1)
         self.assertEqual(envelopes[0].id, "telegram:2001")
+
+    def test_poll_observes_chats_before_allowlist_filtering(self) -> None:
+        observations: list[TelegramChatObservation] = []
+        connector = TelegramConnector(
+            bot_token="token",
+            allowed_chat_ids=["12345"],
+            allowed_channel_ids=["-100123"],
+            observe_chat=observations.append,
+            http_get_json=lambda _url, _timeout: TelegramGetUpdatesResponse(
+                ok=True,
+                result=[
+                    {
+                        "update_id": 2101,
+                        "message": {
+                            "message_id": 1,
+                            "date": 1772272800,
+                            "text": "blocked",
+                            "chat": {
+                                "id": -100999,
+                                "type": "supergroup",
+                                "title": "New group",
+                            },
+                        },
+                    },
+                    {
+                        "update_id": 2102,
+                        "channel_post": {
+                            "message_id": 2,
+                            "date": 1772272801,
+                            "text": "blocked channel",
+                            "chat": {
+                                "id": -100998,
+                                "type": "channel",
+                                "title": "New channel",
+                                "username": "new_channel",
+                            },
+                        },
+                    },
+                    {
+                        "update_id": 2103,
+                        "my_chat_member": {
+                            "date": 1772272802,
+                            "chat": {
+                                "id": -100997,
+                                "type": "group",
+                                "title": "Added here",
+                            },
+                        },
+                    },
+                ],
+            ),
+        )
+
+        envelopes = connector.poll()
+
+        self.assertEqual(envelopes, [])
+        self.assertEqual(
+            observations,
+            [
+                TelegramChatObservation(
+                    chat_id="-100999",
+                    chat_type="supergroup",
+                    title="New group",
+                    username=None,
+                    update_id=2101,
+                    update_kind="message",
+                    message_date=datetime.fromtimestamp(1772272800, tz=timezone.utc),
+                ),
+                TelegramChatObservation(
+                    chat_id="-100998",
+                    chat_type="channel",
+                    title="New channel",
+                    username="new_channel",
+                    update_id=2102,
+                    update_kind="channel_post",
+                    message_date=datetime.fromtimestamp(1772272801, tz=timezone.utc),
+                ),
+                TelegramChatObservation(
+                    chat_id="-100997",
+                    chat_type="group",
+                    title="Added here",
+                    username=None,
+                    update_id=2103,
+                    update_kind="my_chat_member",
+                    message_date=datetime.fromtimestamp(1772272802, tz=timezone.utc),
+                ),
+            ],
+        )
 
     def test_poll_accepts_channel_post_when_channel_id_is_explicitly_allowed(
         self,

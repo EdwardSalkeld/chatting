@@ -56,6 +56,7 @@ from app.handler.runtime import (
     TaskLedgerStore,
     TelegramAttachmentCleanupResult,
     TelegramAttachmentStore,
+    TelegramChatRegistryStore,
     cleanup_telegram_attachments,
 )
 from app.models import OutboundMessage, PromptContext, TaskEnvelope
@@ -1016,7 +1017,7 @@ def _is_connector_configured(
 
 
 def _build_live_connectors(
-    args: argparse.Namespace, config: dict[str, object]
+    args: argparse.Namespace, config: dict[str, object], *, db_path: str | None = None
 ) -> list[Connector]:
     connectors: list[Connector] = []
     global_prompt_context = _resolve_prompt_context_values(
@@ -1152,6 +1153,9 @@ def _build_live_connectors(
             raise ValueError(
                 f"missing Telegram bot token env var: {telegram_bot_token_env}"
             )
+        telegram_chat_registry = (
+            TelegramChatRegistryStore(db_path) if db_path is not None else None
+        )
         connectors.append(
             TelegramConnector(
                 bot_token=bot_token,
@@ -1175,6 +1179,21 @@ def _build_live_connectors(
                     reply_channel_instructions=telegram_prompt_context,
                 ),
                 attachment_root_dir=_resolve_telegram_attachment_dir(args, config),
+                observe_chat=(
+                    (
+                        lambda observation: telegram_chat_registry.record_chat(
+                            chat_id=observation.chat_id,
+                            chat_type=observation.chat_type,
+                            title=observation.title,
+                            username=observation.username,
+                            update_id=observation.update_id,
+                            update_kind=observation.update_kind,
+                            message_date=observation.message_date,
+                        )
+                    )
+                    if telegram_chat_registry is not None
+                    else None
+                ),
             )
         )
 
@@ -1569,7 +1588,9 @@ def _build_live_connectors_fail_open(
                     )
                 )
                 continue
-            connectors.extend(_build_live_connectors(scoped_args, scoped_config))
+            connectors.extend(
+                _build_live_connectors(scoped_args, scoped_config, db_path=db_path)
+            )
         except Exception as error:  # noqa: BLE001
             LOGGER.exception(
                 "ingress_connector_startup_failed connector=%s", connector_name

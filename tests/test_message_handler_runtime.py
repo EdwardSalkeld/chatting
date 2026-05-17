@@ -23,6 +23,7 @@ from app.internal_heartbeat import build_internal_heartbeat_egress, build_intern
 from app.handler.runtime import (
     TaskLedgerStore,
     TelegramAttachmentStore,
+    TelegramChatRegistryStore,
     cleanup_telegram_attachments,
 )
 from app.models import AttachmentRef, OutboundMessage, ReplyChannel, TaskEnvelope
@@ -38,6 +39,54 @@ class _RecordingApplier:
         return OutboundMessage(
             channel="email", target="alice@example.com", body="ok"
         )
+
+
+class TelegramChatRegistryStoreTests(unittest.TestCase):
+    def test_record_chat_upserts_observed_telegram_chat_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = TelegramChatRegistryStore(str(Path(tmpdir) / "handler.db"))
+            first_seen = datetime(2026, 5, 17, 8, 0, tzinfo=timezone.utc)
+            second_seen = datetime(2026, 5, 17, 8, 5, tzinfo=timezone.utc)
+
+            store.record_chat(
+                chat_id="-1004974044081",
+                chat_type="supergroup",
+                title="Test group",
+                username=None,
+                update_id=1001,
+                update_kind="my_chat_member",
+                message_date=None,
+                retrieved_at=first_seen,
+            )
+            store.record_chat(
+                chat_id="-1004974044081",
+                chat_type="supergroup",
+                title="Renamed group",
+                username="test_group",
+                update_id=1002,
+                update_kind="message",
+                message_date=datetime(2026, 5, 17, 8, 4, tzinfo=timezone.utc),
+                retrieved_at=second_seen,
+            )
+
+            records = store.list_chats()
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.chat_id, "-1004974044081")
+        self.assertEqual(record.chat_type, "supergroup")
+        self.assertEqual(record.title, "Renamed group")
+        self.assertEqual(record.username, "test_group")
+        self.assertEqual(record.first_seen_at, first_seen)
+        self.assertEqual(record.last_retrieved_at, second_seen)
+        self.assertEqual(
+            record.last_message_at,
+            datetime(2026, 5, 17, 8, 4, tzinfo=timezone.utc),
+        )
+        self.assertEqual(record.last_update_id, 1002)
+        self.assertEqual(record.last_update_kind, "message")
+
+
 @dataclass
 class _DispatchFailingApplier:
     apply_calls: int = 0
