@@ -369,6 +369,7 @@ This covers the lowest-complexity real-world integration pair.
 Implement:
 - Telegram ingress
 - Telegram dispatch
+- Telegram chat registry state for observed DM/group/supergroup/channel IDs
 - attachment tracking and cleanup
 
 Telegram is more stateful and should come after the egress engine is already proven.
@@ -667,14 +668,16 @@ Validation:
 - parse-mode fallback behavior matches Python
 - attachment URI validation matches Python behavior
 
-### 16. Telegram Ingress And Attachments
+### 16. Telegram Ingress, Chat Registry, And Attachments
 
 Implement Telegram getUpdates polling, update normalization, attachment download, conversation memory,
-and attachment cleanup state.
+chat registry state, and attachment cleanup state.
 
 Validation:
 - fake Telegram update tests cover text, channel posts, reactions, photos, and location payloads
 - allowlist behavior matches Python
+- observed `message`, `channel_post`, and `my_chat_member` chats are recorded in the SQLite
+  `telegram_chat_registry` table before allowlist filtering
 - conversation memory is included for Telegram tasks
 - attachment cleanup tests match Python semantics
 
@@ -727,4 +730,4 @@ Validation:
 ## Immediate Next Steps
 
 1. Add Telegram dispatch.
-2. Add Telegram ingress and attachment tracking.
+2. Add Telegram ingress, chat registry, and attachment tracking.
