@@ -208,30 +208,46 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 }
 
 func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {
-	if config.SMTPHost == "" {
-		return dispatch.Dispatcher{}, nil
-	}
-	password := ""
-	if config.SMTPUsername != "" {
-		password = os.Getenv(config.SMTPPasswordEnv)
-		if password == "" {
-			return nil, fmt.Errorf("missing SMTP password env var: %s", config.SMTPPasswordEnv)
+	dispatcher := dispatch.Dispatcher{}
+	if config.SMTPHost != "" {
+		password := ""
+		if config.SMTPUsername != "" {
+			password = os.Getenv(config.SMTPPasswordEnv)
+			if password == "" {
+				return nil, fmt.Errorf("missing SMTP password env var: %s", config.SMTPPasswordEnv)
+			}
 		}
+		sender, err := dispatch.NewSMTPEmailSender(dispatch.SMTPConfig{
+			Host:        config.SMTPHost,
+			Port:        config.SMTPPort,
+			FromAddress: config.SMTPFrom,
+			Username:    config.SMTPUsername,
+			Password:    password,
+			UseSSL:      config.SMTPUseSSL,
+			StartTLS:    config.SMTPStartTLS,
+			Timeout:     10 * time.Second,
+		})
+		if err != nil {
+			return nil, err
+		}
+		dispatcher.EmailSender = sender
 	}
-	sender, err := dispatch.NewSMTPEmailSender(dispatch.SMTPConfig{
-		Host:        config.SMTPHost,
-		Port:        config.SMTPPort,
-		FromAddress: config.SMTPFrom,
-		Username:    config.SMTPUsername,
-		Password:    password,
-		UseSSL:      config.SMTPUseSSL,
-		StartTLS:    config.SMTPStartTLS,
-		Timeout:     10 * time.Second,
-	})
-	if err != nil {
-		return nil, err
+	if config.TelegramEnabled {
+		token := os.Getenv(config.TelegramBotTokenEnv)
+		if token == "" {
+			return nil, fmt.Errorf("missing Telegram bot token env var: %s", config.TelegramBotTokenEnv)
+		}
+		sender, err := dispatch.NewTelegramMessageSender(dispatch.TelegramConfig{
+			BotToken:   token,
+			APIBaseURL: config.TelegramAPIBaseURL,
+			Timeout:    10 * time.Second,
+		})
+		if err != nil {
+			return nil, err
+		}
+		dispatcher.TelegramSender = sender
 	}
-	return dispatch.Dispatcher{EmailSender: sender}, nil
+	return dispatcher, nil
 }
 
 type egressHandlerFunc func(context.Context, []byte) error

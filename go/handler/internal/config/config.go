@@ -51,6 +51,9 @@ var allowedKeys = map[string]bool{
 	"smtp_from":               true,
 	"smtp_starttls":           true,
 	"smtp_use_ssl":            true,
+	"telegram_enabled":        true,
+	"telegram_bot_token_env":  true,
+	"telegram_api_base_url":   true,
 
 	"auxiliary_ingress_enabled":      true,
 	"auxiliary_ingress_bbmb_address": true,
@@ -86,6 +89,9 @@ type Config struct {
 	SMTPFrom              string
 	SMTPStartTLS          bool
 	SMTPUseSSL            bool
+	TelegramEnabled       bool
+	TelegramBotTokenEnv   string
+	TelegramAPIBaseURL    string
 
 	AuxiliaryIngressEnabled     bool
 	AuxiliaryIngressBBMBAddress string
@@ -122,6 +128,9 @@ func Defaults() Config {
 		SMTPFrom:              "",
 		SMTPStartTLS:          false,
 		SMTPUseSSL:            true,
+		TelegramEnabled:       false,
+		TelegramBotTokenEnv:   "CHATTING_TELEGRAM_BOT_TOKEN",
+		TelegramAPIBaseURL:    "https://api.telegram.org",
 
 		AuxiliaryIngressEnabled:     false,
 		AuxiliaryIngressBBMBAddress: "",
@@ -348,6 +357,24 @@ func Load(raw []byte) (Config, error) {
 	}
 	if rawValue, ok := payload["smtp_use_ssl"]; ok && !isNull(rawValue) {
 		config.SMTPUseSSL, err = decodeBool(rawValue, "smtp_use_ssl")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_enabled"]; ok && !isNull(rawValue) {
+		config.TelegramEnabled, err = decodeBool(rawValue, "telegram_enabled")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_bot_token_env"]; ok && !isNull(rawValue) {
+		config.TelegramBotTokenEnv, err = decodeNonEmptyString(rawValue, "telegram_bot_token_env")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_api_base_url"]; ok && !isNull(rawValue) {
+		config.TelegramAPIBaseURL, err = decodeNonEmptyString(rawValue, "telegram_api_base_url")
 		if err != nil {
 			return Config{}, err
 		}
