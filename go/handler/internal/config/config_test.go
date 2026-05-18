@@ -49,6 +49,9 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"smtp_from": "replies@example.com",
 		"smtp_starttls": true,
 		"smtp_use_ssl": false,
+		"telegram_enabled": true,
+		"telegram_bot_token_env": "TELEGRAM_TOKEN",
+		"telegram_api_base_url": "https://telegram.example.test",
 		"auxiliary_ingress_enabled": true,
 		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
 		"auxiliary_ingress_queues": ["generic-post"],
@@ -138,6 +141,15 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if config.SMTPUseSSL {
 		t.Fatal("SMTPUseSSL = true")
+	}
+	if !config.TelegramEnabled {
+		t.Fatal("TelegramEnabled = false")
+	}
+	if config.TelegramBotTokenEnv != "TELEGRAM_TOKEN" {
+		t.Fatalf("TelegramBotTokenEnv = %q", config.TelegramBotTokenEnv)
+	}
+	if config.TelegramAPIBaseURL != "https://telegram.example.test" {
+		t.Fatalf("TelegramAPIBaseURL = %q", config.TelegramAPIBaseURL)
 	}
 	if !config.AuxiliaryIngressEnabled {
 		t.Fatal("AuxiliaryIngressEnabled = false")
@@ -262,6 +274,16 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "smtp starttls wrong type",
 			raw:     `{"smtp_starttls": "yes"}`,
 			message: "config smtp_starttls must be a boolean",
+		},
+		{
+			name:    "telegram enabled wrong type",
+			raw:     `{"telegram_enabled": "yes"}`,
+			message: "config telegram_enabled must be a boolean",
+		},
+		{
+			name:    "blank telegram token env",
+			raw:     `{"telegram_bot_token_env": ""}`,
+			message: "config telegram_bot_token_env must be a non-empty string",
 		},
 		{
 			name:    "enabled auxiliary without queues",

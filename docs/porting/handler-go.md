@@ -661,6 +661,11 @@ Validation:
 
 ### 15. Telegram Dispatch
 
+Status: complete. The Go handler now accepts the Python handler Telegram
+dispatch config keys, wires Bot API text/reaction/attachment sending into the
+egress dispatcher, preserves parse-mode fallback behavior, and validates local
+attachment URIs before choosing `sendPhoto` or `sendDocument`.
+
 Implement Telegram text, reaction, and attachment dispatch.
 
 Validation:
@@ -729,5 +734,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add Telegram dispatch.
-2. Add Telegram ingress, chat registry, and attachment tracking.
+1. Add Telegram ingress, chat registry, and attachment tracking.
+2. Add GitHub checkpoint persistence.

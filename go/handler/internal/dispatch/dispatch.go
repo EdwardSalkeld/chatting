@@ -13,8 +13,14 @@ type EmailSender interface {
 	Send(ctx context.Context, target string, body string, subject *string) error
 }
 
+type TelegramSender interface {
+	Send(ctx context.Context, target string, message contracts.OutboundMessage) error
+	React(ctx context.Context, target string, messageID int64, emoji string) error
+}
+
 type Dispatcher struct {
-	EmailSender EmailSender
+	EmailSender    EmailSender
+	TelegramSender TelegramSender
 }
 
 type MessageDispatchError struct {
@@ -44,6 +50,29 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		}
 		if err := dispatcher.EmailSender.Send(ctx, target, body, subject); err != nil {
 			return nil, MessageDispatchError{ReasonCode: "email_dispatch_failed"}
+		}
+		return &normalized, nil
+	case "telegram":
+		if dispatcher.TelegramSender == nil {
+			return nil, nil
+		}
+		if err := dispatcher.TelegramSender.Send(ctx, target, message); err != nil {
+			return nil, MessageDispatchError{ReasonCode: telegramDispatchReasonCode(message, err)}
+		}
+		return &normalized, nil
+	case "telegram_reaction":
+		if dispatcher.TelegramSender == nil {
+			return nil, nil
+		}
+		if message.Body == nil {
+			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
+		}
+		messageID, ok := resolveTelegramReactionMessageID(message, envelope)
+		if !ok {
+			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
+		}
+		if err := dispatcher.TelegramSender.React(ctx, target, messageID, *message.Body); err != nil {
+			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
 		}
 		return &normalized, nil
 	default:
@@ -126,4 +155,46 @@ func stripLeadingSubjectLine(body string) string {
 		return body
 	}
 	return cleaned
+}
+
+func resolveTelegramReactionMessageID(message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (int64, bool) {
+	if value, ok := metadataPositiveInt(message.Metadata, "message_id"); ok {
+		return value, true
+	}
+	return metadataPositiveInt(envelope.ReplyChannel.Metadata, "message_id")
+}
+
+func metadataPositiveInt(metadata map[string]any, key string) (int64, bool) {
+	if metadata == nil {
+		return 0, false
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		if value > 0 {
+			return int64(value), true
+		}
+	case int64:
+		if value > 0 {
+			return value, true
+		}
+	case float64:
+		asInt := int64(value)
+		if value > 0 && float64(asInt) == value {
+			return asInt, true
+		}
+	}
+	return 0, false
+}
+
+func telegramDispatchReasonCode(message contracts.OutboundMessage, err error) string {
+	if err != nil {
+		reason := strings.TrimSpace(err.Error())
+		if strings.HasPrefix(reason, "telegram_") {
+			return reason
+		}
+	}
+	if message.Attachment != nil {
+		return "telegram_attachment_dispatch_failed"
+	}
+	return "telegram_dispatch_failed"
 }

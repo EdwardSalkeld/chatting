@@ -175,6 +175,21 @@ func TestBuildDispatcherRequiresSMTPPasswordEnvWhenUsernameConfigured(t *testing
 	}
 }
 
+func TestBuildDispatcherRequiresTelegramTokenWhenEnabled(t *testing.T) {
+	t.Setenv("MISSING_TELEGRAM_TOKEN", "")
+	_, err := buildDispatcher(handlerconfig.Config{
+		TelegramEnabled:     true,
+		TelegramBotTokenEnv: "MISSING_TELEGRAM_TOKEN",
+		TelegramAPIBaseURL:  "https://api.telegram.org",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "missing Telegram bot token env var: MISSING_TELEGRAM_TOKEN") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 type fakeRunnerFactory struct {
 	called bool
 	config handlerconfig.Config
