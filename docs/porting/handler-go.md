@@ -675,6 +675,14 @@ Validation:
 
 ### 16. Telegram Ingress, Chat Registry, And Attachments
 
+Status: in progress. The Go handler now accepts Telegram ingress config keys,
+polls Bot API `getUpdates`, normalizes allowlisted text/caption/location
+`message` and `channel_post` updates into Python-compatible IM task envelopes,
+advances update offsets, observes `my_chat_member` updates, and upserts observed
+Telegram chat metadata into the Python-compatible `telegram_chat_registry`
+SQLite table before allowlist filtering. Media download and attachment cleanup
+state remain to be ported.
+
 Implement Telegram getUpdates polling, update normalization, attachment download, conversation memory,
 chat registry state, and attachment cleanup state.
 
@@ -734,5 +742,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add Telegram ingress, chat registry, and attachment tracking.
+1. Finish Telegram media download, attachment tracking, and cleanup state.
 2. Add GitHub checkpoint persistence.

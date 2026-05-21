@@ -17,5 +17,11 @@
   "smtp_from": "bot@example.com",
   "telegram_enabled": false,
   "telegram_bot_token_env": "CHATTING_TELEGRAM_BOT_TOKEN",
+  "telegram_api_base_url": "https://api.telegram.org",
+  "telegram_poll_timeout_seconds": 20,
+  "telegram_allowed_chat_ids": [],
+  "telegram_allowed_channel_ids": [],
+  "telegram_context_refs": [],
+  "telegram_prompt_context": [],
   "telegram_attachment_dir": "/var/lib/chatting/telegram-attachments"
 }

@@ -42,6 +42,29 @@ type StagedEgressRecord struct {
 	CreatedAt     time.Time
 }
 
+type TelegramChatObservation struct {
+	ChatID      string
+	ChatType    *string
+	Title       *string
+	Username    *string
+	UpdateID    int64
+	UpdateKind  string
+	MessageDate *time.Time
+	RetrievedAt time.Time
+}
+
+type TelegramChatRecord struct {
+	ChatID          string
+	ChatType        *string
+	Title           *string
+	Username        *string
+	FirstSeenAt     time.Time
+	LastRetrievedAt time.Time
+	LastMessageAt   *time.Time
+	LastUpdateID    int64
+	LastUpdateKind  string
+}
+
 func Open(ctx context.Context, dbPath string) (*Store, error) {
 	if strings.TrimSpace(dbPath) == "" {
 		return nil, errors.New("db_path is required")
@@ -107,6 +130,17 @@ func (store *Store) initialize(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			PRIMARY KEY (task_id, event_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS telegram_chat_registry (
+			chat_id TEXT PRIMARY KEY,
+			chat_type TEXT,
+			title TEXT,
+			username TEXT,
+			first_seen_at TEXT NOT NULL,
+			last_retrieved_at TEXT NOT NULL,
+			last_message_at TEXT,
+			last_update_id INTEGER NOT NULL,
+			last_update_kind TEXT NOT NULL
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
@@ -114,6 +148,119 @@ func (store *Store) initialize(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (store *Store) RecordTelegramChat(ctx context.Context, observation TelegramChatObservation) error {
+	if strings.TrimSpace(observation.ChatID) == "" {
+		return errors.New("chat_id is required")
+	}
+	if strings.TrimSpace(observation.UpdateKind) == "" {
+		return errors.New("update_kind is required")
+	}
+	retrievedAt := observation.RetrievedAt
+	if retrievedAt.IsZero() {
+		retrievedAt = time.Now().UTC()
+	}
+	var messageDate any
+	if observation.MessageDate != nil {
+		messageDate = formatTimestamp(*observation.MessageDate)
+	}
+	_, err := store.db.ExecContext(
+		ctx,
+		`INSERT INTO telegram_chat_registry (
+			chat_id,
+			chat_type,
+			title,
+			username,
+			first_seen_at,
+			last_retrieved_at,
+			last_message_at,
+			last_update_id,
+			last_update_kind
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(chat_id) DO UPDATE SET
+			chat_type = COALESCE(excluded.chat_type, telegram_chat_registry.chat_type),
+			title = COALESCE(excluded.title, telegram_chat_registry.title),
+			username = COALESCE(excluded.username, telegram_chat_registry.username),
+			last_retrieved_at = excluded.last_retrieved_at,
+			last_message_at = COALESCE(excluded.last_message_at, telegram_chat_registry.last_message_at),
+			last_update_id = excluded.last_update_id,
+			last_update_kind = excluded.last_update_kind`,
+		observation.ChatID,
+		nullableString(observation.ChatType),
+		nullableString(observation.Title),
+		nullableString(observation.Username),
+		formatTimestamp(retrievedAt),
+		formatTimestamp(retrievedAt),
+		messageDate,
+		observation.UpdateID,
+		observation.UpdateKind,
+	)
+	return err
+}
+
+func (store *Store) ListTelegramChats(ctx context.Context) ([]TelegramChatRecord, error) {
+	rows, err := store.db.QueryContext(
+		ctx,
+		`SELECT
+			chat_id,
+			chat_type,
+			title,
+			username,
+			first_seen_at,
+			last_retrieved_at,
+			last_message_at,
+			last_update_id,
+			last_update_kind
+		FROM telegram_chat_registry
+		ORDER BY last_retrieved_at DESC, chat_id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []TelegramChatRecord{}
+	for rows.Next() {
+		var chatType, title, username, lastMessageAt sql.NullString
+		var firstSeenAt, lastRetrievedAt string
+		record := TelegramChatRecord{}
+		if err := rows.Scan(
+			&record.ChatID,
+			&chatType,
+			&title,
+			&username,
+			&firstSeenAt,
+			&lastRetrievedAt,
+			&lastMessageAt,
+			&record.LastUpdateID,
+			&record.LastUpdateKind,
+		); err != nil {
+			return nil, err
+		}
+		record.ChatType = nullStringPointer(chatType)
+		record.Title = nullStringPointer(title)
+		record.Username = nullStringPointer(username)
+		parsedFirstSeenAt, err := parseTimestamp(firstSeenAt)
+		if err != nil {
+			return nil, err
+		}
+		record.FirstSeenAt = parsedFirstSeenAt
+		parsedLastRetrievedAt, err := parseTimestamp(lastRetrievedAt)
+		if err != nil {
+			return nil, err
+		}
+		record.LastRetrievedAt = parsedLastRetrievedAt
+		if lastMessageAt.Valid {
+			parsedLastMessageAt, err := parseTimestamp(lastMessageAt.String)
+			if err != nil {
+				return nil, err
+			}
+			record.LastMessageAt = &parsedLastMessageAt
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 func (store *Store) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
@@ -512,4 +659,18 @@ func parseTimestamp(value string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return parsed.UTC(), nil
+}
+
+func nullableString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func nullStringPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
 }

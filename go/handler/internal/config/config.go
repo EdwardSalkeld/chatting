@@ -51,9 +51,19 @@ var allowedKeys = map[string]bool{
 	"smtp_from":               true,
 	"smtp_starttls":           true,
 	"smtp_use_ssl":            true,
-	"telegram_enabled":        true,
-	"telegram_bot_token_env":  true,
-	"telegram_api_base_url":   true,
+
+	"telegram_enabled":              true,
+	"telegram_bot_token_env":        true,
+	"telegram_api_base_url":         true,
+	"telegram_poll_timeout_seconds": true,
+	"telegram_allowed_chat_ids":     true,
+	"telegram_allowed_channel_ids":  true,
+
+	"telegram_attachment_dir":                   true,
+	"telegram_attachment_cleanup_grace_seconds": true,
+	"telegram_attachment_max_age_seconds":       true,
+	"telegram_prompt_context":                   true,
+	"telegram_context_refs":                     true,
 
 	"auxiliary_ingress_enabled":      true,
 	"auxiliary_ingress_bbmb_address": true,
@@ -89,9 +99,18 @@ type Config struct {
 	SMTPFrom              string
 	SMTPStartTLS          bool
 	SMTPUseSSL            bool
-	TelegramEnabled       bool
-	TelegramBotTokenEnv   string
-	TelegramAPIBaseURL    string
+
+	TelegramEnabled                       bool
+	TelegramBotTokenEnv                   string
+	TelegramAPIBaseURL                    string
+	TelegramPollTimeoutSeconds            int
+	TelegramAllowedChatIDs                []string
+	TelegramAllowedChannelIDs             []string
+	TelegramAttachmentDir                 string
+	TelegramAttachmentCleanupGraceSeconds int
+	TelegramAttachmentMaxAgeSeconds       int
+	TelegramPromptContext                 []string
+	TelegramContextRefs                   []string
 
 	AuxiliaryIngressEnabled     bool
 	AuxiliaryIngressBBMBAddress string
@@ -128,9 +147,18 @@ func Defaults() Config {
 		SMTPFrom:              "",
 		SMTPStartTLS:          false,
 		SMTPUseSSL:            true,
-		TelegramEnabled:       false,
-		TelegramBotTokenEnv:   "CHATTING_TELEGRAM_BOT_TOKEN",
-		TelegramAPIBaseURL:    "https://api.telegram.org",
+
+		TelegramEnabled:                       false,
+		TelegramBotTokenEnv:                   "CHATTING_TELEGRAM_BOT_TOKEN",
+		TelegramAPIBaseURL:                    "https://api.telegram.org",
+		TelegramPollTimeoutSeconds:            20,
+		TelegramAllowedChatIDs:                []string{},
+		TelegramAllowedChannelIDs:             []string{},
+		TelegramAttachmentDir:                 "",
+		TelegramAttachmentCleanupGraceSeconds: 604800,
+		TelegramAttachmentMaxAgeSeconds:       2592000,
+		TelegramPromptContext:                 []string{},
+		TelegramContextRefs:                   []string{},
 
 		AuxiliaryIngressEnabled:     false,
 		AuxiliaryIngressBBMBAddress: "",
@@ -375,6 +403,54 @@ func Load(raw []byte) (Config, error) {
 	}
 	if rawValue, ok := payload["telegram_api_base_url"]; ok && !isNull(rawValue) {
 		config.TelegramAPIBaseURL, err = decodeNonEmptyString(rawValue, "telegram_api_base_url")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_poll_timeout_seconds"]; ok && !isNull(rawValue) {
+		config.TelegramPollTimeoutSeconds, err = decodePositiveInt(rawValue, "telegram_poll_timeout_seconds")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_allowed_chat_ids"]; ok && !isNull(rawValue) {
+		config.TelegramAllowedChatIDs, err = decodeStringList(rawValue, "telegram_allowed_chat_ids")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_allowed_channel_ids"]; ok && !isNull(rawValue) {
+		config.TelegramAllowedChannelIDs, err = decodeStringList(rawValue, "telegram_allowed_channel_ids")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_attachment_dir"]; ok && !isNull(rawValue) {
+		config.TelegramAttachmentDir, err = decodeNonEmptyString(rawValue, "telegram_attachment_dir")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_attachment_cleanup_grace_seconds"]; ok && !isNull(rawValue) {
+		config.TelegramAttachmentCleanupGraceSeconds, err = decodePositiveInt(rawValue, "telegram_attachment_cleanup_grace_seconds")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_attachment_max_age_seconds"]; ok && !isNull(rawValue) {
+		config.TelegramAttachmentMaxAgeSeconds, err = decodePositiveInt(rawValue, "telegram_attachment_max_age_seconds")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_prompt_context"]; ok && !isNull(rawValue) {
+		config.TelegramPromptContext, err = decodeStringList(rawValue, "telegram_prompt_context")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["telegram_context_refs"]; ok && !isNull(rawValue) {
+		config.TelegramContextRefs, err = decodeStringList(rawValue, "telegram_context_refs")
 		if err != nil {
 			return Config{}, err
 		}

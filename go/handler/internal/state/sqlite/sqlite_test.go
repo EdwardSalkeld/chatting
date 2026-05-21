@@ -48,6 +48,62 @@ func TestDedupeKeysAreScopedBySource(t *testing.T) {
 	}
 }
 
+func TestTelegramChatRegistryUpsertsObservedMetadata(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	firstSeenAt := mustTime(t, "2026-05-21T06:40:00Z")
+	firstMessageAt := mustTime(t, "2026-05-21T06:39:30Z")
+	updatedAt := mustTime(t, "2026-05-21T06:45:00Z")
+	chatType := "supergroup"
+	title := "Build Tests"
+	username := "build_tests"
+
+	if err := store.RecordTelegramChat(ctx, TelegramChatObservation{
+		ChatID:      "-100123",
+		ChatType:    &chatType,
+		Title:       &title,
+		Username:    &username,
+		UpdateID:    1001,
+		UpdateKind:  "message",
+		MessageDate: &firstMessageAt,
+		RetrievedAt: firstSeenAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordTelegramChat(ctx, TelegramChatObservation{
+		ChatID:      "-100123",
+		UpdateID:    1002,
+		UpdateKind:  "my_chat_member",
+		RetrievedAt: updatedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.ListTelegramChats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v", records)
+	}
+	record := records[0]
+	if record.ChatID != "-100123" || derefString(record.ChatType) != "supergroup" || derefString(record.Title) != "Build Tests" || derefString(record.Username) != "build_tests" {
+		t.Fatalf("record metadata = %#v", record)
+	}
+	if !record.FirstSeenAt.Equal(firstSeenAt) {
+		t.Fatalf("FirstSeenAt = %s", record.FirstSeenAt)
+	}
+	if !record.LastRetrievedAt.Equal(updatedAt) {
+		t.Fatalf("LastRetrievedAt = %s", record.LastRetrievedAt)
+	}
+	if record.LastMessageAt == nil || !record.LastMessageAt.Equal(firstMessageAt) {
+		t.Fatalf("LastMessageAt = %#v", record.LastMessageAt)
+	}
+	if record.LastUpdateID != 1002 || record.LastUpdateKind != "my_chat_member" {
+		t.Fatalf("last update = %#v", record)
+	}
+}
+
 func TestRecordTaskRoundTripsAndUsesPythonCompatibleTable(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
