@@ -699,6 +699,10 @@ Validation:
 
 ### 17. GitHub Checkpoint Store
 
+Status: complete. The Go handler now has Python-compatible SQLite persistence
+for `github_assignment_checkpoints`, plus deterministic checkpoint scope and
+event boundary helpers for assignment and review streams.
+
 Implement GitHub checkpoint persistence.
 
 Validation:
@@ -745,5 +749,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add GitHub checkpoint persistence.
+1. Add GitHub issue assignment and pull request review polling.
 2. Continue closing remaining Python handler parity gaps before a side-by-side dry run.
