@@ -105,6 +105,40 @@ func TestTelegramChatRegistryUpsertsObservedMetadata(t *testing.T) {
 	}
 }
 
+func TestGitHubAssignmentCheckpointRoundTripUsesPythonCompatibleTable(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store := openStoreAt(t, dbPath)
+	scopeKey := "assignments:billyacachofa:EdwardSalkeld/chatting"
+	checkpoint := GitHubAssignmentCheckpoint{
+		EventCreatedAt: mustTime(t, "2026-05-30T12:34:56.123456789Z"),
+		EventID:        "AE_lADOB9Rs6s4A9fxGzwAAAAAB",
+	}
+
+	empty, err := store.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != nil {
+		t.Fatalf("unexpected checkpoint before set: %#v", empty)
+	}
+	if err := store.SetGitHubAssignmentCheckpoint(ctx, scopeKey, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil {
+		t.Fatal("checkpoint was not persisted")
+	}
+	if !loaded.EventCreatedAt.Equal(checkpoint.EventCreatedAt) || loaded.EventID != checkpoint.EventID {
+		t.Fatalf("loaded checkpoint = %#v", loaded)
+	}
+
+	assertGitHubAssignmentCheckpointSchemaAndPayload(t, dbPath, scopeKey, checkpoint)
+}
+
 func TestRecordTaskRoundTripsAndUsesPythonCompatibleTable(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -134,6 +168,31 @@ func TestRecordTaskRoundTripsAndUsesPythonCompatibleTable(t *testing.T) {
 
 	assertTaskLedgerSchemaAndPayload(t, dbPath, taskMessage)
 	assertPythonTaskLedgerCanRead(t, dbPath, taskMessage)
+}
+
+func assertGitHubAssignmentCheckpointSchemaAndPayload(t *testing.T, dbPath string, scopeKey string, checkpoint GitHubAssignmentCheckpoint) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	row := db.QueryRow(
+		`SELECT event_created_at, event_id, updated_at
+		FROM github_assignment_checkpoints
+		WHERE scope_key = ?`,
+		scopeKey,
+	)
+	var eventCreatedAt, eventID, updatedAt string
+	if err := row.Scan(&eventCreatedAt, &eventID, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if eventCreatedAt != formatTimestamp(checkpoint.EventCreatedAt) || eventID != checkpoint.EventID {
+		t.Fatalf("checkpoint row = event_created_at:%q event_id:%q", eventCreatedAt, eventID)
+	}
+	if _, err := parseTimestamp(updatedAt); err != nil {
+		t.Fatalf("updated_at is not RFC3339Nano: %q", updatedAt)
+	}
 }
 
 func TestCompletionBlocksSameEnvelopeAndRemovesOpenTask(t *testing.T) {
