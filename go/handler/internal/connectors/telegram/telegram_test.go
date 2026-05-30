@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -180,6 +182,139 @@ func TestPollNormalizesAllowedChannelPostAndMyChatMemberObservation(t *testing.T
 	}
 }
 
+func TestPollDownloadsPhotoAttachmentAndUsesCaptionAsContent(t *testing.T) {
+	attachmentDir := t.TempDir()
+	requestedURLs := []string{}
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		requestedURLs = append(requestedURLs, req.URL.String())
+		switch {
+		case strings.Contains(req.URL.Path, "/getUpdates"):
+			return jsonResponse(`{
+				"ok": true,
+				"result": [{
+					"update_id": 3001,
+					"message": {
+						"message_id": 77,
+						"date": 1779345600,
+						"chat": {"id": 12345, "type": "private"},
+						"from": {"id": 7},
+						"caption": "leaf spot",
+						"photo": [
+							{"file_id": "small", "file_unique_id": "small-unique", "width": 90, "height": 60, "file_size": 10},
+							{"file_id": "large", "file_unique_id": "large/unique", "width": 900, "height": 600, "file_size": 100}
+						]
+					}
+				}]
+			}`), nil
+		case strings.Contains(req.URL.Path, "/getFile"):
+			if got := req.URL.Query().Get("file_id"); got != "large" {
+				t.Fatalf("getFile file_id = %q", got)
+			}
+			return jsonResponse(`{"ok": true, "result": {"file_path": "photos/leaf.jpg"}}`), nil
+		case strings.Contains(req.URL.Path, "/file/bottoken/photos/leaf.jpg"):
+			return bytesResponse("jpeg-bytes"), nil
+		default:
+			t.Fatalf("unexpected request URL: %s", req.URL.String())
+			return nil, nil
+		}
+	}}
+	connector, err := New(Config{
+		BotToken:          "token",
+		APIBaseURL:        "https://telegram.example.test",
+		AllowedChatIDs:    []string{"12345"},
+		AttachmentRootDir: attachmentDir,
+		HTTPClient:        client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(envelopes) != 1 {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+	envelope := envelopes[0]
+	if envelope.Content != "leaf spot" {
+		t.Fatalf("content = %q", envelope.Content)
+	}
+	if len(envelope.Attachments) != 1 {
+		t.Fatalf("attachments = %#v", envelope.Attachments)
+	}
+	attachment := envelope.Attachments[0]
+	if deref(attachment.Name) != "leaf.jpg" {
+		t.Fatalf("attachment name = %#v", attachment.Name)
+	}
+	if !strings.HasPrefix(attachment.URI, "file://") || !strings.Contains(attachment.URI, "telegram-3001-77-large_unique.jpg") {
+		t.Fatalf("attachment URI = %q", attachment.URI)
+	}
+	downloadedPath := filepath.Join(attachmentDir, "telegram-3001-77-large_unique.jpg")
+	raw, err := os.ReadFile(downloadedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "jpeg-bytes" {
+		t.Fatalf("downloaded bytes = %q", string(raw))
+	}
+	if len(requestedURLs) != 3 {
+		t.Fatalf("requested URLs = %#v", requestedURLs)
+	}
+}
+
+func TestPollAcceptsPhotoOnlyMessageWithPlaceholderContent(t *testing.T) {
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(req.URL.Path, "/getUpdates"):
+			return jsonResponse(`{
+				"ok": true,
+				"result": [{
+					"update_id": 3002,
+					"message": {
+						"message_id": 78,
+						"date": 1779345600,
+						"chat": {"id": 12345, "type": "private"},
+						"photo": [{"file_id": "only", "width": 800, "height": 600}]
+					}
+				}]
+			}`), nil
+		case strings.Contains(req.URL.Path, "/getFile"):
+			return jsonResponse(`{"ok": true, "result": {"file_path": "photos/photo.jpg"}}`), nil
+		case strings.Contains(req.URL.Path, "/file/bottoken/photos/photo.jpg"):
+			return bytesResponse("jpeg-bytes"), nil
+		default:
+			t.Fatalf("unexpected request URL: %s", req.URL.String())
+			return nil, nil
+		}
+	}}
+	connector, err := New(Config{
+		BotToken:          "token",
+		AllowedChatIDs:    []string{"12345"},
+		AttachmentRootDir: t.TempDir(),
+		HTTPClient:        client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(envelopes) != 1 {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+	if envelopes[0].Content != "[photo attached]" {
+		t.Fatalf("content = %q", envelopes[0].Content)
+	}
+	if len(envelopes[0].Attachments) != 1 {
+		t.Fatalf("attachments = %#v", envelopes[0].Attachments)
+	}
+}
+
 type fakeHTTPClient struct {
 	do func(*http.Request) (*http.Response, error)
 }
@@ -193,6 +328,13 @@ func jsonResponse(body string) *http.Response {
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+}
+
+func bytesResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
 

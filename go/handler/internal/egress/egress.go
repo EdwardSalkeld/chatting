@@ -49,6 +49,7 @@ type Engine struct {
 	state           State
 	dispatcher      Dispatcher
 	allowedChannels map[string]bool
+	onCompletion    func(context.Context, contracts.EgressQueueMessage) error
 }
 
 type Option func(*Engine)
@@ -59,6 +60,12 @@ func WithAllowedChannels(channels []string) Option {
 		for _, channel := range channels {
 			engine.allowedChannels[channel] = true
 		}
+	}
+}
+
+func WithCompletionHook(hook func(context.Context, contracts.EgressQueueMessage) error) Option {
+	return func(engine *Engine) {
+		engine.onCompletion = hook
 	}
 }
 
@@ -202,6 +209,11 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			}
 			if err := engine.state.MarkTaskCompleted(ctx, message.TaskID, message.EnvelopeID, message.TraceID); err != nil {
 				return Result{}, err
+			}
+			if engine.onCompletion != nil {
+				if err := engine.onCompletion(ctx, message); err != nil {
+					return Result{}, err
+				}
 			}
 			return Result{Status: StatusCompleted}, nil
 		}

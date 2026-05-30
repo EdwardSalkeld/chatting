@@ -9,6 +9,9 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +46,7 @@ type Config struct {
 	AllowedChannelIDs  []string
 	ContextRefs        []string
 	PromptContext      contracts.PromptContext
+	AttachmentRootDir  string
 	RequestTimeout     time.Duration
 	HTTPClient         HTTPClient
 	ObserveChat        ObserveChatFunc
@@ -200,6 +204,10 @@ func (connector *Connector) normalizeChannelPost(ctx context.Context, updateID i
 }
 
 func (connector *Connector) buildEnvelope(updateID int64, message telegramMessage, chatID string, actor *string) (*contracts.TaskEnvelope, error) {
+	attachments, err := connector.extractAttachments(updateID, message)
+	if err != nil {
+		return nil, err
+	}
 	content := strings.TrimSpace(message.Text)
 	if content == "" {
 		content = strings.TrimSpace(message.Caption)
@@ -214,7 +222,10 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 		}
 	}
 	if content == "" {
-		return nil, nil
+		if len(attachments) == 0 {
+			return nil, nil
+		}
+		content = "[photo attached]"
 	}
 	if message.MessageThreadID != nil {
 		content = fmt.Sprintf("[thread_id=%d] %s", *message.MessageThreadID, content)
@@ -231,7 +242,7 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 		ReceivedAt:    contracts.NewTimestamp(parseTelegramDate(message.Date, connector.now())),
 		Actor:         actor,
 		Content:       content,
-		Attachments:   []contracts.AttachmentRef{},
+		Attachments:   attachments,
 		ContextRefs:   append([]string{}, connector.config.ContextRefs...),
 		PromptContext: connector.prompt,
 		ReplyChannel: contracts.ReplyChannel{
@@ -241,6 +252,110 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 		},
 		DedupeKey: eventID,
 	}, nil
+}
+
+func (connector *Connector) extractAttachments(updateID int64, message telegramMessage) ([]contracts.AttachmentRef, error) {
+	if len(message.Photo) == 0 {
+		return []contracts.AttachmentRef{}, nil
+	}
+	photo := selectBestPhoto(message.Photo)
+	if strings.TrimSpace(photo.FileID) == "" {
+		return nil, errors.New("telegram_photo_missing_file_id")
+	}
+	metadata, err := connector.resolveFileMetadata(photo.FileID)
+	if err != nil {
+		return nil, err
+	}
+	suffix := filepath.Ext(metadata.FilePath)
+	if suffix == "" {
+		suffix = ".jpg"
+	}
+	uniqueFragment := strings.TrimSpace(photo.FileUniqueID)
+	if uniqueFragment == "" {
+		uniqueFragment = photo.FileID
+	}
+	localName := fmt.Sprintf(
+		"telegram-%d-%d-%s%s",
+		updateID,
+		message.MessageID,
+		safePathFragment(uniqueFragment),
+		suffix,
+	)
+	rootDir := connector.config.AttachmentRootDir
+	if strings.TrimSpace(rootDir) == "" {
+		rootDir = filepath.Join(os.TempDir(), "chatting-telegram-attachments")
+	}
+	destination, err := filepath.Abs(filepath.Join(rootDir, localName))
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return nil, err
+	}
+	fileURL := connector.buildFileDownloadURL(metadata.FilePath)
+	raw, err := connector.fetchRaw(fileURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(destination, raw, 0o600); err != nil {
+		return nil, err
+	}
+	name := path.Base(metadata.FilePath)
+	if name == "." || name == "/" {
+		name = filepath.Base(destination)
+	}
+	return []contracts.AttachmentRef{{
+		URI:  (&url.URL{Scheme: "file", Path: filepath.ToSlash(destination)}).String(),
+		Name: &name,
+	}}, nil
+}
+
+func (connector *Connector) resolveFileMetadata(fileID string) (telegramFileMetadata, error) {
+	endpoint := strings.TrimRight(connector.config.APIBaseURL, "/") + "/bot" + connector.config.BotToken + "/getFile"
+	query := url.Values{"file_id": []string{fileID}}
+	req, err := http.NewRequest(http.MethodGet, endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return telegramFileMetadata{}, err
+	}
+	resp, err := connector.client.Do(req)
+	if err != nil {
+		return telegramFileMetadata{}, errors.New("telegram_http_error")
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return telegramFileMetadata{}, errors.New("telegram_http_error")
+	}
+	var decoded getFileResponse
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return telegramFileMetadata{}, errors.New("telegram_invalid_json")
+	}
+	if !decoded.OK || strings.TrimSpace(decoded.Result.FilePath) == "" {
+		return telegramFileMetadata{}, errors.New("telegram_invalid_response_shape")
+	}
+	return decoded.Result, nil
+}
+
+func (connector *Connector) fetchRaw(rawURL string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := connector.client.Do(req)
+	if err != nil {
+		return nil, errors.New("telegram_http_error")
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.New("telegram_http_error")
+	}
+	return raw, nil
+}
+
+func (connector *Connector) buildFileDownloadURL(filePath string) string {
+	quotedPath := strings.ReplaceAll(url.PathEscape(filePath), "%2F", "/")
+	return strings.TrimRight(connector.config.APIBaseURL, "/") + "/file/bot" + connector.config.BotToken + "/" + quotedPath
 }
 
 func (connector *Connector) observeChat(ctx context.Context, updateID int64, updateKind string, chat telegramChat, messageDate *time.Time) error {
@@ -292,6 +407,15 @@ type getUpdatesResponse struct {
 	Result []telegramUpdate `json:"result"`
 }
 
+type getFileResponse struct {
+	OK     bool                 `json:"ok"`
+	Result telegramFileMetadata `json:"result"`
+}
+
+type telegramFileMetadata struct {
+	FilePath string `json:"file_path"`
+}
+
 type telegramUpdate struct {
 	UpdateID     int64               `json:"update_id"`
 	Message      *telegramMessage    `json:"message"`
@@ -313,6 +437,15 @@ type telegramMessage struct {
 	Text            string            `json:"text"`
 	Caption         string            `json:"caption"`
 	Location        *telegramLocation `json:"location"`
+	Photo           []telegramPhoto   `json:"photo"`
+}
+
+type telegramPhoto struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	FileSize     int64  `json:"file_size"`
+	Width        int64  `json:"width"`
+	Height       int64  `json:"height"`
 }
 
 type telegramChat struct {
@@ -410,4 +543,38 @@ func formatLocationContent(metadata map[string]any) string {
 
 func round6(value float64) float64 {
 	return math.Round(value*1000000) / 1000000
+}
+
+func selectBestPhoto(photos []telegramPhoto) telegramPhoto {
+	var best telegramPhoto
+	bestKey := [3]int64{-1, -1, -1}
+	for _, photo := range photos {
+		key := [3]int64{photo.FileSize, photo.Width, photo.Height}
+		if key[0] > bestKey[0] ||
+			(key[0] == bestKey[0] && key[1] > bestKey[1]) ||
+			(key[0] == bestKey[0] && key[1] == bestKey[1] && key[2] > bestKey[2]) {
+			best = photo
+			bestKey = key
+		}
+	}
+	return best
+}
+
+func safePathFragment(value string) string {
+	var builder strings.Builder
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '-' ||
+			character == '_' {
+			builder.WriteRune(character)
+		} else {
+			builder.WriteByte('_')
+		}
+	}
+	if builder.Len() == 0 {
+		return "attachment"
+	}
+	return builder.String()
 }

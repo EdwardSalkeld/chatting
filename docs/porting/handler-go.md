@@ -680,8 +680,11 @@ polls Bot API `getUpdates`, normalizes allowlisted text/caption/location
 `message` and `channel_post` updates into Python-compatible IM task envelopes,
 advances update offsets, observes `my_chat_member` updates, and upserts observed
 Telegram chat metadata into the Python-compatible `telegram_chat_registry`
-SQLite table before allowlist filtering. Media download and attachment cleanup
-state remain to be ported.
+SQLite table before allowlist filtering. It also downloads Telegram photo
+attachments into `telegram_attachment_dir`, tracks local Telegram attachments in
+the Python-compatible `telegram_attachment_ledger`, marks them cleanup-eligible
+after task completion, and runs max-age/grace-period cleanup from the handler
+loop.
 
 Implement Telegram getUpdates polling, update normalization, attachment download, conversation memory,
 chat registry state, and attachment cleanup state.
@@ -742,5 +745,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Finish Telegram media download, attachment tracking, and cleanup state.
-2. Add GitHub checkpoint persistence.
+1. Add GitHub checkpoint persistence.
+2. Continue closing remaining Python handler parity gaps before a side-by-side dry run.
