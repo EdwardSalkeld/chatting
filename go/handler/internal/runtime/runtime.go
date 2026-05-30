@@ -37,6 +37,14 @@ type IngressState interface {
 	RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error
 }
 
+type TelegramAttachmentIngressState interface {
+	RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error)
+}
+
+type TelegramAttachmentCleanupState interface {
+	CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error
+}
+
 type Connector interface {
 	Poll(ctx context.Context) ([]contracts.TaskEnvelope, error)
 }
@@ -132,6 +140,9 @@ func (runner *Runner) Run(ctx context.Context) error {
 		if _, err := runner.DrainEgress(ctx); err != nil {
 			return err
 		}
+		if err := runner.cleanupTelegramAttachments(ctx); err != nil {
+			return err
+		}
 		if runner.metrics != nil {
 			runner.metrics.RecordLoop(published, runner.now())
 		}
@@ -142,6 +153,23 @@ func (runner *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (runner *Runner) cleanupTelegramAttachments(ctx context.Context) error {
+	if !runner.config.TelegramEnabled {
+		return nil
+	}
+	cleanupState, ok := runner.ingressState.(TelegramAttachmentCleanupState)
+	if !ok {
+		return nil
+	}
+	now := runner.now()
+	return cleanupState.CleanupTelegramAttachmentsForRuntime(
+		ctx,
+		runner.config.TelegramAttachmentDir,
+		now,
+		now.Add(-time.Duration(runner.config.TelegramAttachmentMaxAgeSeconds)*time.Second),
+	)
 }
 
 func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
@@ -172,6 +200,11 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 			)
 			if err := runner.ingressState.RecordTask(ctx, taskMessage); err != nil {
 				return published, err
+			}
+			if attachmentState, ok := runner.ingressState.(TelegramAttachmentIngressState); ok && envelope.ReplyChannel.Type == "telegram" && len(envelope.Attachments) > 0 {
+				if _, err := attachmentState.RecordTelegramTaskAttachments(ctx, taskMessage, runner.config.TelegramAttachmentDir); err != nil {
+					return published, err
+				}
 			}
 			payload, err := taskMessageMap(taskMessage)
 			if err != nil {

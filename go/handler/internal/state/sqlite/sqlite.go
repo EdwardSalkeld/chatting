@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,25 @@ type TelegramChatRecord struct {
 	LastMessageAt   *time.Time
 	LastUpdateID    int64
 	LastUpdateKind  string
+}
+
+type TelegramAttachmentRecord struct {
+	AttachmentPath   string
+	AttachmentURI    string
+	TaskID           string
+	EnvelopeID       string
+	CreatedAt        time.Time
+	EligibleAfter    *time.Time
+	DeletedAt        *time.Time
+	CleanupAttempts  int
+	LastCleanupError *string
+}
+
+type TelegramAttachmentCleanupResult struct {
+	DeletedCount   int
+	MissingCount   int
+	FailedCount    int
+	ReclaimedBytes int64
 }
 
 func Open(ctx context.Context, dbPath string) (*Store, error) {
@@ -141,6 +161,17 @@ func (store *Store) initialize(ctx context.Context) error {
 			last_update_id INTEGER NOT NULL,
 			last_update_kind TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS telegram_attachment_ledger (
+			attachment_path TEXT PRIMARY KEY,
+			attachment_uri TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			envelope_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			eligible_after TEXT,
+			deleted_at TEXT,
+			cleanup_attempts INTEGER NOT NULL,
+			last_cleanup_error TEXT
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
@@ -148,6 +179,206 @@ func (store *Store) initialize(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (store *Store) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {
+	if taskMessage.Envelope.Source != "im" || taskMessage.Envelope.ReplyChannel.Type != "telegram" {
+		return 0, nil
+	}
+	rootDir, err := filepath.Abs(defaultTelegramAttachmentRoot(attachmentRootDir))
+	if err != nil {
+		return 0, err
+	}
+	type trackedAttachment struct {
+		path string
+		uri  string
+	}
+	tracked := []trackedAttachment{}
+	for _, attachment := range taskMessage.Envelope.Attachments {
+		path, ok := trackedTelegramAttachmentPath(attachment.URI, rootDir)
+		if ok {
+			tracked = append(tracked, trackedAttachment{path: path, uri: attachment.URI})
+		}
+	}
+	if len(tracked) == 0 {
+		return 0, nil
+	}
+	createdAt := formatTimestamp(time.Now())
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollbackUnlessCommitted(tx)
+	inserted := 0
+	for _, attachment := range tracked {
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT OR IGNORE INTO telegram_attachment_ledger (
+				attachment_path,
+				attachment_uri,
+				task_id,
+				envelope_id,
+				created_at,
+				eligible_after,
+				deleted_at,
+				cleanup_attempts,
+				last_cleanup_error
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			attachment.path,
+			attachment.uri,
+			taskMessage.TaskID,
+			taskMessage.Envelope.ID,
+			createdAt,
+			nil,
+			nil,
+			0,
+			nil,
+		)
+		if err != nil {
+			return 0, err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		inserted += int(rows)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return inserted, nil
+}
+
+func (store *Store) MarkTelegramTaskAttachmentsEligible(ctx context.Context, taskID string, eligibleAfter time.Time) (int, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return 0, errors.New("task_id is required")
+	}
+	result, err := store.db.ExecContext(
+		ctx,
+		`UPDATE telegram_attachment_ledger
+		SET eligible_after = ?, last_cleanup_error = NULL
+		WHERE task_id = ? AND deleted_at IS NULL`,
+		formatTimestamp(eligibleAfter),
+		taskID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(rows), nil
+}
+
+func (store *Store) ListTelegramAttachmentRecords(ctx context.Context) ([]TelegramAttachmentRecord, error) {
+	rows, err := store.db.QueryContext(
+		ctx,
+		`SELECT
+			attachment_path,
+			attachment_uri,
+			task_id,
+			envelope_id,
+			created_at,
+			eligible_after,
+			deleted_at,
+			cleanup_attempts,
+			last_cleanup_error
+		FROM telegram_attachment_ledger
+		ORDER BY created_at ASC, attachment_path ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTelegramAttachmentRecords(rows)
+}
+
+func (store *Store) CleanupTelegramAttachments(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) (TelegramAttachmentCleanupResult, error) {
+	rootDir, err := filepath.Abs(defaultTelegramAttachmentRoot(attachmentRootDir))
+	if err != nil {
+		return TelegramAttachmentCleanupResult{}, err
+	}
+	rows, err := store.db.QueryContext(
+		ctx,
+		`SELECT
+			attachment_path,
+			attachment_uri,
+			task_id,
+			envelope_id,
+			created_at,
+			eligible_after,
+			deleted_at,
+			cleanup_attempts,
+			last_cleanup_error
+		FROM telegram_attachment_ledger
+		WHERE deleted_at IS NULL
+		  AND (
+			(eligible_after IS NOT NULL AND eligible_after <= ?)
+			OR created_at <= ?
+		  )
+		ORDER BY created_at ASC`,
+		formatTimestamp(notAfter),
+		formatTimestamp(maxAgeCutoff),
+	)
+	if err != nil {
+		return TelegramAttachmentCleanupResult{}, err
+	}
+	candidates, err := scanTelegramAttachmentRecords(rows)
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return TelegramAttachmentCleanupResult{}, err
+	}
+	result := TelegramAttachmentCleanupResult{}
+	for _, candidate := range candidates {
+		if !pathWithinRoot(candidate.AttachmentPath, rootDir) {
+			if markErr := store.markTelegramAttachmentCleanupFailed(ctx, candidate.AttachmentPath, "attachment_path_outside_root"); markErr != nil {
+				return result, markErr
+			}
+			result.FailedCount++
+			continue
+		}
+		info, statErr := os.Stat(candidate.AttachmentPath)
+		if errors.Is(statErr, os.ErrNotExist) {
+			if err := store.markTelegramAttachmentDeleted(ctx, candidate.AttachmentPath); err != nil {
+				return result, err
+			}
+			result.MissingCount++
+			continue
+		}
+		if statErr != nil {
+			if markErr := store.markTelegramAttachmentCleanupFailed(ctx, candidate.AttachmentPath, statErr.Error()); markErr != nil {
+				return result, markErr
+			}
+			result.FailedCount++
+			continue
+		}
+		reclaimedBytes := int64(0)
+		if info.Mode().IsRegular() {
+			reclaimedBytes = info.Size()
+		}
+		if err := os.Remove(candidate.AttachmentPath); err != nil {
+			if markErr := store.markTelegramAttachmentCleanupFailed(ctx, candidate.AttachmentPath, err.Error()); markErr != nil {
+				return result, markErr
+			}
+			result.FailedCount++
+			continue
+		}
+		if err := store.markTelegramAttachmentDeleted(ctx, candidate.AttachmentPath); err != nil {
+			return result, err
+		}
+		result.DeletedCount++
+		result.ReclaimedBytes += reclaimedBytes
+	}
+	return result, nil
+}
+
+func (store *Store) CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error {
+	_, err := store.CleanupTelegramAttachments(ctx, attachmentRootDir, notAfter, maxAgeCutoff)
+	return err
 }
 
 func (store *Store) RecordTelegramChat(ctx context.Context, observation TelegramChatObservation) error {
@@ -673,4 +904,102 @@ func nullStringPointer(value sql.NullString) *string {
 		return nil
 	}
 	return &value.String
+}
+
+func scanTelegramAttachmentRecords(rows *sql.Rows) ([]TelegramAttachmentRecord, error) {
+	records := []TelegramAttachmentRecord{}
+	for rows.Next() {
+		var createdAt string
+		var eligibleAfter, deletedAt, lastCleanupError sql.NullString
+		record := TelegramAttachmentRecord{}
+		if err := rows.Scan(
+			&record.AttachmentPath,
+			&record.AttachmentURI,
+			&record.TaskID,
+			&record.EnvelopeID,
+			&createdAt,
+			&eligibleAfter,
+			&deletedAt,
+			&record.CleanupAttempts,
+			&lastCleanupError,
+		); err != nil {
+			return nil, err
+		}
+		parsedCreatedAt, err := parseTimestamp(createdAt)
+		if err != nil {
+			return nil, err
+		}
+		record.CreatedAt = parsedCreatedAt
+		if eligibleAfter.Valid {
+			parsed, err := parseTimestamp(eligibleAfter.String)
+			if err != nil {
+				return nil, err
+			}
+			record.EligibleAfter = &parsed
+		}
+		if deletedAt.Valid {
+			parsed, err := parseTimestamp(deletedAt.String)
+			if err != nil {
+				return nil, err
+			}
+			record.DeletedAt = &parsed
+		}
+		record.LastCleanupError = nullStringPointer(lastCleanupError)
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func trackedTelegramAttachmentPath(rawURI string, rootDir string) (string, bool) {
+	parsed, err := url.Parse(rawURI)
+	if err != nil || parsed.Scheme != "file" {
+		return "", false
+	}
+	candidate, err := filepath.Abs(parsed.Path)
+	if err != nil {
+		return "", false
+	}
+	if !pathWithinRoot(candidate, rootDir) {
+		return "", false
+	}
+	return candidate, true
+}
+
+func defaultTelegramAttachmentRoot(rootDir string) string {
+	if strings.TrimSpace(rootDir) == "" {
+		return filepath.Join(os.TempDir(), "chatting-telegram-attachments")
+	}
+	return rootDir
+}
+
+func pathWithinRoot(candidate string, rootDir string) bool {
+	relative, err := filepath.Rel(rootDir, candidate)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (!strings.HasPrefix(relative, ".."+string(filepath.Separator)) && relative != "..")
+}
+
+func (store *Store) markTelegramAttachmentDeleted(ctx context.Context, attachmentPath string) error {
+	_, err := store.db.ExecContext(
+		ctx,
+		`UPDATE telegram_attachment_ledger
+		SET deleted_at = ?, last_cleanup_error = NULL
+		WHERE attachment_path = ?`,
+		formatTimestamp(time.Now()),
+		attachmentPath,
+	)
+	return err
+}
+
+func (store *Store) markTelegramAttachmentCleanupFailed(ctx context.Context, attachmentPath string, cleanupError string) error {
+	_, err := store.db.ExecContext(
+		ctx,
+		`UPDATE telegram_attachment_ledger
+		SET cleanup_attempts = cleanup_attempts + 1, last_cleanup_error = ?
+		WHERE attachment_path = ?`,
+		cleanupError,
+		attachmentPath,
+	)
+	return err
 }

@@ -101,10 +101,21 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		_ = store.Close()
 		return nil, err
 	}
+	egressOptions := []egress.Option{
+		egress.WithAllowedChannels(config.AllowedEgressChannels),
+		egress.WithCompletionHook(func(ctx context.Context, message contracts.EgressQueueMessage) error {
+			if !config.TelegramEnabled {
+				return nil
+			}
+			eligibleAfter := time.Now().UTC().Add(time.Duration(config.TelegramAttachmentCleanupGraceSeconds) * time.Second)
+			_, err := store.MarkTelegramTaskAttachmentsEligible(ctx, message.TaskID, eligibleAfter)
+			return err
+		}),
+	}
 	engine, err := egress.New(
 		egress.NewSQLiteState(store),
 		dispatcher,
-		egress.WithAllowedChannels(config.AllowedEgressChannels),
+		egressOptions...,
 	)
 	if err != nil {
 		_ = store.Close()
@@ -172,6 +183,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			AllowedChatIDs:     config.TelegramAllowedChatIDs,
 			AllowedChannelIDs:  config.TelegramAllowedChannelIDs,
 			ContextRefs:        telegramContextRefs,
+			AttachmentRootDir:  config.TelegramAttachmentDir,
 			PromptContext: contracts.PromptContext{
 				GlobalInstructions:       config.GlobalPromptContext,
 				ReplyChannelInstructions: config.TelegramPromptContext,

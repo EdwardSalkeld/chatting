@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -316,6 +317,184 @@ func TestCompletionEventsCanBeStagedAndCompletionClearsEgressState(t *testing.T)
 	}
 }
 
+func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	attachmentRoot := t.TempDir()
+	attachmentPath := filepath.Join(attachmentRoot, "telegram-1-2-photo.jpg")
+	if err := os.WriteFile(attachmentPath, []byte("jpeg-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name := "photo.jpg"
+	taskMessage := contracts.NewTaskQueueMessage(contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:1",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-05-30T12:00:00Z")),
+		Content:       "[photo attached]",
+		Attachments: []contracts.AttachmentRef{
+			{URI: fileURIForTest(attachmentPath), Name: &name},
+			{URI: "file:///tmp/outside.jpg", Name: &name},
+			{URI: "s3://bucket/photo.jpg", Name: &name},
+		},
+		ContextRefs: []string{},
+		ReplyChannel: contracts.ReplyChannel{
+			Type:   "telegram",
+			Target: "12345",
+		},
+		DedupeKey: "telegram:1",
+	}, "trace:telegram:1", mustTime(t, "2026-05-30T12:00:01Z"))
+
+	tracked, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tracked != 1 {
+		t.Fatalf("tracked = %d", tracked)
+	}
+	eligibleAfter := mustTime(t, "2026-05-30T12:10:00Z")
+	eligible, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, eligibleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eligible != 1 {
+		t.Fatalf("eligible = %d", eligible)
+	}
+	records, err := store.ListTelegramAttachmentRecords(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v", records)
+	}
+	if records[0].AttachmentPath != attachmentPath || records[0].EligibleAfter == nil || !records[0].EligibleAfter.Equal(eligibleAfter) {
+		t.Fatalf("record = %#v", records[0])
+	}
+
+	result, err := store.CleanupTelegramAttachments(
+		ctx,
+		attachmentRoot,
+		mustTime(t, "2026-05-30T12:11:00Z"),
+		mustTime(t, "2026-01-01T00:00:00Z"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DeletedCount != 1 || result.MissingCount != 0 || result.FailedCount != 0 || result.ReclaimedBytes != int64(len("jpeg-bytes")) {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+	if _, err := os.Stat(attachmentPath); !os.IsNotExist(err) {
+		t.Fatalf("attachment still exists or unexpected stat error: %v", err)
+	}
+	records, err = store.ListTelegramAttachmentRecords(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].DeletedAt == nil {
+		t.Fatalf("deleted_at not marked: %#v", records[0])
+	}
+}
+
+func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	attachmentRoot := t.TempDir()
+	missingPath := filepath.Join(attachmentRoot, "missing.jpg")
+	name := "photo.jpg"
+	taskMessage := contracts.NewTaskQueueMessage(contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:missing",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-05-30T12:00:00Z")),
+		Content:       "[photo attached]",
+		Attachments: []contracts.AttachmentRef{{
+			URI:  fileURIForTest(missingPath),
+			Name: &name,
+		}},
+		ContextRefs: []string{},
+		ReplyChannel: contracts.ReplyChannel{
+			Type:   "telegram",
+			Target: "12345",
+		},
+		DedupeKey: "telegram:missing",
+	}, "trace:telegram:missing", mustTime(t, "2026-05-30T12:00:01Z"))
+	if _, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, mustTime(t, "2026-05-30T12:01:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.CleanupTelegramAttachments(
+		ctx,
+		attachmentRoot,
+		mustTime(t, "2026-05-30T12:02:00Z"),
+		mustTime(t, "2026-01-01T00:00:00Z"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MissingCount != 1 || result.DeletedCount != 0 || result.FailedCount != 0 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+
+	outsidePath := filepath.Join(t.TempDir(), "outside.jpg")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.db.ExecContext(
+		ctx,
+		`INSERT INTO telegram_attachment_ledger (
+			attachment_path,
+			attachment_uri,
+			task_id,
+			envelope_id,
+			created_at,
+			eligible_after,
+			deleted_at,
+			cleanup_attempts,
+			last_cleanup_error
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		outsidePath,
+		fileURIForTest(outsidePath),
+		"task:telegram:outside",
+		"telegram:outside",
+		formatTimestamp(mustTime(t, "2026-05-30T12:00:00Z")),
+		formatTimestamp(mustTime(t, "2026-05-30T12:01:00Z")),
+		nil,
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = store.CleanupTelegramAttachments(
+		ctx,
+		attachmentRoot,
+		mustTime(t, "2026-05-30T12:02:00Z"),
+		mustTime(t, "2026-01-01T00:00:00Z"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FailedCount != 1 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+	records, err := store.ListTelegramAttachmentRecords(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outsideRecord *TelegramAttachmentRecord
+	for index := range records {
+		if records[index].AttachmentPath == outsidePath {
+			outsideRecord = &records[index]
+		}
+	}
+	if outsideRecord == nil || outsideRecord.CleanupAttempts != 1 || derefString(outsideRecord.LastCleanupError) != "attachment_path_outside_root" {
+		t.Fatalf("outside record = %#v", outsideRecord)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	return openStoreAt(t, filepath.Join(t.TempDir(), "state.db"))
@@ -396,6 +575,10 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func fileURIForTest(path string) string {
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
 }
 
 func assertTaskLedgerSchemaAndPayload(t *testing.T, dbPath string, taskMessage contracts.TaskQueueMessage) {
