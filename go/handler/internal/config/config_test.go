@@ -52,6 +52,14 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"telegram_enabled": true,
 		"telegram_bot_token_env": "TELEGRAM_TOKEN",
 		"telegram_api_base_url": "https://telegram.example.test",
+		"telegram_poll_timeout_seconds": 12,
+		"telegram_allowed_chat_ids": ["12345"],
+		"telegram_allowed_channel_ids": ["-100999"],
+		"telegram_attachment_dir": "/tmp/telegram-attachments",
+		"telegram_attachment_cleanup_grace_seconds": 30,
+		"telegram_attachment_max_age_seconds": 60,
+		"telegram_prompt_context": ["Telegram replies are visible in chat."],
+		"telegram_context_refs": ["repo:/workspace/telegram"],
 		"auxiliary_ingress_enabled": true,
 		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
 		"auxiliary_ingress_queues": ["generic-post"],
@@ -150,6 +158,30 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if config.TelegramAPIBaseURL != "https://telegram.example.test" {
 		t.Fatalf("TelegramAPIBaseURL = %q", config.TelegramAPIBaseURL)
+	}
+	if config.TelegramPollTimeoutSeconds != 12 {
+		t.Fatalf("TelegramPollTimeoutSeconds = %d", config.TelegramPollTimeoutSeconds)
+	}
+	if !reflect.DeepEqual(config.TelegramAllowedChatIDs, []string{"12345"}) {
+		t.Fatalf("TelegramAllowedChatIDs = %#v", config.TelegramAllowedChatIDs)
+	}
+	if !reflect.DeepEqual(config.TelegramAllowedChannelIDs, []string{"-100999"}) {
+		t.Fatalf("TelegramAllowedChannelIDs = %#v", config.TelegramAllowedChannelIDs)
+	}
+	if config.TelegramAttachmentDir != "/tmp/telegram-attachments" {
+		t.Fatalf("TelegramAttachmentDir = %q", config.TelegramAttachmentDir)
+	}
+	if config.TelegramAttachmentCleanupGraceSeconds != 30 {
+		t.Fatalf("TelegramAttachmentCleanupGraceSeconds = %d", config.TelegramAttachmentCleanupGraceSeconds)
+	}
+	if config.TelegramAttachmentMaxAgeSeconds != 60 {
+		t.Fatalf("TelegramAttachmentMaxAgeSeconds = %d", config.TelegramAttachmentMaxAgeSeconds)
+	}
+	if !reflect.DeepEqual(config.TelegramPromptContext, []string{"Telegram replies are visible in chat."}) {
+		t.Fatalf("TelegramPromptContext = %#v", config.TelegramPromptContext)
+	}
+	if !reflect.DeepEqual(config.TelegramContextRefs, []string{"repo:/workspace/telegram"}) {
+		t.Fatalf("TelegramContextRefs = %#v", config.TelegramContextRefs)
 	}
 	if !config.AuxiliaryIngressEnabled {
 		t.Fatal("AuxiliaryIngressEnabled = false")

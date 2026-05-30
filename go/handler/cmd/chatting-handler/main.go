@@ -17,6 +17,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/telegram"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
@@ -147,6 +148,46 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 				ReplyChannelInstructions: config.EmailPromptContext,
 			},
 			UseSSL: config.IMAPUseSSL,
+		})
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		connectors = append(connectors, connector)
+	}
+	if config.TelegramEnabled {
+		token := os.Getenv(config.TelegramBotTokenEnv)
+		if token == "" {
+			_ = store.Close()
+			return nil, fmt.Errorf("missing Telegram bot token env var: %s", config.TelegramBotTokenEnv)
+		}
+		telegramContextRefs := config.TelegramContextRefs
+		if len(telegramContextRefs) == 0 {
+			telegramContextRefs = config.ContextRefs
+		}
+		connector, err := telegram.New(telegram.Config{
+			BotToken:           token,
+			APIBaseURL:         config.TelegramAPIBaseURL,
+			PollTimeoutSeconds: config.TelegramPollTimeoutSeconds,
+			AllowedChatIDs:     config.TelegramAllowedChatIDs,
+			AllowedChannelIDs:  config.TelegramAllowedChannelIDs,
+			ContextRefs:        telegramContextRefs,
+			PromptContext: contracts.PromptContext{
+				GlobalInstructions:       config.GlobalPromptContext,
+				ReplyChannelInstructions: config.TelegramPromptContext,
+			},
+			ObserveChat: func(ctx context.Context, observation telegram.ChatObservation) error {
+				return store.RecordTelegramChat(ctx, sqlitestate.TelegramChatObservation{
+					ChatID:      observation.ChatID,
+					ChatType:    observation.ChatType,
+					Title:       observation.Title,
+					Username:    observation.Username,
+					UpdateID:    observation.UpdateID,
+					UpdateKind:  observation.UpdateKind,
+					MessageDate: observation.MessageDate,
+					RetrievedAt: observation.RetrievedAt,
+				})
+			},
 		})
 		if err != nil {
 			_ = store.Close()
