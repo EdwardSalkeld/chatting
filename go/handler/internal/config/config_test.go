@@ -63,7 +63,12 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"auxiliary_ingress_enabled": true,
 		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
 		"auxiliary_ingress_queues": ["generic-post"],
-		"auxiliary_ingress_context_refs": ["repo:/workspace/chatting"]
+		"auxiliary_ingress_context_refs": ["repo:/workspace/chatting"],
+		"github_repositories": ["EdwardSalkeld/chatting", "EdwardSalkeld/*", "EdwardSalkeld/chatting"],
+		"github_assignee_login": "BillyAcachofa",
+		"github_context_refs": ["repo:/workspace/chatting"],
+		"github_max_issues": 12,
+		"github_max_timeline_events": 8
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +199,21 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config.AuxiliaryIngressContextRefs, []string{"repo:/workspace/chatting"}) {
 		t.Fatalf("AuxiliaryIngressContextRefs = %#v", config.AuxiliaryIngressContextRefs)
+	}
+	if !reflect.DeepEqual(config.GitHubRepositories, []string{"EdwardSalkeld/chatting", "EdwardSalkeld/*"}) {
+		t.Fatalf("GitHubRepositories = %#v", config.GitHubRepositories)
+	}
+	if config.GitHubAssigneeLogin != "BillyAcachofa" {
+		t.Fatalf("GitHubAssigneeLogin = %q", config.GitHubAssigneeLogin)
+	}
+	if !reflect.DeepEqual(config.GitHubContextRefs, []string{"repo:/workspace/chatting"}) {
+		t.Fatalf("GitHubContextRefs = %#v", config.GitHubContextRefs)
+	}
+	if config.GitHubMaxIssues != 12 {
+		t.Fatalf("GitHubMaxIssues = %d", config.GitHubMaxIssues)
+	}
+	if config.GitHubMaxTimelineEvents != 8 {
+		t.Fatalf("GitHubMaxTimelineEvents = %d", config.GitHubMaxTimelineEvents)
 	}
 }
 
@@ -326,6 +346,16 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "blank auxiliary queue",
 			raw:     `{"auxiliary_ingress_queues": ["generic-post", ""]}`,
 			message: "auxiliary_ingress_queues entries must not be empty",
+		},
+		{
+			name:    "invalid github repository selector",
+			raw:     `{"github_repositories": ["EdwardSalkeld/chat*"]}`,
+			message: "github_repositories entries must be owner/repo or owner/*",
+		},
+		{
+			name:    "bad github max issues",
+			raw:     `{"github_max_issues": 0}`,
+			message: "config github_max_issues must be a positive integer",
 		},
 	}
 

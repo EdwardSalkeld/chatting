@@ -14,6 +14,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/auxiliary"
+	githubconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
@@ -207,6 +208,42 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		}
 		connectors = append(connectors, connector)
 	}
+	if len(config.GitHubRepositories) > 0 {
+		assigneeLogin := config.GitHubAssigneeLogin
+		if strings.TrimSpace(assigneeLogin) == "" {
+			assigneeLogin, err = githubconnector.FetchAuthenticatedViewerLogin(ctx, nil)
+			if err != nil {
+				_ = store.Close()
+				return nil, fmt.Errorf("github_assignee_login is required when github_repositories is configured unless it can be derived from authenticated gh user")
+			}
+		}
+		checkpointStore := githubCheckpointStore{store: store}
+		assignmentConnector, err := githubconnector.NewIssueAssignmentConnector(githubconnector.IssueAssignmentConfig{
+			RepositoryPatterns: config.GitHubRepositories,
+			AssigneeLogin:      assigneeLogin,
+			ContextRefs:        config.GitHubContextRefs,
+			CheckpointStore:    checkpointStore,
+			MaxIssues:          config.GitHubMaxIssues,
+			MaxTimelineEvents:  config.GitHubMaxTimelineEvents,
+		})
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		reviewConnector, err := githubconnector.NewPullRequestReviewConnector(githubconnector.PullRequestReviewConfig{
+			RepositoryPatterns: config.GitHubRepositories,
+			AuthorLogin:        assigneeLogin,
+			ContextRefs:        config.GitHubContextRefs,
+			CheckpointStore:    checkpointStore,
+			MaxPullRequests:    config.GitHubMaxIssues,
+			MaxReviews:         config.GitHubMaxTimelineEvents,
+		})
+		if err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		connectors = append(connectors, assignmentConnector, reviewConnector)
+	}
 	auxiliaryAdapter := adapter
 	if config.AuxiliaryIngressEnabled {
 		auxiliaryAddress := config.AuxiliaryIngressBBMBAddress
@@ -258,6 +295,28 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		return nil, err
 	}
 	return &closingRunner{runner: runner, closers: []closer{metricsServer, store}}, nil
+}
+
+type githubCheckpointStore struct {
+	store *sqlitestate.Store
+}
+
+func (store githubCheckpointStore) GetGitHubCheckpoint(ctx context.Context, scopeKey string) (*githubconnector.AssignmentCheckpoint, error) {
+	checkpoint, err := store.store.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
+	if err != nil || checkpoint == nil {
+		return nil, err
+	}
+	return &githubconnector.AssignmentCheckpoint{
+		EventCreatedAt: checkpoint.EventCreatedAt,
+		EventID:        checkpoint.EventID,
+	}, nil
+}
+
+func (store githubCheckpointStore) SetGitHubCheckpoint(ctx context.Context, scopeKey string, checkpoint githubconnector.AssignmentCheckpoint) error {
+	return store.store.SetGitHubAssignmentCheckpoint(ctx, scopeKey, sqlitestate.GitHubAssignmentCheckpoint{
+		EventCreatedAt: checkpoint.EventCreatedAt,
+		EventID:        checkpoint.EventID,
+	})
 }
 
 func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {

@@ -712,6 +712,13 @@ Validation:
 
 ### 18. GitHub Polling
 
+Status: complete. The Go handler now accepts the Python handler GitHub polling
+config keys, derives the authenticated `gh` viewer when no assignee is set,
+expands `owner/*` repository selectors, polls issue assignment and pull request
+review GraphQL streams, normalizes both streams into Python-compatible GitHub
+task envelopes, and advances Python-compatible checkpoints after successful
+poll cycles.
+
 Implement GitHub issue assignment and pull request review polling.
 
 Validation:
@@ -749,5 +756,5 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add GitHub issue assignment and pull request review polling.
+1. Add GitHub comment dispatch.
 2. Continue closing remaining Python handler parity gaps before a side-by-side dry run.
