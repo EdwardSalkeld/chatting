@@ -69,6 +69,12 @@ var allowedKeys = map[string]bool{
 	"auxiliary_ingress_bbmb_address": true,
 	"auxiliary_ingress_queues":       true,
 	"auxiliary_ingress_context_refs": true,
+
+	"github_repositories":        true,
+	"github_assignee_login":      true,
+	"github_context_refs":        true,
+	"github_max_issues":          true,
+	"github_max_timeline_events": true,
 }
 
 type Config struct {
@@ -116,6 +122,12 @@ type Config struct {
 	AuxiliaryIngressBBMBAddress string
 	AuxiliaryIngressQueues      []string
 	AuxiliaryIngressContextRefs []string
+
+	GitHubRepositories      []string
+	GitHubAssigneeLogin     string
+	GitHubContextRefs       []string
+	GitHubMaxIssues         int
+	GitHubMaxTimelineEvents int
 }
 
 func Defaults() Config {
@@ -164,6 +176,12 @@ func Defaults() Config {
 		AuxiliaryIngressBBMBAddress: "",
 		AuxiliaryIngressQueues:      []string{},
 		AuxiliaryIngressContextRefs: []string{},
+
+		GitHubRepositories:      []string{},
+		GitHubAssigneeLogin:     "",
+		GitHubContextRefs:       []string{},
+		GitHubMaxIssues:         25,
+		GitHubMaxTimelineEvents: 10,
 	}
 }
 
@@ -479,6 +497,36 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if rawValue, ok := payload["github_repositories"]; ok && !isNull(rawValue) {
+		config.GitHubRepositories, err = decodeGitHubRepositories(rawValue)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["github_assignee_login"]; ok && !isNull(rawValue) {
+		config.GitHubAssigneeLogin, err = decodeNonEmptyString(rawValue, "github_assignee_login")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["github_context_refs"]; ok && !isNull(rawValue) {
+		config.GitHubContextRefs, err = decodeStringList(rawValue, "github_context_refs")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["github_max_issues"]; ok && !isNull(rawValue) {
+		config.GitHubMaxIssues, err = decodePositiveInt(rawValue, "github_max_issues")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["github_max_timeline_events"]; ok && !isNull(rawValue) {
+		config.GitHubMaxTimelineEvents, err = decodePositiveInt(rawValue, "github_max_timeline_events")
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if config.AuxiliaryIngressEnabled && len(config.AuxiliaryIngressQueues) == 0 {
 		return Config{}, errors.New("auxiliary ingress requires auxiliary_ingress_queues")
 	}
@@ -555,6 +603,39 @@ func decodeAllowedEgressChannels(raw json.RawMessage) ([]string, error) {
 		return Defaults().AllowedEgressChannels, nil
 	}
 	return values, nil
+}
+
+func decodeGitHubRepositories(raw json.RawMessage) ([]string, error) {
+	values, err := decodeStringList(raw, "github_repositories")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		owner, name, err := parseGitHubRepositoryPattern(value)
+		if err != nil {
+			return nil, err
+		}
+		normalized := owner + "/" + name
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func parseGitHubRepositoryPattern(value string) (string, string, error) {
+	parts := strings.SplitN(strings.TrimSpace(value), "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", errors.New("github_repositories entries must be owner/repo or owner/*")
+	}
+	if parts[1] != "*" && strings.Contains(parts[1], "*") {
+		return "", "", errors.New("github_repositories entries must be owner/repo or owner/*")
+	}
+	return parts[0], parts[1], nil
 }
 
 func decodeStringList(raw json.RawMessage, name string) ([]string, error) {
