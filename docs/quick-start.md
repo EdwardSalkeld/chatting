@@ -87,6 +87,7 @@ Use the worker page for a quick operator view, or query SQLite directly when you
 docker compose exec handler sqlite3 /data/handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
 docker compose exec handler sqlite3 /data/handler.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 20;"
 docker compose exec handler sqlite3 /data/handler.db "select result_status, count(*) from run_records group by result_status order by result_status;"
+docker compose exec worker sqlite3 /data/worker.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
 ```
 
 ## Notes
