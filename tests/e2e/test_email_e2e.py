@@ -13,10 +13,14 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from tests.e2e.handler_selector import message_handler_command
+
+
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
         return probe.connect_ex((host, port)) == 0
+
+
 def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -24,7 +28,18 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
             return
         time.sleep(0.05)
     raise TimeoutError(f"timed out waiting for {host}:{port}")
-def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str, *, port: int = 3025) -> None:
+
+
+def _reserve_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        return int(listener.getsockname()[1])
+
+
+def _send_test_email(
+    from_addr: str, to_addr: str, subject: str, body: str, *, port: int = 3025
+) -> None:
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to_addr
@@ -40,6 +55,8 @@ def _send_test_email(from_addr: str, to_addr: str, subject: str, body: str, *, p
             last_error = exc
             time.sleep(1)
     raise RuntimeError(f"failed to send email after retries: {last_error}")
+
+
 class EmailE2ETests(unittest.TestCase):
     def test_email_roundtrip_with_real_codex_executor_and_greenmail(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
@@ -49,9 +66,6 @@ class EmailE2ETests(unittest.TestCase):
         if not server_bin.exists():
             self.skipTest(f"bbmb server binary not found: {server_bin}")
 
-        if _is_port_open("127.0.0.1", 9876):
-            self.skipTest("127.0.0.1:9876 already in use")
-
         # GreenMail IMAP (3143) and SMTP (3025) must be running
         if not _is_port_open("127.0.0.1", 3143):
             self.skipTest("GreenMail IMAP not available on 127.0.0.1:3143")
@@ -60,6 +74,9 @@ class EmailE2ETests(unittest.TestCase):
 
         repo_root = Path(__file__).resolve().parent.parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
+        bbmb_port = _reserve_port()
+        bbmb_metrics_port = _reserve_port()
+        bbmb_address = f"127.0.0.1:{bbmb_port}"
 
         server_proc = None
         worker_proc = None
@@ -82,7 +99,7 @@ class EmailE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(handler_db),
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": bbmb_address,
                         "poll_interval_seconds": 0.5,
                         "poll_timeout_seconds": 2,
                         "max_loops": 200,
@@ -106,7 +123,7 @@ class EmailE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(worker_db),
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": bbmb_address,
                         "max_attempts": 2,
                         "poll_timeout_seconds": 2,
                         "sleep_seconds": 0.2,
@@ -127,13 +144,17 @@ class EmailE2ETests(unittest.TestCase):
 
             try:
                 server_proc = subprocess.Popen(
-                    [str(server_bin)],
+                    [
+                        str(server_bin),
+                        f"--port={bbmb_port}",
+                        f"--metrics-port={bbmb_metrics_port}",
+                    ],
                     cwd=repo_root,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                _wait_for_port("127.0.0.1", 9876, timeout_seconds=5.0)
+                _wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
 
                 worker_proc = subprocess.Popen(
                     [
@@ -179,8 +200,17 @@ class EmailE2ETests(unittest.TestCase):
                     time.sleep(1)
 
                 if not prompt_file.exists():
-                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh)
-                    self.fail("prompt file never appeared - task never reached the executor")
+                    self._dump_diagnostics(
+                        handler_proc,
+                        worker_proc,
+                        handler_log,
+                        worker_log,
+                        handler_log_fh,
+                        worker_log_fh,
+                    )
+                    self.fail(
+                        "prompt file never appeared - task never reached the executor"
+                    )
 
                 # Now wait for the reply email to arrive back in GreenMail
                 # Check via IMAP directly
@@ -204,7 +234,14 @@ class EmailE2ETests(unittest.TestCase):
                     time.sleep(1)
 
                 if not reply_found:
-                    self._dump_diagnostics(handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh)
+                    self._dump_diagnostics(
+                        handler_proc,
+                        worker_proc,
+                        handler_log,
+                        worker_log,
+                        handler_log_fh,
+                        worker_log_fh,
+                    )
                     self.fail("reply email not found in GreenMail within 30s")
 
                 # Validate the captured prompt
@@ -217,9 +254,7 @@ class EmailE2ETests(unittest.TestCase):
                 self.assertIn("Please do the e2e test thing", task["content"])
                 self.assertEqual(task["source"], "email")
                 self.assertEqual(task["reply_channel"]["type"], "email")
-                self.assertEqual(
-                    task["reply_channel"]["target"], "sender@test.local"
-                )
+                self.assertEqual(task["reply_channel"]["target"], "sender@test.local")
                 self.assertIn("current_time", prompt)
                 self.assertIn("reply_contract", prompt)
 
@@ -234,12 +269,24 @@ class EmailE2ETests(unittest.TestCase):
                         except subprocess.TimeoutExpired:
                             proc.kill()
                             proc.wait(timeout=5)
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                    if proc.stderr is not None:
+                        proc.stderr.close()
                 if not handler_log_fh.closed:
                     handler_log_fh.close()
                 if not worker_log_fh.closed:
                     worker_log_fh.close()
 
-    def _dump_diagnostics(self, handler_proc, worker_proc, handler_log, worker_log, handler_log_fh, worker_log_fh):
+    def _dump_diagnostics(
+        self,
+        handler_proc,
+        worker_proc,
+        handler_log,
+        worker_log,
+        handler_log_fh,
+        worker_log_fh,
+    ):
         for proc in (handler_proc, worker_proc):
             if proc is not None and proc.poll() is None:
                 proc.terminate()
@@ -259,5 +306,7 @@ class EmailE2ETests(unittest.TestCase):
             diag.append(f"\n--- {name} log (last 3000 chars) ---")
             diag.append(log_content[-3000:] if log_content else "(empty)")
         print("\n".join(diag), file=sys.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
