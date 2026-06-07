@@ -45,8 +45,8 @@ CHATTING_E2E_HANDLER_IMPLEMENTATION=python uv run python -m unittest tests.test_
 ```
 
 Supported values are `python` and `go`. The default is `python`. Selecting `go`
-currently fails clearly because the Go handler runtime is not implemented yet.
-This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
+uses the Go handler entrypoint. This still skips locally unless
+`CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
 
 ## Useful runtime inspection commands
 
@@ -116,3 +116,6 @@ Use these with DB queries to correlate outcomes.
 - Triggers: push to `main`, and pull requests targeting `main`
 - Python version: `3.13`
 - CI installs `uv`, locks/syncs the project environment, downloads the latest BBMB release binary, verifies its published SHA256, and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.
+- Go handler release workflow: `.github/workflows/handler-release.yml`
+- Handler release trigger: push to `main` or manual dispatch
+- Handler release outputs: `chatting-handler-linux-amd64`, `.sha256`, and `.tar.gz` uploaded both as workflow artifacts and GitHub release assets

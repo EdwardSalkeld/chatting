@@ -1,0 +1,90 @@
+name: Handler Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build And Publish Handler Binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/handler/go.mod
+          cache-dependency-path: go/handler/go.mod
+
+      - name: Run Go handler tests
+        working-directory: go/handler
+        run: go test ./...
+
+      - name: Check gofmt
+        working-directory: go/handler
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            echo "Go files need gofmt:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Run go vet
+        working-directory: go/handler
+        run: go vet ./...
+
+      - name: Build Linux amd64 handler binary
+        run: |
+          mkdir -p dist
+          cd go/handler
+          GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o ../../dist/chatting-handler-linux-amd64 \
+            ./cmd/chatting-handler
+
+      - name: Package release assets
+        run: |
+          cd dist
+          sha256sum chatting-handler-linux-amd64 > chatting-handler-linux-amd64.sha256
+          tar -czf chatting-handler-linux-amd64.tar.gz \
+            chatting-handler-linux-amd64 \
+            chatting-handler-linux-amd64.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatting-handler-linux-amd64
+          path: |
+            dist/chatting-handler-linux-amd64
+            dist/chatting-handler-linux-amd64.sha256
+            dist/chatting-handler-linux-amd64.tar.gz
+          retention-days: 30
+
+      - name: Compute release metadata
+        id: metadata
+        run: |
+          release_number="${GITHUB_RUN_NUMBER}"
+          echo "tag=handler-v${release_number}" >> "$GITHUB_OUTPUT"
+          echo "name=Chatting Handler v${release_number}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          name: ${{ steps.metadata.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            dist/chatting-handler-linux-amd64
+            dist/chatting-handler-linux-amd64.sha256
+            dist/chatting-handler-linux-amd64.tar.gz
