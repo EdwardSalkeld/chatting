@@ -729,6 +729,11 @@ Validation:
 
 ### 19. GitHub Dispatch
 
+Status: complete. The Go handler now parses both GitHub issue or pull request
+URLs and `owner/repo#number` targets, dispatches issue comments through `gh
+issue comment`, and applies the same handler-level failure semantics as the
+Python implementation.
+
 Implement GitHub comment dispatch.
 
 Validation:
@@ -737,6 +742,11 @@ Validation:
 - GitHub egress failure handling matches Python at the handler level
 
 ### 20. Go Handler Drop-In E2E
+
+Status: in progress. All handler-oriented E2E scenarios now route through the
+implementation selector, and the split-mode smoke test now uses reserved BBMB
+ports so it can run against both Python and Go handlers without fixed-port
+collisions.
 
 Run the full handler-oriented E2E suite with:
 - Go handler
@@ -756,5 +766,7 @@ Validation:
 
 ## Immediate Next Steps
 
-1. Add GitHub comment dispatch.
-2. Continue closing remaining Python handler parity gaps before a side-by-side dry run.
+1. Run the selector-based handler E2E suite in an environment with the full
+   external dependencies available for both Python and Go handler modes.
+2. Decide whether the Go handler should ship first behind a deploy/config
+   switch or as the direct default once the drop-in E2E pass is clean.
