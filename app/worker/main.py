@@ -52,6 +52,29 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
 BBMB_PICKUP_WAIT_SECONDS = 10
 
 
+def _log_worker_processed(*, task_id: str, result) -> None:
+    if result.run_record.result_status in {"execution_error", "dead_letter"}:
+        LOGGER.warning(
+            "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s "
+            "reason_codes=%s attempt_count=%s error_summary=%s",
+            result.run_record.run_id,
+            task_id,
+            len(result.egress_messages),
+            result.run_record.result_status,
+            ",".join(result.reason_codes) if result.reason_codes else "none",
+            result.attempt_count,
+            result.error_summary or "unknown_error",
+        )
+        return
+    LOGGER.info(
+        "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
+        result.run_record.run_id,
+        task_id,
+        len(result.egress_messages),
+        result.run_record.result_status,
+    )
+
+
 def _configure_logging() -> None:
     if logging.getLogger().handlers:
         return
@@ -409,13 +432,7 @@ def main() -> int:
                         activity_monitor=activity_monitor,
                     )
                 broker.ack(TASK_QUEUE_NAME, picked.guid)
-                LOGGER.info(
-                    "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s",
-                    result.run_record.run_id,
-                    task_message.task_id,
-                    len(result.egress_messages),
-                    result.run_record.result_status,
-                )
+                _log_worker_processed(task_id=task_message.task_id, result=result)
             except Exception:  # noqa: BLE001
                 LOGGER.exception("worker_processing_failed guid=%s", picked.guid)
 

@@ -14,7 +14,7 @@ from app.models import (
 )
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
-from app.worker.runtime import process_task_message
+from app.worker.runtime import _build_error_summary, process_task_message
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,18 @@ class ExecutionErrorExecutor:
         del task
         return ExecutionResult(
             errors=["executor_exit_nonzero:1:insufficient credits"],
+        )
+
+
+@dataclass(frozen=True)
+class LongExecutionErrorExecutor:
+    def execute(self, task):
+        del task
+        return ExecutionResult(
+            errors=[
+                "executor_exit_nonzero:1:"
+                + "permission denied\nconfig.toml " * 30
+            ],
         )
 
 
@@ -142,6 +154,9 @@ class WorkerRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.run_record.result_status, "dead_letter")
             self.assertEqual(result.dead_lettered, True)
+            self.assertEqual(result.attempt_count, 2)
+            self.assertEqual(result.reason_codes, ["retry_exhausted"])
+            self.assertEqual(result.error_summary, "RuntimeError: executor down")
             self.assertEqual(
                 store.list_dead_letters()[0].reason_codes, ["retry_exhausted"]
             )
@@ -184,10 +199,34 @@ class WorkerRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.run_record.result_status, "execution_error")
             self.assertEqual(len(result.egress_messages), 2)
+            self.assertEqual(result.reason_codes, ["executor_reported_errors"])
+            self.assertEqual(
+                result.error_summary, "executor_exit_nonzero:1:insufficient credits"
+            )
             visible = result.egress_messages[0]
             self.assertEqual(visible.event_kind, "message")
             self.assertEqual(visible.message.target, "alice@example.com")
             self.assertIn("ran out of credits or quota", visible.message.body)
+
+    def test_process_task_message_builds_bounded_single_line_error_summary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                executor_impl=LongExecutionErrorExecutor(),
+                max_attempts=1,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertIsNotNone(result.error_summary)
+            assert result.error_summary is not None
+            self.assertNotIn("\n", result.error_summary)
+            self.assertLessEqual(len(result.error_summary), 240)
+            self.assertTrue(result.error_summary.endswith("..."))
 
     def test_process_task_message_emits_completion_even_when_executor_does_no_actions(
         self,
@@ -260,6 +299,8 @@ class WorkerRuntimeTests(unittest.TestCase):
                 "heartbeat_pong",
             )
             self.assertEqual(completion_egress_message.event_kind, "completion")
+            self.assertEqual(result.reason_codes, ["internal_heartbeat"])
+            self.assertIsNone(result.error_summary)
             audit_event = store.list_audit_events()[0]
             self.assertEqual(audit_event.workflow, "default")
             self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
@@ -285,6 +326,25 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(terminal.message.channel, "internal")
             self.assertEqual(terminal.message.target, "task")
             self.assertEqual(terminal.sequence, 0)
+
+    def test_build_error_summary_prefers_execution_error_then_last_error_then_fallback(
+        self,
+    ) -> None:
+        self.assertEqual(
+            _build_error_summary(
+                execution_errors=["executor_exit_nonzero:1: boom"],
+                last_error="RuntimeError: ignored",
+            ),
+            "executor_exit_nonzero:1: boom",
+        )
+        self.assertEqual(
+            _build_error_summary(execution_errors=[], last_error="RuntimeError:\n boom"),
+            "RuntimeError: boom",
+        )
+        self.assertEqual(
+            _build_error_summary(execution_errors=[], last_error=None),
+            "unknown_error",
+        )
 
 
 if __name__ == "__main__":
