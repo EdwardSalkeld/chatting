@@ -18,9 +18,14 @@ type TelegramSender interface {
 	React(ctx context.Context, target string, messageID int64, emoji string) error
 }
 
+type GitHubSender interface {
+	Send(ctx context.Context, target string, body string) error
+}
+
 type Dispatcher struct {
 	EmailSender    EmailSender
 	TelegramSender TelegramSender
+	GitHubSender   GitHubSender
 }
 
 type MessageDispatchError struct {
@@ -73,6 +78,17 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		}
 		if err := dispatcher.TelegramSender.React(ctx, target, messageID, *message.Body); err != nil {
 			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
+		}
+		return &normalized, nil
+	case "github":
+		if dispatcher.GitHubSender == nil {
+			return nil, nil
+		}
+		if message.Body == nil {
+			return nil, MessageDispatchError{ReasonCode: "github_dispatch_failed"}
+		}
+		if err := dispatcher.GitHubSender.Send(ctx, target, *message.Body); err != nil {
+			return nil, MessageDispatchError{ReasonCode: "github_dispatch_failed"}
 		}
 		return &normalized, nil
 	default:

@@ -139,7 +139,7 @@ func Defaults() Config {
 		PollTimeoutSeconds:    DefaultPollTimeoutSeconds,
 		MetricsHost:           DefaultMetricsHost,
 		MetricsPort:           DefaultMetricsPort,
-		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "log"},
+		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		GlobalPromptContext:   []string{},
 		CronPromptContext:     []string{},
 		EmailPromptContext:    []string{},

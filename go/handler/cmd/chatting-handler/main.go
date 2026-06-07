@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -28,6 +29,8 @@ import (
 )
 
 const version = "go-handler-bootstrap"
+
+var ghLookPath = exec.LookPath
 
 type runner interface {
 	Run(ctx context.Context) error
@@ -358,6 +361,9 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {
 			return nil, err
 		}
 		dispatcher.TelegramSender = sender
+	}
+	if _, err := ghLookPath("gh"); err == nil {
+		dispatcher.GitHubSender = dispatch.NewGitHubIssueCommentSender(nil)
 	}
 	return dispatcher, nil
 }

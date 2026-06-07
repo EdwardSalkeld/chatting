@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 )
 
 func TestRunPrintsVersion(t *testing.T) {
@@ -187,6 +189,56 @@ func TestBuildDispatcherRequiresTelegramTokenWhenEnabled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing Telegram bot token env var: MISSING_TELEGRAM_TOKEN") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildDispatcherConfiguresGitHubWhenGHAvailable(t *testing.T) {
+	originalLookPath := ghLookPath
+	ghLookPath = func(file string) (string, error) {
+		if file != "gh" {
+			t.Fatalf("unexpected binary lookup = %q", file)
+		}
+		return "/usr/bin/gh", nil
+	}
+	defer func() {
+		ghLookPath = originalLookPath
+	}()
+
+	dispatcher, err := buildDispatcher(handlerconfig.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, ok := dispatcher.(dispatch.Dispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T", dispatcher)
+	}
+	if typed.GitHubSender == nil {
+		t.Fatal("GitHubSender was not configured")
+	}
+}
+
+func TestBuildDispatcherSkipsGitHubWhenGHUnavailable(t *testing.T) {
+	originalLookPath := ghLookPath
+	ghLookPath = func(file string) (string, error) {
+		if file != "gh" {
+			t.Fatalf("unexpected binary lookup = %q", file)
+		}
+		return "", exec.ErrNotFound
+	}
+	defer func() {
+		ghLookPath = originalLookPath
+	}()
+
+	dispatcher, err := buildDispatcher(handlerconfig.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, ok := dispatcher.(dispatch.Dispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T", dispatcher)
+	}
+	if typed.GitHubSender != nil {
+		t.Fatal("GitHubSender should be nil when gh is unavailable")
 	}
 }
 

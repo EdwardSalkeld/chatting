@@ -18,6 +18,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("config = %#v, want %#v", config, expected)
 	}
+	if !reflect.DeepEqual(config.AllowedEgressChannels, []string{"email", "telegram", "telegram_reaction", "github", "log"}) {
+		t.Fatalf("AllowedEgressChannels = %#v", config.AllowedEgressChannels)
+	}
 }
 
 func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {

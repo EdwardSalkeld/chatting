@@ -212,6 +212,45 @@ func TestDispatcherReturnsTelegramAttachmentFailureReason(t *testing.T) {
 	}
 }
 
+func TestDispatcherSendsGitHubComment(t *testing.T) {
+	body := "Done via GitHub."
+	sender := &recordingGitHubSender{}
+	message := contracts.OutboundMessage{
+		Channel: "github",
+		Target:  "brokensbone/chatting#13",
+		Body:    &body,
+	}
+
+	dispatched, err := (Dispatcher{GitHubSender: sender}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatched == nil || dispatched.Channel != "github" || dispatched.Target != "brokensbone/chatting#13" {
+		t.Fatalf("dispatched = %#v", dispatched)
+	}
+	if len(sender.messages) != 1 || sender.messages[0].target != "brokensbone/chatting#13" || sender.messages[0].body != "Done via GitHub." {
+		t.Fatalf("messages = %#v", sender.messages)
+	}
+}
+
+func TestDispatcherReturnsGitHubFailureReason(t *testing.T) {
+	body := "Done via GitHub."
+	message := contracts.OutboundMessage{
+		Channel: "github",
+		Target:  "brokensbone/chatting#13",
+		Body:    &body,
+	}
+
+	_, err := (Dispatcher{GitHubSender: &recordingGitHubSender{err: errors.New("boom")}}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var dispatchErr MessageDispatchError
+	if !errors.As(err, &dispatchErr) || dispatchErr.ReasonCode != "github_dispatch_failed" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
 func TestTelegramMessageSenderSendsTextAndFallsBackWithoutParseMode(t *testing.T) {
 	var calls []telegramHTTPCall
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -390,6 +429,24 @@ func (sender *recordingTelegramSender) React(_ context.Context, target string, m
 		return sender.err
 	}
 	sender.reactions = append(sender.reactions, sentReaction{target: target, messageID: messageID, emoji: emoji})
+	return nil
+}
+
+type sentGitHub struct {
+	target string
+	body   string
+}
+
+type recordingGitHubSender struct {
+	messages []sentGitHub
+	err      error
+}
+
+func (sender *recordingGitHubSender) Send(_ context.Context, target string, body string) error {
+	if sender.err != nil {
+		return sender.err
+	}
+	sender.messages = append(sender.messages, sentGitHub{target: target, body: body})
 	return nil
 }
 
