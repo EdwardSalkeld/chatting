@@ -28,6 +28,9 @@ class WorkerProcessResult:
     run_record: RunRecord
     egress_messages: list[EgressQueueMessage]
     dead_lettered: bool
+    attempt_count: int
+    reason_codes: list[str]
+    error_summary: str | None
 
 
 def process_task_message(
@@ -173,10 +176,25 @@ def process_task_message(
         latency_ms=latency_ms,
     )
 
+    error_summary = None
+    if run_record.result_status in {"execution_error", "dead_letter"}:
+        execution_errors = []
+        if execution_payload is not None:
+            raw_errors = execution_payload.get("errors")
+            if isinstance(raw_errors, list):
+                execution_errors = [error for error in raw_errors if isinstance(error, str)]
+        error_summary = _build_error_summary(
+            execution_errors=execution_errors,
+            last_error=last_error,
+        )
+
     return WorkerProcessResult(
         run_record=run_record,
         egress_messages=egress_messages,
         dead_lettered=dead_lettered,
+        attempt_count=attempt_count,
+        reason_codes=list(reason_codes),
+        error_summary=error_summary,
     )
 
 
@@ -238,6 +256,9 @@ def _process_internal_heartbeat(
         run_record=run_record,
         egress_messages=[visible_egress_message, completion_egress_message],
         dead_lettered=False,
+        attempt_count=1,
+        reason_codes=["internal_heartbeat"],
+        error_summary=None,
     )
 
 
@@ -361,6 +382,30 @@ def _build_credit_exhausted_visible_error(
     return None
 
 
+def _build_error_summary(
+    *,
+    execution_errors: list[str],
+    last_error: str | None,
+    max_length: int = 240,
+) -> str:
+    candidate = next(
+        (
+            error
+            for error in execution_errors
+            if isinstance(error, str) and error.strip()
+        ),
+        None,
+    )
+    if candidate is None and last_error is not None and last_error.strip():
+        candidate = last_error
+    if candidate is None:
+        candidate = "unknown_error"
+    normalized = " ".join(candidate.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[: max_length - 3].rstrip() + "..."
+
+
 def _looks_like_credit_exhaustion(error: str) -> bool:
     lowered = error.lower()
     return any(
@@ -390,5 +435,6 @@ def _event_id_for_sequence(
 
 __all__ = [
     "WorkerProcessResult",
+    "_build_error_summary",
     "process_task_message",
 ]
