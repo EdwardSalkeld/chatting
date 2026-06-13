@@ -41,12 +41,22 @@ uv run python -m unittest tests.test_split_mode_e2e -v
 Select the handler implementation used by E2E tests:
 
 ```bash
-CHATTING_E2E_HANDLER_IMPLEMENTATION=python uv run python -m unittest tests.test_split_mode_e2e -v
+CHATTING_E2E_HANDLER_IMPLEMENTATION=go uv run python -m unittest tests.test_split_mode_e2e -v
 ```
 
-Supported values are `python` and `go`. The default is `python`. Selecting `go`
-uses the Go handler entrypoint. This still skips locally unless
+Supported values are `go` and `python`. The default is `go`. Selecting `python`
+uses the legacy Python handler entrypoint. This still skips locally unless
 `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
+
+To avoid `go run` cold-start cost in repeated E2E runs, you can point the Go
+path at a prebuilt handler binary:
+
+```bash
+cd go/handler && go build -o /tmp/chatting-handler ./cmd/chatting-handler
+CHATTING_E2E_HANDLER_BINARY=/tmp/chatting-handler \
+CHATTING_BBMB_SERVER_BIN=/tmp/bbmb-server-linux-amd64 \
+uv run python -m unittest tests.test_split_mode_e2e -v
+```
 
 ## Useful runtime inspection commands
 

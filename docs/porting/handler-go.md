@@ -428,14 +428,15 @@ Validation:
 ### 2. E2E Implementation Selector
 
 Status: complete. E2E tests select the handler implementation with
-`CHATTING_E2E_HANDLER_IMPLEMENTATION`; `python` remains the default, and `go`
-fails explicitly until the Go runtime is implemented.
+`CHATTING_E2E_HANDLER_IMPLEMENTATION`; `go` is now the default, and `python`
+remains available as the explicit rollback path.
 
 Extend the E2E harness so tests can choose a handler implementation:
 - `python`
 - `go`
 
-The default should remain `python`.
+The default should become `go` once parity is complete, while still allowing
+explicit `python` selection for rollback coverage.
 
 Validation:
 - existing Python-handler E2E tests still pass unchanged

@@ -26,7 +26,7 @@ For a worked message example and the full message-handler <-> worker conversatio
 
 ## Topology
 
-- `handler`: `python -m app.main_message_handler`
+- `handler`: `chatting-handler --config /config/handler.json`
 - `worker`: `python -m app.main_worker`
 - `bbmb`: `bbmb-server` on `:9876`
 - optional `auxiliary-ingress`: `python -m app.main_auxiliary_ingress`
@@ -199,8 +199,9 @@ with:
 chatting-handler --config /config/handler.json
 ```
 
-If your process manager is Docker Compose or systemd, make the same command
-swap there and keep the existing handler config file, env file, and DB path.
+The repo's default Docker Compose stack already uses `chatting-handler`. If your
+process manager is systemd or another supervisor, make the same command swap
+there and keep the existing handler config file, env file, and DB path.
 
 Recommended cutover order:
 1. Stop the running Python `message-handler`.

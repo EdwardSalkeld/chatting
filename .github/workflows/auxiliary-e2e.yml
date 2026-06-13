@@ -43,10 +43,25 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/handler/go.mod
+          cache-dependency-path: go/handler/go.mod
+
       - name: Sync dependencies
         run: uv sync --locked
+
+      - name: Build Go handler test binary
+        run: |
+          mkdir -p "${{ runner.temp }}/chatting-e2e"
+          cd go/handler
+          go build -trimpath \
+            -o "${{ runner.temp }}/chatting-e2e/chatting-handler" \
+            ./cmd/chatting-handler
 
       - name: Run auxiliary ingress E2E tests
         env:
           CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
+          CHATTING_E2E_HANDLER_BINARY: ${{ runner.temp }}/chatting-e2e/chatting-handler
         run: uv run python -m unittest tests.e2e.test_auxiliary_ingress_e2e -v
