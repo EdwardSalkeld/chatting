@@ -129,3 +129,6 @@ Use these with DB queries to correlate outcomes.
 - Go handler release workflow: `.github/workflows/handler-release.yml`
 - Handler release trigger: push to `main` or manual dispatch
 - Handler release outputs: `chatting-handler-linux-amd64`, `.sha256`, and `.tar.gz` uploaded both as workflow artifacts and GitHub release assets
+- Runtime image publish workflow: `.github/workflows/publish-image.yml`
+- Runtime image publish trigger: push to `main`, matching `v*` tags, or manual dispatch
+- Runtime image tags: `latest` on `main`, branch/tag refs when applicable, and `sha-<commit>`

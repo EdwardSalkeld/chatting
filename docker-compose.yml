@@ -15,10 +15,7 @@ services:
     restart: unless-stopped
 
   handler:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: prod
+    image: ${CHATTING_RUNTIME_IMAGE:-ghcr.io/edwardsalkeld/chatting:latest}
     entrypoint: ["/entrypoint.sh"]
     command: ["chatting-handler", "--config", "/config/handler.json"]
     env_file: configs/handler/handler.env
@@ -41,10 +38,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: prod
+    image: ${CHATTING_RUNTIME_IMAGE:-ghcr.io/edwardsalkeld/chatting:latest}
     entrypoint: ["/entrypoint.sh"]
     command: ["/app/.venv/bin/python", "-m", "app.main_worker"]
     env_file: configs/worker/worker.env
