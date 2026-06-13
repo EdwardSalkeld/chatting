@@ -21,10 +21,10 @@ jobs:
 
       - name: Download bbmb-server
         run: |
-          curl -fsSL \
+          curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
             -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
             https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
-          curl -fsSL \
+          curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
             -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
             https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
           (
