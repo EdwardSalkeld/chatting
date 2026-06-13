@@ -26,7 +26,7 @@ For a worked message example and the full message-handler <-> worker conversatio
 
 ## Topology
 
-- `handler`: `python -m app.main_message_handler`
+- `handler`: `chatting-handler --config /config/handler.json`
 - `worker`: `python -m app.main_worker`
 - `bbmb`: `bbmb-server` on `:9876`
 - optional `auxiliary-ingress`: `python -m app.main_auxiliary_ingress`
@@ -52,10 +52,28 @@ Edit the copied configs and env files for the target integrations and executor p
 export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
 ```
 
-## 3) Start the stack
+## 3) Choose the runtime image
+
+The default compose stack pulls the published runtime image from GHCR:
 
 ```bash
-docker compose up -d --build
+export CHATTING_RUNTIME_IMAGE=ghcr.io/edwardsalkeld/chatting:latest
+```
+
+You can pin that to a published `sha-<commit>` tag when you want a fixed deploy.
+
+If the host has not already authenticated to GHCR, log in once with a token that
+has package read access:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+```
+
+## 4) Start the stack
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 Optional auxiliary ingress connector settings in message-handler config:
@@ -71,7 +89,7 @@ The worker also serves a local read-only activity page by default at `http://127
 with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 `activity_history_limit` to change the retention window.
 
-## 3.5) Optional auxiliary webhook ingress
+## 4.5) Optional auxiliary webhook ingress
 
 ```bash
 uv run python -m app.main_auxiliary_ingress \
@@ -96,7 +114,7 @@ JSON bodies to `generic-post` and `new-service` respectively. To make the handle
 queues, add `auxiliary_ingress_queues: ["generic-post", "new-service"]` to the message-handler
 config.
 
-## 4) Security boundary expectations
+## 5) Security boundary expectations
 
 - `message-handler` owns integration secrets (`IMAP`, `SMTP`, `Telegram`).
 - `worker` does not read integration secrets and does not dispatch directly.
@@ -105,7 +123,7 @@ config.
   internal `completion` event so `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
-## 5) Configure GitHub assignment polling (in message-handler)
+## 6) Configure GitHub assignment polling (in message-handler)
 
 Edit message-handler config:
 - `github_repositories` (`owner/repo` or `owner/*`)
@@ -113,7 +131,7 @@ Edit message-handler config:
 
 `gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
 
-## 6) Publish a visible reply from worker side
+## 7) Publish a visible reply from worker side
 
 Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
 path for both quick acknowledgements and final user-visible answers instead of returning replies in
@@ -144,7 +162,7 @@ docker compose exec worker python -m app.main_reply task:telegram:53 \
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 
-## 7) Docker worker CLI auth bootstrap
+## 8) Docker worker CLI auth bootstrap
 
 When running with `docker-compose.yml`, the worker image includes both `codex` and `claude` CLIs.
 Auth is still external to the app and must be completed once interactively, then persisted in Docker
@@ -163,7 +181,7 @@ docker compose run --rm worker claude login
 
 The compose stack publishes the worker activity UI on `9465`.
 
-## 8) Switch the handler from Python to Go
+## 9) Switch the handler from Python to Go
 
 The Go handler is a drop-in replacement at the message-handler boundary:
 - same handler JSON config
@@ -199,8 +217,10 @@ with:
 chatting-handler --config /config/handler.json
 ```
 
-If your process manager is Docker Compose or systemd, make the same command
-swap there and keep the existing handler config file, env file, and DB path.
+The repo's default Docker Compose stack already uses `chatting-handler` in the
+published runtime image. If your process manager is systemd or another
+supervisor, make the same command swap there and keep the existing handler
+config file, env file, and DB path.
 
 Recommended cutover order:
 1. Stop the running Python `message-handler`.

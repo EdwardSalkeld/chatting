@@ -23,7 +23,7 @@ services:
       context: .
       target: test
     entrypoint: ["/entrypoint.sh"]
-    command: ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
+    command: ["chatting-handler", "--config", "/config/handler.json"]
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
       CHATTING_IMAP_PASSWORD: dummy
