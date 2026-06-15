@@ -553,11 +553,12 @@ func DefaultGraphQLRunner(ctx context.Context, query string, variables map[strin
 		}
 	}
 	command := exec.CommandContext(ctx, "gh", args...)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
 	output, err := command.Output()
-	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) && len(exitError.Stderr) > 0 {
-			return nil, fmt.Errorf("github_graphql_failed:%s", strings.TrimSpace(string(exitError.Stderr)))
+	if len(bytes.TrimSpace(output)) == 0 && err != nil {
+		if strings.TrimSpace(stderr.String()) != "" {
+			return nil, fmt.Errorf("github_graphql_failed:%s", strings.TrimSpace(stderr.String()))
 		}
 		return nil, fmt.Errorf("github_graphql_failed:%v", err)
 	}

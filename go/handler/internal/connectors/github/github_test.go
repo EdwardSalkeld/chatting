@@ -2,6 +2,8 @@ package github
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -202,6 +204,68 @@ func TestExpandRepositoryPatternsExpandsOwnerWildcard(t *testing.T) {
 	}
 	if !reflect.DeepEqual(repositories, []string{"brokensbone/chatting", "brokensbone/bbmb"}) {
 		t.Fatalf("repositories = %#v", repositories)
+	}
+}
+
+func TestListOwnerRepositoriesHandlesPartialOrganizationNotFoundError(t *testing.T) {
+	repositories, err := ListOwnerRepositories(
+		context.Background(),
+		"brokensbone",
+		func(_ context.Context, query string, variables map[string]any) (map[string]any, error) {
+			if query != OwnerRepositoriesQuery {
+				t.Fatalf("query = %q", query)
+			}
+			if variables["owner"] != "brokensbone" {
+				t.Fatalf("variables = %#v", variables)
+			}
+			return map[string]any{
+				"data": map[string]any{
+					"organization": nil,
+					"user": map[string]any{
+						"repositories": map[string]any{
+							"nodes":    []any{map[string]any{"nameWithOwner": "brokensbone/chatting"}},
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
+						},
+					},
+				},
+				"errors": []any{
+					map[string]any{
+						"type":    "NOT_FOUND",
+						"path":    []any{"organization"},
+						"message": "Could not resolve to an Organization",
+					},
+				},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repositories, []string{"brokensbone/chatting"}) {
+		t.Fatalf("repositories = %#v", repositories)
+	}
+}
+
+func TestDefaultGraphQLRunnerParsesJSONWhenGHExitsNonZero(t *testing.T) {
+	tempDir := t.TempDir()
+	fakeGHPath := filepath.Join(tempDir, "gh")
+	script := `#!/bin/sh
+printf '%s\n' '{"data":{"viewer":{"login":"BillyAcachofa"}},"errors":[{"path":["organization"]}]}'
+printf '%s\n' 'gh: Could not resolve to an Organization' >&2
+exit 1
+`
+	if err := os.WriteFile(fakeGHPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalPath := os.Getenv("PATH")
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
+
+	payload, err := DefaultGraphQLRunner(context.Background(), ViewerLoginQuery, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["data"].(map[string]any); !ok {
+		t.Fatalf("payload = %#v", payload)
 	}
 }
 
