@@ -185,13 +185,12 @@ func TestExpandRepositoryPatternsExpandsOwnerWildcard(t *testing.T) {
 			}
 			return map[string]any{
 				"data": map[string]any{
-					"organization": map[string]any{
+					"repositoryOwner": map[string]any{
 						"repositories": map[string]any{
 							"nodes":    []any{map[string]any{"nameWithOwner": "brokensbone/chatting"}, map[string]any{"nameWithOwner": "brokensbone/bbmb"}},
 							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil},
 						},
 					},
-					"user": nil,
 				},
 			}, nil
 		},

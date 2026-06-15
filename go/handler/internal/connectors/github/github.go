@@ -131,24 +131,8 @@ query (
   $owner: String!
   $after: String
 ) {
-  organization(login: $owner) {
+  repositoryOwner(login: $owner) {
     repositories(first: 100, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
-      nodes {
-        nameWithOwner
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-    }
-  }
-  user(login: $owner) {
-    repositories(
-      first: 100
-      after: $after
-      ownerAffiliations: OWNER
-      orderBy: { field: UPDATED_AT, direction: DESC }
-    ) {
       nodes {
         nameWithOwner
       }
@@ -651,9 +635,12 @@ func ListOwnerRepositories(ctx context.Context, owner string, runner GraphQLRunn
 		if !ok {
 			return nil, errors.New("github_graphql_missing_data")
 		}
-		ownerNode, _ := data["organization"].(map[string]any)
+		ownerNode, _ := data["repositoryOwner"].(map[string]any)
 		if ownerNode == nil {
-			ownerNode, _ = data["user"].(map[string]any)
+			ownerNode, _ = data["organization"].(map[string]any)
+			if ownerNode == nil {
+				ownerNode, _ = data["user"].(map[string]any)
+			}
 		}
 		if ownerNode == nil {
 			if hasGraphQLErrors(payload) {
