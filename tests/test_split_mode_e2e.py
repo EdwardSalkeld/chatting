@@ -14,6 +14,8 @@ def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
         return probe.connect_ex((host, port)) == 0
+
+
 def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -21,6 +23,8 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
             return
         time.sleep(0.05)
     raise TimeoutError(f"timed out waiting for {host}:{port}")
+
+
 class SplitModeE2ETests(unittest.TestCase):
     def test_split_mode_roundtrip_with_real_bbmb_server(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
@@ -148,16 +152,19 @@ class SplitModeE2ETests(unittest.TestCase):
             worker_store = SQLiteStateStore(str(worker_db_path))
             worker_runs = worker_store.list_runs()
             matching_worker_runs = [
-                run for run in worker_runs if run.envelope_id.startswith("cron:ci-split-smoke:")
+                run
+                for run in worker_runs
+                if run.envelope_id.startswith("cron:ci-split-smoke:")
             ]
             self.assertTrue(
                 matching_worker_runs,
-                msg="missing worker run for ci-split-smoke cron schedule",
+                msg="missing worker run for cron:ci-split-smoke",
             )
             expected_envelope_id = matching_worker_runs[0].envelope_id
             self.assertTrue(
                 any(
-                    run.envelope_id == expected_envelope_id and run.result_status == "success"
+                    run.envelope_id == expected_envelope_id
+                    and run.result_status == "success"
                     for run in worker_runs
                 ),
                 msg=f"missing successful worker run for expected envelope_id={expected_envelope_id!r}",
@@ -166,12 +173,16 @@ class SplitModeE2ETests(unittest.TestCase):
             handler_store = SQLiteStateStore(str(handler_db_path))
             expected_task_id = f"task:{expected_envelope_id}"
             expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
-            self.assertEqual(handler_store.list_dispatched_event_indices(run_id=expected_task_id), [])
+            self.assertEqual(
+                handler_store.list_dispatched_event_indices(run_id=expected_task_id), []
+            )
             self.assertTrue(
                 handler_store.has_dispatched_event_id(
                     task_id=expected_task_id,
                     event_id=expected_event_id,
                 )
             )
+
+
 if __name__ == "__main__":
     unittest.main()

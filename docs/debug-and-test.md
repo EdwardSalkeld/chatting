@@ -17,13 +17,9 @@ uv run python -m unittest discover -s tests
 ```bash
 uv run python -m unittest tests.test_main
 ```
-- Connectors:
-```bash
-uv run python -m unittest tests.test_connectors
-```
 - Executor parser checks:
 ```bash
-uv run python -m unittest tests.test_executor.ParseExecutionResultTests
+uv run python -m unittest tests.test_executor
 ```
 - State store checks:
 ```bash
@@ -31,7 +27,7 @@ uv run python -m unittest tests.test_sqlite_store tests.test_state_contract
 ```
 - Split-mode runtime coverage:
 ```bash
-uv run python -m unittest tests.test_worker_runtime tests.test_message_handler_runtime tests.test_main_reply
+uv run python -m unittest tests.test_worker_runtime tests.test_main_reply
 ```
 - Split-mode smoke e2e:
 ```bash
@@ -41,18 +37,17 @@ uv run python -m unittest tests.test_split_mode_e2e -v
 Select the handler implementation used by E2E tests:
 
 ```bash
-CHATTING_E2E_HANDLER_IMPLEMENTATION=python uv run python -m unittest tests.test_split_mode_e2e -v
+CHATTING_E2E_HANDLER_IMPLEMENTATION=go uv run python -m unittest tests.test_split_mode_e2e -v
 ```
 
-Supported values are `python` and `go`. The default is `python`. Selecting `go`
-currently fails clearly because the Go handler runtime is not implemented yet.
+Supported value is `go`.
 This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
 
 ## Useful runtime inspection commands
 
 - Message-handler runtime help:
 ```bash
-uv run python -m app.main_message_handler --help
+cd go/handler && go run ./cmd/chatting-handler --help
 ```
 - Worker runtime help:
 ```bash

@@ -7,7 +7,7 @@ ingress is enabled:
 - `bbmb-server` in the middle (message bus)
 - optional `auxiliary-ingress` on a web-facing host (secret-path JSON POST listener)
 
-GitHub assignment polling is part of `message-handler` when configured.
+GitHub assignment polling is part of the Go `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
@@ -26,7 +26,7 @@ For a worked message example and the full message-handler <-> worker conversatio
 
 ## Topology
 
-- `handler`: `python -m app.main_message_handler`
+- `handler`: `chatting-handler --config <message-handler.json>`
 - `worker`: `python -m app.main_worker`
 - `bbmb`: `bbmb-server` on `:9876`
 - optional `auxiliary-ingress`: `python -m app.main_auxiliary_ingress`
@@ -102,7 +102,7 @@ config.
 - `worker` does not read integration secrets and does not dispatch directly.
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
 - Worker emits zero or more task-scoped visible `message` egress events and exactly one terminal
-  internal `completion` event so `message-handler` can close the task and reject future egress.
+  internal `completion` event so the Go `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
 ## 5) Configure GitHub assignment polling (in message-handler)

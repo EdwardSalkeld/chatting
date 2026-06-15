@@ -20,7 +20,7 @@ services:
       dockerfile: Dockerfile
       target: prod
     entrypoint: ["/entrypoint.sh"]
-    command: ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
+    command: ["/usr/local/bin/chatting-handler", "--config", "/config/handler.json"]
     env_file: configs/handler/handler.env
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json

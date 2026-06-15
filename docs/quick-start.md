@@ -1,7 +1,7 @@
 # Quick Start
 
 `chatting` runs as three services:
-- `message-handler`
+- `message-handler` (Go)
 - `worker`
 - `bbmb-server`
 
@@ -56,7 +56,7 @@ The compose stack starts:
 - `handler`
 - `worker`
 
-The message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
+The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
 

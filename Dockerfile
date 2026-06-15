@@ -31,6 +31,8 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --locked --no-dev --no-install-project
 
 COPY app/ app/
+COPY go/handler/ go/handler/
+RUN cd /app/go/handler && go build -o /usr/local/bin/chatting-handler ./cmd/chatting-handler
 
 ENV HOME=/home/chatting
 RUN mkdir -p /home/chatting && chmod 755 /home/chatting
@@ -39,7 +41,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
+CMD ["/usr/local/bin/chatting-handler"]
 
 FROM base AS prod
 RUN uv sync --locked

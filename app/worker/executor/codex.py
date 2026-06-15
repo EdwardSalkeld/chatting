@@ -8,12 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from app.models import (
-    ExecutionResult,
-    SCHEMA_VERSION,
-    TaskEnvelope,
-    parse_context_ref,
-)
+from app.models import ExecutionResult, SCHEMA_VERSION, TaskEnvelope, parse_context_ref
 
 
 @dataclass(frozen=True)
