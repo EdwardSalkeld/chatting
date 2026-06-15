@@ -147,6 +147,15 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertNotIn('http-equiv="refresh"', html_body)
                 self.assertIn("data-event-id='3'", html_body)
                 self.assertIn("Number.isInteger(item.activity_id)", html_body)
+                self.assertIn("main { width: 100%; min-height: 100vh;", html_body)
+                self.assertIn(
+                    ".layout { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);",
+                    html_body,
+                )
+                self.assertIn(
+                    '<section class="panel detail-panel" id="detail-panel">',
+                    html_body,
+                )
 
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/?refresh_off=1"
@@ -158,7 +167,9 @@ class WorkerActivityTests(unittest.TestCase):
             finally:
                 server.shutdown()
 
-    def test_activity_html_uses_stable_activity_ids_for_duplicate_like_events(self) -> None:
+    def test_activity_html_uses_stable_activity_ids_for_duplicate_like_events(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             monitor = WorkerActivityMonitor(store=store, history_limit=10)
