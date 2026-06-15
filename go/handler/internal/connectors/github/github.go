@@ -131,24 +131,8 @@ query (
   $owner: String!
   $after: String
 ) {
-  organization(login: $owner) {
+  repositoryOwner(login: $owner) {
     repositories(first: 100, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
-      nodes {
-        nameWithOwner
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-    }
-  }
-  user(login: $owner) {
-    repositories(
-      first: 100
-      after: $after
-      ownerAffiliations: OWNER
-      orderBy: { field: UPDATED_AT, direction: DESC }
-    ) {
       nodes {
         nameWithOwner
       }
@@ -553,11 +537,12 @@ func DefaultGraphQLRunner(ctx context.Context, query string, variables map[strin
 		}
 	}
 	command := exec.CommandContext(ctx, "gh", args...)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
 	output, err := command.Output()
-	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) && len(exitError.Stderr) > 0 {
-			return nil, fmt.Errorf("github_graphql_failed:%s", strings.TrimSpace(string(exitError.Stderr)))
+	if len(bytes.TrimSpace(output)) == 0 && err != nil {
+		if strings.TrimSpace(stderr.String()) != "" {
+			return nil, fmt.Errorf("github_graphql_failed:%s", strings.TrimSpace(stderr.String()))
 		}
 		return nil, fmt.Errorf("github_graphql_failed:%v", err)
 	}
@@ -650,9 +635,12 @@ func ListOwnerRepositories(ctx context.Context, owner string, runner GraphQLRunn
 		if !ok {
 			return nil, errors.New("github_graphql_missing_data")
 		}
-		ownerNode, _ := data["organization"].(map[string]any)
+		ownerNode, _ := data["repositoryOwner"].(map[string]any)
 		if ownerNode == nil {
-			ownerNode, _ = data["user"].(map[string]any)
+			ownerNode, _ = data["organization"].(map[string]any)
+			if ownerNode == nil {
+				ownerNode, _ = data["user"].(map[string]any)
+			}
 		}
 		if ownerNode == nil {
 			if hasGraphQLErrors(payload) {
