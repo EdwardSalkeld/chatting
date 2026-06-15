@@ -30,7 +30,7 @@ from app.worker.activity import (
 )
 from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
-from app.worker.runtime import process_task_message
+from app.worker.runtime import WorkerProcessResult, process_task_message
 
 WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
 LOGGER = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
 BBMB_PICKUP_WAIT_SECONDS = 10
 
 
-def _log_worker_processed(*, task_id: str, result) -> None:
+def _log_worker_processed(*, task_id: str, result: WorkerProcessResult) -> None:
     if result.run_record.result_status in {"execution_error", "dead_letter"}:
         LOGGER.warning(
             "worker_processed run_id=%s task_id=%s egress_messages=%s result_status=%s "

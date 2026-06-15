@@ -182,7 +182,9 @@ def process_task_message(
         if execution_payload is not None:
             raw_errors = execution_payload.get("errors")
             if isinstance(raw_errors, list):
-                execution_errors = [error for error in raw_errors if isinstance(error, str)]
+                execution_errors = [
+                    error for error in raw_errors if isinstance(error, str)
+                ]
         error_summary = _build_error_summary(
             execution_errors=execution_errors,
             last_error=last_error,

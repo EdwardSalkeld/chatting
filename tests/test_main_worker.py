@@ -113,7 +113,9 @@ class MainWorkerTests(unittest.TestCase):
             log_line,
         )
 
-    def test_log_worker_processed_includes_failure_context_for_dead_letter(self) -> None:
+    def test_log_worker_processed_includes_failure_context_for_dead_letter(
+        self,
+    ) -> None:
         result = self._build_result(
             result_status="dead_letter",
             reason_codes=["retry_exhausted"],

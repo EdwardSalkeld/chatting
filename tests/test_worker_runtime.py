@@ -55,8 +55,7 @@ class LongExecutionErrorExecutor:
         del task
         return ExecutionResult(
             errors=[
-                "executor_exit_nonzero:1:"
-                + "permission denied\nconfig.toml " * 30
+                "executor_exit_nonzero:1:" + "permission denied\nconfig.toml " * 30
             ],
         )
 
@@ -338,7 +337,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             "executor_exit_nonzero:1: boom",
         )
         self.assertEqual(
-            _build_error_summary(execution_errors=[], last_error="RuntimeError:\n boom"),
+            _build_error_summary(
+                execution_errors=[], last_error="RuntimeError:\n boom"
+            ),
             "RuntimeError: boom",
         )
         self.assertEqual(
