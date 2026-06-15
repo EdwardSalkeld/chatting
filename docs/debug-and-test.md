@@ -43,6 +43,16 @@ CHATTING_E2E_HANDLER_IMPLEMENTATION=go uv run python -m unittest tests.test_spli
 Supported value is `go`.
 This skips locally unless `CHATTING_BBMB_SERVER_BIN` points to a built `bbmb-server`.
 
+To avoid `go run` cold-start cost in repeated E2E runs, you can point the Go
+path at a prebuilt handler binary:
+
+```bash
+cd go/handler && go build -o /tmp/chatting-handler ./cmd/chatting-handler
+CHATTING_E2E_HANDLER_BINARY=/tmp/chatting-handler \
+CHATTING_BBMB_SERVER_BIN=/tmp/bbmb-server-linux-amd64 \
+uv run python -m unittest tests.test_split_mode_e2e -v
+```
+
 ## Useful runtime inspection commands
 
 - Message-handler runtime help:
@@ -111,3 +121,9 @@ Use these with DB queries to correlate outcomes.
 - Triggers: push to `main`, and pull requests targeting `main`
 - Python version: `3.13`
 - CI installs `uv`, locks/syncs the project environment, downloads the latest BBMB release binary, verifies its published SHA256, and sets `CHATTING_BBMB_SERVER_BIN` before running the test suite.
+- Go handler release workflow: `.github/workflows/handler-release.yml`
+- Handler release trigger: push to `main` or manual dispatch
+- Handler release outputs: `chatting-handler-linux-amd64`, `.sha256`, and `.tar.gz` uploaded both as workflow artifacts and GitHub release assets
+- Runtime image publish workflow: `.github/workflows/publish-image.yml`
+- Runtime image publish trigger: push to `main`, matching `v*` tags, or manual dispatch
+- Runtime image tags: `latest` on `main`, branch/tag refs when applicable, and `sha-<commit>`

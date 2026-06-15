@@ -391,11 +391,12 @@ def _render_html(
       --accent-soft: #f4d8c9;
       --shadow: 0 18px 45px rgba(56, 37, 18, 0.08);
     }}
-    body {{ background: linear-gradient(180deg, #efe4d2 0%, var(--bg) 100%); color: var(--ink); font: 16px/1.4 Georgia, serif; margin: 0; }}
-    main {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
+    html {{ height: 100%; }}
+    body {{ background: linear-gradient(180deg, #efe4d2 0%, var(--bg) 100%); color: var(--ink); font: 16px/1.4 Georgia, serif; margin: 0; min-height: 100vh; }}
+    main {{ width: 100%; min-height: 100vh; box-sizing: border-box; padding: 18px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 18px; }}
     h1, h2 {{ font-family: "Iowan Old Style", Georgia, serif; margin: 0 0 12px; }}
     h3 {{ margin: 0 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}
-    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; margin-bottom: 18px; }}
+    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; min-height: 0; box-sizing: border-box; }}
     .topbar {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }}
     .controls {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
     .button-link {{ appearance: none; border: 1px solid var(--border); background: transparent; color: var(--accent); border-radius: 999px; padding: 8px 12px; font: inherit; text-decoration: none; cursor: pointer; }}
@@ -403,8 +404,8 @@ def _render_html(
     .note, .muted {{ color: var(--muted); }}
     a {{ color: var(--accent); }}
     code, pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
-    .layout {{ display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 18px; align-items: stretch; }}
-    .list-panel {{ padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 72vh; max-height: calc(100vh - 180px); }}
+    .layout {{ display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 18px; align-items: stretch; min-height: 0; }}
+    .list-panel {{ padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 0; height: 100%; }}
     .list-header {{ padding: 18px 18px 0; }}
     .activity-list {{ list-style: none; margin: 0; padding: 12px; display: grid; gap: 10px; flex: 1 1 auto; min-height: 0; overflow: auto; }}
     .activity-item {{ border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.65); padding: 0; }}
@@ -418,14 +419,15 @@ def _render_html(
     .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-bottom: 16px; }}
     .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
     .detail-block dd {{ margin: 4px 0 0; }}
+    .detail-panel {{ overflow: auto; height: 100%; }}
     .detail-section {{ border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }}
     .detail-section:first-of-type {{ border-top: none; margin-top: 0; padding-top: 0; }}
     .detail-message {{ white-space: pre-wrap; word-break: break-word; font-size: 18px; line-height: 1.5; }}
     .empty-state {{ padding: 28px 18px; color: var(--muted); }}
     @media (max-width: 900px) {{
-      main {{ padding: 16px; }}
+      main {{ min-height: 0; padding: 12px; grid-template-rows: auto auto; }}
       .layout {{ grid-template-columns: 1fr; }}
-      .list-panel {{ min-height: 0; max-height: none; }}
+      .list-panel, .detail-panel {{ height: auto; overflow: visible; }}
       .detail-grid {{ grid-template-columns: 1fr; }}
     }}
   </style>
@@ -455,7 +457,7 @@ def _render_html(
         </div>
         <ul class="activity-list" id="activity-list">{initial_list_markup}</ul>
       </section>
-      <section class="panel" id="detail-panel">{initial_detail_markup}</section>
+      <section class="panel detail-panel" id="detail-panel">{initial_detail_markup}</section>
     </div>
     <script id="activity-snapshot" type="application/json">{activity_json}</script>
     <script>

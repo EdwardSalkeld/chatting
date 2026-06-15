@@ -32,7 +32,8 @@ RUN uv sync --locked --no-dev --no-install-project
 
 COPY app/ app/
 COPY go/handler/ go/handler/
-RUN cd /app/go/handler && go build -o /usr/local/bin/chatting-handler ./cmd/chatting-handler
+RUN cd go/handler \
+    && go build -trimpath -o /usr/local/bin/chatting-handler ./cmd/chatting-handler
 
 ENV HOME=/home/chatting
 RUN mkdir -p /home/chatting && chmod 755 /home/chatting
@@ -41,7 +42,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/usr/local/bin/chatting-handler"]
+CMD ["chatting-handler", "--config", "/config/handler.json"]
 
 FROM base AS prod
 RUN uv sync --locked

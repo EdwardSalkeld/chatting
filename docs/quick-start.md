@@ -9,6 +9,7 @@
 
 - Docker with Compose support
 - Access to a shell
+- GHCR login that can pull `ghcr.io/edwardsalkeld/chatting`
 - Optional: Codex or Claude credentials if you want real executor mode
 
 ## 1) Clone and enter repo
@@ -45,10 +46,29 @@ The Docker examples use container paths and Docker DNS:
 export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
 ```
 
-## 4) Start chatting
+## 4) Choose the runtime image
+
+The default compose file pulls the published runtime image:
 
 ```bash
-docker compose up -d --build
+export CHATTING_RUNTIME_IMAGE=ghcr.io/edwardsalkeld/chatting:latest
+```
+
+You can pin a specific published tag instead, for example `sha-<commit>` from the
+GitHub Container Registry package page.
+
+If this host has not already authenticated to GHCR, log in once with a token that
+has package read access:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+```
+
+## 5) Start chatting
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 The compose stack starts:
@@ -60,7 +80,7 @@ The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:946
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
 
-## 5) Bootstrap CLI auth
+## 6) Bootstrap CLI auth
 
 When using real executor mode, authenticate the CLIs once inside the worker container. Auth state is
 persisted in Docker volumes.
@@ -70,7 +90,7 @@ docker compose run --rm worker codex login
 docker compose run --rm worker claude login
 ```
 
-## 6) Run tests
+## 7) Run tests
 
 Local tests are separate from the Docker runtime path and require Python 3.13+ plus `uv`.
 
@@ -79,7 +99,7 @@ uv sync
 uv run python -m unittest discover -s tests
 ```
 
-## 7) Query state and metrics
+## 8) Query state and metrics
 
 Use the worker page for a quick operator view, or query SQLite directly when you need deeper history:
 

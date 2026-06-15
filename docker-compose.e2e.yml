@@ -23,7 +23,7 @@ services:
       context: .
       target: test
     entrypoint: ["/entrypoint.sh"]
-    command: ["/usr/local/bin/chatting-handler", "--config", "/config/handler.json"]
+    command: ["chatting-handler", "--config", "/config/handler.json"]
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
       CHATTING_IMAP_PASSWORD: dummy

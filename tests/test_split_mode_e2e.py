@@ -10,6 +10,8 @@ from pathlib import Path
 
 from app.state import SQLiteStateStore
 from tests.e2e.handler_selector import message_handler_command
+
+
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
@@ -25,6 +27,13 @@ def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
     raise TimeoutError(f"timed out waiting for {host}:{port}")
 
 
+def _reserve_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        return int(listener.getsockname()[1])
+
+
 class SplitModeE2ETests(unittest.TestCase):
     def test_split_mode_roundtrip_with_real_bbmb_server(self) -> None:
         server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
@@ -35,11 +44,11 @@ class SplitModeE2ETests(unittest.TestCase):
         if not server_bin.exists():
             self.skipTest(f"bbmb server binary not found: {server_bin}")
 
-        if _is_port_open("127.0.0.1", 9876):
-            self.skipTest("127.0.0.1:9876 already in use")
-
         repo_root = Path(__file__).resolve().parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
+        bbmb_port = _reserve_port()
+        bbmb_metrics_port = _reserve_port()
+        bbmb_address = f"127.0.0.1:{bbmb_port}"
         server_proc: subprocess.Popen[str] | None = None
         worker_proc: subprocess.Popen[str] | None = None
         handler_proc: subprocess.Popen[str] | None = None
@@ -56,7 +65,7 @@ class SplitModeE2ETests(unittest.TestCase):
                     "job_name": "ci-split-smoke",
                     "content": "CI smoke task",
                     "cron": "* * * * *",
-                    "context_refs": ["repo:/workspace/chatting"],
+                    "context_refs": [f"repo:{repo_root}"],
                     "reply_channel_type": "log",
                     "reply_channel_target": "ci-split-smoke",
                 }
@@ -67,7 +76,7 @@ class SplitModeE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(handler_db_path),
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": bbmb_address,
                         "poll_interval_seconds": 0.1,
                         "poll_timeout_seconds": 1,
                         "max_loops": 20,
@@ -81,7 +90,7 @@ class SplitModeE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(worker_db_path),
-                        "bbmb_address": "127.0.0.1:9876",
+                        "bbmb_address": bbmb_address,
                         "max_attempts": 2,
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
@@ -95,13 +104,17 @@ class SplitModeE2ETests(unittest.TestCase):
 
             try:
                 server_proc = subprocess.Popen(
-                    [str(server_bin)],
+                    [
+                        str(server_bin),
+                        f"--port={bbmb_port}",
+                        f"--metrics-port={bbmb_metrics_port}",
+                    ],
                     cwd=repo_root,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                _wait_for_port("127.0.0.1", 9876, timeout_seconds=5.0)
+                _wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
 
                 worker_proc = subprocess.Popen(
                     [
@@ -137,6 +150,10 @@ class SplitModeE2ETests(unittest.TestCase):
                         except subprocess.TimeoutExpired:
                             proc.kill()
                             proc.wait(timeout=5)
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                    if proc.stderr is not None:
+                        proc.stderr.close()
 
             self.assertEqual(
                 handler_proc.returncode,

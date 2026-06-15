@@ -10,6 +10,7 @@
 ## CI
 
 - [GitHub Actions CI Workflow](../.github/workflows/ci.yml)
+- [GitHub Actions Handler Release Workflow](../.github/workflows/handler-release.yml)
 
 ## Connectors
 
