@@ -1,16 +1,15 @@
-"""Handler implementation selection for E2E tests."""
+"""Go handler command selection for E2E tests."""
 
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from typing import Mapping
 
 
 HANDLER_IMPLEMENTATION_ENV = "CHATTING_E2E_HANDLER_IMPLEMENTATION"
 HANDLER_BINARY_ENV = "CHATTING_E2E_HANDLER_BINARY"
-SUPPORTED_HANDLER_IMPLEMENTATIONS = ("python", "go")
+SUPPORTED_HANDLER_IMPLEMENTATIONS = ("go",)
 DEFAULT_HANDLER_IMPLEMENTATION = "go"
 
 
@@ -35,17 +34,8 @@ def message_handler_command(
     config_path: Path,
     *,
     env: Mapping[str, str] | None = None,
-    python_executable: str = sys.executable,
 ) -> list[str]:
-    implementation = selected_handler_implementation(env)
-    if implementation == "python":
-        return [
-            python_executable,
-            "-m",
-            "app.main_message_handler",
-            "--config",
-            str(config_path),
-        ]
+    selected_handler_implementation(env)
     values = os.environ if env is None else env
     handler_binary = values.get(HANDLER_BINARY_ENV, "").strip()
     if handler_binary:

@@ -1,7 +1,7 @@
 # Connector: Webhook
 
 Modules:
-- `app.handler.connectors.auxiliary_ingress_connector`
+- `go/handler/internal/connectors/auxiliary`
 - `app.main_auxiliary_ingress`
 
 ## Purpose
@@ -13,7 +13,7 @@ into canonical webhook envelopes.
 
 Split mode supports BBMB-backed auxiliary ingress with:
 - `app.main_auxiliary_ingress` listening on configured secret paths from `ingress_routes`
-- `AuxiliaryIngressConnector` draining configured handler-side queue names from `auxiliary_ingress_queues`
+- the Go auxiliary connector draining configured handler-side queue names from `auxiliary_ingress_queues`
 - worker-visible task content set to the JSON body only
 
 ## Queue payload

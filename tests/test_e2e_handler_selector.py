@@ -13,24 +13,6 @@ class E2EHandlerSelectorTests(unittest.TestCase):
     def test_default_handler_implementation_is_go(self) -> None:
         self.assertEqual(selected_handler_implementation({}), "go")
 
-    def test_python_handler_command_uses_current_python_entrypoint(self) -> None:
-        command = message_handler_command(
-            Path("/tmp/handler.json"),
-            env={HANDLER_IMPLEMENTATION_ENV: "python"},
-            python_executable="/bin/python-test",
-        )
-
-        self.assertEqual(
-            command,
-            [
-                "/bin/python-test",
-                "-m",
-                "app.main_message_handler",
-                "--config",
-                "/tmp/handler.json",
-            ],
-        )
-
     def test_go_handler_command_uses_go_entrypoint(self) -> None:
         command = message_handler_command(
             Path("/tmp/handler.json"),

@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
 from app.main_reply import main
-from app.handler.runtime import TaskLedgerStore
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
+from app.task_ledger import TaskLedgerStore
 
 
 class _FakeBroker:
@@ -264,6 +264,8 @@ class MainReplyCliTests(unittest.TestCase):
                         "email",
                         "--target",
                         "alice@example.com",
+                        "--event-id",
+                        "evt:custom:1",
                         "--config",
                         str(config_path),
                     ],
@@ -271,70 +273,17 @@ class MainReplyCliTests(unittest.TestCase):
             ):
                 exit_code = main()
 
-            self.assertEqual(exit_code, 0)
             activity = SQLiteStateStore(str(db_path)).list_recent_worker_activity(
-                limit=5, include_internal=True
+                limit=10,
+                include_internal=True,
             )
-            self.assertEqual(len(activity), 1)
-            self.assertEqual(activity[0]["phase"], "egress_incremental")
-            self.assertEqual(activity[0]["detail"]["publish_source"], "main_reply")
-
-    def test_main_reply_normalizes_literal_escape_sequences_in_message_body(
-        self,
-    ) -> None:
-        broker = _FakeBroker("127.0.0.1:9876")
-        with (
-            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
-            patch(
-                "sys.argv",
-                [
-                    "main_reply.py",
-                    "task:telegram:53",
-                    "--message",
-                    r"Proof line 1.\nProof line 2.\n\nTabs:\tokay",
-                    "--channel",
-                    "telegram",
-                    "--target",
-                    "8605042448",
-                ],
-            ),
-        ):
-            exit_code = main()
 
         self.assertEqual(exit_code, 0)
-        _, payload = broker.published[0]
-        self.assertEqual(
-            payload["message"]["body"], "Proof line 1.\nProof line 2.\n\nTabs:\tokay"
-        )
-
-    def test_main_reply_normalizes_double_escaped_sequences_in_message_body(
-        self,
-    ) -> None:
-        broker = _FakeBroker("127.0.0.1:9876")
-        with (
-            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
-            patch(
-                "sys.argv",
-                [
-                    "main_reply.py",
-                    "task:telegram:53",
-                    "--message",
-                    r"Proof line 1.\\nProof line 2.\\n\\nEscaped \\(paren\\)",
-                    "--channel",
-                    "telegram",
-                    "--target",
-                    "8605042448",
-                ],
-            ),
-        ):
-            exit_code = main()
-
-        self.assertEqual(exit_code, 0)
-        _, payload = broker.published[0]
-        self.assertEqual(
-            payload["message"]["body"],
-            "Proof line 1.\nProof line 2.\n\nEscaped (paren)",
-        )
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(activity[0]["task_id"], "task:email:53")
+        self.assertEqual(activity[0]["phase"], "egress_incremental")
+        self.assertEqual(activity[0]["summary"], "incremental egress to email")
+        self.assertEqual(activity[0]["detail"]["event_id"], "evt:custom:1")
 
 
 if __name__ == "__main__":

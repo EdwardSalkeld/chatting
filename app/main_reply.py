@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
-from app.handler.runtime import TaskLedgerStore
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
+from app.task_ledger import TaskLedgerStore
 from app.telegram_text import normalize_telegram_outbound_text
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 

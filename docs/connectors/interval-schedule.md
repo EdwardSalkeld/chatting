@@ -8,7 +8,7 @@ Live scheduled-job connector that emits `cron`-source events from cron expressio
 
 ## Runtime config keys
 
-Configured via `schedule_file` JSON loaded by `app.main_message_handler`.
+Configured via `schedule_file` JSON loaded by the Go `message-handler`.
 Global schedule prompt guidance comes from message-handler config:
 - `prompt_context` (optional global prompt instructions)
 - `cron_prompt_context` (optional schedule-source prompt instructions)

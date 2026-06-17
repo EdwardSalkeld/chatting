@@ -699,7 +699,7 @@ func assertPythonTaskLedgerCanRead(t *testing.T, dbPath string, taskMessage cont
 	repoRoot := filepath.Clean(filepath.Join("..", "..", "..", "..", ".."))
 	script := `
 import sys
-from app.handler.runtime import TaskLedgerStore
+from app.task_ledger import TaskLedgerStore
 
 db_path, task_id, envelope_id, trace_id = sys.argv[1:5]
 record = TaskLedgerStore(db_path).get_task(task_id)

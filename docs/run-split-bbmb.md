@@ -7,7 +7,7 @@ ingress is enabled:
 - `bbmb-server` in the middle (message bus)
 - optional `auxiliary-ingress` on a web-facing host (secret-path JSON POST listener)
 
-GitHub assignment polling is part of `message-handler` when configured.
+GitHub assignment polling is part of the Go `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
@@ -120,7 +120,7 @@ config.
 - `worker` does not read integration secrets and does not dispatch directly.
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
 - Worker emits zero or more task-scoped visible `message` egress events and exactly one terminal
-  internal `completion` event so `message-handler` can close the task and reject future egress.
+  internal `completion` event so the Go `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
 ## 6) Configure GitHub assignment polling (in message-handler)
@@ -180,53 +180,3 @@ docker compose run --rm worker claude login
 ```
 
 The compose stack publishes the worker activity UI on `9465`.
-
-## 9) Switch the handler from Python to Go
-
-The Go handler is a drop-in replacement at the message-handler boundary:
-- same handler JSON config
-- same handler env file / secrets
-- same BBMB queues and worker
-- same rollback path: switch the handler command back to Python
-
-Download the latest released binary and verify it:
-
-```bash
-curl -fsSL \
-  -o /usr/local/bin/chatting-handler \
-  https://github.com/EdwardSalkeld/chatting/releases/latest/download/chatting-handler-linux-amd64
-curl -fsSL \
-  -o /tmp/chatting-handler-linux-amd64.sha256 \
-  https://github.com/EdwardSalkeld/chatting/releases/latest/download/chatting-handler-linux-amd64.sha256
-(
-  cd /tmp
-  sha256sum -c chatting-handler-linux-amd64.sha256
-)
-chmod +x /usr/local/bin/chatting-handler
-```
-
-Then replace the Python handler command:
-
-```bash
-python -m app.main_message_handler --config /config/handler.json
-```
-
-with:
-
-```bash
-chatting-handler --config /config/handler.json
-```
-
-The repo's default Docker Compose stack already uses `chatting-handler` in the
-published runtime image. If your process manager is systemd or another
-supervisor, make the same command swap there and keep the existing handler
-config file, env file, and DB path.
-
-Recommended cutover order:
-1. Stop the running Python `message-handler`.
-2. Leave `worker` and `bbmb-server` running.
-3. Start `chatting-handler` with the same config/env.
-4. Watch handler logs and `:9464/metrics` for a few minutes.
-
-Rollback is immediate: stop `chatting-handler` and restart the previous Python
-handler command against the same config and DB.

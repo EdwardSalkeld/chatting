@@ -32,7 +32,6 @@ RUN uv sync --locked --no-dev --no-install-project
 
 COPY app/ app/
 COPY go/handler/ go/handler/
-
 RUN cd go/handler \
     && go build -trimpath -o /usr/local/bin/chatting-handler ./cmd/chatting-handler
 
