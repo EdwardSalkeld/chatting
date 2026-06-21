@@ -338,6 +338,86 @@ func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
 	}
 }
 
+func TestTelegramMessageSenderNormalizesAttachmentCaptionBeforeMarkdownEscape(t *testing.T) {
+	tempDir := t.TempDir()
+	photoPath := filepath.Join(tempDir, "plant.png")
+	if err := os.WriteFile(photoPath, []byte("png bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var multipartCall telegramMultipartCall
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		multipartCall = recordTelegramMultipartCall(t, request)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
+	}))
+	defer server.Close()
+	sender := newTestTelegramSender(t, server.URL)
+	body := `Heading\n\n- Item \(note\)`
+
+	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+		Channel: "telegram",
+		Target:  "12345",
+		Body:    &body,
+		Attachment: &contracts.AttachmentRef{
+			URI: photoPath,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if multipartCall.fields["caption"] != "Heading\n\n- Item \\(note\\)" {
+		t.Fatalf("caption = %#v", multipartCall.fields["caption"])
+	}
+	if multipartCall.fields["parse_mode"] != "Markdown" {
+		t.Fatalf("parse_mode = %#v", multipartCall.fields["parse_mode"])
+	}
+}
+
+func TestTelegramMessageSenderRetriesAttachmentWithNormalizedPlainCaptionAfterParseError(t *testing.T) {
+	tempDir := t.TempDir()
+	documentPath := filepath.Join(tempDir, "report.txt")
+	if err := os.WriteFile(documentPath, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []telegramMultipartCall
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		call := recordTelegramMultipartCall(t, request)
+		calls = append(calls, call)
+		if len(calls) == 1 {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities"})
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
+	}))
+	defer server.Close()
+	sender := newTestTelegramSender(t, server.URL)
+	body := `Heading\n\n- Item \(note\)`
+
+	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+		Channel: "telegram",
+		Target:  "12345",
+		Body:    &body,
+		Attachment: &contracts.AttachmentRef{
+			URI: documentPath,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if calls[0].fields["caption"] != "Heading\n\n- Item \\(note\\)" {
+		t.Fatalf("first caption = %#v", calls[0].fields["caption"])
+	}
+	if calls[0].fields["parse_mode"] != "Markdown" {
+		t.Fatalf("first parse_mode = %#v", calls[0].fields["parse_mode"])
+	}
+	if _, ok := calls[1].fields["parse_mode"]; ok {
+		t.Fatalf("fallback still has parse_mode: %#v", calls[1].fields)
+	}
+	if calls[1].fields["caption"] != "Heading\n\n- Item (note)" {
+		t.Fatalf("fallback caption = %#v", calls[1].fields["caption"])
+	}
+}
+
 func TestTelegramMessageSenderSendsDocumentAttachmentFromFileURI(t *testing.T) {
 	tempDir := t.TempDir()
 	documentPath := filepath.Join(tempDir, "report.txt")

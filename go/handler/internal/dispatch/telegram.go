@@ -91,7 +91,8 @@ func (sender *TelegramMessageSender) Send(ctx context.Context, target string, me
 	}
 	payload := map[string]string{"chat_id": target}
 	if message.Body != nil {
-		payload["caption"] = normalizeTelegramTextForParseMode(*message.Body, sender.parseMode)
+		normalizedBody := normalizeTelegramOutboundText(*message.Body)
+		payload["caption"] = normalizeTelegramTextForParseMode(normalizedBody, sender.parseMode)
 		if sender.parseMode != nil {
 			payload["parse_mode"] = *sender.parseMode
 		}
@@ -101,7 +102,7 @@ func (sender *TelegramMessageSender) Send(ctx context.Context, target string, me
 		return nil
 	}
 	if err == nil && sender.parseMode != nil && message.Body != nil && isTelegramParseModeError(response) {
-		fallback := map[string]string{"chat_id": target, "caption": *message.Body}
+		fallback := map[string]string{"chat_id": target, "caption": normalizeTelegramOutboundText(*message.Body)}
 		response, err = sender.postMultipart(ctx, method, fallback, fileField, filePath)
 		if err == nil && response.OK {
 			return nil
