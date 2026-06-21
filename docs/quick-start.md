@@ -75,10 +75,32 @@ The compose stack starts:
 - `bbmb`
 - `handler`
 - `worker`
+- `site` on port `3000`, serving files from `$LOCAL_WORKSPACE/site`
 
 The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
+
+If you want the static preview path to have content immediately, create a simple page in the
+mounted workspace before or after startup:
+
+```bash
+mkdir -p "$LOCAL_WORKSPACE/site"
+cat > "$LOCAL_WORKSPACE/site/index.html" <<'EOF'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Site Preview</title>
+  </head>
+  <body>
+    <h1>Site preview is live.</h1>
+    <p>Edit files in the workspace-mounted site directory and reload port 3000.</p>
+  </body>
+</html>
+EOF
+```
 
 ## 6) Bootstrap CLI auth
 

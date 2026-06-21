@@ -89,6 +89,10 @@ The worker also serves a local read-only activity page by default at `http://127
 with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 `activity_history_limit` to change the retention window.
 
+The default compose stack also runs a simple static preview service on `http://127.0.0.1:3000/`
+that serves the workspace-mounted directory at `$LOCAL_WORKSPACE/site`, so worker-generated output
+can live in the workspace instead of the `chatting` repo checkout.
+
 ## 4.5) Optional auxiliary webhook ingress
 
 ```bash

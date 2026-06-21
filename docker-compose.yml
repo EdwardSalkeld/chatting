@@ -52,6 +52,7 @@ services:
       - ./configs/worker:/config:ro
       - worker-data:/data
       - ${LOCAL_WORKSPACE}:/workspace
+      - ${LOCAL_WORKSPACE}/site:/site
       - shared-temp:/tmp
       - codex-auth:/home/chatting/.codex
       - claude-auth:/home/chatting/.claude
@@ -61,6 +62,21 @@ services:
         condition: service_healthy
     ports:
       - "9465:9465"
+    restart: unless-stopped
+
+  site:
+    image: node:22-alpine
+    working_dir: /site
+    command:
+      [
+        "sh",
+        "-lc",
+        "npm install -g browser-sync@3 && browser-sync start --server /site --files /site --host 0.0.0.0 --port 3000 --no-open --no-ui --no-notify"
+      ]
+    volumes:
+      - ${LOCAL_WORKSPACE}/site:/site
+    ports:
+      - "3000:3000"
     restart: unless-stopped
 
 volumes:
