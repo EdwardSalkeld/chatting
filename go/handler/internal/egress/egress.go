@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -33,6 +35,10 @@ type State interface {
 	ExpectedSequence(ctx context.Context, taskID string) (int, error)
 	GetStagedEventBySequence(ctx context.Context, taskID string, sequence int) (*StagedRecord, error)
 	MarkStagedEventDispatched(ctx context.Context, taskID string, eventID string, sequence int) error
+}
+
+type TelegramConversationState interface {
+	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error
 }
 
 type Dispatcher interface {
@@ -232,8 +238,14 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 }
 
 func (engine *Engine) dispatchAndMark(ctx context.Context, task *TaskRecord, message contracts.EgressQueueMessage) error {
-	if _, err := engine.dispatcher.Dispatch(ctx, message.Message, task.TaskMessage.Envelope); err != nil {
+	dispatched, err := engine.dispatcher.Dispatch(ctx, message.Message, task.TaskMessage.Envelope)
+	if err != nil {
 		return err
+	}
+	if memoryState, ok := engine.state.(TelegramConversationState); ok {
+		if err := maybeRecordTelegramConversationTurn(ctx, memoryState, task, dispatched, message.TaskID); err != nil {
+			return err
+		}
 	}
 	return engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID)
 }
@@ -249,4 +261,44 @@ func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage, task 
 		return engine.allowedChannels[task.TaskMessage.Envelope.ReplyChannel.Type]
 	}
 	return engine.allowedChannels[message.Message.Channel]
+}
+
+func maybeRecordTelegramConversationTurn(ctx context.Context, state TelegramConversationState, task *TaskRecord, dispatched *contracts.OutboundMessage, runID string) error {
+	if task == nil || dispatched == nil {
+		return nil
+	}
+	if task.TaskMessage.Envelope.ReplyChannel.Type != "telegram" {
+		return nil
+	}
+	if dispatched.Channel != "telegram" || dispatched.Target != task.TaskMessage.Envelope.ReplyChannel.Target {
+		return nil
+	}
+	content, ok := telegramConversationContent(*dispatched)
+	if !ok {
+		return nil
+	}
+	return state.AppendConversationTurn(ctx, "telegram", dispatched.Target, "assistant", content, runID)
+}
+
+func telegramConversationContent(message contracts.OutboundMessage) (string, bool) {
+	if message.Body != nil {
+		trimmed := strings.TrimSpace(*message.Body)
+		if trimmed != "" {
+			return trimmed, true
+		}
+	}
+	if message.Attachment == nil {
+		return "", false
+	}
+	name := ""
+	if message.Attachment.Name != nil {
+		name = strings.TrimSpace(*message.Attachment.Name)
+	}
+	if name == "" {
+		name = filepath.Base(message.Attachment.URI)
+	}
+	if name == "" || name == "." || name == "/" {
+		name = message.Attachment.URI
+	}
+	return "[Attachment sent: " + name + "]", true
 }

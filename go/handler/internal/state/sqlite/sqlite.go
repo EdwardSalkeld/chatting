@@ -85,6 +85,11 @@ type TelegramAttachmentCleanupResult struct {
 	ReclaimedBytes int64
 }
 
+type ConversationTurn struct {
+	Role    string
+	Content string
+}
+
 type GitHubAssignmentCheckpoint struct {
 	EventCreatedAt time.Time
 	EventID        string
@@ -176,6 +181,15 @@ func (store *Store) initialize(ctx context.Context) error {
 			deleted_at TEXT,
 			cleanup_attempts INTEGER NOT NULL,
 			last_cleanup_error TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS conversation_turns (
+			turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			channel TEXT NOT NULL,
+			target TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			run_id TEXT,
+			created_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS github_assignment_checkpoints (
 			scope_key TEXT PRIMARY KEY,
@@ -561,6 +575,86 @@ func (store *Store) ListTelegramChats(ctx context.Context) ([]TelegramChatRecord
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func (store *Store) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error {
+	if strings.TrimSpace(channel) == "" {
+		return errors.New("channel is required")
+	}
+	if strings.TrimSpace(target) == "" {
+		return errors.New("target is required")
+	}
+	if role != "user" && role != "assistant" {
+		return errors.New("role must be user or assistant")
+	}
+	if strings.TrimSpace(content) == "" {
+		return errors.New("content is required")
+	}
+	if runID != "" && strings.TrimSpace(runID) == "" {
+		return errors.New("run_id must not be empty")
+	}
+	_, err := store.db.ExecContext(
+		ctx,
+		`INSERT INTO conversation_turns (
+			channel,
+			target,
+			role,
+			content,
+			run_id,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		channel,
+		target,
+		role,
+		content,
+		nullIfEmpty(runID),
+		formatTimestamp(time.Now()),
+	)
+	return err
+}
+
+func (store *Store) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error) {
+	if strings.TrimSpace(channel) == "" {
+		return nil, errors.New("channel is required")
+	}
+	if strings.TrimSpace(target) == "" {
+		return nil, errors.New("target is required")
+	}
+	if limit <= 0 {
+		return nil, errors.New("limit must be positive")
+	}
+	rows, err := store.db.QueryContext(
+		ctx,
+		`SELECT role, content
+		FROM conversation_turns
+		WHERE channel = ? AND target = ?
+		ORDER BY turn_id DESC
+		LIMIT ?`,
+		channel,
+		target,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	reversed := make([]ConversationTurn, 0, limit)
+	for rows.Next() {
+		turn := ConversationTurn{}
+		if err := rows.Scan(&turn.Role, &turn.Content); err != nil {
+			return nil, err
+		}
+		reversed = append(reversed, turn)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	turns := make([]ConversationTurn, 0, len(reversed))
+	for index := len(reversed) - 1; index >= 0; index-- {
+		turns = append(turns, reversed[index])
+	}
+	return turns, nil
 }
 
 func (store *Store) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
@@ -966,6 +1060,13 @@ func nullableString(value *string) any {
 		return nil
 	}
 	return *value
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func nullStringPointer(value sql.NullString) *string {
