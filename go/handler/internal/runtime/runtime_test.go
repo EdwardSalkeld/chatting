@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,6 +226,65 @@ func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
 	}
 }
 
+func TestPublishIngressEnrichesTelegramEnvelopeWithRecentConversation(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	for index := 0; index < 35; index++ {
+		state.turns["12345"] = append(state.turns["12345"], ConversationTurn{
+			Role:    "user",
+			Content: fmt.Sprintf("turn-%d", index),
+		})
+	}
+	envelope := contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:100",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:00:00Z")),
+		Content:       "latest-turn",
+		ReplyChannel: contracts.ReplyChannel{
+			Type:   "telegram",
+			Target: "12345",
+		},
+		DedupeKey: "telegram:100",
+	}
+	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
+	runner, err := NewRunner(
+		handlerconfig.Defaults(),
+		broker,
+		&fakeEgressHandler{},
+		WithIngress(state, connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := runner.PublishIngress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if published != 1 {
+		t.Fatalf("published = %d", published)
+	}
+	recorded := state.tasks["task:telegram:100"]
+	if !strings.Contains(recorded.Envelope.Content, "Recent conversation context (oldest first):") {
+		t.Fatalf("content = %q", recorded.Envelope.Content)
+	}
+	if !strings.Contains(recorded.Envelope.Content, "user: turn-5") || !strings.Contains(recorded.Envelope.Content, "user: turn-34") {
+		t.Fatalf("content = %q", recorded.Envelope.Content)
+	}
+	if strings.Contains(recorded.Envelope.Content, "user: turn-4") {
+		t.Fatalf("content = %q", recorded.Envelope.Content)
+	}
+	if !strings.Contains(recorded.Envelope.Content, "Current user message:\nlatest-turn") {
+		t.Fatalf("content = %q", recorded.Envelope.Content)
+	}
+	lastTurn := state.turns["12345"][len(state.turns["12345"])-1]
+	if lastTurn.Role != "user" || lastTurn.Content != "latest-turn" {
+		t.Fatalf("stored turn = %#v", lastTurn)
+	}
+}
+
 func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
@@ -382,12 +443,14 @@ func (handler *fakeEgressHandler) HandleRaw(ctx context.Context, raw []byte) err
 type fakeIngressState struct {
 	seen  map[string]map[string]bool
 	tasks map[string]contracts.TaskQueueMessage
+	turns map[string][]ConversationTurn
 }
 
 func newFakeIngressState() *fakeIngressState {
 	return &fakeIngressState{
 		seen:  map[string]map[string]bool{},
 		tasks: map[string]contracts.TaskQueueMessage{},
+		turns: map[string][]ConversationTurn{},
 	}
 }
 
@@ -406,6 +469,25 @@ func (state *fakeIngressState) MarkSeen(ctx context.Context, source string, dedu
 func (state *fakeIngressState) RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error {
 	state.tasks[taskMessage.TaskID] = taskMessage
 	return nil
+}
+
+func (state *fakeIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error {
+	if channel != "telegram" {
+		return nil
+	}
+	state.turns[target] = append(state.turns[target], ConversationTurn{Role: role, Content: content})
+	return nil
+}
+
+func (state *fakeIngressState) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error) {
+	if channel != "telegram" {
+		return nil, nil
+	}
+	turns := state.turns[target]
+	if len(turns) <= limit {
+		return append([]ConversationTurn{}, turns...), nil
+	}
+	return append([]ConversationTurn{}, turns[len(turns)-limit:]...), nil
 }
 
 func mustTime(t *testing.T, raw string) time.Time {

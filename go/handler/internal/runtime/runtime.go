@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
@@ -18,6 +19,7 @@ const (
 	EgressQueueName         = "chatting.egress.v1"
 	egressPickupWaitSeconds = 5
 	egressDrainWaitSeconds  = 0
+	telegramMemoryTurnLimit = 30
 )
 
 type Broker interface {
@@ -43,6 +45,16 @@ type TelegramAttachmentIngressState interface {
 
 type TelegramAttachmentCleanupState interface {
 	CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error
+}
+
+type ConversationTurn struct {
+	Role    string
+	Content string
+}
+
+type TelegramConversationState interface {
+	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error
+	ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error)
 }
 
 type Connector interface {
@@ -198,6 +210,13 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 				"trace:"+envelope.ID,
 				runner.now(),
 			)
+			if conversationState, ok := runner.ingressState.(TelegramConversationState); ok {
+				enriched, err := prepareTelegramEnvelope(ctx, conversationState, taskMessage.TaskID, envelope)
+				if err != nil {
+					return published, err
+				}
+				taskMessage.Envelope = enriched
+			}
 			if err := runner.ingressState.RecordTask(ctx, taskMessage); err != nil {
 				return published, err
 			}
@@ -223,6 +242,30 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 		}
 	}
 	return published, nil
+}
+
+func prepareTelegramEnvelope(ctx context.Context, state TelegramConversationState, runID string, envelope contracts.TaskEnvelope) (contracts.TaskEnvelope, error) {
+	if envelope.ReplyChannel.Type != "telegram" {
+		return envelope, nil
+	}
+	turns, err := state.ListRecentConversationTurns(ctx, "telegram", envelope.ReplyChannel.Target, telegramMemoryTurnLimit)
+	if err != nil {
+		return contracts.TaskEnvelope{}, err
+	}
+	enriched := envelope
+	if len(turns) > 0 {
+		lines := make([]string, 0, len(turns)+3)
+		lines = append(lines, "Recent conversation context (oldest first):")
+		for _, turn := range turns {
+			lines = append(lines, turn.Role+": "+turn.Content)
+		}
+		lines = append(lines, "", "Current user message:", envelope.Content)
+		enriched.Content = strings.Join(lines, "\n")
+	}
+	if err := state.AppendConversationTurn(ctx, "telegram", envelope.ReplyChannel.Target, "user", envelope.Content, runID); err != nil {
+		return contracts.TaskEnvelope{}, err
+	}
+	return enriched, nil
 }
 
 func ackEnvelope(ctx context.Context, connector Connector, envelopeID string) error {
