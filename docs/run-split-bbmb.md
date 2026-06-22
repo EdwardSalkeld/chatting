@@ -7,7 +7,7 @@ ingress is enabled:
 - `bbmb-server` in the middle (message bus)
 - optional `auxiliary-ingress` on a web-facing host (secret-path JSON POST listener)
 
-GitHub assignment polling is part of `message-handler` when configured.
+GitHub assignment polling is part of the Go `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
@@ -26,7 +26,7 @@ For a worked message example and the full message-handler <-> worker conversatio
 
 ## Topology
 
-- `handler`: `python -m app.main_message_handler`
+- `handler`: `chatting-handler --config /config/handler.json`
 - `worker`: `python -m app.main_worker`
 - `bbmb`: `bbmb-server` on `:9876`
 - optional `auxiliary-ingress`: `python -m app.main_auxiliary_ingress`
@@ -46,16 +46,34 @@ cp configs/worker.env.example configs/worker/worker.env
 
 Edit the copied configs and env files for the target integrations and executor provider secrets.
 
-## 2) Set the worker workspace mount
+## 2) Choose the runtime image
+
+The default compose stack pulls the published runtime image from GHCR:
+
+```bash
+export CHATTING_RUNTIME_IMAGE=ghcr.io/edwardsalkeld/chatting:latest
+```
+
+You can pin that to a published `sha-<commit>` tag when you want a fixed deploy.
+
+If the host has not already authenticated to GHCR, log in once with a token that
+has package read access:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+```
+
+## 3) Start the stack
+
+The worker still needs a host workspace bind so the executor can operate on real repos:
 
 ```bash
 export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
 ```
 
-## 3) Start the stack
-
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Optional auxiliary ingress connector settings in message-handler config:
@@ -70,6 +88,12 @@ directory.
 The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
 with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 `activity_history_limit` to change the retention window.
+
+The default compose stack also runs a simple static preview service on `http://127.0.0.1:9466/`.
+It serves a Docker-managed `html-output` volume that is mounted read-write into the worker at
+`/workspace/html`. The worker still uses the existing `${LOCAL_WORKSPACE}:/workspace` bind for its
+main working tree, and the extra volume just provides a stable place for worker-generated HTML
+reports without tying that output to a checkout-specific host path.
 
 ## 3.5) Optional auxiliary webhook ingress
 
@@ -102,7 +126,7 @@ config.
 - `worker` does not read integration secrets and does not dispatch directly.
 - Egress is strict: if a task is unknown to the ingress ledger, it is logged and dropped.
 - Worker emits zero or more task-scoped visible `message` egress events and exactly one terminal
-  internal `completion` event so `message-handler` can close the task and reject future egress.
+  internal `completion` event so the Go `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
 ## 5) Configure GitHub assignment polling (in message-handler)
@@ -153,60 +177,18 @@ volumes.
 The compose file mounts:
 - `codex-auth` -> `/home/chatting/.codex`
 - `claude-auth` -> `/home/chatting/.claude`
+- `gh-auth` -> `/home/chatting/.config/gh`
 
 One-time bootstrap:
 
 ```bash
+docker compose run --rm worker gh auth login
 docker compose run --rm worker codex login
 docker compose run --rm worker claude login
 ```
 
 The compose stack publishes the worker activity UI on `9465`.
 
-## 8) Switch the handler from Python to Go
-
-The Go handler is a drop-in replacement at the message-handler boundary:
-- same handler JSON config
-- same handler env file / secrets
-- same BBMB queues and worker
-- same rollback path: switch the handler command back to Python
-
-Download the latest released binary and verify it:
-
-```bash
-curl -fsSL \
-  -o /usr/local/bin/chatting-handler \
-  https://github.com/EdwardSalkeld/chatting/releases/latest/download/chatting-handler-linux-amd64
-curl -fsSL \
-  -o /tmp/chatting-handler-linux-amd64.sha256 \
-  https://github.com/EdwardSalkeld/chatting/releases/latest/download/chatting-handler-linux-amd64.sha256
-(
-  cd /tmp
-  sha256sum -c chatting-handler-linux-amd64.sha256
-)
-chmod +x /usr/local/bin/chatting-handler
-```
-
-Then replace the Python handler command:
-
-```bash
-python -m app.main_message_handler --config /config/handler.json
-```
-
-with:
-
-```bash
-chatting-handler --config /config/handler.json
-```
-
-If your process manager is Docker Compose or systemd, make the same command
-swap there and keep the existing handler config file, env file, and DB path.
-
-Recommended cutover order:
-1. Stop the running Python `message-handler`.
-2. Leave `worker` and `bbmb-server` running.
-3. Start `chatting-handler` with the same config/env.
-4. Watch handler logs and `:9464/metrics` for a few minutes.
-
-Rollback is immediate: stop `chatting-handler` and restart the previous Python
-handler command against the same config and DB.
+The runtime image already sets Git's credential helper to `gh auth git-credential` at the system
+level, so plain `git push` keeps working after container replacement as long as the `gh-auth`
+volume still contains a valid `gh` login.

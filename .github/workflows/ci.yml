@@ -23,10 +23,10 @@ jobs:
 
       - name: Download bbmb-server release
         run: |
-          curl -fsSL \
+          curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
             -o "${{ runner.temp }}/bbmb-server-linux-amd64" \
             https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64
-          curl -fsSL \
+          curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
             -o "${{ runner.temp }}/bbmb-server-linux-amd64.sha256" \
             https://github.com/EdwardSalkeld/bbmb/releases/latest/download/bbmb-server-linux-amd64.sha256
           (
@@ -54,9 +54,18 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Build Go handler test binary
+        run: |
+          mkdir -p "${{ runner.temp }}/chatting-e2e"
+          cd go/handler
+          go build -trimpath \
+            -o "${{ runner.temp }}/chatting-e2e/chatting-handler" \
+            ./cmd/chatting-handler
+
       - name: Run unit tests
         env:
           CHATTING_BBMB_SERVER_BIN: ${{ runner.temp }}/bbmb-server-linux-amd64
+          CHATTING_E2E_HANDLER_BINARY: ${{ runner.temp }}/chatting-e2e/chatting-handler
         run: uv run python -m unittest discover -s tests
 
       - name: Run Go handler tests

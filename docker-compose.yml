@@ -15,12 +15,9 @@ services:
     restart: unless-stopped
 
   handler:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: prod
+    image: ${CHATTING_RUNTIME_IMAGE:-ghcr.io/edwardsalkeld/chatting:latest}
     entrypoint: ["/entrypoint.sh"]
-    command: ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
+    command: ["chatting-handler", "--config", "/config/handler.json"]
     env_file: configs/handler/handler.env
     environment:
       CHATTING_MESSAGE_HANDLER_CONFIG_PATH: /config/handler.json
@@ -41,10 +38,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: prod
+    image: ${CHATTING_RUNTIME_IMAGE:-ghcr.io/edwardsalkeld/chatting:latest}
     entrypoint: ["/entrypoint.sh"]
     command: ["/app/.venv/bin/python", "-m", "app.main_worker"]
     env_file: configs/worker/worker.env
@@ -58,6 +52,7 @@ services:
       - ./configs/worker:/config:ro
       - worker-data:/data
       - ${LOCAL_WORKSPACE}:/workspace
+      - html-output:/workspace/html
       - shared-temp:/tmp
       - codex-auth:/home/chatting/.codex
       - claude-auth:/home/chatting/.claude
@@ -69,9 +64,25 @@ services:
       - "9465:9465"
     restart: unless-stopped
 
+  site:
+    image: node:22-alpine
+    working_dir: /site
+    command:
+      [
+        "sh",
+        "-lc",
+        "npm install -g browser-sync@3 && browser-sync start --server /site --files /site --host 0.0.0.0 --port 9466 --no-open --no-ui --no-notify"
+      ]
+    volumes:
+      - html-output:/site
+    ports:
+      - "9466:9466"
+    restart: unless-stopped
+
 volumes:
   handler-data:
   worker-data:
+  html-output:
   shared-temp:
   codex-auth:
   claude-auth:

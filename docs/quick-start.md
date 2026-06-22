@@ -1,7 +1,7 @@
 # Quick Start
 
 `chatting` runs as three services:
-- `message-handler`
+- `message-handler` (Go)
 - `worker`
 - `bbmb-server`
 
@@ -9,6 +9,7 @@
 
 - Docker with Compose support
 - Access to a shell
+- GHCR login that can pull `ghcr.io/edwardsalkeld/chatting`
 - Optional: Codex or Claude credentials if you want real executor mode
 
 ## 1) Clone and enter repo
@@ -31,7 +32,7 @@ cp configs/worker.env.example configs/worker/worker.env
 Edit the copied files before starting the stack:
 - `configs/handler/handler.json`: connector settings, egress channels, metrics, and integration paths
 - `configs/handler/handler.env`: IMAP, SMTP, Telegram, and other integration secrets
-- `configs/worker/worker.json`: executor settings and mounted workspace path
+- `configs/worker/worker.json`: executor settings
 - `configs/worker/worker.env`: executor provider secrets
 
 The Docker examples use container paths and Docker DNS:
@@ -39,26 +40,71 @@ The Docker examples use container paths and Docker DNS:
 - worker DB: `/data/worker.db`
 - BBMB: `bbmb:9876`
 
-## 3) Set the workspace mount
+## 3) Choose the runtime image
+
+The default compose file pulls the published runtime image:
+
+```bash
+export CHATTING_RUNTIME_IMAGE=ghcr.io/edwardsalkeld/chatting:latest
+```
+
+You can pin a specific published tag instead, for example `sha-<commit>` from the
+GitHub Container Registry package page.
+
+If this host has not already authenticated to GHCR, log in once with a token that
+has package read access:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+```
+
+## 4) Start chatting
+
+The worker still needs a real workspace bind for repo access. Set it before starting:
 
 ```bash
 export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
 ```
 
-## 4) Start chatting
-
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 The compose stack starts:
 - `bbmb`
 - `handler`
 - `worker`
+- `site` on port `9466`, serving files from the shared `html-output` Docker volume
 
-The message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
+The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
+
+The worker keeps your normal host workspace mounted at `/workspace` and also gets a writable
+Docker volume mounted at `/workspace/html`, so the agent can drop
+HTML reports there and you can open them through the preview service on `http://127.0.0.1:9466/`.
+
+If you want the static preview path to have content immediately, create a simple page from inside
+the worker container before or after startup:
+
+```bash
+docker compose exec worker sh -lc 'cat > /workspace/html/index.html <<'"'"'EOF'"'"'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Site Preview</title>
+  </head>
+  <body>
+    <h1>Site preview is live.</h1>
+    <p>Edit files in /workspace/html and reload port 9466.</p>
+  </body>
+</html>
+EOF
+'
+```
 
 ## 5) Bootstrap CLI auth
 
@@ -66,9 +112,14 @@ When using real executor mode, authenticate the CLIs once inside the worker cont
 persisted in Docker volumes.
 
 ```bash
+docker compose run --rm worker gh auth login
 docker compose run --rm worker codex login
 docker compose run --rm worker claude login
 ```
+
+The runtime image already configures Git to use `gh auth git-credential`, so you do not need a
+separate `gh auth setup-git` step after redeploys. The `gh-auth` Docker volume persists the GitHub
+CLI login itself.
 
 ## 6) Run tests
 

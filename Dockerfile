@@ -9,6 +9,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap nodejs npm ca-certificates curl gh git gosu ripgrep sqlite3 \
     && npm install -g @openai/codex @anthropic-ai/claude-code \
+    && git config --system credential.helper '!/usr/bin/gh auth git-credential' \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
@@ -31,6 +32,9 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --locked --no-dev --no-install-project
 
 COPY app/ app/
+COPY go/handler/ go/handler/
+RUN cd go/handler \
+    && go build -trimpath -o /usr/local/bin/chatting-handler ./cmd/chatting-handler
 
 ENV HOME=/home/chatting
 RUN mkdir -p /home/chatting && chmod 755 /home/chatting
@@ -39,7 +43,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/app/.venv/bin/python", "-m", "app.main_message_handler"]
+CMD ["chatting-handler", "--config", "/config/handler.json"]
 
 FROM base AS prod
 RUN uv sync --locked

@@ -175,7 +175,7 @@ class SplitModeE2ETests(unittest.TestCase):
             ]
             self.assertTrue(
                 matching_worker_runs,
-                msg="missing worker run for ci-split-smoke cron schedule",
+                msg="missing worker run for cron:ci-split-smoke",
             )
             expected_envelope_id = matching_worker_runs[0].envelope_id
             self.assertTrue(

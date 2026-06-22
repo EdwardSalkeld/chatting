@@ -5,15 +5,14 @@
 
 - Sync local env: `uv sync`
 - Run all tests: `uv run python -m unittest discover -s tests`
-- Run message-handler tests: `uv run python -m unittest tests.test_message_handler_runtime tests.test_main_github_ingress`
+- Run handler-adjacent tests: `uv run python -m unittest tests.test_main_reply tests.test_split_mode_e2e`
 - Run worker tests: `uv run python -m unittest tests.test_worker_runtime`
-- Run GitHub ingress runtime tests: `uv run python -m unittest tests.test_github_ingress_runtime`
 - Run app-main admin/query CLI tests: `uv run python -m unittest tests.test_main`
 
 ## Runtime Entry Points
 
 - Split mode only:
-  - `uv run python -m app.main_message_handler --config <message-handler.json>`
+  - `cd go/handler && go run ./cmd/chatting-handler --config <message-handler.json>`
   - `uv run python -m app.main_worker --config <worker.json>`
 
 ## Query Examples
