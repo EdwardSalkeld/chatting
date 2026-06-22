@@ -171,12 +171,18 @@ volumes.
 The compose file mounts:
 - `codex-auth` -> `/home/chatting/.codex`
 - `claude-auth` -> `/home/chatting/.claude`
+- `gh-auth` -> `/home/chatting/.config/gh`
 
 One-time bootstrap:
 
 ```bash
+docker compose run --rm worker gh auth login
 docker compose run --rm worker codex login
 docker compose run --rm worker claude login
 ```
 
 The compose stack publishes the worker activity UI on `9465`.
+
+The runtime image already sets Git's credential helper to `gh auth git-credential` at the system
+level, so plain `git push` keeps working after container replacement as long as the `gh-auth`
+volume still contains a valid `gh` login.
