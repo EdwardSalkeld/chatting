@@ -51,6 +51,7 @@ services:
     volumes:
       - ./configs/worker:/config:ro
       - worker-data:/data
+      - ${LOCAL_WORKSPACE}:/workspace
       - html-output:/workspace/html
       - shared-temp:/tmp
       - codex-auth:/home/chatting/.codex

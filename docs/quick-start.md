@@ -60,6 +60,12 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 
 ## 4) Start chatting
 
+The worker still needs a real workspace bind for repo access. Set it before starting:
+
+```bash
+export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
+```
+
 ```bash
 docker compose pull
 docker compose up -d
@@ -75,7 +81,8 @@ The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:946
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
 
-The worker gets the same writable volume mounted at `/workspace/html`, so the agent can drop
+The worker keeps your normal host workspace mounted at `/workspace` and also gets a writable
+Docker volume mounted at `/workspace/html`, so the agent can drop
 HTML reports there and you can open them through the preview service on `http://127.0.0.1:9466/`.
 
 If you want the static preview path to have content immediately, create a simple page from inside

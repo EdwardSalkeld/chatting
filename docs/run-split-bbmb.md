@@ -65,6 +65,12 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 
 ## 3) Start the stack
 
+The worker still needs a host workspace bind so the executor can operate on real repos:
+
+```bash
+export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
+```
+
 ```bash
 docker compose pull
 docker compose up -d
@@ -85,8 +91,9 @@ with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 
 The default compose stack also runs a simple static preview service on `http://127.0.0.1:9466/`.
 It serves a Docker-managed `html-output` volume that is mounted read-write into the worker at
-`/workspace/html`, so worker-generated reports can be written there without relying on a host bind
-mount or a checkout-specific path.
+`/workspace/html`. The worker still uses the existing `${LOCAL_WORKSPACE}:/workspace` bind for its
+main working tree, and the extra volume just provides a stable place for worker-generated HTML
+reports without tying that output to a checkout-specific host path.
 
 ## 3.5) Optional auxiliary webhook ingress
 
