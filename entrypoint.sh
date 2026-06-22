@@ -13,7 +13,7 @@ if [ "$PUID" != "0" ] || [ "$PGID" != "0" ]; then
     fi
     chown -R "$PUID:$PGID" "$HOME"
     # Runtime state lives on mounted volumes; ensure they remain writable after dropping privileges.
-    for path in /data /tmp; do
+    for path in /data /tmp /workspace/html; do
         if [ -e "$path" ]; then
             chown -R "$PUID:$PGID" "$path"
         fi

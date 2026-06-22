@@ -32,7 +32,7 @@ cp configs/worker.env.example configs/worker/worker.env
 Edit the copied files before starting the stack:
 - `configs/handler/handler.json`: connector settings, egress channels, metrics, and integration paths
 - `configs/handler/handler.env`: IMAP, SMTP, Telegram, and other integration secrets
-- `configs/worker/worker.json`: executor settings and mounted workspace path
+- `configs/worker/worker.json`: executor settings
 - `configs/worker/worker.env`: executor provider secrets
 
 The Docker examples use container paths and Docker DNS:
@@ -40,13 +40,7 @@ The Docker examples use container paths and Docker DNS:
 - worker DB: `/data/worker.db`
 - BBMB: `bbmb:9876`
 
-## 3) Set the workspace mount
-
-```bash
-export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
-```
-
-## 4) Choose the runtime image
+## 3) Choose the runtime image
 
 The default compose file pulls the published runtime image:
 
@@ -64,7 +58,7 @@ has package read access:
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 ```
 
-## 5) Start chatting
+## 4) Start chatting
 
 ```bash
 docker compose pull
@@ -75,18 +69,20 @@ The compose stack starts:
 - `bbmb`
 - `handler`
 - `worker`
-- `site` on port `3000`, serving files from `$LOCAL_WORKSPACE/site`
+- `site` on port `9466`, serving files from the shared `html-output` Docker volume
 
 The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
 
-If you want the static preview path to have content immediately, create a simple page in the
-mounted workspace before or after startup:
+The worker gets the same writable volume mounted at `/workspace/html`, so the agent can drop
+HTML reports there and you can open them through the preview service on `http://127.0.0.1:9466/`.
+
+If you want the static preview path to have content immediately, create a simple page from inside
+the worker container before or after startup:
 
 ```bash
-mkdir -p "$LOCAL_WORKSPACE/site"
-cat > "$LOCAL_WORKSPACE/site/index.html" <<'EOF'
+docker compose exec worker sh -lc 'cat > /workspace/html/index.html <<'"'"'EOF'"'"'
 <!doctype html>
 <html lang="en">
   <head>
@@ -96,13 +92,14 @@ cat > "$LOCAL_WORKSPACE/site/index.html" <<'EOF'
   </head>
   <body>
     <h1>Site preview is live.</h1>
-    <p>Edit files in the workspace-mounted site directory and reload port 3000.</p>
+    <p>Edit files in /workspace/html and reload port 9466.</p>
   </body>
 </html>
 EOF
+'
 ```
 
-## 6) Bootstrap CLI auth
+## 5) Bootstrap CLI auth
 
 When using real executor mode, authenticate the CLIs once inside the worker container. Auth state is
 persisted in Docker volumes.
@@ -112,7 +109,7 @@ docker compose run --rm worker codex login
 docker compose run --rm worker claude login
 ```
 
-## 7) Run tests
+## 6) Run tests
 
 Local tests are separate from the Docker runtime path and require Python 3.13+ plus `uv`.
 
@@ -121,7 +118,7 @@ uv sync
 uv run python -m unittest discover -s tests
 ```
 
-## 8) Query state and metrics
+## 7) Query state and metrics
 
 Use the worker page for a quick operator view, or query SQLite directly when you need deeper history:
 

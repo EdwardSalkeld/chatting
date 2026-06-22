@@ -46,13 +46,7 @@ cp configs/worker.env.example configs/worker/worker.env
 
 Edit the copied configs and env files for the target integrations and executor provider secrets.
 
-## 2) Set the worker workspace mount
-
-```bash
-export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
-```
-
-## 3) Choose the runtime image
+## 2) Choose the runtime image
 
 The default compose stack pulls the published runtime image from GHCR:
 
@@ -69,7 +63,7 @@ has package read access:
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 ```
 
-## 4) Start the stack
+## 3) Start the stack
 
 ```bash
 docker compose pull
@@ -89,11 +83,12 @@ The worker also serves a local read-only activity page by default at `http://127
 with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 `activity_history_limit` to change the retention window.
 
-The default compose stack also runs a simple static preview service on `http://127.0.0.1:3000/`
-that serves the workspace-mounted directory at `$LOCAL_WORKSPACE/site`, so worker-generated output
-can live in the workspace instead of the `chatting` repo checkout.
+The default compose stack also runs a simple static preview service on `http://127.0.0.1:9466/`.
+It serves a Docker-managed `html-output` volume that is mounted read-write into the worker at
+`/workspace/html`, so worker-generated reports can be written there without relying on a host bind
+mount or a checkout-specific path.
 
-## 4.5) Optional auxiliary webhook ingress
+## 3.5) Optional auxiliary webhook ingress
 
 ```bash
 uv run python -m app.main_auxiliary_ingress \
@@ -118,7 +113,7 @@ JSON bodies to `generic-post` and `new-service` respectively. To make the handle
 queues, add `auxiliary_ingress_queues: ["generic-post", "new-service"]` to the message-handler
 config.
 
-## 5) Security boundary expectations
+## 4) Security boundary expectations
 
 - `message-handler` owns integration secrets (`IMAP`, `SMTP`, `Telegram`).
 - `worker` does not read integration secrets and does not dispatch directly.
@@ -127,7 +122,7 @@ config.
   internal `completion` event so the Go `message-handler` can close the task and reject future egress.
 - Egress channel dispatch is allowlist-gated by `allowed_egress_channels`.
 
-## 6) Configure GitHub assignment polling (in message-handler)
+## 5) Configure GitHub assignment polling (in message-handler)
 
 Edit message-handler config:
 - `github_repositories` (`owner/repo` or `owner/*`)
@@ -135,7 +130,7 @@ Edit message-handler config:
 
 `gh` CLI must already be authenticated on the message-handler host for both polling and issue-comment egress.
 
-## 7) Publish a visible reply from worker side
+## 6) Publish a visible reply from worker side
 
 Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
 path for both quick acknowledgements and final user-visible answers instead of returning replies in
@@ -166,7 +161,7 @@ docker compose exec worker python -m app.main_reply task:telegram:53 \
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 
-## 8) Docker worker CLI auth bootstrap
+## 7) Docker worker CLI auth bootstrap
 
 When running with `docker-compose.yml`, the worker image includes both `codex` and `claude` CLIs.
 Auth is still external to the app and must be completed once interactively, then persisted in Docker
