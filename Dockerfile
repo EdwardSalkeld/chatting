@@ -9,6 +9,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap nodejs npm ca-certificates curl gh git gosu ripgrep sqlite3 \
     && npm install -g @openai/codex @anthropic-ai/claude-code \
+    && git config --system credential.helper '!/usr/bin/gh auth git-credential' \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 

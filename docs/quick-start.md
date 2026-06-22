@@ -105,9 +105,14 @@ When using real executor mode, authenticate the CLIs once inside the worker cont
 persisted in Docker volumes.
 
 ```bash
+docker compose run --rm worker gh auth login
 docker compose run --rm worker codex login
 docker compose run --rm worker claude login
 ```
+
+The runtime image already configures Git to use `gh auth git-credential`, so you do not need a
+separate `gh auth setup-git` step after redeploys. The `gh-auth` Docker volume persists the GitHub
+CLI login itself.
 
 ## 6) Run tests
 
