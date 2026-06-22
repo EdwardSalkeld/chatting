@@ -291,7 +291,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			metricRecorder.RecordEgressResult(result.Status, result.Reason)
 		}
 		return err
-	}), handlerruntime.WithIngress(store, connectors...), handlerruntime.WithMetrics(metricRecorder))
+	}), handlerruntime.WithIngress(handlerIngressState{store: store}, connectors...), handlerruntime.WithMetrics(metricRecorder))
 	if err != nil {
 		_ = metricsServer.Close()
 		_ = store.Close()
@@ -302,6 +302,49 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 
 type githubCheckpointStore struct {
 	store *sqlitestate.Store
+}
+
+type handlerIngressState struct {
+	store *sqlitestate.Store
+}
+
+func (state handlerIngressState) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
+	return state.store.Seen(ctx, source, dedupeKey)
+}
+
+func (state handlerIngressState) MarkSeen(ctx context.Context, source string, dedupeKey string) error {
+	return state.store.MarkSeen(ctx, source, dedupeKey)
+}
+
+func (state handlerIngressState) RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error {
+	return state.store.RecordTask(ctx, taskMessage)
+}
+
+func (state handlerIngressState) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {
+	return state.store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRootDir)
+}
+
+func (state handlerIngressState) CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error {
+	return state.store.CleanupTelegramAttachmentsForRuntime(ctx, attachmentRootDir, notAfter, maxAgeCutoff)
+}
+
+func (state handlerIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error {
+	return state.store.AppendConversationTurn(ctx, channel, target, role, content, runID)
+}
+
+func (state handlerIngressState) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]handlerruntime.ConversationTurn, error) {
+	turns, err := state.store.ListRecentConversationTurns(ctx, channel, target, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]handlerruntime.ConversationTurn, 0, len(turns))
+	for _, turn := range turns {
+		result = append(result, handlerruntime.ConversationTurn{
+			Role:    turn.Role,
+			Content: turn.Content,
+		})
+	}
+	return result, nil
 }
 
 func (store githubCheckpointStore) GetGitHubCheckpoint(ctx context.Context, scopeKey string) (*githubconnector.AssignmentCheckpoint, error) {
