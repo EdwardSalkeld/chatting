@@ -80,6 +80,7 @@ The compose stack starts:
 The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
 The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
 `http://127.0.0.1:9465/activity.json`.
+The worker image also includes `nix` with flakes enabled.
 
 The worker keeps your normal host workspace mounted at `/workspace` and also gets a writable
 Docker volume mounted at `/workspace/html`, so the agent can drop
