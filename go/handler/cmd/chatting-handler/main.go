@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -100,11 +102,12 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	if err != nil {
 		return nil, err
 	}
-	dispatcher, err := buildDispatcher(config)
+	dispatcher, emailSender, err := buildDispatcher(config)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
+	errorEmailRecipient := resolveErrorEmailRecipient(config)
 	egressOptions := []egress.Option{
 		egress.WithAllowedChannels(config.AllowedEgressChannels),
 		egress.WithCompletionHook(func(ctx context.Context, message contracts.EgressQueueMessage) error {
@@ -114,6 +117,11 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			eligibleAfter := time.Now().UTC().Add(time.Duration(config.TelegramAttachmentCleanupGraceSeconds) * time.Second)
 			_, err := store.MarkTelegramTaskAttachmentsEligible(ctx, message.TaskID, eligibleAfter)
 			return err
+		}),
+		egress.WithDispatchFailureHook(func(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+			log.Printf("egress_dispatch_failed task_id=%s event_id=%s channel=%s target=%s reason=%s",
+				message.TaskID, message.EventID, message.Message.Channel, message.Message.Target, reasonCode)
+			sendEgressDispatchErrorEmail(ctx, emailSender, errorEmailRecipient, message, reasonCode)
 		}),
 	}
 	engine, err := egress.New(
@@ -365,14 +373,14 @@ func (store githubCheckpointStore) SetGitHubCheckpoint(ctx context.Context, scop
 	})
 }
 
-func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {
+func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.EmailSender, error) {
 	dispatcher := dispatch.Dispatcher{}
 	if config.SMTPHost != "" {
 		password := ""
 		if config.SMTPUsername != "" {
 			password = os.Getenv(config.SMTPPasswordEnv)
 			if password == "" {
-				return nil, fmt.Errorf("missing SMTP password env var: %s", config.SMTPPasswordEnv)
+				return nil, nil, fmt.Errorf("missing SMTP password env var: %s", config.SMTPPasswordEnv)
 			}
 		}
 		sender, err := dispatch.NewSMTPEmailSender(dispatch.SMTPConfig{
@@ -386,14 +394,14 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {
 			Timeout:     10 * time.Second,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		dispatcher.EmailSender = sender
 	}
 	if config.TelegramEnabled {
 		token := os.Getenv(config.TelegramBotTokenEnv)
 		if token == "" {
-			return nil, fmt.Errorf("missing Telegram bot token env var: %s", config.TelegramBotTokenEnv)
+			return nil, nil, fmt.Errorf("missing Telegram bot token env var: %s", config.TelegramBotTokenEnv)
 		}
 		sender, err := dispatch.NewTelegramMessageSender(dispatch.TelegramConfig{
 			BotToken:   token,
@@ -401,14 +409,53 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, error) {
 			Timeout:    10 * time.Second,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		dispatcher.TelegramSender = sender
 	}
 	if _, err := ghLookPath("gh"); err == nil {
 		dispatcher.GitHubSender = dispatch.NewGitHubIssueCommentSender(nil)
 	}
-	return dispatcher, nil
+	return dispatcher, dispatcher.EmailSender, nil
+}
+
+func resolveErrorEmailRecipient(config handlerconfig.Config) string {
+	for _, candidate := range []string{config.ErrorEmailTo, config.SMTPUsername, config.IMAPUsername} {
+		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// sendEgressDispatchErrorEmail notifies the operator that a single egress event could
+// not be delivered. The event has already been dropped so the handler keeps running;
+// this is the visibility half of that trade-off.
+func sendEgressDispatchErrorEmail(ctx context.Context, sender dispatch.EmailSender, recipient string, message contracts.EgressQueueMessage, reasonCode string) {
+	if sender == nil || strings.TrimSpace(recipient) == "" {
+		return
+	}
+	sequence := "None"
+	if message.Sequence != nil {
+		sequence = strconv.Itoa(*message.Sequence)
+	}
+	subject := "Chatting handler dispatch error: " + reasonCode
+	body := strings.Join([]string{
+		"Message-handler egress dispatch failed.",
+		"task_id: " + message.TaskID,
+		"envelope_id: " + message.EnvelopeID,
+		"trace_id: " + message.TraceID,
+		"event_id: " + message.EventID,
+		"sequence: " + sequence,
+		"event_kind: " + message.EventKind,
+		"channel: " + message.Message.Channel,
+		"target: " + message.Message.Target,
+		"reason_code: " + reasonCode,
+	}, "\n")
+	if err := sender.Send(ctx, recipient, body, &subject); err != nil {
+		log.Printf("egress_dispatch_error_email_failed task_id=%s event_id=%s reason=%s recipient=%s err=%v",
+			message.TaskID, message.EventID, reasonCode, recipient, err)
+	}
 }
 
 type egressHandlerFunc func(context.Context, []byte) error

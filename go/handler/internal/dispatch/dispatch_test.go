@@ -308,6 +308,27 @@ func TestTelegramMessageSenderSendsReaction(t *testing.T) {
 	}
 }
 
+func TestTelegramMessageSenderReactionFailurePreservesDescription(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"ok":          false,
+			"error_code":  400,
+			"description": "Bad Request: REACTION_INVALID",
+		})
+	}))
+	defer server.Close()
+	sender := newTestTelegramSender(t, server.URL)
+
+	err := sender.React(context.Background(), "12345", 99, "🙂")
+	if err == nil {
+		t.Fatal("expected reaction error")
+	}
+	if got, want := err.Error(), "telegram_reaction_failed description=Bad Request: REACTION_INVALID"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
 func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
 	tempDir := t.TempDir()
 	photoPath := filepath.Join(tempDir, "plant.png")

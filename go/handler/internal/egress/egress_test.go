@@ -10,6 +10,7 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
@@ -282,6 +283,63 @@ func TestHandleReturnsDispatchErrorWithoutMarkingEvent(t *testing.T) {
 	}
 	if state.dispatched[task.TaskID]["evt:incremental:1"] {
 		t.Fatal("failed dispatch was marked dispatched")
+	}
+}
+
+func TestHandleDropsAndNotifiesOnUnsequencedDispatchFailure(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	reason := "telegram_reaction_failed description=Bad Request: REACTION_INVALID"
+	dispatcher := &recordingDispatcher{err: dispatch.MessageDispatchError{ReasonCode: reason}}
+	var notified []string
+	engine := newTestEngineWithState(t, state, dispatcher,
+		WithAllowedChannels([]string{"email"}),
+		WithDispatchFailureHook(func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+			notified = append(notified, message.EventID+"|"+reasonCode)
+		}),
+	)
+
+	result, err := engine.Handle(context.Background(), testEgressMessage(t, task, nil, "evt:incremental:1", "incremental"))
+	if err != nil {
+		t.Fatalf("dispatch failure must not crash the handler: %v", err)
+	}
+	if result.Status != StatusDropped || result.Reason != "dispatch_failed" {
+		t.Fatalf("result = %#v", result)
+	}
+	if want := []string{"evt:incremental:1|" + reason}; !reflect.DeepEqual(notified, want) {
+		t.Fatalf("notified = %#v, want %#v", notified, want)
+	}
+	if !state.dispatched[task.TaskID]["evt:incremental:1"] {
+		t.Fatal("dropped event should be marked dispatched to avoid reprocessing")
+	}
+}
+
+func TestFlushDropsAndContinuesOnSequencedDispatchFailure(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{err: dispatch.MessageDispatchError{ReasonCode: "telegram_send_failed description=Bad Request: chat not found"}}
+	notified := 0
+	engine := newTestEngineWithState(t, state, dispatcher,
+		WithAllowedChannels([]string{"email"}),
+		WithDispatchFailureHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ }),
+	)
+	first := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
+	first.Message.Body = stringPtr("first")
+
+	result, err := engine.Handle(context.Background(), first)
+	if err != nil {
+		t.Fatalf("sequenced dispatch failure must not crash the handler: %v", err)
+	}
+	if result.Status != StatusDropped || result.Reason != "dispatch_failed" {
+		t.Fatalf("result = %#v", result)
+	}
+	if notified != 1 {
+		t.Fatalf("notified = %d, want 1", notified)
+	}
+	if got, _ := state.ExpectedSequence(context.Background(), task.TaskID); got != 1 {
+		t.Fatalf("expected sequence = %d, want 1 (must advance past the dropped event)", got)
 	}
 }
 
