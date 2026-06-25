@@ -7,6 +7,10 @@ import json
 
 from app.broker import TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_envelope
+from app.internal_notices import (
+    INTERNAL_NOTICE_METADATA_KEY,
+    TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE,
+)
 from app.models import (
     ExecutionResult,
     ReplyChannel,
@@ -109,6 +113,35 @@ class WorkerRuntimeTests(unittest.TestCase):
                 now=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
             ),
             trace_id="trace:internal:heartbeat:1",
+        )
+
+    def _build_internal_channel_notice_task_message(self) -> TaskQueueMessage:
+        envelope = TaskEnvelope(
+            id="telegram-disallowed-channel:2101",
+            source="internal",
+            received_at=datetime(2026, 6, 25, 8, 0, tzinfo=timezone.utc),
+            actor="message-handler",
+            content=(
+                "Not enabled in channel -100777. "
+                "Add this id to telegram_allowed_channel_ids to enable replies here."
+            ),
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target="-100777",
+                metadata={
+                    INTERNAL_NOTICE_METADATA_KEY: (
+                        TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE
+                    ),
+                    "message_id": 19,
+                },
+            ),
+            dedupe_key="telegram-disallowed-channel:2101",
+        )
+        return TaskQueueMessage.from_envelope(
+            envelope,
+            trace_id="trace:internal:telegram-disallowed-channel:2101",
         )
 
     def test_process_task_message_emits_completion_only_for_successful_task(
@@ -326,6 +359,42 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(terminal.message.channel, "internal")
             self.assertEqual(terminal.message.target, "task")
             self.assertEqual(terminal.sequence, 0)
+
+    def test_process_task_message_handles_internal_channel_notice_without_executor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_internal_channel_notice_task_message(),
+                executor_impl=AlwaysFailExecutor(),
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(result.run_record.source, "internal")
+            self.assertEqual(len(result.egress_messages), 2)
+            visible_egress_message = result.egress_messages[0]
+            completion_egress_message = result.egress_messages[1]
+            self.assertEqual(visible_egress_message.event_kind, "message")
+            self.assertEqual(visible_egress_message.message.channel, "telegram")
+            self.assertEqual(visible_egress_message.message.target, "-100777")
+            self.assertEqual(
+                visible_egress_message.message.body,
+                "Not enabled in channel -100777. Add this id to telegram_allowed_channel_ids to enable replies here.",
+            )
+            self.assertEqual(completion_egress_message.event_kind, "completion")
+            self.assertEqual(completion_egress_message.sequence, 1)
+            self.assertEqual(result.reason_codes, ["internal_notice"])
+            self.assertIsNone(result.error_summary)
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(audit_event.detail["reason_codes"], ["internal_notice"])
+            self.assertEqual(
+                audit_event.detail["internal_notice"],
+                "telegram_channel_not_enabled",
+            )
 
     def test_build_error_summary_prefers_execution_error_then_last_error_then_fallback(
         self,

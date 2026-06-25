@@ -42,8 +42,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
 - Location-only messages are accepted with synthesized content that includes latitude, longitude, and a map URL.
 - When a message includes both text and a Telegram `location`, the location block is appended to the text so the worker can reason over both in one prompt.
-- `channel_post` updates are ignored unless the channel ID is present in `telegram_allowed_channel_ids`.
-- Ignored `channel_post` updates log `update_id`, `channel_id`, and an explicit reason so new channel IDs can be copied from logs.
+- `channel_post` updates from allowlisted channel IDs are ingested normally.
+- `channel_post` updates from other channel IDs still update `telegram_chat_registry`, then trigger an automatic Telegram reply that includes the channel ID so it can be copied into `telegram_allowed_channel_ids`.
 - Each observed `message`, `channel_post`, and `my_chat_member` chat is upserted into the handler SQLite table `telegram_chat_registry` before allowlist filtering. Query that table to discover new DM/group/supergroup/channel IDs, titles, usernames, and the latest retrieval timestamp.
 - Offset is advanced as `highest_update_id + 1` each poll.
 - The message handler tracks downloaded Telegram attachments in its SQLite DB and only makes them cleanup-eligible after the task reaches terminal completion.

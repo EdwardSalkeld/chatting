@@ -21,6 +21,9 @@ import (
 
 const Source = "im"
 
+const internalNoticeKey = "internal_notice"
+const telegramChannelNotEnabledNotice = "telegram_channel_not_enabled"
+
 type ChatObservation struct {
 	ChatID      string
 	ChatType    *string
@@ -197,10 +200,37 @@ func (connector *Connector) normalizeChannelPost(ctx context.Context, updateID i
 	if err := connector.observeChat(ctx, updateID, "channel_post", message.Chat, messageDate); err != nil {
 		return nil, err
 	}
-	if message.Chat.Type != "channel" || len(connector.allowedChannelIDs) == 0 || !connector.allowedChannelIDs[chatID] {
+	if message.Chat.Type != "channel" {
 		return nil, nil
 	}
+	if len(connector.allowedChannelIDs) == 0 || !connector.allowedChannelIDs[chatID] {
+		return connector.buildDisallowedChannelNoticeEnvelope(updateID, message, chatID), nil
+	}
 	return connector.buildEnvelope(updateID, message, chatID, connector.actorFromChat(message.SenderChat))
+}
+
+func (connector *Connector) buildDisallowedChannelNoticeEnvelope(updateID int64, message telegramMessage, chatID string) *contracts.TaskEnvelope {
+	eventID := "telegram-disallowed-channel:" + strconv.FormatInt(updateID, 10)
+	actor := "message-handler"
+	return &contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            eventID,
+		Source:        "internal",
+		ReceivedAt:    contracts.NewTimestamp(parseTelegramDate(message.Date, connector.now())),
+		Actor:         &actor,
+		Content:       fmt.Sprintf("Not enabled in channel %s. Add this id to telegram_allowed_channel_ids to enable replies here.", chatID),
+		Attachments:   []contracts.AttachmentRef{},
+		ContextRefs:   []string{},
+		ReplyChannel: contracts.ReplyChannel{
+			Type:   "telegram",
+			Target: chatID,
+			Metadata: map[string]any{
+				"message_id":      message.MessageID,
+				internalNoticeKey: telegramChannelNotEnabledNotice,
+			},
+		},
+		DedupeKey: eventID,
+	}
 }
 
 func (connector *Connector) buildEnvelope(updateID int64, message telegramMessage, chatID string, actor *string) (*contracts.TaskEnvelope, error) {
