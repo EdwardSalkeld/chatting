@@ -14,6 +14,10 @@ from app.internal_heartbeat import (
     build_internal_heartbeat_egress,
     is_internal_heartbeat_envelope,
 )
+from app.internal_notices import (
+    build_internal_telegram_channel_not_enabled_egress,
+    is_internal_telegram_channel_not_enabled_envelope,
+)
 from app.models import AuditEvent, OutboundMessage, RunRecord
 from app.state import SQLiteStateStore
 
@@ -46,6 +50,11 @@ def process_task_message(
         raise ValueError("max_attempts must be positive")
 
     envelope = task_message.envelope
+    if is_internal_telegram_channel_not_enabled_envelope(envelope):
+        return _process_internal_telegram_channel_not_enabled_notice(
+            store=store,
+            task_message=task_message,
+        )
     if is_internal_heartbeat_envelope(envelope):
         return _process_internal_heartbeat(
             store=store,
@@ -258,6 +267,69 @@ def _process_internal_heartbeat(
         dead_lettered=False,
         attempt_count=1,
         reason_codes=["internal_heartbeat"],
+        error_summary=None,
+    )
+
+
+def _process_internal_telegram_channel_not_enabled_notice(
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+) -> WorkerProcessResult:
+    emitted_at = datetime.now(timezone.utc)
+    visible_egress_message = build_internal_telegram_channel_not_enabled_egress(
+        task_message=task_message,
+        emitted_at=emitted_at,
+    )
+    completion_egress_message = build_internal_completion_egress(
+        task_message=task_message,
+        sequence=1,
+        emitted_at=emitted_at,
+    )
+    run_record = RunRecord(
+        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+        envelope_id=task_message.envelope.id,
+        source=task_message.envelope.source,
+        workflow="default",
+        latency_ms=0,
+        result_status="success",
+        created_at=emitted_at,
+    )
+    store.append_run(run_record)
+    store.append_audit_event(
+        AuditEvent(
+            run_id=run_record.run_id,
+            envelope_id=run_record.envelope_id,
+            source=run_record.source,
+            workflow=run_record.workflow,
+            result_status=run_record.result_status,
+            detail={
+                "trace_id": task_message.trace_id,
+                "task_id": task_message.task_id,
+                "reason_codes": ["internal_notice"],
+                "attempt_count": 1,
+                "max_attempts": 1,
+                "last_error": None,
+                "last_error_stage": None,
+                "execution_result": {
+                    "errors": [],
+                },
+                "incremental_reply_send_requested_count": 0,
+                "incremental_reply_send_published_count": 0,
+                "egress_message_count": 2,
+                "internal_notice": (
+                    task_message.envelope.reply_channel.metadata.get("internal_notice")
+                ),
+            },
+            created_at=run_record.created_at,
+        )
+    )
+    return WorkerProcessResult(
+        run_record=run_record,
+        egress_messages=[visible_egress_message, completion_egress_message],
+        dead_lettered=False,
+        attempt_count=1,
+        reason_codes=["internal_notice"],
         error_summary=None,
     )
 
