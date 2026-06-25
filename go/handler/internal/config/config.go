@@ -105,6 +105,7 @@ type Config struct {
 	SMTPFrom              string
 	SMTPStartTLS          bool
 	SMTPUseSSL            bool
+	ErrorEmailTo          string
 
 	TelegramEnabled                       bool
 	TelegramBotTokenEnv                   string
@@ -159,6 +160,7 @@ func Defaults() Config {
 		SMTPFrom:              "",
 		SMTPStartTLS:          false,
 		SMTPUseSSL:            true,
+		ErrorEmailTo:          "",
 
 		TelegramEnabled:                       false,
 		TelegramBotTokenEnv:                   "CHATTING_TELEGRAM_BOT_TOKEN",
@@ -399,6 +401,12 @@ func Load(raw []byte) (Config, error) {
 		}
 		if _, ok := payload["smtp_use_ssl"]; !ok {
 			config.SMTPUseSSL = !config.SMTPStartTLS
+		}
+	}
+	if rawValue, ok := payload["error_email_to"]; ok && !isNull(rawValue) {
+		config.ErrorEmailTo, err = decodeNonEmptyString(rawValue, "error_email_to")
+		if err != nil {
+			return Config{}, err
 		}
 	}
 	if rawValue, ok := payload["smtp_use_ssl"]; ok && !isNull(rawValue) {

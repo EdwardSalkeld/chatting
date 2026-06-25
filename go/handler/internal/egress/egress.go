@@ -9,6 +9,7 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 )
 
 type TaskRecord struct {
@@ -52,10 +53,11 @@ func (fn DispatcherFunc) Dispatch(ctx context.Context, message contracts.Outboun
 }
 
 type Engine struct {
-	state           State
-	dispatcher      Dispatcher
-	allowedChannels map[string]bool
-	onCompletion    func(context.Context, contracts.EgressQueueMessage) error
+	state             State
+	dispatcher        Dispatcher
+	allowedChannels   map[string]bool
+	onCompletion      func(context.Context, contracts.EgressQueueMessage) error
+	onDispatchFailure func(context.Context, contracts.EgressQueueMessage, string)
 }
 
 type Option func(*Engine)
@@ -72,6 +74,15 @@ func WithAllowedChannels(channels []string) Option {
 func WithCompletionHook(hook func(context.Context, contracts.EgressQueueMessage) error) Option {
 	return func(engine *Engine) {
 		engine.onCompletion = hook
+	}
+}
+
+// WithDispatchFailureHook registers a callback invoked when a single egress event
+// fails to dispatch. The event is dropped (acked) rather than crashing the handler,
+// so the hook is responsible for making the failure visible (log + operator email).
+func WithDispatchFailureHook(hook func(context.Context, contracts.EgressQueueMessage, string)) Option {
+	return func(engine *Engine) {
+		engine.onDispatchFailure = hook
 	}
 }
 
@@ -152,6 +163,9 @@ func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueM
 			return Result{Status: StatusDropped, Reason: "invalid_payload"}, nil
 		}
 		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
+			if reason, ok := dispatchFailureReason(err); ok {
+				return engine.dropFailedDispatch(ctx, message, reason)
+			}
 			return Result{}, err
 		}
 		return Result{Status: StatusDispatched}, nil
@@ -228,13 +242,49 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			return Result{}, fmt.Errorf("staged event %s has disallowed channel %q", staged.EventID, message.Message.Channel)
 		}
 		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
-			return Result{}, err
+			reason, ok := dispatchFailureReason(err)
+			if !ok {
+				return Result{}, err
+			}
+			if _, err := engine.dropFailedDispatch(ctx, message, reason); err != nil {
+				return Result{}, err
+			}
+			if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
+				return Result{}, err
+			}
+			last = Result{Status: StatusDropped, Reason: "dispatch_failed"}
+			continue
 		}
 		if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
 			return Result{}, err
 		}
 		last = Result{Status: StatusDispatched}
 	}
+}
+
+// dropFailedDispatch handles a permanent per-message dispatch failure: it surfaces
+// the failure (log + operator email via the hook), records the event as dispatched so
+// it is not retried, and reports the event as dropped. The egress message is acked by
+// the caller, so a single bad event no longer crash-loops the handler.
+func (engine *Engine) dropFailedDispatch(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) (Result, error) {
+	if engine.onDispatchFailure != nil {
+		engine.onDispatchFailure(ctx, message, reasonCode)
+	}
+	if err := engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID); err != nil {
+		return Result{}, err
+	}
+	return Result{Status: StatusDropped, Reason: "dispatch_failed"}, nil
+}
+
+// dispatchFailureReason reports whether err is a per-message dispatch failure (as
+// opposed to an infrastructure error that should still abort the run) and returns the
+// reason code, which carries any upstream API description.
+func dispatchFailureReason(err error) (string, bool) {
+	var dispatchErr dispatch.MessageDispatchError
+	if errors.As(err, &dispatchErr) {
+		return dispatchErr.ReasonCode, true
+	}
+	return "", false
 }
 
 func (engine *Engine) dispatchAndMark(ctx context.Context, task *TaskRecord, message contracts.EgressQueueMessage) error {

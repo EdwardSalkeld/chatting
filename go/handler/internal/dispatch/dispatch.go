@@ -77,7 +77,7 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
 		}
 		if err := dispatcher.TelegramSender.React(ctx, target, messageID, *message.Body); err != nil {
-			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
+			return nil, MessageDispatchError{ReasonCode: telegramDispatchReasonCode(message, err)}
 		}
 		return &normalized, nil
 	case "github":

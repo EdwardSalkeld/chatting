@@ -162,7 +162,7 @@ func TestUnsupportedDispatcherAcceptsInternalHeartbeatLogPong(t *testing.T) {
 
 func TestBuildDispatcherRequiresSMTPPasswordEnvWhenUsernameConfigured(t *testing.T) {
 	t.Setenv("MISSING_SMTP_PASSWORD", "")
-	_, err := buildDispatcher(handlerconfig.Config{
+	_, _, err := buildDispatcher(handlerconfig.Config{
 		SMTPHost:        "smtp.example.com",
 		SMTPPort:        587,
 		SMTPUsername:    "bot@example.com",
@@ -179,7 +179,7 @@ func TestBuildDispatcherRequiresSMTPPasswordEnvWhenUsernameConfigured(t *testing
 
 func TestBuildDispatcherRequiresTelegramTokenWhenEnabled(t *testing.T) {
 	t.Setenv("MISSING_TELEGRAM_TOKEN", "")
-	_, err := buildDispatcher(handlerconfig.Config{
+	_, _, err := buildDispatcher(handlerconfig.Config{
 		TelegramEnabled:     true,
 		TelegramBotTokenEnv: "MISSING_TELEGRAM_TOKEN",
 		TelegramAPIBaseURL:  "https://api.telegram.org",
@@ -204,7 +204,7 @@ func TestBuildDispatcherConfiguresGitHubWhenGHAvailable(t *testing.T) {
 		ghLookPath = originalLookPath
 	}()
 
-	dispatcher, err := buildDispatcher(handlerconfig.Config{})
+	dispatcher, _, err := buildDispatcher(handlerconfig.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestBuildDispatcherSkipsGitHubWhenGHUnavailable(t *testing.T) {
 		ghLookPath = originalLookPath
 	}()
 
-	dispatcher, err := buildDispatcher(handlerconfig.Config{})
+	dispatcher, _, err := buildDispatcher(handlerconfig.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

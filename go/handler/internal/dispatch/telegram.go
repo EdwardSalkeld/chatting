@@ -107,7 +107,7 @@ func (sender *TelegramMessageSender) Send(ctx context.Context, target string, me
 			return nil
 		}
 	}
-	return errors.New("telegram_attachment_send_failed")
+	return errors.New(describeTelegramResponseError("telegram_attachment_send_failed", response))
 }
 
 func (sender *TelegramMessageSender) React(ctx context.Context, target string, messageID int64, emoji string) error {
@@ -129,7 +129,7 @@ func (sender *TelegramMessageSender) React(ctx context.Context, target string, m
 	}
 	response, err := sender.postJSON(ctx, "setMessageReaction", payload)
 	if err != nil || !response.OK {
-		return errors.New("telegram_reaction_failed")
+		return errors.New(describeTelegramResponseError("telegram_reaction_failed", response))
 	}
 	return nil
 }
@@ -154,7 +154,7 @@ func (sender *TelegramMessageSender) sendText(ctx context.Context, target string
 			return nil
 		}
 	}
-	return errors.New("telegram_send_failed")
+	return errors.New(describeTelegramResponseError("telegram_send_failed", response))
 }
 
 type telegramAPIResponse struct {
@@ -278,6 +278,16 @@ func telegramAPIMethodForAttachment(filePath string) string {
 
 func isTelegramParseModeError(response telegramAPIResponse) bool {
 	return strings.Contains(strings.ToLower(response.Description), "parse entities")
+}
+
+// describeTelegramResponseError appends the Telegram API description (for example
+// "Bad Request: REACTION_INVALID") to the reason code so dispatch failures are
+// diagnosable from the logged/emailed reason rather than an opaque code.
+func describeTelegramResponseError(prefix string, response telegramAPIResponse) string {
+	if description := strings.TrimSpace(response.Description); description != "" {
+		return prefix + " description=" + description
+	}
+	return prefix
 }
 
 func normalizeTelegramTextForParseMode(text string, parseMode *string) string {
