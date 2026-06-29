@@ -106,10 +106,19 @@ EOF
 '
 ```
 
-## 5) Bootstrap CLI auth
+## 5) Bootstrap worker tools and CLI auth
 
-When using real executor mode, authenticate the CLIs once inside the worker container. Auth state is
-persisted in Docker volumes.
+The worker image includes `codex`, `claude`, and `hugo`.
+
+If you plan to build a Hugo site from the mounted workspace, you can sanity-check the bundled tool
+first:
+
+```bash
+docker compose run --rm worker hugo version
+```
+
+When using real executor mode, authenticate the CLIs once inside the worker container. Auth state
+is persisted in Docker volumes.
 
 ```bash
 docker compose run --rm worker gh auth login

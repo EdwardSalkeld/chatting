@@ -170,9 +170,15 @@ docker compose exec worker python -m app.main_reply task:telegram:53 \
 
 ## 7) Docker worker CLI auth bootstrap
 
-When running with `docker-compose.yml`, the worker image includes both `codex` and `claude` CLIs.
-Auth is still external to the app and must be completed once interactively, then persisted in Docker
-volumes.
+When running with `docker-compose.yml`, the worker image includes `codex`, `claude`, and `hugo`.
+Auth is still external to the app and must be completed once interactively, then persisted in
+Docker volumes.
+
+If the mounted workspace contains a Hugo site, you can verify the tool is present with:
+
+```bash
+docker compose run --rm worker hugo version
+```
 
 The compose file mounts:
 - `codex-auth` -> `/home/chatting/.codex`
