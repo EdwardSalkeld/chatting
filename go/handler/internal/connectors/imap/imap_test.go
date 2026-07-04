@@ -2,6 +2,8 @@ package imap
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +151,100 @@ func TestPollUsesUsernameAsReplyTargetWhenFromAddressIsMissing(t *testing.T) {
 	}
 	if envelopes[0].ReplyChannel.Target != "bot@example.com" {
 		t.Fatalf("ReplyChannel.Target = %q", envelopes[0].ReplyChannel.Target)
+	}
+}
+
+func TestPollFallsBackToHTMLBodyWhenPlainTextIsMissing(t *testing.T) {
+	raw := "From: alice@example.com\r\n" +
+		"To: bot@example.com\r\n" +
+		"Subject: HTML only\r\n" +
+		"Date: Sat, 28 Feb 2026 10:15:00 +0000\r\n" +
+		"Content-Type: multipart/alternative; boundary=alt\r\n" +
+		"\r\n" +
+		"--alt\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"\r\n" +
+		"<div>Hello <b>there</b></div><p>Second &amp; line</p>\r\n" +
+		"--alt--\r\n"
+	fake := &fakeClient{messages: map[string][]byte{"401": []byte(raw)}}
+	connector, err := New(Config{
+		Host:     "imap.example.com",
+		Port:     993,
+		Username: "bot@example.com",
+		Password: "secret",
+		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
+			return fake, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if envelopes[0].Content != "Subject: HTML only\n\nHello there\nSecond & line" {
+		t.Fatalf("Content = %q", envelopes[0].Content)
+	}
+}
+
+func TestPollExtractsNestedPlainTextAndAttachments(t *testing.T) {
+	raw := "From: alice@example.com\r\n" +
+		"To: bot@example.com\r\n" +
+		"Subject: Forwarded policy\r\n" +
+		"Date: Sat, 28 Feb 2026 10:15:00 +0000\r\n" +
+		"Content-Type: multipart/mixed; boundary=outer\r\n" +
+		"\r\n" +
+		"--outer\r\n" +
+		"Content-Type: multipart/alternative; boundary=inner\r\n" +
+		"\r\n" +
+		"--inner\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		"Policy details go here.\r\n" +
+		"--inner--\r\n" +
+		"--outer\r\n" +
+		"Content-Type: application/pdf\r\n" +
+		"Content-Disposition: attachment; filename=\"policy.pdf\"\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		"\r\n" +
+		"JVBERi0xLjQK\r\n" +
+		"--outer--\r\n"
+	fake := &fakeClient{messages: map[string][]byte{"402": []byte(raw)}}
+	connector, err := New(Config{
+		Host:     "imap.example.com",
+		Port:     993,
+		Username: "bot@example.com",
+		Password: "secret",
+		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
+			return fake, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector.attachmentDir = t.TempDir()
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelope := envelopes[0]
+	if envelope.Content != "Subject: Forwarded policy\n\nPolicy details go here." {
+		t.Fatalf("Content = %q", envelope.Content)
+	}
+	if len(envelope.Attachments) != 1 {
+		t.Fatalf("len(Attachments) = %d", len(envelope.Attachments))
+	}
+	if envelope.Attachments[0].Name == nil || *envelope.Attachments[0].Name != "policy.pdf" {
+		t.Fatalf("Attachment name = %#v", envelope.Attachments[0].Name)
+	}
+	wantPath := filepath.Join(connector.attachmentDir, "402", "policy.pdf")
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("attachment path missing: %v", err)
 	}
 }
 
