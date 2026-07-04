@@ -8,12 +8,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
+	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,6 +65,7 @@ type Connector struct {
 	clientFactory ClientFactory
 	now           func() time.Time
 	prompt        *contracts.PromptContext
+	attachmentDir string
 }
 
 func New(config Config) (*Connector, error) {
@@ -99,7 +104,13 @@ func New(config Config) (*Connector, error) {
 	config.Username = strings.TrimSpace(config.Username)
 	config.Mailbox = strings.TrimSpace(config.Mailbox)
 	config.SearchCriterion = strings.TrimSpace(config.SearchCriterion)
-	return &Connector{config: config, clientFactory: factory, now: now, prompt: prompt}, nil
+	return &Connector{
+		config:        config,
+		clientFactory: factory,
+		now:           now,
+		prompt:        prompt,
+		attachmentDir: filepath.Join(os.TempDir(), "chatting-email-attachments"),
+	}, nil
 }
 
 func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
@@ -159,7 +170,7 @@ func (connector *Connector) toEnvelope(uid string, raw []byte) (contracts.TaskEn
 	if subject == "" {
 		subject = "(no subject)"
 	}
-	body := extractBodyText(parsed)
+	body, attachments := extractMessageContent(parsed, uid, connector.attachmentDir)
 	receivedAt := parseReceivedAt(parsed.Header.Get("Date"), connector.now())
 	eventID := "email:" + uid
 	var actor *string
@@ -174,7 +185,7 @@ func (connector *Connector) toEnvelope(uid string, raw []byte) (contracts.TaskEn
 		ReceivedAt:    contracts.NewTimestamp(receivedAt),
 		Actor:         actor,
 		Content:       "Subject: " + subject + "\n\n" + body,
-		Attachments:   []contracts.AttachmentRef{},
+		Attachments:   attachments,
 		ContextRefs:   append([]string{}, connector.config.ContextRefs...),
 		PromptContext: connector.prompt,
 		ReplyChannel:  contracts.ReplyChannel{Type: "email", Target: target},
@@ -190,44 +201,110 @@ func decodeHeader(value string) string {
 	return decoded
 }
 
-func extractBodyText(message *mail.Message) string {
-	contentType := message.Header.Get("Content-Type")
-	mediaType, params, err := mime.ParseMediaType(contentType)
-	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
-		reader := multipart.NewReader(message.Body, params["boundary"])
-		for {
-			part, err := reader.NextPart()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				break
-			}
-			disposition := strings.ToLower(part.Header.Get("Content-Disposition"))
-			if strings.Contains(disposition, "attachment") {
-				continue
-			}
-			partType, _, _ := mime.ParseMediaType(part.Header.Get("Content-Type"))
-			if strings.ToLower(partType) != "text/plain" {
-				continue
-			}
-			if body := readBody(part.Header, part); body != "" {
-				return body
-			}
-		}
-		return "(empty body)"
-	}
-	if body := readBody(message.Header, message.Body); body != "" {
-		return body
-	}
-	return "(empty body)"
-}
-
 type headerGetter interface {
 	Get(key string) string
 }
 
-func readBody(header headerGetter, reader io.Reader) string {
+type extractedContent struct {
+	plainTexts  []string
+	htmlTexts   []string
+	attachments []contracts.AttachmentRef
+}
+
+func extractMessageContent(message *mail.Message, uid string, attachmentDir string) (string, []contracts.AttachmentRef) {
+	content := extractedContent{}
+	attachmentIndex := 0
+	extractEntityContent(message.Header, message.Body, uid, attachmentDir, &attachmentIndex, &content)
+	for _, candidate := range append(content.plainTexts, content.htmlTexts...) {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate), content.attachments
+		}
+	}
+	return "(empty body)", content.attachments
+}
+
+func extractEntityContent(
+	header headerGetter,
+	reader io.Reader,
+	uid string,
+	attachmentDir string,
+	attachmentIndex *int,
+	content *extractedContent,
+) {
+	mediaType, params, err := mime.ParseMediaType(header.Get("Content-Type"))
+	if err != nil {
+		mediaType = "text/plain"
+		params = map[string]string{}
+	}
+	mediaType = strings.ToLower(mediaType)
+
+	if strings.HasPrefix(mediaType, "multipart/") {
+		boundary := params["boundary"]
+		if strings.TrimSpace(boundary) == "" {
+			return
+		}
+		multiReader := multipart.NewReader(reader, boundary)
+		for {
+			part, err := multiReader.NextPart()
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				return
+			}
+			extractEntityContent(part.Header, part, uid, attachmentDir, attachmentIndex, content)
+		}
+	}
+
+	if mediaType == "message/rfc822" {
+		raw := readDecodedBody(header, reader)
+		if len(raw) == 0 {
+			return
+		}
+		nested, err := mail.ReadMessage(bytes.NewReader(raw))
+		if err != nil {
+			return
+		}
+		extractEntityContent(nested.Header, nested.Body, uid, attachmentDir, attachmentIndex, content)
+		return
+	}
+
+	disposition, dispositionParams, _ := mime.ParseMediaType(header.Get("Content-Disposition"))
+	disposition = strings.ToLower(disposition)
+	filename := strings.TrimSpace(dispositionParams["filename"])
+	if filename == "" {
+		filename = strings.TrimSpace(params["name"])
+	}
+	if filename != "" {
+		filename = decodeHeader(filename)
+	}
+	if disposition == "attachment" || filename != "" {
+		payload := readDecodedBody(header, reader)
+		if len(payload) == 0 {
+			return
+		}
+		*attachmentIndex = *attachmentIndex + 1
+		ref, err := writeAttachment(payload, uid, attachmentDir, filename, mediaType, *attachmentIndex)
+		if err != nil {
+			return
+		}
+		content.attachments = append(content.attachments, ref)
+		return
+	}
+
+	switch mediaType {
+	case "text/plain":
+		if body := strings.TrimSpace(string(readDecodedBody(header, reader))); body != "" {
+			content.plainTexts = append(content.plainTexts, body)
+		}
+	case "text/html":
+		if body := htmlToText(string(readDecodedBody(header, reader))); body != "" {
+			content.htmlTexts = append(content.htmlTexts, body)
+		}
+	}
+}
+
+func readDecodedBody(header headerGetter, reader io.Reader) []byte {
 	var decoded io.Reader = reader
 	switch strings.ToLower(strings.TrimSpace(header.Get("Content-Transfer-Encoding"))) {
 	case "base64":
@@ -237,9 +314,100 @@ func readBody(header headerGetter, reader io.Reader) string {
 	}
 	raw, err := io.ReadAll(decoded)
 	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func writeAttachment(
+	payload []byte,
+	uid string,
+	attachmentDir string,
+	filename string,
+	mediaType string,
+	index int,
+) (contracts.AttachmentRef, error) {
+	safeName := safeAttachmentName(filename, mediaType, index)
+	targetDir := filepath.Join(attachmentDir, uid)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return contracts.AttachmentRef{}, err
+	}
+	targetPath := filepath.Join(targetDir, safeName)
+	if err := os.WriteFile(targetPath, payload, 0o644); err != nil {
+		return contracts.AttachmentRef{}, err
+	}
+	name := safeName
+	return contracts.AttachmentRef{
+		URI:  (&url.URL{Scheme: "file", Path: targetPath}).String(),
+		Name: &name,
+	}, nil
+}
+
+func safeAttachmentName(filename string, mediaType string, index int) string {
+	candidate := strings.TrimSpace(filename)
+	if candidate == "" {
+		return fmt.Sprintf("attachment-%d%s", index, extensionForMediaType(mediaType))
+	}
+	candidate = filepath.Base(candidate)
+	candidate = strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', 0:
+			return -1
+		default:
+			return r
+		}
+	}, candidate)
+	if strings.TrimSpace(candidate) == "" {
+		return fmt.Sprintf("attachment-%d%s", index, extensionForMediaType(mediaType))
+	}
+	return candidate
+}
+
+func extensionForMediaType(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "application/pdf":
+		return ".pdf"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "text/plain":
+		return ".txt"
+	case "message/rfc822":
+		return ".eml"
+	default:
 		return ""
 	}
-	return strings.TrimSpace(string(raw))
+}
+
+var (
+	htmlBlockBreakPattern = regexp.MustCompile(`(?i)<\s*(br|/p|/div|/li|/tr|/table)\b[^>]*>`)
+	htmlOpenBreakPattern  = regexp.MustCompile(`(?i)<\s*(p|div|li|tr)\b[^>]*>`)
+	htmlTagPattern        = regexp.MustCompile(`(?s)<[^>]+>`)
+	htmlMultiBreakPattern = regexp.MustCompile(`\n\s*\n\s*\n+`)
+	htmlSpacePattern      = regexp.MustCompile(`[ \t]+`)
+)
+
+func htmlToText(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	text := htmlBlockBreakPattern.ReplaceAllString(value, "\n")
+	text = htmlOpenBreakPattern.ReplaceAllString(text, "\n")
+	text = htmlTagPattern.ReplaceAllString(text, "")
+	text = html.UnescapeString(text)
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = htmlSpacePattern.ReplaceAllString(text, " ")
+	text = htmlMultiBreakPattern.ReplaceAllString(text, "\n\n")
+	lines := strings.Split(text, "\n")
+	trimmed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			trimmed = append(trimmed, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(trimmed, "\n"))
 }
 
 func parseReceivedAt(value string, fallback time.Time) time.Time {
