@@ -1,0 +1,73 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows:
+      - Publish Docker Image
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-chatting
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy-blink
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: resolve target sha
+        id: target
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            target_sha="${{ github.event.workflow_run.head_sha }}"
+          else
+            target_sha="${{ github.sha }}"
+          fi
+
+          case "$target_sha" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+              ;;
+            *)
+              echo "unexpected target sha: $target_sha" >&2
+              exit 64
+              ;;
+          esac
+
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+      - name: tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: fourth.ts.alcachofa.faith
+
+      - name: install ssh key
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "${{ secrets.FOURTH_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy
+          chmod 0600 ~/.ssh/deploy
+
+      - name: trigger blink deploy on the orchestrator
+        run: |
+          ssh \
+            -i ~/.ssh/deploy \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=accept-new \
+            deploy@fourth.ts.alcachofa.faith \
+            "blink ${{ steps.target.outputs.sha }}"
