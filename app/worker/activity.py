@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Lock, Thread
 from typing import Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.state import SQLiteStateStore
@@ -228,6 +228,117 @@ class WorkerActivityMonitor:
             "include_internal": include_internal,
         }
 
+    def list_runs_snapshot(
+        self, *, include_internal: bool = False
+    ) -> dict[str, object]:
+        with self._lock:
+            current_executor = (
+                {"active": False, "phase": "idle"}
+                if self._active_executor is None
+                else dict(self._active_executor)
+            )
+        runs = []
+        for run in self._store.list_recent_runs(limit=self._history_limit):
+            run_summary = self._build_run_summary(
+                run_id=run.run_id,
+                include_internal=include_internal,
+            )
+            if run_summary is not None:
+                runs.append(run_summary)
+        return {
+            "current_executor": current_executor,
+            "runs": runs,
+            "history_limit": self._history_limit,
+            "history_truncated": len(runs) >= self._history_limit,
+            "include_internal": include_internal,
+        }
+
+    def get_run_snapshot(
+        self,
+        *,
+        run_id: str,
+        include_internal: bool = False,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            current_executor = (
+                {"active": False, "phase": "idle"}
+                if self._active_executor is None
+                else dict(self._active_executor)
+            )
+        run_summary = self._build_run_summary(
+            run_id=run_id,
+            include_internal=include_internal,
+        )
+        if run_summary is None:
+            return None
+        return {
+            "current_executor": current_executor,
+            "run": run_summary,
+            "include_internal": include_internal,
+        }
+
+    def _build_run_summary(
+        self,
+        *,
+        run_id: str,
+        include_internal: bool,
+    ) -> dict[str, object] | None:
+        run = self._store.get_run(run_id=run_id)
+        if run is None:
+            return None
+        audit_event = self._store.get_audit_event_for_run(run_id=run_id)
+        if audit_event is None:
+            return None
+        detail = audit_event.detail if isinstance(audit_event.detail, dict) else {}
+        task_id = detail.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            return None
+        activity = self._store.list_worker_activity_for_run(
+            run_id=run_id,
+            task_id=task_id,
+            envelope_id=run.envelope_id,
+            include_internal=include_internal,
+        )
+        preview = ""
+        actor = None
+        reply_target = None
+        for item in activity:
+            if preview:
+                break
+            message = _message_text(item)
+            if message is not None:
+                preview = message
+            item_detail = item.get("detail")
+            if isinstance(item_detail, dict):
+                if actor is None and isinstance(item_detail.get("actor"), str):
+                    actor = item_detail.get("actor")
+                if reply_target is None and isinstance(
+                    item_detail.get("reply_target"), str
+                ):
+                    reply_target = item_detail.get("reply_target")
+        last_event = activity[-1] if activity else None
+        return {
+            "run_id": run.run_id,
+            "task_id": task_id,
+            "envelope_id": run.envelope_id,
+            "source": run.source,
+            "workflow": run.workflow,
+            "result_status": run.result_status,
+            "latency_ms": run.latency_ms,
+            "created_at": _isoformat(run.created_at),
+            "attempt_count": detail.get("attempt_count"),
+            "reason_codes": detail.get("reason_codes", []),
+            "preview": preview,
+            "actor": actor,
+            "reply_target": reply_target,
+            "event_count": len(activity),
+            "latest_phase": last_event.get("phase")
+            if isinstance(last_event, dict)
+            else None,
+            "events": activity,
+            "audit_detail": detail,
+        }
+
     def _append(
         self,
         *,
@@ -276,7 +387,6 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             include_internal = _bool_query_flag(parsed.query, "include_internal")
-            auto_refresh = not _bool_query_flag(parsed.query, "refresh_off")
             if parsed.path == "/activity.json":
                 payload = monitor.snapshot(include_internal=include_internal)
                 body = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -286,12 +396,62 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
                     body=body,
                 )
                 return
-            if parsed.path == "/":
-                snapshot = monitor.snapshot(include_internal=include_internal)
-                body = _render_html(
+            if parsed.path in {"/", "/runs"}:
+                snapshot = monitor.list_runs_snapshot(include_internal=include_internal)
+                body = _render_runs_index_html(
                     snapshot=snapshot,
                     include_internal=include_internal,
-                    auto_refresh=auto_refresh,
+                ).encode("utf-8")
+                self._write_response(
+                    status_code=200,
+                    content_type="text/html; charset=utf-8",
+                    body=body,
+                )
+                return
+            if parsed.path == "/runs.json":
+                payload = monitor.list_runs_snapshot(include_internal=include_internal)
+                body = json.dumps(payload, sort_keys=True).encode("utf-8")
+                self._write_response(
+                    status_code=200,
+                    content_type="application/json; charset=utf-8",
+                    body=body,
+                )
+                return
+            if parsed.path.startswith("/runs/"):
+                encoded_run_id = parsed.path[len("/runs/") :]
+                if not encoded_run_id:
+                    self._write_response(
+                        status_code=404,
+                        content_type="text/plain; charset=utf-8",
+                        body=b"not found",
+                    )
+                    return
+                json_mode = encoded_run_id.endswith(".json")
+                if json_mode:
+                    encoded_run_id = encoded_run_id[: -len(".json")]
+                run_id = unquote(encoded_run_id)
+                snapshot = monitor.get_run_snapshot(
+                    run_id=run_id,
+                    include_internal=include_internal,
+                )
+                if snapshot is None:
+                    self._write_response(
+                        status_code=404,
+                        content_type="text/plain; charset=utf-8",
+                        body=b"run not found",
+                    )
+                    return
+                if json_mode:
+                    body = json.dumps(snapshot, sort_keys=True).encode("utf-8")
+                    self._write_response(
+                        status_code=200,
+                        content_type="application/json; charset=utf-8",
+                        body=body,
+                    )
+                    return
+                body = _render_run_detail_html(
+                    snapshot=snapshot,
+                    include_internal=include_internal,
                 ).encode("utf-8")
                 self._write_response(
                     status_code=200,
@@ -324,417 +484,100 @@ def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandle
     return Handler
 
 
-def _render_html(
+def _render_runs_index_html(
     *,
     snapshot: dict[str, object],
     include_internal: bool,
-    auto_refresh: bool,
 ) -> str:
     current_executor = snapshot["current_executor"]
-    activity = snapshot["recent_activity"]
+    runs = snapshot["runs"]
     assert isinstance(current_executor, dict)
-    assert isinstance(activity, list)
-    activity_json = _json_script_value(snapshot)
-    initial_list_markup = _render_activity_list(activity)
-    initial_detail_markup = _render_detail_panel(activity[0] if activity else None)
-    current_state_markup = _render_current_executor(current_executor)
-
+    assert isinstance(runs, list)
     showing_note = ""
     if snapshot.get("history_truncated"):
-        showing_note = (
-            f"<p class='note'>Showing the latest {html.escape(str(snapshot['history_limit']))} events. "
-            "Older local history has been pruned from this view.</p>"
-        )
-
-    query_parts: list[str] = []
-    if include_internal:
-        query_parts.append("include_internal=1")
-    if not auto_refresh:
-        query_parts.append("refresh_off=1")
-
-    toggle_query_parts = list(query_parts)
-    if include_internal:
-        toggle_query_parts.remove("include_internal=1")
-    else:
-        toggle_query_parts.append("include_internal=1")
-
-    refresh_query_parts = list(query_parts)
-    if auto_refresh:
-        refresh_query_parts.append("refresh_off=1")
-    else:
-        refresh_query_parts.remove("refresh_off=1")
-
-    toggle_href = "/" if not toggle_query_parts else f"/?{'&'.join(toggle_query_parts)}"
+        showing_note = f"<p class='note'>Showing the latest {html.escape(str(snapshot['history_limit']))} runs.</p>"
+    runs_markup = _render_runs_index(runs, include_internal=include_internal)
+    current_state_markup = _render_current_executor(current_executor)
+    toggle_href = _with_query("/runs", include_internal=not include_internal)
     toggle_label = (
         "show internal traffic" if not include_internal else "hide internal traffic"
     )
-    refresh_href = (
-        "/" if not refresh_query_parts else f"/?{'&'.join(refresh_query_parts)}"
-    )
-    refresh_label = "pause refresh" if auto_refresh else "resume refresh"
-    refresh_note = "Auto-refresh every 5s." if auto_refresh else "Auto-refresh paused."
-
+    json_href = _with_query("/runs.json", include_internal=include_internal)
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Chatting Worker Activity</title>
+  <title>Chatting Worker Runs</title>
   <style>
     :root {{
       color-scheme: light;
-      --bg: #f4efe6;
-      --panel: #fffaf2;
-      --border: #d5c7b3;
-      --ink: #1f1d1a;
-      --muted: #6b655d;
-      --accent: #b85c38;
-      --accent-soft: #f4d8c9;
-      --shadow: 0 18px 45px rgba(56, 37, 18, 0.08);
+      --bg: #f6f1e8;
+      --panel: #fffdf8;
+      --border: #d6ccbc;
+      --ink: #1c1915;
+      --muted: #655d53;
+      --accent: #1f6f78;
+      --accent-soft: #d8eff2;
+      --success: #2f6b3b;
+      --warning: #8b5a1c;
+      --danger: #8c2f39;
+      --shadow: 0 20px 60px rgba(39, 30, 18, 0.08);
     }}
-    html {{ height: 100%; }}
-    body {{ background: linear-gradient(180deg, #efe4d2 0%, var(--bg) 100%); color: var(--ink); font: 16px/1.4 Georgia, serif; margin: 0; min-height: 100vh; }}
-    main {{ width: 100%; min-height: 100vh; box-sizing: border-box; padding: 18px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 18px; }}
-    h1, h2 {{ font-family: "Iowan Old Style", Georgia, serif; margin: 0 0 12px; }}
-    h3 {{ margin: 0 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}
-    .panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; min-height: 0; box-sizing: border-box; }}
-    .topbar {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }}
-    .controls {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
-    .button-link {{ appearance: none; border: 1px solid var(--border); background: transparent; color: var(--accent); border-radius: 999px; padding: 8px 12px; font: inherit; text-decoration: none; cursor: pointer; }}
+    body {{ background:
+      radial-gradient(circle at top left, #e5f2ef 0, transparent 30%),
+      linear-gradient(180deg, #efe7d9 0%, var(--bg) 100%);
+      color: var(--ink); font: 16px/1.45 Georgia, serif; margin: 0; min-height: 100vh; }}
+    main {{ max-width: 1040px; margin: 0 auto; padding: 20px 14px 40px; }}
+    h1, h2, h3 {{ font-family: "Iowan Old Style", Georgia, serif; }}
+    .hero {{ background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 22px; margin-bottom: 18px; }}
+    .hero-top {{ display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }}
+    .eyebrow {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; margin-bottom: 8px; }}
+    .hero h1 {{ margin: 0 0 8px; font-size: clamp(28px, 5vw, 42px); }}
+    .controls {{ display: flex; gap: 10px; flex-wrap: wrap; }}
+    .button-link {{ border: 1px solid var(--border); background: white; color: var(--accent); border-radius: 999px; padding: 9px 14px; text-decoration: none; }}
     .button-link:hover {{ background: var(--accent-soft); }}
     .note, .muted {{ color: var(--muted); }}
-    a {{ color: var(--accent); }}
-    code, pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
-    .layout {{ display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 18px; align-items: stretch; min-height: 0; }}
-    .list-panel {{ padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 0; height: 100%; }}
-    .list-header {{ padding: 18px 18px 0; }}
-    .activity-list {{ list-style: none; margin: 0; padding: 12px; display: grid; gap: 10px; flex: 1 1 auto; min-height: 0; overflow: auto; }}
-    .activity-item {{ border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.65); padding: 0; }}
-    .activity-item button {{ width: 100%; text-align: left; background: transparent; border: none; padding: 14px; font: inherit; color: inherit; cursor: pointer; }}
-    .activity-item.selected {{ border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }}
-    .activity-kicker {{ display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }}
-    .activity-summary {{ font-size: 17px; margin: 6px 0; }}
-    .activity-meta {{ display: grid; gap: 6px; font-size: 13px; color: var(--muted); }}
-    .activity-meta-row {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-    .meta-chip {{ display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; background: rgba(184, 92, 56, 0.08); }}
-    .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-bottom: 16px; }}
-    .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
+    .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-top: 16px; }}
+    .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
     .detail-block dd {{ margin: 4px 0 0; }}
-    .detail-panel {{ overflow: auto; height: 100%; }}
-    .detail-section {{ border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }}
-    .detail-section:first-of-type {{ border-top: none; margin-top: 0; padding-top: 0; }}
-    .detail-message {{ white-space: pre-wrap; word-break: break-word; font-size: 18px; line-height: 1.5; }}
-    .empty-state {{ padding: 28px 18px; color: var(--muted); }}
-    @media (max-width: 900px) {{
-      main {{ min-height: 0; padding: 12px; grid-template-rows: auto auto; }}
-      .layout {{ grid-template-columns: 1fr; }}
-      .list-panel, .detail-panel {{ height: auto; overflow: visible; }}
+    .runs {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }}
+    .run-card {{ display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 18px; box-shadow: var(--shadow); }}
+    .run-card:hover {{ border-color: var(--accent); transform: translateY(-1px); }}
+    .run-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
+    .run-title {{ margin: 10px 0 8px; font-size: 23px; line-height: 1.2; }}
+    .run-preview {{ margin: 0 0 12px; font-size: 16px; color: #2d2823; }}
+    .chips {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+    .chip {{ display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 4px 9px; background: rgba(31, 111, 120, 0.08); font-size: 13px; color: var(--muted); }}
+    .chip.status-success {{ background: rgba(47, 107, 59, 0.12); color: var(--success); }}
+    .chip.status-execution_error, .chip.status-dead_letter {{ background: rgba(140, 47, 57, 0.12); color: var(--danger); }}
+    .empty-state {{ background: var(--panel); border: 1px dashed var(--border); border-radius: 20px; padding: 28px; color: var(--muted); }}
+    @media (max-width: 720px) {{
+      main {{ padding: 12px 12px 28px; }}
+      .hero {{ padding: 18px; border-radius: 18px; }}
       .detail-grid {{ grid-template-columns: 1fr; }}
+      .run-title {{ font-size: 20px; }}
     }}
   </style>
 </head>
 <body>
   <main>
-    <div class="panel">
-      <div class="topbar">
+    <section class="hero">
+      <div class="hero-top">
         <div>
-          <h1>Worker Now</h1>
+          <div class="eyebrow">Chatting Worker</div>
+          <h1>Recent Runs</h1>
+          <p class="muted">Stable URLs, grouped per run, and no live event list jumping around.</p>
           <div id="current-executor">{current_state_markup}</div>
-          <p class="muted" id="refresh-note">{html.escape(refresh_note)}</p>
         </div>
         <div class="controls">
-          <button class="button-link" id="refresh-toggle" type="button">{html.escape(refresh_label)}</button>
-          <a class="button-link" href="/activity.json{"?include_internal=1" if include_internal else ""}">JSON</a>
+          <a class="button-link" href="{json_href}">JSON</a>
           <a class="button-link" href="{toggle_href}">{toggle_label}</a>
-          <a class="button-link" href="{refresh_href}">open current view</a>
+          <a class="button-link" href="/activity.json">raw activity</a>
         </div>
       </div>
-    </div>
-    <div class="layout">
-      <section class="panel list-panel">
-        <div class="list-header">
-          <h2>Recent Activity</h2>
-          {showing_note}
-        </div>
-        <ul class="activity-list" id="activity-list">{initial_list_markup}</ul>
-      </section>
-      <section class="panel detail-panel" id="detail-panel">{initial_detail_markup}</section>
-    </div>
-    <script id="activity-snapshot" type="application/json">{activity_json}</script>
-    <script>
-      (() => {{
-        const snapshotElement = document.getElementById("activity-snapshot");
-        const listElement = document.getElementById("activity-list");
-        const detailElement = document.getElementById("detail-panel");
-        const currentExecutorElement = document.getElementById("current-executor");
-        const refreshToggleElement = document.getElementById("refresh-toggle");
-        const refreshNoteElement = document.getElementById("refresh-note");
-        const initialSnapshot = JSON.parse(snapshotElement.textContent);
-        const includeInternal = {str(include_internal).lower()};
-        let autoRefresh = {str(auto_refresh).lower()};
-        let selectedId = null;
-        let currentActivity = Array.isArray(initialSnapshot.recent_activity)
-          ? initialSnapshot.recent_activity
-          : [];
-        let timerId = null;
-
-        function eventId(item) {{
-          if (item && Number.isInteger(item.activity_id)) {{
-            return String(item.activity_id);
-          }}
-          return [
-            item.occurred_at || "",
-            item.phase || "",
-            item.task_id || "",
-            item.envelope_id || "",
-            item.run_id || "",
-            item.summary || "",
-          ].join("|");
-        }}
-
-        function escapeHtml(value) {{
-          return String(value ?? "")
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
-            .replaceAll("'", "&#39;");
-        }}
-
-        function messageText(item) {{
-          const detail = item && typeof item.detail === "object" ? item.detail : null;
-          if (!detail) {{
-            return null;
-          }}
-          for (const key of ["content", "body"]) {{
-            const value = detail[key];
-            if (typeof value === "string" && value.trim()) {{
-              return value.trim();
-            }}
-          }}
-          return null;
-        }}
-
-        function listMetaEntries(item) {{
-          return [
-            ["task", item && item.task_id ? item.task_id : null],
-            ["source", item && item.source ? item.source : null],
-          ].filter(([, value]) => value);
-        }}
-
-        function detailWithoutMessage(detail) {{
-          if (!detail || typeof detail !== "object") {{
-            return detail;
-          }}
-          return Object.fromEntries(
-            Object.entries(detail).filter(([key]) => key !== "content" && key !== "body")
-          );
-        }}
-
-        function friendlyTimestamp(value) {{
-          if (!value) {{
-            return "";
-          }}
-          const parsed = new Date(value);
-          if (Number.isNaN(parsed.getTime())) {{
-            return String(value);
-          }}
-          return new Intl.DateTimeFormat("en-GB", {{
-            weekday: "short",
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            timeZone: "UTC",
-            timeZoneName: "short",
-          }}).format(parsed);
-        }}
-
-        function renderCurrentExecutor(currentExecutor) {{
-          const active = Boolean(currentExecutor && currentExecutor.active);
-          const entries = [
-            ["state", active ? "running" : "idle"],
-            ["phase", currentExecutor && currentExecutor.phase ? currentExecutor.phase : "idle"],
-            ["task_id", currentExecutor && currentExecutor.task_id],
-            ["envelope_id", currentExecutor && currentExecutor.envelope_id],
-            ["attempt", currentExecutor && currentExecutor.attempt],
-            ["pid", currentExecutor && currentExecutor.pid],
-            [
-              "started_at",
-              currentExecutor && currentExecutor.started_at
-                ? friendlyTimestamp(currentExecutor.started_at)
-                : null,
-            ],
-          ].filter(([, value]) => value !== null && value !== undefined && value !== "");
-          currentExecutorElement.innerHTML = `<div class="detail-grid">${{entries
-            .map(
-              ([label, value]) =>
-                `<dl class="detail-block"><dt>${{escapeHtml(label)}}</dt><dd>${{escapeHtml(value)}}</dd></dl>`
-            )
-            .join("")}}</div>`;
-        }}
-
-        function renderList() {{
-          if (!currentActivity.length) {{
-            listElement.innerHTML = `<li class="empty-state">No recent worker activity.</li>`;
-            return;
-          }}
-          listElement.innerHTML = currentActivity
-            .map((item) => {{
-              const id = eventId(item);
-              const metaMarkup = listMetaEntries(item)
-                .map(
-                  ([label, value]) =>
-                    `<span class="meta-chip"><strong>${{escapeHtml(label)}}:</strong> ${{escapeHtml(value)}}</span>`
-                )
-                .join("");
-              const selectedClass = id === selectedId ? " selected" : "";
-              return `
-                <li class="activity-item${{selectedClass}}" data-event-id="${{escapeHtml(id)}}">
-                  <button type="button">
-                    <div class="activity-kicker">
-                      <span title="${{escapeHtml(item.occurred_at || "")}}">${{escapeHtml(
-                        friendlyTimestamp(item.occurred_at)
-                      )}}</span>
-                      <span>${{escapeHtml(item.phase || "")}}</span>
-                    </div>
-                    <div class="activity-summary">${{escapeHtml(item.summary || "")}}</div>
-                    <div class="activity-meta">
-                      <div class="activity-meta-row">${{metaMarkup || '<span class="muted">No event metadata</span>'}}</div>
-                    </div>
-                  </button>
-                </li>`;
-            }})
-            .join("");
-        }}
-
-        function renderDetail() {{
-          const selectedItem =
-            currentActivity.find((item) => eventId(item) === selectedId) ||
-            currentActivity[0] ||
-            null;
-          if (selectedItem) {{
-            selectedId = eventId(selectedItem);
-          }}
-          if (!selectedItem) {{
-            detailElement.innerHTML =
-              `<div class="empty-state">Select an event to inspect it.</div>`;
-            return;
-          }}
-          const message = messageText(selectedItem);
-          const detailJson = JSON.stringify(
-            detailWithoutMessage(selectedItem.detail),
-            null,
-            2
-          );
-          const metaEntries = [
-            ["When", friendlyTimestamp(selectedItem.occurred_at)],
-            ["Phase", selectedItem.phase || ""],
-            ["Task", selectedItem.task_id || ""],
-            ["Envelope", selectedItem.envelope_id || ""],
-            ["Run", selectedItem.run_id || ""],
-            ["Source", selectedItem.source || ""],
-          ].filter(([, value]) => value);
-          detailElement.innerHTML = `
-            <h2>Message Detail</h2>
-            <div class="detail-section">
-              <div class="detail-grid">
-                ${{metaEntries
-                  .map(
-                    ([label, value]) =>
-                      `<dl class="detail-block"><dt>${{escapeHtml(label)}}</dt><dd>${{escapeHtml(value)}}</dd></dl>`
-                  )
-                  .join("")}}
-              </div>
-            </div>
-            <div class="detail-section">
-              <h3>Summary</h3>
-              <p>${{escapeHtml(selectedItem.summary || "")}}</p>
-            </div>
-            <div class="detail-section">
-              <h3>Message</h3>
-              <div class="detail-message">${{
-                message
-                  ? escapeHtml(message)
-                  : '<span class="muted">No message text captured for this event.</span>'
-              }}</div>
-            </div>
-            <div class="detail-section">
-              <h3>Detail JSON</h3>
-              <pre><code>${{escapeHtml(detailJson)}}</code></pre>
-            </div>`;
-        }}
-
-        async function refreshData() {{
-          const response = await fetch(`/activity.json${{includeInternal ? "?include_internal=1" : ""}}`, {{
-            headers: {{ Accept: "application/json" }},
-            cache: "no-store",
-          }});
-          if (!response.ok) {{
-            throw new Error(`activity fetch failed: ${{response.status}}`);
-          }}
-          const snapshot = await response.json();
-          currentActivity = Array.isArray(snapshot.recent_activity)
-            ? snapshot.recent_activity
-            : [];
-          renderCurrentExecutor(snapshot.current_executor || {{}});
-          renderList();
-          renderDetail();
-        }}
-
-        function updateRefreshControls() {{
-          refreshToggleElement.textContent = autoRefresh ? "pause refresh" : "resume refresh";
-          refreshNoteElement.textContent = autoRefresh
-            ? "Auto-refresh every 5s in the background."
-            : "Auto-refresh paused.";
-        }}
-
-        function resetTimer() {{
-          if (timerId !== null) {{
-            window.clearInterval(timerId);
-            timerId = null;
-          }}
-          if (autoRefresh) {{
-            timerId = window.setInterval(() => {{
-              refreshData().catch((error) => {{
-                console.error(error);
-              }});
-            }}, 5000);
-          }}
-        }}
-
-        listElement.addEventListener("click", (event) => {{
-          const target =
-            event.target instanceof Element ? event.target.closest("[data-event-id]") : null;
-          if (!target) {{
-            return;
-          }}
-          const id = target.getAttribute("data-event-id");
-          if (!id) {{
-            return;
-          }}
-          selectedId = id;
-          renderList();
-          renderDetail();
-        }});
-
-        refreshToggleElement.addEventListener("click", () => {{
-          autoRefresh = !autoRefresh;
-          updateRefreshControls();
-          resetTimer();
-        }});
-
-        renderCurrentExecutor(initialSnapshot.current_executor || {{}});
-        if (currentActivity.length) {{
-          selectedId = eventId(currentActivity[0]);
-        }}
-        renderList();
-        renderDetail();
-        updateRefreshControls();
-        resetTimer();
-      }})();
-    </script>
+      {showing_note}
+    </section>
+    {runs_markup}
   </main>
 </body>
 </html>"""
@@ -763,61 +606,216 @@ def _render_current_executor(current_executor: dict[str, object]) -> str:
     return f"<div class='detail-grid'>{''.join(blocks)}</div>"
 
 
-def _render_activity_list(activity: list[object]) -> str:
+def _render_runs_index(runs: list[object], *, include_internal: bool) -> str:
+    if not runs:
+        return "<div class='empty-state'>No completed runs yet.</div>"
     items = []
-    for item in activity:
+    for item in runs:
         assert isinstance(item, dict)
-        event_id = _event_id(item)
-        occurred_at = str(item.get("occurred_at", ""))
-        meta_entries = _list_meta_entries(item)
-        empty_meta_markup = "<span class='muted'>No event metadata</span>"
-        meta_markup = "".join(
-            "<span class='meta-chip'>"
-            f"<strong>{html.escape(label)}:</strong> {html.escape(value)}"
-            "</span>"
-            for label, value in meta_entries
+        run_id = str(item.get("run_id", ""))
+        href = _with_query(
+            f"/runs/{_quote_path_segment(run_id)}",
+            include_internal=include_internal,
         )
+        preview = str(item.get("preview", "")).strip() or "No captured message preview."
+        title = str(item.get("task_id", "")) or run_id
+        chips = [
+            ("status", str(item.get("result_status", ""))),
+            ("source", str(item.get("source", ""))),
+            ("events", str(item.get("event_count", ""))),
+            ("latency", f"{item.get('latency_ms', 0)} ms"),
+        ]
+        latest_phase = item.get("latest_phase")
+        if isinstance(latest_phase, str) and latest_phase:
+            chips.append(("phase", latest_phase))
         items.append(
-            "<li class='activity-item' "
-            f"data-event-id='{html.escape(event_id)}'>"
-            "<button type='button'>"
-            "<div class='activity-kicker'>"
-            f"<span title='{html.escape(occurred_at)}'>{html.escape(_friendly_timestamp(occurred_at))}</span>"
-            f"<span>{html.escape(str(item.get('phase', '')))}</span>"
+            "<li>"
+            f"<a class='run-card' href='{html.escape(href)}'>"
+            "<div class='run-kicker'>"
+            f"<span>{html.escape(_friendly_timestamp(item.get('created_at')))}</span>"
+            f"<span>{html.escape(run_id)}</span>"
             "</div>"
-            f"<div class='activity-summary'>{html.escape(str(item.get('summary', '')))}</div>"
-            "<div class='activity-meta'>"
-            "<div class='activity-meta-row'>"
-            f"{meta_markup or empty_meta_markup}"
-            "</div>"
-            "</div>"
-            "</button>"
+            f"<h2 class='run-title'>{html.escape(title)}</h2>"
+            f"<p class='run-preview'>{html.escape(preview)}</p>"
+            f"{_render_chip_row(chips, status_value=str(item.get('result_status', '')))}"
+            "</a>"
             "</li>"
         )
-    if not items:
-        return "<li class='empty-state'>No recent worker activity.</li>"
-    items[0] = items[0].replace(
-        "class='activity-item'", "class='activity-item selected'", 1
-    )
-    return "".join(items)
+    return f"<ul class='runs'>{''.join(items)}</ul>"
 
 
-def _render_detail_panel(item: object) -> str:
-    if not isinstance(item, dict):
-        return "<div class='empty-state'>No recent worker activity.</div>"
-    detail = item.get("detail")
-    message = _message_text(item)
-    detail_json = html.escape(
-        json.dumps(_detail_without_message(detail), indent=2, sort_keys=True)
+def _render_run_detail_html(
+    *,
+    snapshot: dict[str, object],
+    include_internal: bool,
+) -> str:
+    current_executor = snapshot["current_executor"]
+    run = snapshot["run"]
+    assert isinstance(current_executor, dict)
+    assert isinstance(run, dict)
+    current_state_markup = _render_current_executor(current_executor)
+    events = run.get("events", [])
+    assert isinstance(events, list)
+    back_href = _with_query("/runs", include_internal=include_internal)
+    json_href = _with_query(
+        f"/runs/{_quote_path_segment(str(run.get('run_id', '')))}.json",
+        include_internal=include_internal,
     )
-    entries = [
-        ("When", _friendly_timestamp(item.get("occurred_at"))),
-        ("Phase", str(item.get("phase", ""))),
-        ("Task", str(item.get("task_id", ""))),
-        ("Envelope", str(item.get("envelope_id", ""))),
-        ("Run", str(item.get("run_id", ""))),
-        ("Source", str(item.get("source", ""))),
+    toggle_href = _with_query(
+        f"/runs/{_quote_path_segment(str(run.get('run_id', '')))}",
+        include_internal=not include_internal,
+    )
+    toggle_label = (
+        "show internal traffic" if not include_internal else "hide internal traffic"
+    )
+    summary_entries = [
+        ("Run", str(run.get("run_id", ""))),
+        ("Task", str(run.get("task_id", ""))),
+        ("Envelope", str(run.get("envelope_id", ""))),
+        ("Status", str(run.get("result_status", ""))),
+        ("Source", str(run.get("source", ""))),
+        ("Workflow", str(run.get("workflow", ""))),
+        ("Started", _friendly_timestamp(run.get("created_at"))),
+        ("Latency", f"{run.get('latency_ms', 0)} ms"),
     ]
+    timeline_markup = _render_run_timeline(events)
+    audit_detail = run.get("audit_detail", {})
+    audit_json = html.escape(json.dumps(audit_detail, indent=2, sort_keys=True))
+    preview = str(run.get("preview", "")).strip()
+    preview_markup = (
+        f"<div class='preview-box'>{html.escape(preview)}</div>"
+        if preview
+        else "<div class='preview-box muted'>No captured message preview for this run.</div>"
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{html.escape(str(run.get("task_id", run.get("run_id", "Run"))))}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f4efe7;
+      --panel: #fffdf9;
+      --border: #d7cbbc;
+      --ink: #1f1a16;
+      --muted: #685f56;
+      --accent: #9a3412;
+      --accent-soft: #f5dfd3;
+      --shadow: 0 18px 60px rgba(42, 30, 17, 0.08);
+    }}
+    body {{ margin: 0; background:
+      radial-gradient(circle at top right, #f3dcc8 0, transparent 28%),
+      linear-gradient(180deg, #ede5d8 0%, var(--bg) 100%);
+      color: var(--ink); font: 16px/1.5 Georgia, serif; }}
+    main {{ max-width: 980px; margin: 0 auto; padding: 18px 14px 42px; }}
+    .hero, .panel, .timeline-item {{ background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); }}
+    .hero {{ border-radius: 24px; padding: 22px; margin-bottom: 18px; }}
+    .hero-top {{ display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }}
+    .eyebrow {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; margin-bottom: 8px; }}
+    h1, h2, h3 {{ font-family: "Iowan Old Style", Georgia, serif; margin: 0 0 10px; }}
+    h1 {{ font-size: clamp(28px, 5vw, 40px); }}
+    .controls {{ display: flex; gap: 10px; flex-wrap: wrap; }}
+    .button-link {{ border: 1px solid var(--border); border-radius: 999px; padding: 9px 14px; text-decoration: none; color: var(--accent); background: white; }}
+    .button-link:hover {{ background: var(--accent-soft); }}
+    .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }}
+    .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
+    .detail-block dd {{ margin: 4px 0 0; }}
+    .panel {{ border-radius: 20px; padding: 18px; margin-bottom: 18px; }}
+    .preview-box {{ font-size: 18px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }}
+    .muted {{ color: var(--muted); }}
+    .timeline {{ list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }}
+    .timeline-item {{ border-radius: 18px; padding: 16px; }}
+    .timeline-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
+    .timeline-item h3 {{ margin-top: 8px; font-size: 21px; }}
+    .timeline-message {{ margin-top: 10px; padding: 12px 14px; background: rgba(154, 52, 18, 0.06); border-radius: 14px; white-space: pre-wrap; word-break: break-word; }}
+    pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
+    @media (max-width: 720px) {{
+      main {{ padding: 12px 12px 28px; }}
+      .hero, .panel, .timeline-item {{ border-radius: 18px; }}
+      .detail-grid {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="eyebrow">Run Detail</div>
+          <h1>{html.escape(str(run.get("task_id", "")) or str(run.get("run_id", "")))}</h1>
+          <div>{current_state_markup}</div>
+        </div>
+        <div class="controls">
+          <a class="button-link" href="{back_href}">all runs</a>
+          <a class="button-link" href="{json_href}">JSON</a>
+          <a class="button-link" href="{toggle_href}">{toggle_label}</a>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Run Summary</h2>
+      <div class="detail-grid">{_render_detail_blocks(summary_entries)}</div>
+    </section>
+    <section class="panel">
+      <h2>Content Preview</h2>
+      {preview_markup}
+    </section>
+    <section class="panel">
+      <h2>Events In Order</h2>
+      {timeline_markup}
+    </section>
+    <section class="panel">
+      <h2>Audit Detail</h2>
+      <pre><code>{audit_json}</code></pre>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
+def _render_run_timeline(events: list[object]) -> str:
+    if not events:
+        return "<div class='muted'>No worker activity captured for this run.</div>"
+    items = []
+    for item in events:
+        assert isinstance(item, dict)
+        message = _message_text(item)
+        detail_json = html.escape(
+            json.dumps(
+                _detail_without_message(item.get("detail")), indent=2, sort_keys=True
+            )
+        )
+        meta = [
+            ("When", _friendly_timestamp(item.get("occurred_at"))),
+            ("Phase", str(item.get("phase", ""))),
+            ("Task", str(item.get("task_id", ""))),
+            ("Envelope", str(item.get("envelope_id", ""))),
+            ("Run", str(item.get("run_id", ""))),
+            ("Source", str(item.get("source", ""))),
+        ]
+        message_markup = (
+            f"<div class='timeline-message'>{html.escape(message)}</div>"
+            if message is not None
+            else ""
+        )
+        items.append(
+            "<li class='timeline-item'>"
+            "<div class='timeline-kicker'>"
+            f"<span>{html.escape(_event_id(item))}</span>"
+            f"<span>{html.escape(_friendly_timestamp(item.get('occurred_at')))}</span>"
+            "</div>"
+            f"<h3>{html.escape(str(item.get('summary', '')))}</h3>"
+            f"<div class='detail-grid'>{_render_detail_blocks(meta)}</div>"
+            f"{message_markup}"
+            "<h3>Detail JSON</h3>"
+            f"<pre><code>{detail_json}</code></pre>"
+            "</li>"
+        )
+    return f"<ol class='timeline'>{''.join(items)}</ol>"
+
+
+def _render_detail_blocks(entries: list[tuple[str, str]]) -> str:
     blocks = []
     for label, value in entries:
         if not value:
@@ -828,29 +826,25 @@ def _render_detail_panel(item: object) -> str:
             f"<dd>{html.escape(value)}</dd>"
             "</dl>"
         )
-    message_markup = (
-        html.escape(message)
-        if message is not None
-        else "<span class='muted'>No message text captured for this event.</span>"
-    )
-    return (
-        "<h2>Message Detail</h2>"
-        "<div class='detail-section'>"
-        f"<div class='detail-grid'>{''.join(blocks)}</div>"
-        "</div>"
-        "<div class='detail-section'>"
-        "<h3>Summary</h3>"
-        f"<p>{html.escape(str(item.get('summary', '')))}</p>"
-        "</div>"
-        "<div class='detail-section'>"
-        "<h3>Message</h3>"
-        f"<div class='detail-message'>{message_markup}</div>"
-        "</div>"
-        "<div class='detail-section'>"
-        "<h3>Detail JSON</h3>"
-        f"<pre><code>{detail_json}</code></pre>"
-        "</div>"
-    )
+    return "".join(blocks)
+
+
+def _render_chip_row(
+    entries: list[tuple[str, str]],
+    *,
+    status_value: str,
+) -> str:
+    chips = []
+    for label, value in entries:
+        if not value:
+            continue
+        classes = ["chip"]
+        if label == "status":
+            classes.append(f"status-{status_value}")
+        chips.append(
+            f"<span class='{' '.join(classes)}'><strong>{html.escape(label)}:</strong> {html.escape(value)}</span>"
+        )
+    return f"<div class='chips'>{''.join(chips)}</div>"
 
 
 def _list_meta_entries(item: dict[str, object]) -> list[tuple[str, str]]:
@@ -924,3 +918,13 @@ def _detail_without_message(detail: object) -> object:
     return {
         key: value for key, value in detail.items() if key not in {"body", "content"}
     }
+
+
+def _with_query(path: str, *, include_internal: bool) -> str:
+    if include_internal:
+        return f"{path}?include_internal=1"
+    return path
+
+
+def _quote_path_segment(value: str) -> str:
+    return quote(value, safe="")
