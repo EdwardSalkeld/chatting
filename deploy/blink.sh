@@ -20,5 +20,8 @@ ssh \
   -i "$KEY" \
   -o IdentitiesOnly=yes \
   -o StrictHostKeyChecking=accept-new \
-  root@blink.int.alcachofa.faith \
-  "chatting-deploy $TARGET_SHA"
+  edward@blink.int.alcachofa.faith \
+  "cd /home/edward/develop/chatting && \
+   export CHATTING_RUNTIME_IMAGE=ghcr.io/edwardsalkeld/chatting:sha-$SHORT_SHA && \
+   docker compose pull && \
+   docker compose up -d"
