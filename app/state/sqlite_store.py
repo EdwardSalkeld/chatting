@@ -252,6 +252,49 @@ class SQLiteStateStore:
             for row in rows
         ]
 
+    def list_recent_runs(self, *, limit: int) -> list[RunRecord]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM run_records ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            RunRecord(
+                run_id=row["run_id"],
+                envelope_id=row["envelope_id"],
+                source=row["source"],
+                workflow=row["workflow"],
+                latency_ms=row["latency_ms"],
+                result_status=row["result_status"],
+                created_at=_parse_rfc3339_utc(row["created_at"]),
+                schema_version=row["schema_version"],
+            )
+            for row in rows
+        ]
+
+    def get_run(self, *, run_id: str) -> RunRecord | None:
+        if not run_id:
+            raise ValueError("run_id is required")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM run_records WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RunRecord(
+            run_id=row["run_id"],
+            envelope_id=row["envelope_id"],
+            source=row["source"],
+            workflow=row["workflow"],
+            latency_ms=row["latency_ms"],
+            result_status=row["result_status"],
+            created_at=_parse_rfc3339_utc(row["created_at"]),
+            schema_version=row["schema_version"],
+        )
+
     def append_audit_event(self, event: AuditEvent) -> None:
         payload = event.to_dict()
         with closing(self._connect()) as connection:
@@ -301,6 +344,33 @@ class SQLiteStateStore:
             )
             for row in rows
         ]
+
+    def get_audit_event_for_run(self, *, run_id: str) -> AuditEvent | None:
+        if not run_id:
+            raise ValueError("run_id is required")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM audit_events
+                WHERE run_id = ?
+                ORDER BY event_id DESC
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return AuditEvent(
+            run_id=row["run_id"],
+            envelope_id=row["envelope_id"],
+            source=row["source"],
+            workflow=row["workflow"],
+            result_status=row["result_status"],
+            detail=json.loads(row["detail_json"]),
+            created_at=_parse_rfc3339_utc(row["created_at"]),
+            schema_version=row["schema_version"],
+        )
 
     def append_dead_letter(
         self,
@@ -384,7 +454,9 @@ class SQLiteStateStore:
             for row in rows
         ]
 
-    def mark_dead_letter_replayed(self, dead_letter_id: int, replayed_run_id: str) -> None:
+    def mark_dead_letter_replayed(
+        self, dead_letter_id: int, replayed_run_id: str
+    ) -> None:
         if dead_letter_id <= 0:
             raise ValueError("dead_letter_id must be positive")
         if not replayed_run_id:
@@ -602,7 +674,10 @@ class SQLiteStateStore:
                 ORDER BY task_id ASC, sequence ASC, created_at ASC
                 """
             ).fetchall()
-        return [EgressQueueMessage.from_dict(json.loads(row["payload_json"])) for row in rows]
+        return [
+            EgressQueueMessage.from_dict(json.loads(row["payload_json"]))
+            for row in rows
+        ]
 
     def append_worker_activity(
         self,
@@ -641,7 +716,9 @@ class SQLiteStateStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    occurred_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    occurred_at.astimezone(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                     task_id,
                     envelope_id,
                     run_id,
@@ -702,6 +779,61 @@ class SQLiteStateStore:
             for row in rows
         ]
 
+    def list_worker_activity_for_run(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        envelope_id: str,
+        include_internal: bool = False,
+    ) -> list[dict[str, object]]:
+        if not run_id:
+            raise ValueError("run_id is required")
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not envelope_id:
+            raise ValueError("envelope_id is required")
+        with closing(self._connect()) as connection:
+            if include_internal:
+                rows = connection.execute(
+                    """
+                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                    FROM worker_activity_events
+                    WHERE run_id = ?
+                       OR (task_id = ? AND envelope_id = ?)
+                    ORDER BY occurred_at ASC, activity_id ASC
+                    """,
+                    (run_id, task_id, envelope_id),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                    FROM worker_activity_events
+                    WHERE (run_id = ?
+                       OR (task_id = ? AND envelope_id = ?))
+                      AND is_internal = 0
+                    ORDER BY occurred_at ASC, activity_id ASC
+                    """,
+                    (run_id, task_id, envelope_id),
+                ).fetchall()
+        return [
+            {
+                "activity_id": row["activity_id"],
+                "occurred_at": row["occurred_at"],
+                "task_id": row["task_id"],
+                "envelope_id": row["envelope_id"],
+                "run_id": row["run_id"],
+                "source": row["source"],
+                "workflow": row["workflow"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "detail": json.loads(row["detail_json"]),
+                "is_internal": bool(row["is_internal"]),
+            }
+            for row in rows
+        ]
+
 
 def _parse_rfc3339_utc(value: str) -> datetime:
     if value.endswith("Z"):
@@ -736,7 +868,10 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
         attachments.append(AttachmentRef(uri=uri, name=name))
     return TaskEnvelope(
         id=str(payload["id"]),
-        source=cast(Literal["cron", "email", "im", "webhook", "internal"], str(payload["source"])),
+        source=cast(
+            Literal["cron", "email", "im", "webhook", "internal"],
+            str(payload["source"]),
+        ),
         received_at=_parse_rfc3339_utc(str(payload["received_at"])),
         actor=str(payload["actor"]) if isinstance(payload.get("actor"), str) else None,
         content=str(payload["content"]),

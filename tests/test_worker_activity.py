@@ -4,9 +4,16 @@ import unittest
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
+from app.models import (
+    AuditEvent,
+    OutboundMessage,
+    ReplyChannel,
+    RunRecord,
+    TaskEnvelope,
+)
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor, start_worker_activity_server
 
@@ -115,6 +122,39 @@ class WorkerActivityTests(unittest.TestCase):
                 stream="stderr",
                 content="warning line",
             )
+            run_record = RunRecord(
+                run_id="run:task:telegram:1:123",
+                envelope_id=task_message.envelope.id,
+                source=task_message.envelope.source,
+                workflow="default",
+                latency_ms=42,
+                result_status="success",
+                created_at=datetime(2026, 3, 31, 12, 5, tzinfo=timezone.utc),
+            )
+            store.append_run(run_record)
+            store.append_audit_event(
+                AuditEvent(
+                    run_id=run_record.run_id,
+                    envelope_id=run_record.envelope_id,
+                    source=run_record.source,
+                    workflow=run_record.workflow,
+                    result_status=run_record.result_status,
+                    detail={
+                        "task_id": task_message.task_id,
+                        "attempt_count": 1,
+                        "reason_codes": [],
+                    },
+                    created_at=run_record.created_at,
+                )
+            )
+            monitor.record_executor_finished(
+                task_message=task_message,
+                run_id=run_record.run_id,
+                result_status="success",
+                attempt_count=1,
+                reason_codes=[],
+                latency_ms=42,
+            )
 
             server = start_worker_activity_server(
                 host="127.0.0.1", port=0, monitor=monitor
@@ -125,56 +165,76 @@ class WorkerActivityTests(unittest.TestCase):
                     f"http://127.0.0.1:{port}/activity.json"
                 ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(payload["current_executor"]["active"], True)
+                self.assertEqual(payload["current_executor"]["active"], False)
                 self.assertEqual(
-                    payload["recent_activity"][0]["phase"], "executor_stderr"
-                )
-
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
-                    html_body = response.read().decode("utf-8")
-                self.assertIn("Worker Now", html_body)
-                self.assertIn("Recent Activity", html_body)
-                self.assertIn("Message Detail", html_body)
-                self.assertIn("task_received", html_body)
-                self.assertIn("hello", html_body)
-                self.assertIn("warning line", html_body)
-                self.assertIn("task:</strong> task:telegram:1", html_body)
-                self.assertIn("source:</strong> im", html_body)
-                self.assertIn("Tue 31 Mar 2026 12:00:00 UTC", html_body)
-                self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
-                self.assertIn("pause refresh", html_body)
-                self.assertIn("fetch(`/activity.json", html_body)
-                self.assertNotIn('http-equiv="refresh"', html_body)
-                self.assertIn("data-event-id='3'", html_body)
-                self.assertIn("Number.isInteger(item.activity_id)", html_body)
-                self.assertIn("main { width: 100%; min-height: 100vh;", html_body)
-                self.assertIn(
-                    ".layout { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);",
-                    html_body,
-                )
-                self.assertIn(
-                    '<section class="panel detail-panel" id="detail-panel">',
-                    html_body,
+                    payload["recent_activity"][0]["phase"], "task_finished"
                 )
 
                 with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/?refresh_off=1"
+                    f"http://127.0.0.1:{port}/runs.json"
                 ) as response:
-                    paused_html_body = response.read().decode("utf-8")
-                self.assertIn("resume refresh", paused_html_body)
-                self.assertIn("Auto-refresh paused.", paused_html_body)
-                self.assertNotIn('http-equiv="refresh"', paused_html_body)
+                    runs_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(runs_payload["runs"][0]["task_id"], "task:telegram:1")
+                self.assertEqual(runs_payload["runs"][0]["event_count"], 4)
+                self.assertEqual(
+                    runs_payload["runs"][0]["latest_phase"], "task_finished"
+                )
+                self.assertEqual(runs_payload["runs"][0]["preview"], "hello")
+
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
+                    html_body = response.read().decode("utf-8")
+                self.assertIn("Recent Runs", html_body)
+                self.assertIn("Stable URLs, grouped per run", html_body)
+                self.assertIn("task:telegram:1", html_body)
+                self.assertIn("no live event list jumping around", html_body.lower())
+                self.assertIn("run%3Atask%3Atelegram%3A1%3A123", html_body)
+                self.assertIn("raw activity", html_body)
+                self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
+                self.assertNotIn("pause refresh", html_body)
+                self.assertNotIn("fetch(`/activity.json", html_body)
+
+                run_id = runs_payload["runs"][0]["run_id"]
+                encoded_run_id = quote(run_id, safe="")
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/runs/{encoded_run_id}.json"
+                ) as response:
+                    run_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(run_payload["run"]["run_id"], run_id)
+                self.assertEqual(
+                    [event["phase"] for event in run_payload["run"]["events"]],
+                    [
+                        "task_received",
+                        "executor_started",
+                        "executor_stderr",
+                        "task_finished",
+                    ],
+                )
+
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/runs/{encoded_run_id}"
+                ) as response:
+                    detail_html = response.read().decode("utf-8")
+                self.assertIn("Run Detail", detail_html)
+                self.assertIn("Events In Order", detail_html)
+                self.assertIn("task received", detail_html)
+                self.assertIn("executor started (attempt 1)", detail_html)
+                self.assertIn("warning line", detail_html)
+                self.assertIn("all runs", detail_html)
+                self.assertIn("Audit Detail", detail_html)
             finally:
                 server.shutdown()
 
-    def test_activity_html_uses_stable_activity_ids_for_duplicate_like_events(
-        self,
-    ) -> None:
+    def test_run_json_keeps_duplicate_like_events_in_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             monitor = WorkerActivityMonitor(store=store, history_limit=10)
             task_message = self._build_task_message()
 
+            monitor.record_task_received(task_message=task_message)
+            monitor.record_executor_started(
+                task_message=task_message,
+                attempt=1,
+            )
             monitor.record_executor_output(
                 task_message=task_message,
                 stream="stdout",
@@ -184,6 +244,39 @@ class WorkerActivityTests(unittest.TestCase):
                 task_message=task_message,
                 stream="stdout",
                 content="same output",
+            )
+            run_record = RunRecord(
+                run_id="run:task:telegram:1:456",
+                envelope_id=task_message.envelope.id,
+                source=task_message.envelope.source,
+                workflow="default",
+                latency_ms=7,
+                result_status="success",
+                created_at=datetime(2026, 3, 31, 12, 0, 7, tzinfo=timezone.utc),
+            )
+            store.append_run(run_record)
+            store.append_audit_event(
+                AuditEvent(
+                    run_id=run_record.run_id,
+                    envelope_id=run_record.envelope_id,
+                    source=run_record.source,
+                    workflow=run_record.workflow,
+                    result_status=run_record.result_status,
+                    detail={
+                        "task_id": task_message.task_id,
+                        "attempt_count": 1,
+                        "reason_codes": [],
+                    },
+                    created_at=run_record.created_at,
+                )
+            )
+            monitor.record_executor_finished(
+                task_message=task_message,
+                run_id=run_record.run_id,
+                result_status="success",
+                attempt_count=1,
+                reason_codes=[],
+                latency_ms=7,
             )
 
             server = start_worker_activity_server(
@@ -192,18 +285,19 @@ class WorkerActivityTests(unittest.TestCase):
             port = server.server.server_address[1]
             try:
                 with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/activity.json"
+                    f"http://127.0.0.1:{port}/runs.json"
                 ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                run_id = payload["runs"][0]["run_id"]
+                encoded_run_id = quote(run_id, safe="")
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/runs/{encoded_run_id}.json"
+                ) as response:
+                    run_payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(
-                    [item["activity_id"] for item in payload["recent_activity"]],
-                    [2, 1],
+                    [item["activity_id"] for item in run_payload["run"]["events"]],
+                    [1, 2, 3, 4, 5],
                 )
-
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
-                    html_body = response.read().decode("utf-8")
-                self.assertIn("data-event-id='2'", html_body)
-                self.assertIn("data-event-id='1'", html_body)
             finally:
                 server.shutdown()
 
