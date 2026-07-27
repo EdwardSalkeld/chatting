@@ -6,7 +6,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 BBMB_BIN=${CHATTING_BBMB_BIN:-"$REPO_ROOT/.runtime/bin/bbmb-server"}
 
 if [ ! -x "$BBMB_BIN" ]; then
-    echo "missing bbmb runtime: run deploy/magpie/build-runtime.sh first" >&2
+    echo "missing bbmb runtime: run deploy/host_runtime/build-runtime.sh first" >&2
     exit 1
 fi
 

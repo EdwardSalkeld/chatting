@@ -3,11 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from deploy.magpie.render_runtime_config import render_runtime_config
+from deploy.host_runtime.render_runtime_config import render_runtime_config
 
 
 class RenderRuntimeConfigTests(unittest.TestCase):
-    def test_render_runtime_config_rewrites_blink_paths_for_magpie(self) -> None:
+    def test_render_runtime_config_rewrites_docker_paths_for_host_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             source_root = root / "source"
@@ -46,7 +46,16 @@ class RenderRuntimeConfigTests(unittest.TestCase):
                 "[]\n", encoding="utf-8"
             )
 
-            render_runtime_config(source_root=source_root, output_root=output_root)
+            render_runtime_config(
+                source_root=source_root,
+                output_root=output_root,
+                workspace_dir="/srv/chatting/workspace",
+                handler_state_dir="/var/lib/handler",
+                worker_state_dir="/var/lib/worker",
+                config_dir="/etc/chatting",
+                bbmb_address="127.0.0.1:9876",
+                metrics_host="127.0.0.1",
+            )
 
             handler_payload = json.loads(
                 (output_root / "handler.json").read_text(encoding="utf-8")
