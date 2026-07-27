@@ -46,7 +46,8 @@ Useful overrides:
 - `--worker-state-dir`
 - `--config-dir`
 - `--bbmb-address`
-- `--metrics-host`
+- `--metrics-host` (defaults to `0.0.0.0` so an external Prometheus can scrape
+  the handler; firewall-gated. Pass `127.0.0.1` for local-only metrics.)
 
 This rewrites:
 

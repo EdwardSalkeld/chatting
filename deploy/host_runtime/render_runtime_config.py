@@ -50,8 +50,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--metrics-host",
-        default="127.0.0.1",
-        help="Metrics bind host for the rendered handler config.",
+        default="0.0.0.0",
+        help=(
+            "Metrics bind host for the rendered handler config. Defaults to "
+            "0.0.0.0 so an external Prometheus can scrape the handler; the host "
+            "firewall is expected to gate access. Use 127.0.0.1 to keep metrics "
+            "local-only."
+        ),
     )
     return parser.parse_args()
 
