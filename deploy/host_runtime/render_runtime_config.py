@@ -11,12 +11,12 @@ DOCKER_WORKSPACE_PREFIX = "repo:/workspace"
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Rewrite Blink chatting configs into Magpie host paths."
+        description="Rewrite chatting runtime configs for a host deployment."
     )
     parser.add_argument(
         "--source-root",
         required=True,
-        help="Directory containing handler/ and worker/ subdirectories from Blink.",
+        help="Directory containing handler/ and worker/ config subdirectories.",
     )
     parser.add_argument(
         "--output-root",
