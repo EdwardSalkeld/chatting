@@ -183,43 +183,62 @@ shape to debug.
 
 The main variable is the worker workspace plus auth/state, not the host OS.
 
-Target with headroom, not a tight fit:
+Measured on Blink on 2026-07-27:
 
-- root disk: `40 GiB`
-- workspace disk: `80 GiB`
+- `/home/edward/develop/chatting`: `699 MiB`
+- `/home/edward/develop/chatting/.git`: `3.6 MiB`
+- worker workspace root `/mnt/ext2tb/4/billy`: `1.7 GiB`
+- backing partition `/mnt/ext2tb/4`: `392 GiB` total, `69 GiB` used, `303 GiB`
+  available
+- Blink root disk `/`: `467 GiB` total, `94 GiB` used, `350 GiB` available
+- Blink Docker local volumes total: `17.27 GiB`
+- Blink Docker build cache total: `21.48 GiB`
 
-This aligns with the first lab VM shape and should leave room for:
+Important current constraint:
 
-- the base NixOS install and toolchain
-- one checked-out `chatting` repo copy
-- worker auth and SQLite state
-- the synced workspace
-- temporary rollback copies during migration
+- `partridge` is only `24 GiB` total on `/`, with about `12 GiB` free as of
+  2026-07-27
+- so the dedicated `chatting` VM should not assume that a large worker
+  workspace can live comfortably on a small default root disk elsewhere in the
+  current lab estate
 
-Known inputs today:
+This means the earlier notional `40 GiB root + 80 GiB workspace` shape should
+be treated as a ceiling sketch, not a grounded requirement.
 
-- the current `/workspace/chatting` checkout in this worker is about `70 MiB`
-- Blink stores persistent `chatting` Docker data under
-  `/mnt/ssd4tb/docker-volumes/chatting_*`
-- the live workspace and auth volumes on Blink are still expected to dominate
-  total usage
+The first practical sizing target should instead be:
 
-Before the final Terraform apply for the production VM shape, measure Blink and
-keep at least 2x the observed in-use bytes:
+- root disk: `24 GiB` minimum, `40 GiB` preferred
+- dedicated worker workspace disk: at least `10 GiB` if newly provisioned,
+  because current observed use is only `1.7 GiB`
+- keep at least 2x observed workspace usage free at cutover time
 
-```sh
-du -sh /home/edward/develop/chatting
-du -sh /mnt/ssd4tb/docker-volumes/chatting_handler-data
-du -sh /mnt/ssd4tb/docker-volumes/chatting_worker-data
-du -sh /mnt/ssd4tb/docker-volumes/chatting_codex-auth
-du -sh /mnt/ssd4tb/docker-volumes/chatting_claude-auth
-du -sh /mnt/ssd4tb/docker-volumes/chatting_gh-auth
-du -sh /mnt/ssd4tb/docker-volumes/chatting_shared-temp
-du -sh /mnt/ssd4tb/docker-volumes/chatting_html-output
-```
+If lab-side storage is genuinely tight, there is a viable fallback:
 
-If the worker workspace currently lives outside the `chatting` checkout, measure
-that path directly and use it as the main sizing input.
+- move the current Blink worker disk that backs `/mnt/ext2tb/4` onto the lab
+  host and attach or pass it through to the new VM
+- that would preserve the existing workspace with substantial free headroom and
+  avoid spending scarce local VM datastore space on worker checkout history and
+  scratch files
+
+Concrete host anchor for that option on Blink:
+
+- disk model: `WDC WD20EURS-63S48Y0`
+- device: `/dev/sdc`
+- worker partition in use: `/dev/sdc4` mounted at `/mnt/ext2tb/4`
+
+The measured `1.7 GiB` worker tree is mostly repo checkouts and scratch space,
+not one huge state directory. Largest visible entries on 2026-07-27 were:
+
+- `untitled-music-project`: `739 MiB`
+- `rumandpopcorn`: `188 MiB`
+- `site-infra`: `160 MiB`
+- `chatting` checkout: `70 MiB`
+- several extra `chatting` worktrees/checkouts around `67 MiB` each
+- hidden scratch directories `.tmp` and `.tmp-bin`: about `213 MiB` combined
+
+That means a first migration does not need a huge fresh workspace disk if we
+prune or selectively re-sync, but it does need a dedicated writable disk or
+mount rather than being squeezed onto a nearly-full root filesystem.
 
 ## Base Host Bootstrap Checklist
 
@@ -251,17 +270,18 @@ This is the first VM bring-up target before installing `chatting` itself.
 Initial migration should be copy-first, then start services:
 
 1. Build the VM and lock down users/directories.
-2. Copy the repo/runtime tree.
-3. Sync handler state:
+2. Attach or provision the worker workspace storage before copying any data.
+3. Copy the repo/runtime tree.
+4. Sync handler state:
    - handler SQLite DB
    - Telegram attachment storage
    - any GitHub auth needed by handler
-4. Sync worker state:
+5. Sync worker state:
    - worker SQLite DB
    - worker `.codex/`
    - worker `.claude/` if retained
    - worker workspace tree
-5. Start `bbmb`, then `handler`, then `worker`.
-6. Do a short final re-sync during a quiet window if needed.
-7. Cut traffic over.
-8. Stop `chatting` on Blink, but leave Blink otherwise untouched as rollback
+6. Start `bbmb`, then `handler`, then `worker`.
+7. Do a short final re-sync during a quiet window if needed.
+8. Cut traffic over.
+9. Stop `chatting` on Blink, but leave Blink otherwise untouched as rollback
