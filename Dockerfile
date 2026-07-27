@@ -53,5 +53,6 @@ RUN chmod -R a+rX /home/chatting
 FROM base AS test
 
 RUN uv sync --locked --no-install-project
+COPY deploy/ deploy/
 COPY tests/ tests/
 COPY configs/ configs/
