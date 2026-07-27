@@ -5,7 +5,7 @@
 - [Quick Start](quick-start.md)
 - [Run Split Mode (BBMB)](run-split-bbmb.md)
 - [BBMB Message Flow](bbmb-message-flow.md)
-- [Dedicated VM Plan](architecture/0005-chatting-dedicated-vm-plan.md)
+- [Magpie Repurpose Plan](architecture/0005-chatting-dedicated-vm-plan.md)
 - [Debug And Test Guide](debug-and-test.md)
 
 ## CI
@@ -22,4 +22,4 @@
 - [0001 Split-Mode Architecture For Private Single-User Automation](architecture/0001-python-prototype-architecture.md)
 - [0002 Interface Contracts And BBMB Payload Schemas](architecture/0002-interface-contracts.md)
 - [0003 Current Implementation Overview (Split Mode)](architecture/0003-implementation-overview.md)
-- [0005 Dedicated VM Plan For Chatting](architecture/0005-chatting-dedicated-vm-plan.md)
+- [0005 Magpie Repurpose Plan For Chatting](architecture/0005-chatting-dedicated-vm-plan.md)

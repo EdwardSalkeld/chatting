@@ -1,4 +1,4 @@
-# 0005: Dedicated VM Plan For Chatting
+# 0005: Magpie Repurpose Plan For Chatting
 
 Date: 2026-07-27
 
@@ -8,8 +8,8 @@ Draft
 
 ## Goal
 
-Move `chatting` off Blink onto a dedicated lab-managed VM while preserving the
-current split runtime model:
+Move `chatting` off Blink onto `magpie`, repurposing that existing lab-managed
+host for a single workload while preserving the current split runtime model:
 
 - `handler`: integrations and outbound dispatch
 - `worker`: executor runtime and workspace access
@@ -48,8 +48,8 @@ From the current repo/runtime shape:
   Python 3.13, `uv`, `git`, `gh`, `bubblewrap`, `node`, `npm`, `ripgrep`,
   `sqlite3`, `curl`, CA certs, Go, `codex`, and `claude`.
 
-The dedicated VM should preserve those ownership boundaries even though all
-three services will run on one host.
+The repurposed `magpie` host should preserve those ownership boundaries even
+though all three services will run on one host.
 
 ## Service Layout
 
@@ -179,7 +179,7 @@ The first non-Docker cut can either:
 For the first migration, a checked-out repo plus systemd units is the simplest
 shape to debug.
 
-## VM Sizing
+## Host Sizing
 
 The main variable is the worker workspace plus auth/state, not the host OS.
 
@@ -194,33 +194,29 @@ Measured on Blink on 2026-07-27:
 - Blink Docker local volumes total: `17.27 GiB`
 - Blink Docker build cache total: `21.48 GiB`
 
-Important current constraint:
+Repurposing `magpie` changes the storage decision:
 
-- `partridge` is only `24 GiB` total on `/`, with about `12 GiB` free as of
-  2026-07-27
-- so the dedicated `chatting` VM should not assume that a large worker
-  workspace can live comfortably on a small default root disk elsewhere in the
-  current lab estate
-
-This means the earlier notional `40 GiB root + 80 GiB workspace` shape should
-be treated as a ceiling sketch, not a grounded requirement.
-
-The first practical sizing target should instead be:
-
-- root disk: `24 GiB` minimum, `40 GiB` preferred
-- dedicated worker workspace disk: at least `10 GiB` if newly provisioned,
-  because current observed use is only `1.7 GiB`
+- start with `magpie` root on its existing VM root disk
+- add or reuse a small dedicated workspace disk for
+  `/srv/chatting/workspace`
+- prefer the suspected spare `5 GiB` local-lvm disk first, because current
+  observed use is only `1.7 GiB`
 - keep at least 2x observed workspace usage free at cutover time
 
-If lab-side storage is genuinely tight, there is a viable fallback:
+That makes the first practical target:
 
-- move the current Blink worker disk that backs `/mnt/ext2tb/4` onto the lab
-  host and attach or pass it through to the new VM
-- that would preserve the existing workspace with substantial free headroom and
-  avoid spending scarce local VM datastore space on worker checkout history and
-  scratch files
+- root disk: keep the current `magpie` root allocation for the base host work
+- dedicated worker workspace disk: `5 GiB`, assuming the unused local-lvm
+  volume is really available
 
-Concrete host anchor for that option on Blink:
+If that `5 GiB` volume turns out not to exist, or if the initial sync lands
+materially above the current `1.7 GiB`, fall back to one of:
+
+- grow the `magpie` workspace disk in Proxmox before cutover
+- physically move the current Blink worker disk that backs `/mnt/ext2tb/4`
+  onto the lab host and attach or pass it through to `magpie`
+
+Concrete host anchor for the physical-disk fallback on Blink:
 
 - disk model: `WDC WD20EURS-63S48Y0`
 - device: `/dev/sdc`
@@ -237,33 +233,47 @@ not one huge state directory. Largest visible entries on 2026-07-27 were:
 - hidden scratch directories `.tmp` and `.tmp-bin`: about `213 MiB` combined
 
 That means a first migration does not need a huge fresh workspace disk if we
-prune or selectively re-sync, but it does need a dedicated writable disk or
-mount rather than being squeezed onto a nearly-full root filesystem.
+prune or selectively re-sync, but it still benefits from a dedicated writable
+disk or mount rather than mixing worker churn into the host root filesystem.
 
 ## Base Host Bootstrap Checklist
 
 This is the first VM bring-up target before installing `chatting` itself.
 
-1. Create the VM in `lab`.
-2. Install NixOS from the `lab` flake.
+1. Rebuild `magpie` in `lab` as the dedicated `chatting` host.
+2. Install or reinstall NixOS from the `lab` flake if the current guest is not
+   already in the intended baseline state.
 3. Create the host users:
    - `edward` in `wheel`
    - `billy` in `wheel`
    - service users `handler`, `worker`, `bbmb` with no interactive login path
 4. Install the base packages and runtime/build tools listed above.
-5. Create directories and permissions:
+5. Attach and format the workspace disk for `/srv/chatting/workspace`.
+6. Create directories and permissions:
    - `/srv/chatting/repo`
    - `/srv/chatting/workspace`
    - `/etc/chatting`
    - `/var/lib/handler`
    - `/var/lib/worker`
    - `/var/lib/bbmb`
-6. Prove the boundary:
+7. Prove the boundary:
    - `sudo -u worker test ! -r /etc/chatting/handler.env`
    - `sudo -u handler test ! -r /var/lib/worker`
    - `sudo -u worker test ! -r /var/lib/handler`
-7. Confirm `edward` and `billy` can SSH in and use passwordless sudo.
-8. Only after that, add `chatting` systemd units and runtime config.
+8. Confirm `edward` and `billy` can SSH in and use passwordless sudo.
+9. Only after that, add `chatting` systemd units and runtime config.
+
+## Initial Migration Sequence
+
+1. Repurpose `magpie` and apply the base host config.
+2. Create and mount the workspace disk.
+3. One-off sync the current Blink state:
+   - `/home/edward/develop/chatting`
+   - worker workspace content from `/mnt/ext2tb/4/billy`
+   - Docker-backed handler and worker state exported into the new host layout
+4. Start `bbmb`, then `handler`, then `worker`.
+5. Run a short quiet-period re-sync if needed to reduce drift.
+6. Cut traffic over and stop the `chatting` services on Blink.
 
 ## Data Migration Plan
 
