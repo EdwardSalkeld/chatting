@@ -220,7 +220,7 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("executor started (attempt 1)", detail_html)
                 self.assertIn("warning line", detail_html)
                 self.assertIn("all runs", detail_html)
-                self.assertIn("Audit Detail", detail_html)
+                self.assertIn("Audit detail (raw JSON)", detail_html)
             finally:
                 server.shutdown()
 
@@ -300,6 +300,50 @@ class WorkerActivityTests(unittest.TestCase):
                 )
             finally:
                 server.shutdown()
+
+    def test_list_runs_hides_internal_runs_unless_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            monitor = WorkerActivityMonitor(store=store, history_limit=50)
+            created = datetime(2026, 3, 31, 12, 5, tzinfo=timezone.utc)
+
+            def _seed(run_id: str, source: str, task_id: str) -> None:
+                store.append_run(
+                    RunRecord(
+                        run_id=run_id,
+                        envelope_id=f"env:{run_id}",
+                        source=source,
+                        workflow="default",
+                        latency_ms=1,
+                        result_status="success",
+                        created_at=created,
+                    )
+                )
+                store.append_audit_event(
+                    AuditEvent(
+                        run_id=run_id,
+                        envelope_id=f"env:{run_id}",
+                        source=source,
+                        workflow="default",
+                        result_status="success",
+                        detail={"task_id": task_id},
+                        created_at=created,
+                    )
+                )
+
+            _seed("run:internal:1", "internal", "task:internal-heartbeat:1")
+            _seed("run:im:1", "im", "task:im:1")
+
+            default_runs = monitor.list_runs_snapshot()["runs"]
+            self.assertEqual(
+                [run["run_id"] for run in default_runs], ["run:im:1"]
+            )
+
+            all_runs = monitor.list_runs_snapshot(include_internal=True)["runs"]
+            self.assertEqual(
+                {run["run_id"] for run in all_runs},
+                {"run:internal:1", "run:im:1"},
+            )
 
 
 if __name__ == "__main__":

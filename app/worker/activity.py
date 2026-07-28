@@ -238,7 +238,10 @@ class WorkerActivityMonitor:
                 else dict(self._active_executor)
             )
         runs = []
-        for run in self._store.list_recent_runs(limit=self._history_limit):
+        for run in self._store.list_recent_runs(
+            limit=self._history_limit,
+            include_internal=include_internal,
+        ):
             run_summary = self._build_run_summary(
                 run_id=run.run_id,
                 include_internal=include_internal,
@@ -545,7 +548,7 @@ def _render_runs_index_html(
     .run-card:hover {{ border-color: var(--accent); transform: translateY(-1px); }}
     .run-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
     .run-title {{ margin: 10px 0 8px; font-size: 23px; line-height: 1.2; }}
-    .run-preview {{ margin: 0 0 12px; font-size: 16px; color: #2d2823; }}
+    .run-preview {{ margin: 0 0 12px; font-size: 16px; color: #2d2823; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }}
     .chips {{ display: flex; gap: 8px; flex-wrap: wrap; }}
     .chip {{ display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 4px 9px; background: rgba(31, 111, 120, 0.08); font-size: 13px; color: var(--muted); }}
     .chip.status-success {{ background: rgba(47, 107, 59, 0.12); color: var(--success); }}
@@ -619,21 +622,18 @@ def _render_runs_index(runs: list[object], *, include_internal: bool) -> str:
         )
         preview = str(item.get("preview", "")).strip() or "No captured message preview."
         title = str(item.get("task_id", "")) or run_id
+        # Keep the row scannable: status/source/latency only; the rest is on the
+        # detail page.
         chips = [
             ("status", str(item.get("result_status", ""))),
             ("source", str(item.get("source", ""))),
-            ("events", str(item.get("event_count", ""))),
             ("latency", f"{item.get('latency_ms', 0)} ms"),
         ]
-        latest_phase = item.get("latest_phase")
-        if isinstance(latest_phase, str) and latest_phase:
-            chips.append(("phase", latest_phase))
         items.append(
             "<li>"
             f"<a class='run-card' href='{html.escape(href)}'>"
             "<div class='run-kicker'>"
             f"<span>{html.escape(_friendly_timestamp(item.get('created_at')))}</span>"
-            f"<span>{html.escape(run_id)}</span>"
             "</div>"
             f"<h2 class='run-title'>{html.escape(title)}</h2>"
             f"<p class='run-preview'>{html.escape(preview)}</p>"
@@ -728,7 +728,8 @@ def _render_run_detail_html(
     .timeline-item {{ border-radius: 18px; padding: 16px; }}
     .timeline-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
     .timeline-item h3 {{ margin-top: 8px; font-size: 21px; }}
-    .timeline-message {{ margin-top: 10px; padding: 12px 14px; background: rgba(154, 52, 18, 0.06); border-radius: 14px; white-space: pre-wrap; word-break: break-word; }}
+    .timeline-message {{ margin-top: 10px; padding: 12px 14px; background: rgba(154, 52, 18, 0.06); border-radius: 14px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }}
+    details summary {{ cursor: pointer; font-family: "Iowan Old Style", Georgia, serif; font-size: 21px; margin-bottom: 10px; }}
     pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
     @media (max-width: 720px) {{
       main {{ padding: 12px 12px 28px; }}
@@ -766,8 +767,10 @@ def _render_run_detail_html(
       {timeline_markup}
     </section>
     <section class="panel">
-      <h2>Audit Detail</h2>
-      <pre><code>{audit_json}</code></pre>
+      <details>
+        <summary>Audit detail (raw JSON)</summary>
+        <pre><code>{audit_json}</code></pre>
+      </details>
     </section>
   </main>
 </body>
