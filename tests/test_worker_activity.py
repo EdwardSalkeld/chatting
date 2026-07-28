@@ -324,6 +324,40 @@ class WorkerActivityTests(unittest.TestCase):
         self.assertEqual(_truncate("short"), "short")
         self.assertEqual(_truncate("x" * 250), "x" * 200 + "…")
 
+    def test_render_executor_stderr_inlines_codex_collapses_exec(self) -> None:
+        from app.worker.activity import _render_executor_stderr, _split_stderr_blocks
+
+        sample = "\n".join(
+            [
+                "OpenAI Codex v0.145.0",
+                "workdir: /srv/chatting/workspace",
+                "user",
+                '{"task": 1}',
+                "codex",
+                "Checking the repo first.",
+                "exec",
+                "bash -lc 'ls'",
+                " succeeded in 0ms:",
+                "file1",
+                "file2",
+                "codex",
+                "Done.",
+            ]
+        )
+        kinds = [k for k, _ in _split_stderr_blocks(sample)]
+        self.assertEqual(kinds, ["header", "user", "codex", "exec", "codex"])
+
+        out = _render_executor_stderr(sample)
+        # codex messages inline (not behind a toggle)
+        self.assertIn("<div class='stderr-codex'>Checking the repo first.</div>", out)
+        self.assertIn("<div class='stderr-codex'>Done.</div>", out)
+        # exec block collapsed, with the bash -lc wrapper stripped to the command
+        self.assertIn("<details class='stderr-exec'>", out)
+        self.assertIn("<summary><code>ls</code></summary>", out)
+        # session header + task JSON collapsed away
+        self.assertIn("session header", out)
+        self.assertIn("task input", out)
+
     def test_list_runs_hides_internal_runs_unless_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))

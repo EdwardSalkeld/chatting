@@ -755,6 +755,11 @@ def _render_run_detail_html(
     .timeline-message {{ margin-top: 10px; padding: 12px 14px; background: rgba(154, 52, 18, 0.06); border-radius: 14px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }}
     details summary {{ cursor: pointer; font-family: "Iowan Old Style", Georgia, serif; font-size: 21px; margin-bottom: 10px; }}
     .timeline-collapsible summary {{ cursor: pointer; color: var(--muted); font-size: 13px; font-family: inherit; margin: 8px 0 0; }}
+    .stderr-log {{ display: grid; gap: 8px; margin-top: 10px; }}
+    .stderr-codex {{ padding: 10px 12px; background: rgba(154, 52, 18, 0.06); border-radius: 12px; white-space: pre-wrap; word-break: break-word; }}
+    .stderr-exec > summary, .stderr-meta > summary {{ cursor: pointer; color: var(--muted); font-size: 13px; }}
+    .stderr-exec > summary code {{ color: var(--ink); font-size: 13px; }}
+    .stderr-exec pre, .stderr-meta pre {{ margin: 8px 0 0; max-height: 360px; overflow: auto; background: rgba(0, 0, 0, 0.04); padding: 10px; border-radius: 10px; }}
     pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
     @media (max-width: 720px) {{
       main {{ padding: 12px 12px 28px; }}
@@ -806,6 +811,81 @@ def _render_run_detail_html(
 </html>"""
 
 
+_STDERR_MARKERS = ("user", "codex", "exec")
+_EXEC_RESULT_PREFIXES = ("succeeded in", "failed in", "exited", "error", "timed out")
+
+
+def _split_stderr_blocks(content: str) -> list[tuple[str, str]]:
+    # Codex `exec` writes a log delimited by bare marker lines (user/codex/exec).
+    # Split on those so exec output can be collapsed while codex messages stay
+    # inline. Anything before the first marker is the session header.
+    blocks: list[tuple[str, list[str]]] = []
+    kind = "header"
+    buf: list[str] = []
+    for line in content.split("\n"):
+        if line.strip() in _STDERR_MARKERS:
+            blocks.append((kind, buf))
+            kind = line.strip()
+            buf = []
+        else:
+            buf.append(line)
+    blocks.append((kind, buf))
+    return [
+        (k, "\n".join(b).strip("\n"))
+        for k, b in blocks
+        if "\n".join(b).strip() or k != "header"
+    ]
+
+
+def _exec_command(block_text: str) -> str:
+    command_lines: list[str] = []
+    for line in block_text.split("\n"):
+        stripped = line.strip()
+        if any(stripped.startswith(prefix) for prefix in _EXEC_RESULT_PREFIXES):
+            break
+        if stripped:
+            command_lines.append(stripped)
+    command = " ".join(command_lines)
+    # Drop the "<store path>/bash -lc " wrapper so the summary is the real
+    # command. What remains is `<quote><command><quote> in <workdir>`; take the
+    # text between the first and last matching quote (handles the trailing
+    # " in <dir>" annotation and escaped inner quotes).
+    marker = " -lc "
+    if marker in command:
+        rest = command.split(marker, 1)[1].strip()
+        if rest[:1] in ("\"", "'"):
+            quote = rest[0]
+            end = rest.rfind(quote)
+            command = rest[1:end] if end > 0 else rest[1:]
+        else:
+            command = rest
+    return command.strip()
+
+
+def _render_executor_stderr(content: str) -> str:
+    parts = []
+    for kind, text in _split_stderr_blocks(content):
+        if kind == "codex":
+            parts.append(f"<div class='stderr-codex'>{html.escape(text)}</div>")
+        elif kind == "exec":
+            summary = _truncate(_exec_command(text) or "command", limit=140)
+            parts.append(
+                "<details class='stderr-exec'>"
+                f"<summary><code>{html.escape(summary)}</code></summary>"
+                f"<pre>{html.escape(text)}</pre>"
+                "</details>"
+            )
+        else:  # header / user (session config + task JSON) — bulky, collapse
+            label = "task input" if kind == "user" else "session header"
+            parts.append(
+                "<details class='stderr-meta'>"
+                f"<summary>{label}</summary>"
+                f"<pre>{html.escape(text)}</pre>"
+                "</details>"
+            )
+    return f"<div class='stderr-log'>{''.join(parts)}</div>"
+
+
 def _render_run_timeline(events: list[object]) -> str:
     if not events:
         return "<div class='muted'>No worker activity captured for this run.</div>"
@@ -826,14 +906,14 @@ def _render_run_timeline(events: list[object]) -> str:
             ("Run", str(item.get("run_id", ""))),
             ("Source", str(item.get("source", ""))),
         ]
+        phase = str(item.get("phase", ""))
         if message is None:
             message_markup = ""
-        elif len(message) > 2000 or str(item.get("phase", "")) in {
-            "executor_stdout",
-            "executor_stderr",
-        }:
-            # Keep bulky output (codex stdout/stderr, context-stuffed prompts)
-            # available but collapsed so the page stays scannable.
+        elif phase == "executor_stderr":
+            # The codex exec log: codex messages inline, each exec collapsed.
+            message_markup = _render_executor_stderr(message)
+        elif len(message) > 2000 or phase == "executor_stdout":
+            # Other bulky output (stdout, context-stuffed prompts): collapse whole.
             message_markup = (
                 "<details class='timeline-collapsible'>"
                 f"<summary>show message ({len(message):,} chars)</summary>"
