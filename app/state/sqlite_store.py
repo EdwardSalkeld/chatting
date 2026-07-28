@@ -252,12 +252,18 @@ class SQLiteStateStore:
             for row in rows
         ]
 
-    def list_recent_runs(self, *, limit: int) -> list[RunRecord]:
+    def list_recent_runs(
+        self, *, limit: int, include_internal: bool = False
+    ) -> list[RunRecord]:
         if limit <= 0:
             raise ValueError("limit must be positive")
+        # Internal runs (heartbeats) dominate the table, so exclude them in SQL
+        # rather than after the limit — otherwise the limited window is almost
+        # entirely heartbeats and real runs never surface.
+        where = "" if include_internal else "WHERE source != 'internal'"
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                "SELECT * FROM run_records ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM run_records {where} ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [
