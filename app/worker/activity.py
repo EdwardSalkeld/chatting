@@ -302,23 +302,40 @@ class WorkerActivityMonitor:
             envelope_id=run.envelope_id,
             include_internal=include_internal,
         )
-        preview = ""
+        user_message = ""
+        reply_parts: list[str] = []
         actor = None
         reply_target = None
         for item in activity:
-            if preview:
-                break
-            message = _message_text(item)
-            if message is not None:
-                preview = message
             item_detail = item.get("detail")
-            if isinstance(item_detail, dict):
-                if actor is None and isinstance(item_detail.get("actor"), str):
-                    actor = item_detail.get("actor")
-                if reply_target is None and isinstance(
-                    item_detail.get("reply_target"), str
+            detail_map = item_detail if isinstance(item_detail, dict) else {}
+            phase = str(item.get("phase", ""))
+            if not user_message and phase == "task_received":
+                content = detail_map.get("content")
+                if isinstance(content, str):
+                    user_message = _extract_current_message(content)
+            if phase.startswith("egress_"):
+                body = detail_map.get("body")
+                channel = detail_map.get("channel")
+                if (
+                    isinstance(body, str)
+                    and body.strip()
+                    and channel not in {"internal", "log"}
                 ):
-                    reply_target = item_detail.get("reply_target")
+                    reply_parts.append(body.strip())
+            if actor is None and isinstance(detail_map.get("actor"), str):
+                actor = detail_map.get("actor")
+            if reply_target is None and isinstance(detail_map.get("reply_target"), str):
+                reply_target = detail_map.get("reply_target")
+        if not user_message:
+            # Sources without the context-wrapped prompt (e.g. email) carry the
+            # message directly; fall back to the first message text.
+            for item in activity:
+                message = _message_text(item)
+                if message:
+                    user_message = _extract_current_message(message)
+                    break
+        reply = "\n\n".join(reply_parts)
         last_event = activity[-1] if activity else None
         return {
             "run_id": run.run_id,
@@ -331,7 +348,8 @@ class WorkerActivityMonitor:
             "created_at": _isoformat(run.created_at),
             "attempt_count": detail.get("attempt_count"),
             "reason_codes": detail.get("reason_codes", []),
-            "preview": preview,
+            "preview": user_message,
+            "reply": reply,
             "actor": actor,
             "reply_target": reply_target,
             "event_count": len(activity),
@@ -620,7 +638,7 @@ def _render_runs_index(runs: list[object], *, include_internal: bool) -> str:
             f"/runs/{_quote_path_segment(run_id)}",
             include_internal=include_internal,
         )
-        preview = str(item.get("preview", "")).strip() or "No captured message preview."
+        preview = _truncate(str(item.get("preview", ""))) or "No message captured."
         title = str(item.get("task_id", "")) or run_id
         # Keep the row scannable: status/source/latency only; the rest is on the
         # detail page.
@@ -685,7 +703,13 @@ def _render_run_detail_html(
     preview_markup = (
         f"<div class='preview-box'>{html.escape(preview)}</div>"
         if preview
-        else "<div class='preview-box muted'>No captured message preview for this run.</div>"
+        else "<div class='preview-box muted'>No message captured for this run.</div>"
+    )
+    reply = str(run.get("reply", "")).strip()
+    reply_markup = (
+        f"<div class='preview-box'>{html.escape(reply)}</div>"
+        if reply
+        else "<div class='preview-box muted'>No reply sent for this run.</div>"
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -730,6 +754,7 @@ def _render_run_detail_html(
     .timeline-item h3 {{ margin-top: 8px; font-size: 21px; }}
     .timeline-message {{ margin-top: 10px; padding: 12px 14px; background: rgba(154, 52, 18, 0.06); border-radius: 14px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }}
     details summary {{ cursor: pointer; font-family: "Iowan Old Style", Georgia, serif; font-size: 21px; margin-bottom: 10px; }}
+    .timeline-collapsible summary {{ cursor: pointer; color: var(--muted); font-size: 13px; font-family: inherit; margin: 8px 0 0; }}
     pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
     @media (max-width: 720px) {{
       main {{ padding: 12px 12px 28px; }}
@@ -755,12 +780,16 @@ def _render_run_detail_html(
       </div>
     </section>
     <section class="panel">
-      <h2>Run Summary</h2>
-      <div class="detail-grid">{_render_detail_blocks(summary_entries)}</div>
+      <h2>Current message</h2>
+      {preview_markup}
     </section>
     <section class="panel">
-      <h2>Content Preview</h2>
-      {preview_markup}
+      <h2>Billy's reply</h2>
+      {reply_markup}
+    </section>
+    <section class="panel">
+      <h2>Run Summary</h2>
+      <div class="detail-grid">{_render_detail_blocks(summary_entries)}</div>
     </section>
     <section class="panel">
       <h2>Events In Order</h2>
@@ -797,11 +826,22 @@ def _render_run_timeline(events: list[object]) -> str:
             ("Run", str(item.get("run_id", ""))),
             ("Source", str(item.get("source", ""))),
         ]
-        message_markup = (
-            f"<div class='timeline-message'>{html.escape(message)}</div>"
-            if message is not None
-            else ""
-        )
+        if message is None:
+            message_markup = ""
+        elif len(message) > 2000 or str(item.get("phase", "")) in {
+            "executor_stdout",
+            "executor_stderr",
+        }:
+            # Keep bulky output (codex stdout/stderr, context-stuffed prompts)
+            # available but collapsed so the page stays scannable.
+            message_markup = (
+                "<details class='timeline-collapsible'>"
+                f"<summary>show message ({len(message):,} chars)</summary>"
+                f"<div class='timeline-message'>{html.escape(message)}</div>"
+                "</details>"
+            )
+        else:
+            message_markup = f"<div class='timeline-message'>{html.escape(message)}</div>"
         items.append(
             "<li class='timeline-item'>"
             "<div class='timeline-kicker'>"
@@ -902,6 +942,27 @@ def _parse_timestamp(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     return datetime.fromisoformat(value).astimezone(timezone.utc)
+
+
+_CURRENT_MESSAGE_MARKER = "Current user message:"
+
+
+def _extract_current_message(content: str | None) -> str:
+    # The handler wraps context-carrying prompts as "<context>\n\nCurrent user
+    # message:\n<message>"; show just the message. Sources without that wrapper
+    # (e.g. email) fall through to the raw content.
+    if not content:
+        return ""
+    if _CURRENT_MESSAGE_MARKER in content:
+        return content.split(_CURRENT_MESSAGE_MARKER, 1)[1].strip()
+    return content.strip()
+
+
+def _truncate(text: str, *, limit: int = 200) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
 
 
 def _message_text(item: dict[str, object]) -> str | None:
