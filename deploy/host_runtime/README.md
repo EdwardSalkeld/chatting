@@ -7,7 +7,6 @@ runtime directly on a host instead of through Docker Compose.
 
 - build the host runtime tree (`deploy/host_runtime/build-runtime.sh`)
 - run BBMB, the handler, and the worker under an external service manager
-- rewrite Docker-oriented config files into host paths
 
 The helpers are intentionally path-configurable so an infra repo can decide
 where the checkout, config, state, and workspace should live.
@@ -28,32 +27,12 @@ That does three things:
 
 Override `CHATTING_RUNTIME_DIR` or `CHATTING_BBMB_VERSION` if needed.
 
-## Render host config files
+## Host config files
 
-If your source config was written for Docker Compose, render host-specific
-copies with:
-
-```sh
-python3 deploy/host_runtime/render_runtime_config.py \
-  --source-root /path/to/source-configs \
-  --output-root /path/to/rendered-configs \
-  --workspace-dir /absolute/host/workspace
-```
-
-Useful overrides:
-
-- `--handler-state-dir`
-- `--worker-state-dir`
-- `--config-dir`
-- `--bbmb-address`
-- `--metrics-host`
-
-This rewrites:
-
-- handler and worker SQLite paths
-- handler schedule-file paths
-- handler context refs that point at `repo:/workspace`
-- the worker `codex_working_dir`
+Provide `handler.json` and `worker.json` (and any env/schedule files) with
+host-appropriate paths at the config dir the entrypoints below read. An infra
+repo that manages the host is expected to own these — for example the NixOS
+`lab` repo generates them declaratively for the `magpie` host.
 
 ## Service entrypoints
 
