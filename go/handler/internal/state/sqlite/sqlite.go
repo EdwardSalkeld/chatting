@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,9 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	_ "modernc.org/sqlite"
 )
+
+// ErrScheduleNotFound is returned when an operation targets a schedule that has no active version.
+var ErrScheduleNotFound = errors.New("schedule not found")
 
 type Store struct {
 	db *sql.DB
@@ -93,6 +98,35 @@ type ConversationTurn struct {
 type GitHubAssignmentCheckpoint struct {
 	EventCreatedAt time.Time
 	EventID        string
+}
+
+type ScheduleRecord struct {
+	ScheduleID         string
+	Version            int
+	Status             string
+	JobName            string
+	Content            string
+	Cron               string
+	Timezone           string
+	ContextRefs        []string
+	PromptContext      []string
+	ReplyChannelType   string
+	ReplyChannelTarget string
+	CreatedAt          time.Time
+	CreatedBy          string
+	SupersededAt       *time.Time
+}
+
+type ScheduleInput struct {
+	JobName            string
+	Content            string
+	Cron               string
+	Timezone           string
+	ContextRefs        []string
+	PromptContext      []string
+	ReplyChannelType   string
+	ReplyChannelTarget string
+	CreatedBy          string
 }
 
 func Open(ctx context.Context, dbPath string) (*Store, error) {
@@ -197,6 +231,24 @@ func (store *Store) initialize(ctx context.Context) error {
 			event_id TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS schedules (
+			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			schedule_id TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			job_name TEXT NOT NULL,
+			content TEXT NOT NULL,
+			cron TEXT NOT NULL,
+			timezone TEXT NOT NULL,
+			context_refs TEXT NOT NULL,
+			prompt_context TEXT NOT NULL,
+			reply_channel_type TEXT NOT NULL,
+			reply_channel_target TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			created_by TEXT NOT NULL,
+			superseded_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_schedules_schedule_id_status ON schedules (schedule_id, status)`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
@@ -262,6 +314,347 @@ func (store *Store) SetGitHubAssignmentCheckpoint(ctx context.Context, scopeKey 
 		formatTimestamp(time.Now()),
 	)
 	return err
+}
+
+const scheduleSelectColumns = `SELECT
+	schedule_id,
+	version,
+	status,
+	job_name,
+	content,
+	cron,
+	timezone,
+	context_refs,
+	prompt_context,
+	reply_channel_type,
+	reply_channel_target,
+	created_at,
+	created_by,
+	superseded_at`
+
+func (store *Store) ListActiveSchedules(ctx context.Context) ([]ScheduleRecord, error) {
+	rows, err := store.db.QueryContext(
+		ctx,
+		scheduleSelectColumns+`
+		FROM schedules
+		WHERE status = 'active'
+		ORDER BY job_name ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduleRecords(rows)
+}
+
+func (store *Store) GetActiveSchedule(ctx context.Context, scheduleID string) (*ScheduleRecord, error) {
+	if strings.TrimSpace(scheduleID) == "" {
+		return nil, errors.New("schedule_id is required")
+	}
+	record, err := scanScheduleRecord(store.db.QueryRowContext(
+		ctx,
+		scheduleSelectColumns+`
+		FROM schedules
+		WHERE schedule_id = ? AND status = 'active'`,
+		scheduleID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (store *Store) GetScheduleHistory(ctx context.Context, scheduleID string) ([]ScheduleRecord, error) {
+	if strings.TrimSpace(scheduleID) == "" {
+		return nil, errors.New("schedule_id is required")
+	}
+	rows, err := store.db.QueryContext(
+		ctx,
+		scheduleSelectColumns+`
+		FROM schedules
+		WHERE schedule_id = ?
+		ORDER BY version DESC`,
+		scheduleID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduleRecords(rows)
+}
+
+func (store *Store) CreateSchedule(ctx context.Context, input ScheduleInput) (ScheduleRecord, error) {
+	scheduleID, err := generateScheduleID()
+	if err != nil {
+		return ScheduleRecord{}, err
+	}
+	record := scheduleRecordFromInput(scheduleID, 1, input, time.Now())
+	if err := store.insertScheduleRow(ctx, store.db, record); err != nil {
+		return ScheduleRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) ReplaceSchedule(ctx context.Context, scheduleID string, input ScheduleInput) (ScheduleRecord, error) {
+	if strings.TrimSpace(scheduleID) == "" {
+		return ScheduleRecord{}, errors.New("schedule_id is required")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ScheduleRecord{}, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	current, err := scanScheduleRecord(tx.QueryRowContext(
+		ctx,
+		scheduleSelectColumns+`
+		FROM schedules
+		WHERE schedule_id = ? AND status = 'active'`,
+		scheduleID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ScheduleRecord{}, ErrScheduleNotFound
+	}
+	if err != nil {
+		return ScheduleRecord{}, err
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE schedules
+		SET status = 'dead', superseded_at = ?
+		WHERE schedule_id = ? AND status = 'active'`,
+		formatTimestamp(now),
+		scheduleID,
+	); err != nil {
+		return ScheduleRecord{}, err
+	}
+	record := scheduleRecordFromInput(scheduleID, current.Version+1, input, now)
+	if err := store.insertScheduleRow(ctx, tx, record); err != nil {
+		return ScheduleRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ScheduleRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) MarkScheduleDead(ctx context.Context, scheduleID string) (bool, error) {
+	if strings.TrimSpace(scheduleID) == "" {
+		return false, errors.New("schedule_id is required")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE schedules
+		SET status = 'dead', superseded_at = ?
+		WHERE schedule_id = ? AND status = 'active'`,
+		formatTimestamp(time.Now()),
+		scheduleID,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (store *Store) insertScheduleRow(ctx context.Context, exec scheduleExecer, record ScheduleRecord) error {
+	contextRefs, err := encodeStringList(record.ContextRefs)
+	if err != nil {
+		return err
+	}
+	promptContext, err := encodeStringList(record.PromptContext)
+	if err != nil {
+		return err
+	}
+	var supersededAt any
+	if record.SupersededAt != nil {
+		supersededAt = formatTimestamp(*record.SupersededAt)
+	}
+	_, err = exec.ExecContext(
+		ctx,
+		`INSERT INTO schedules (
+			schedule_id,
+			version,
+			status,
+			job_name,
+			content,
+			cron,
+			timezone,
+			context_refs,
+			prompt_context,
+			reply_channel_type,
+			reply_channel_target,
+			created_at,
+			created_by,
+			superseded_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ScheduleID,
+		record.Version,
+		record.Status,
+		record.JobName,
+		record.Content,
+		record.Cron,
+		record.Timezone,
+		contextRefs,
+		promptContext,
+		record.ReplyChannelType,
+		record.ReplyChannelTarget,
+		formatTimestamp(record.CreatedAt),
+		record.CreatedBy,
+		supersededAt,
+	)
+	return err
+}
+
+type scheduleExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type scheduleScanner interface {
+	Scan(dest ...any) error
+}
+
+func scheduleRecordFromInput(scheduleID string, version int, input ScheduleInput, now time.Time) ScheduleRecord {
+	timezone := strings.TrimSpace(input.Timezone)
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	createdBy := strings.TrimSpace(input.CreatedBy)
+	if createdBy == "" {
+		createdBy = "api"
+	}
+	contextRefs := input.ContextRefs
+	if contextRefs == nil {
+		contextRefs = []string{}
+	}
+	promptContext := input.PromptContext
+	if promptContext == nil {
+		promptContext = []string{}
+	}
+	return ScheduleRecord{
+		ScheduleID:         scheduleID,
+		Version:            version,
+		Status:             "active",
+		JobName:            input.JobName,
+		Content:            input.Content,
+		Cron:               input.Cron,
+		Timezone:           timezone,
+		ContextRefs:        contextRefs,
+		PromptContext:      promptContext,
+		ReplyChannelType:   input.ReplyChannelType,
+		ReplyChannelTarget: input.ReplyChannelTarget,
+		CreatedAt:          now.UTC(),
+		CreatedBy:          createdBy,
+	}
+}
+
+func scanScheduleRecords(rows *sql.Rows) ([]ScheduleRecord, error) {
+	records := []ScheduleRecord{}
+	for rows.Next() {
+		record, err := scanScheduleRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func scanScheduleRecord(scanner scheduleScanner) (ScheduleRecord, error) {
+	record := ScheduleRecord{}
+	var contextRefs, promptContext, createdAt string
+	var supersededAt sql.NullString
+	if err := scanner.Scan(
+		&record.ScheduleID,
+		&record.Version,
+		&record.Status,
+		&record.JobName,
+		&record.Content,
+		&record.Cron,
+		&record.Timezone,
+		&contextRefs,
+		&promptContext,
+		&record.ReplyChannelType,
+		&record.ReplyChannelTarget,
+		&createdAt,
+		&record.CreatedBy,
+		&supersededAt,
+	); err != nil {
+		return ScheduleRecord{}, err
+	}
+	decodedContextRefs, err := decodeStringList(contextRefs)
+	if err != nil {
+		return ScheduleRecord{}, err
+	}
+	record.ContextRefs = decodedContextRefs
+	decodedPromptContext, err := decodeStringList(promptContext)
+	if err != nil {
+		return ScheduleRecord{}, err
+	}
+	record.PromptContext = decodedPromptContext
+	parsedCreatedAt, err := parseTimestamp(createdAt)
+	if err != nil {
+		return ScheduleRecord{}, err
+	}
+	record.CreatedAt = parsedCreatedAt
+	if supersededAt.Valid {
+		parsed, err := parseTimestamp(supersededAt.String)
+		if err != nil {
+			return ScheduleRecord{}, err
+		}
+		record.SupersededAt = &parsed
+	}
+	return record, nil
+}
+
+func generateScheduleID() (string, error) {
+	buffer := make([]byte, 8)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return "sched_" + hex.EncodeToString(buffer), nil
+}
+
+func encodeStringList(values []string) (string, error) {
+	if values == nil {
+		values = []string{}
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func decodeStringList(raw string) ([]string, error) {
+	values := []string{}
+	if strings.TrimSpace(raw) == "" {
+		return values, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	if values == nil {
+		values = []string{}
+	}
+	return values, nil
 }
 
 func (store *Store) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {

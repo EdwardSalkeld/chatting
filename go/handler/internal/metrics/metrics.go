@@ -165,7 +165,7 @@ type Server struct {
 	addr   string
 }
 
-func StartServer(recorder *Recorder, host string, port int) (*Server, error) {
+func StartServer(recorder *Recorder, host string, port int, routeRegistrars ...func(*http.ServeMux)) (*Server, error) {
 	if recorder == nil {
 		return nil, fmt.Errorf("metrics recorder is required")
 	}
@@ -184,6 +184,11 @@ func StartServer(recorder *Recorder, host string, port int) (*Server, error) {
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusNotFound)
 	})
+	for _, register := range routeRegistrars {
+		if register != nil {
+			register(mux)
+		}
+	}
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {

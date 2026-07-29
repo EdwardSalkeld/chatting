@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
@@ -288,7 +290,10 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		}
 	}
 	metricRecorder := metrics.New(time.Time{}, nil)
-	metricsServer, err := metrics.StartServer(metricRecorder, config.MetricsHost, config.MetricsPort)
+	scheduleService := schedules.NewService(store)
+	metricsServer, err := metrics.StartServer(metricRecorder, config.MetricsHost, config.MetricsPort, func(mux *http.ServeMux) {
+		schedules.RegisterRoutes(mux, scheduleService)
+	})
 	if err != nil {
 		_ = store.Close()
 		return nil, err
