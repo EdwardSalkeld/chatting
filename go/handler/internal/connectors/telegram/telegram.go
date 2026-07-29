@@ -262,6 +262,9 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 	}
 	eventID := "telegram:" + strconv.FormatInt(updateID, 10)
 	metadata := map[string]any{"message_id": message.MessageID}
+	if label := senderLabel(message); label != "" {
+		metadata["sender"] = label
+	}
 	if locationMetadata != nil {
 		metadata["location"] = locationMetadata
 	}
@@ -416,6 +419,50 @@ func (connector *Connector) actorFromUser(user *telegramUser) *string {
 	return &value
 }
 
+// senderLabel builds a human-readable label for the message author, preferring
+// the sending user, then the sending chat (channel posts). Returns "" when
+// neither is present.
+func senderLabel(message telegramMessage) string {
+	if label := userLabel(message.From); label != "" {
+		return label
+	}
+	return chatLabel(message.SenderChat)
+}
+
+func userLabel(user *telegramUser) string {
+	if user == nil {
+		return ""
+	}
+	var label string
+	if username := strings.TrimSpace(user.Username); username != "" {
+		label = "@" + username
+	} else if name := strings.TrimSpace(strings.TrimSpace(user.FirstName) + " " + strings.TrimSpace(user.LastName)); name != "" {
+		label = name
+	} else if user.ID != 0 {
+		label = strconv.FormatInt(user.ID, 10)
+	}
+	if label != "" && user.IsBot {
+		label += " (bot)"
+	}
+	return label
+}
+
+func chatLabel(chat *telegramChat) string {
+	if chat == nil {
+		return ""
+	}
+	if username := strings.TrimSpace(chat.Username); username != "" {
+		return "@" + username
+	}
+	if title := strings.TrimSpace(chat.Title); title != "" {
+		return title
+	}
+	if chat.ID != 0 {
+		return strconv.FormatInt(chat.ID, 10)
+	}
+	return ""
+}
+
 func (connector *Connector) actorFromChat(chat *telegramChat) *string {
 	if chat == nil || chat.ID == 0 {
 		return nil
@@ -486,8 +533,11 @@ type telegramChat struct {
 }
 
 type telegramUser struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	IsBot     bool   `json:"is_bot"`
 }
 
 type telegramLocation struct {

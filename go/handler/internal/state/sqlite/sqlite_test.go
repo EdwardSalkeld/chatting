@@ -144,16 +144,16 @@ func TestConversationTurnsRoundTripScopedByChannelAndTarget(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 
-	if err := store.AppendConversationTurn(ctx, "telegram", "12345", "user", "hello", "task:1"); err != nil {
+	if err := store.AppendConversationTurn(ctx, "telegram", "12345", "user", "hello", "@alice", "task:1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendConversationTurn(ctx, "telegram", "12345", "assistant", "hi there", "task:1"); err != nil {
+	if err := store.AppendConversationTurn(ctx, "telegram", "12345", "assistant", "hi there", "", "task:1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendConversationTurn(ctx, "telegram", "67890", "user", "wrong chat", "task:2"); err != nil {
+	if err := store.AppendConversationTurn(ctx, "telegram", "67890", "user", "wrong chat", "@bob", "task:2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendConversationTurn(ctx, "email", "12345", "user", "wrong channel", "task:3"); err != nil {
+	if err := store.AppendConversationTurn(ctx, "email", "12345", "user", "wrong channel", "", "task:3"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,8 +162,8 @@ func TestConversationTurnsRoundTripScopedByChannelAndTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := turns, []ConversationTurn{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hi there"},
+		{Role: "user", Content: "hello", Sender: "@alice"},
+		{Role: "assistant", Content: "hi there", Sender: ""},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("turns = %#v, want %#v", got, want)
 	}

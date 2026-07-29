@@ -285,6 +285,55 @@ func TestPublishIngressEnrichesTelegramEnvelopeWithRecentConversation(t *testing
 	}
 }
 
+func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	state.turns["12345"] = []ConversationTurn{
+		{Role: "user", Content: "earlier", Sender: "@alice"},
+		{Role: "assistant", Content: "billy replied"},
+	}
+	envelope := contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:101",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:00:00Z")),
+		Content:       "latest-turn",
+		ReplyChannel: contracts.ReplyChannel{
+			Type:     "telegram",
+			Target:   "12345",
+			Metadata: map[string]any{"sender": "@bob (bot)"},
+		},
+		DedupeKey: "telegram:101",
+	}
+	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
+	runner, err := NewRunner(
+		handlerconfig.Defaults(),
+		broker,
+		&fakeEgressHandler{},
+		WithIngress(state, connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PublishIngress(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	content := state.tasks["task:telegram:101"].Envelope.Content
+	if !strings.Contains(content, "@alice: earlier") {
+		t.Fatalf("history not attributed by sender: %q", content)
+	}
+	if !strings.Contains(content, "assistant: billy replied") {
+		t.Fatalf("assistant turn should fall back to role: %q", content)
+	}
+	if !strings.Contains(content, "Current message from @bob (bot):\nlatest-turn") {
+		t.Fatalf("current message not attributed: %q", content)
+	}
+	lastTurn := state.turns["12345"][len(state.turns["12345"])-1]
+	if lastTurn.Sender != "@bob (bot)" {
+		t.Fatalf("stored turn sender = %q", lastTurn.Sender)
+	}
+}
+
 func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
@@ -471,11 +520,11 @@ func (state *fakeIngressState) RecordTask(ctx context.Context, taskMessage contr
 	return nil
 }
 
-func (state *fakeIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error {
+func (state *fakeIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
 	if channel != "telegram" {
 		return nil
 	}
-	state.turns[target] = append(state.turns[target], ConversationTurn{Role: role, Content: content})
+	state.turns[target] = append(state.turns[target], ConversationTurn{Role: role, Content: content, Sender: sender})
 	return nil
 }
 

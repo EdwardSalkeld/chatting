@@ -1025,14 +1025,23 @@ def _parse_timestamp(value: str) -> datetime:
 
 
 _CURRENT_MESSAGE_MARKER = "Current user message:"
+_CURRENT_MESSAGE_FROM_MARKER = "Current message from "
 
 
 def _extract_current_message(content: str | None) -> str:
-    # The handler wraps context-carrying prompts as "<context>\n\nCurrent user
-    # message:\n<message>"; show just the message. Sources without that wrapper
-    # (e.g. email) fall through to the raw content.
+    # The handler wraps context-carrying prompts as either
+    # "<context>\n\nCurrent message from <sender>:\n<message>" (attributed) or
+    # the older "<context>\n\nCurrent user message:\n<message>"; show just the
+    # message. Sources without that wrapper (e.g. email) fall through to the raw
+    # content.
     if not content:
         return ""
+    index = content.rfind(_CURRENT_MESSAGE_FROM_MARKER)
+    if index != -1:
+        # tail is "<sender>:\n<message>"; drop the sender label line.
+        tail = content[index + len(_CURRENT_MESSAGE_FROM_MARKER) :]
+        _, separator, message = tail.partition("\n")
+        return message.strip() if separator else tail.strip()
     if _CURRENT_MESSAGE_MARKER in content:
         return content.split(_CURRENT_MESSAGE_MARKER, 1)[1].strip()
     return content.strip()

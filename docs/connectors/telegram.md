@@ -30,6 +30,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `reply_channel`: `telegram:<chat_id>`
 - `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
 - `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
+- `reply_channel.metadata.sender`: human-readable sender label — `@username`, else first/last name, else the numeric id; suffixed with ` (bot)` when the sender is a bot. Falls back to the sending chat (title/username) for channel posts.
 - `actor`: `<user_id>:<username>` when available
 - `content`: text body, photo caption, or a synthesized location block (thread id is prefixed when present)
 - `attachments`: downloaded photo stored as a local `file://` attachment when the update contains a photo
@@ -38,6 +39,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 
 - Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
   global `prompt_context`, then `telegram_prompt_context`, then the task content itself.
+- Conversation memory attributes each turn to its sender. Recent-context lines render as `<sender>: <content>` (falling back to the `user`/`assistant` role when no sender was stored, e.g. rows predating this feature), and the live turn is headed `Current message from <sender>:`. The per-turn sender is persisted in `conversation_turns.sender`; this is not applied retrospectively to turns recorded before the column existed.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
 - Location-only messages are accepted with synthesized content that includes latitude, longitude, and a map URL.

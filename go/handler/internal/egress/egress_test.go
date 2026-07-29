@@ -624,7 +624,7 @@ func (state *fakeState) MarkStagedEventDispatched(_ context.Context, taskID stri
 	return nil
 }
 
-func (state *fakeState) AppendConversationTurn(_ context.Context, channel string, target string, role string, content string, runID string) error {
+func (state *fakeState) AppendConversationTurn(_ context.Context, channel string, target string, role string, content string, _ string, runID string) error {
 	if channel != "telegram" {
 		return nil
 	}
