@@ -1,10 +1,13 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,7 +298,7 @@ func TestHandleDropsAndNotifiesOnUnsequencedDispatchFailure(t *testing.T) {
 	var notified []string
 	engine := newTestEngineWithState(t, state, dispatcher,
 		WithAllowedChannels([]string{"email"}),
-		WithDispatchFailureHook(func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+		WithDropHook(func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
 			notified = append(notified, message.EventID+"|"+reasonCode)
 		}),
 	)
@@ -315,6 +318,136 @@ func TestHandleDropsAndNotifiesOnUnsequencedDispatchFailure(t *testing.T) {
 	}
 }
 
+func TestSurfacedDropsFireHookAndLogLoudly(t *testing.T) {
+	names := []string{"disallowed_channel", "unknown_task", "invalid_payload"}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			var notified []string
+			state := newFakeState()
+			var message contracts.EgressQueueMessage
+			switch name {
+			case "disallowed_channel":
+				task := testTaskMessage(t)
+				state.addTask(task)
+				message = testEgressMessage(t, task, nil, "evt:1", "incremental")
+				message.Message.Channel = "telegram"
+			case "unknown_task":
+				message = testEgressMessage(t, testTaskMessage(t), nil, "evt:1", "incremental")
+			case "invalid_payload":
+				// A completion event with no sequence is a malformed payload.
+				task := testTaskMessage(t)
+				state.addTask(task)
+				message = testEgressMessage(t, task, nil, "evt:completion", "completion")
+			}
+			engine := newTestEngineWithState(t, state, &recordingDispatcher{},
+				WithAllowedChannels([]string{"email"}),
+				WithDropHook(func(_ context.Context, m contracts.EgressQueueMessage, reasonCode string) {
+					notified = append(notified, reasonCode)
+				}),
+			)
+
+			logged := captureLog(t, func() {
+				result, err := engine.Handle(context.Background(), message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.Status != StatusDropped || result.Reason != name {
+					t.Fatalf("result = %#v", result)
+				}
+			})
+
+			if want := []string{name}; !reflect.DeepEqual(notified, want) {
+				t.Fatalf("hook fired with %#v, want %#v", notified, want)
+			}
+			if !strings.Contains(logged, "egress_message_dropped") || !strings.Contains(logged, "reason="+name) {
+				t.Fatalf("loud drop log missing, got %q", logged)
+			}
+		})
+	}
+}
+
+func TestCompletedTaskDropDoesNotFireHook(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.completed[task.TaskID] = task.Envelope.ID
+	fired := false
+	engine := newTestEngineWithState(t, state, &recordingDispatcher{},
+		WithAllowedChannels([]string{"email"}),
+		WithDropHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { fired = true }),
+	)
+
+	logged := captureLog(t, func() {
+		result, err := engine.Handle(context.Background(), testEgressMessage(t, task, nil, "evt:1", "incremental"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != StatusDropped || result.Reason != "completed_task" {
+			t.Fatalf("result = %#v", result)
+		}
+	})
+
+	if fired {
+		t.Fatal("idempotency drop must not fire the operator alert hook")
+	}
+	if strings.Contains(logged, "egress_message_dropped") {
+		t.Fatalf("completed_task must not log the error-class line, got %q", logged)
+	}
+	if !strings.Contains(logged, "egress_dropped_after_completion") {
+		t.Fatalf("completed_task should log its informational line, got %q", logged)
+	}
+}
+
+func TestFlushDropsAndContinuesOnStagedDisallowedChannel(t *testing.T) {
+	ctx := context.Background()
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{}
+	notified := 0
+	engine := newTestEngineWithState(t, state, dispatcher,
+		WithAllowedChannels([]string{"email"}),
+		WithDropHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ }),
+	)
+
+	// Simulate an event staged under a looser config (e.g. before a restart with a
+	// stricter allowed-channels list): stage a now-disallowed channel directly, then a
+	// deliverable follow-on, and drive the flush.
+	disallowed := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
+	disallowed.Message.Channel = "telegram"
+	disallowed.Message.Body = stringPtr("dropped")
+	if err := state.StageEgressEvent(ctx, disallowed); err != nil {
+		t.Fatal(err)
+	}
+	next := testEgressMessage(t, task, intPtr(1), "evt:1", "message")
+	next.Message.Body = stringPtr("delivered")
+	if err := state.StageEgressEvent(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+
+	logged := captureLog(t, func() {
+		result, err := engine.Flush(ctx, task.TaskID)
+		if err != nil {
+			t.Fatalf("staged disallowed channel must not crash the flush: %v", err)
+		}
+		if result.Status != StatusDispatched {
+			t.Fatalf("flush result = %#v (should end on the delivered follow-on)", result)
+		}
+	})
+	if notified != 1 {
+		t.Fatalf("notified = %d, want 1", notified)
+	}
+	if !strings.Contains(logged, "egress_message_dropped") || !strings.Contains(logged, "reason=disallowed_channel") {
+		t.Fatalf("staged disallowed drop should log loudly, got %q", logged)
+	}
+	if got, _ := state.ExpectedSequence(ctx, task.TaskID); got != 2 {
+		t.Fatalf("expected sequence = %d, want 2 (must advance past both staged events)", got)
+	}
+	if got := dispatcher.bodies(); got != "delivered" {
+		t.Fatalf("dispatched bodies = %q, want %q (disallowed event must be dropped, not sent)", got, "delivered")
+	}
+}
+
 func TestFlushDropsAndContinuesOnSequencedDispatchFailure(t *testing.T) {
 	task := testTaskMessage(t)
 	state := newFakeState()
@@ -323,7 +456,7 @@ func TestFlushDropsAndContinuesOnSequencedDispatchFailure(t *testing.T) {
 	notified := 0
 	engine := newTestEngineWithState(t, state, dispatcher,
 		WithAllowedChannels([]string{"email"}),
-		WithDispatchFailureHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ }),
+		WithDropHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ }),
 	)
 	first := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
 	first.Message.Body = stringPtr("first")
@@ -608,6 +741,21 @@ func testEgressMessage(t *testing.T, task contracts.TaskQueueMessage, sequence *
 		},
 		Sequence: sequence,
 	}
+}
+
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&buffer)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+	fn()
+	return buffer.String()
 }
 
 func intPtr(value int) *int {
