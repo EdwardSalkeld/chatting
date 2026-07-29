@@ -136,24 +136,17 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		return nil, err
 	}
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
-	if config.ScheduleFile != "" {
-		jobs, err := schedule.LoadJobs(config.ScheduleFile)
-		if err != nil {
-			_ = store.Close()
-			return nil, err
-		}
-		connector, err := schedule.New(
-			jobs,
-			config.GlobalPromptContext,
-			config.CronPromptContext,
-			nil,
-		)
-		if err != nil {
-			_ = store.Close()
-			return nil, err
-		}
-		connectors = append(connectors, connector)
+	scheduleConnector, err := schedule.NewFromSource(
+		schedule.NewStoreSource(store),
+		config.GlobalPromptContext,
+		config.CronPromptContext,
+		nil,
+	)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
 	}
+	connectors = append(connectors, scheduleConnector)
 	if config.IMAPHost != "" {
 		password := os.Getenv(config.IMAPPasswordEnv)
 		if password == "" {
@@ -293,6 +286,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	scheduleService := schedules.NewService(store)
 	metricsServer, err := metrics.StartServer(metricRecorder, config.MetricsHost, config.MetricsPort, func(mux *http.ServeMux) {
 		schedules.RegisterRoutes(mux, scheduleService)
+		schedules.RegisterUIRoutes(mux, scheduleService)
 	})
 	if err != nil {
 		_ = store.Close()

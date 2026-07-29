@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -52,32 +53,74 @@ type Job struct {
 	location           *time.Location
 }
 
+// Scheduled pairs a stable ScheduleID with its Job. The ScheduleID (not the
+// mutable job_name) keys the connector's in-memory scheduling state so that
+// edits which rename a job keep their next-run timing.
+type Scheduled struct {
+	ScheduleID string
+	Job        Job
+}
+
+// ScheduleSource yields the active schedule set on each Poll, allowing the
+// connector to live-reload from an authoritative store rather than a static
+// snapshot loaded once at startup.
+type ScheduleSource interface {
+	ActiveSchedules(ctx context.Context) ([]Scheduled, error)
+}
+
+type scheduleState struct {
+	job       Job
+	cron      string
+	nextRunAt time.Time
+}
+
 type Connector struct {
-	jobs                []Job
+	source              ScheduleSource
 	globalPromptContext []string
 	sourcePromptContext []string
 	now                 NowFunc
-	nextRunAtByJob      map[string]time.Time
+	states              map[string]*scheduleState
 }
 
+// staticSource serves a fixed schedule set, preserving the pre-DB behaviour of
+// New where jobs are validated once and never change.
+type staticSource struct {
+	scheduled []Scheduled
+}
+
+func (source staticSource) ActiveSchedules(context.Context) ([]Scheduled, error) {
+	return source.scheduled, nil
+}
+
+// New builds a connector over a fixed set of jobs. Jobs are validated up front;
+// each is keyed by its job_name for scheduling-state continuity.
 func New(jobs []Job, globalPromptContext []string, sourcePromptContext []string, now NowFunc) (*Connector, error) {
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
-	normalized := make([]Job, 0, len(jobs))
+	scheduled := make([]Scheduled, 0, len(jobs))
 	for _, job := range jobs {
 		prepared, err := prepareJob(job)
 		if err != nil {
 			return nil, err
 		}
-		normalized = append(normalized, prepared)
+		scheduled = append(scheduled, Scheduled{ScheduleID: prepared.JobName, Job: prepared})
+	}
+	return NewFromSource(staticSource{scheduled: scheduled}, globalPromptContext, sourcePromptContext, now)
+}
+
+// NewFromSource builds a connector that reloads its active schedule set from
+// source on every Poll.
+func NewFromSource(source ScheduleSource, globalPromptContext []string, sourcePromptContext []string, now NowFunc) (*Connector, error) {
+	if source == nil {
+		return nil, errors.New("schedule source is required")
+	}
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Connector{
-		jobs:                normalized,
+		source:              source,
 		globalPromptContext: append([]string{}, globalPromptContext...),
 		sourcePromptContext: append([]string{}, sourcePromptContext...),
 		now:                 now,
-		nextRunAtByJob:      map[string]time.Time{},
+		states:              map[string]*scheduleState{},
 	}, nil
 }
 
@@ -197,17 +240,38 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	scheduled, err := connector.source.ActiveSchedules(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now := connector.now().UTC()
 	envelopes := []contracts.TaskEnvelope{}
-	for _, job := range connector.jobs {
-		nextRunAt, ok := connector.nextRunAtByJob[job.JobName]
-		if !ok {
-			nextRunAt = initialNextRunAt(job, now)
-		}
-		if now.Before(nextRunAt) {
-			connector.nextRunAtByJob[job.JobName] = nextRunAt
+	seen := make(map[string]bool, len(scheduled))
+	for _, entry := range scheduled {
+		job, err := prepareJob(entry.Job)
+		if err != nil {
+			log.Printf("schedule_skip_invalid schedule_id=%q job_name=%q err=%v", entry.ScheduleID, entry.Job.JobName, err)
 			continue
 		}
+		seen[entry.ScheduleID] = true
+		state, ok := connector.states[entry.ScheduleID]
+		switch {
+		case !ok:
+			// A newly active schedule initialises its next run from now.
+			state = &scheduleState{cron: job.Cron, nextRunAt: initialNextRunAt(job, now)}
+			connector.states[entry.ScheduleID] = state
+		case state.cron != job.Cron:
+			// A changed cron expression recomputes the next run from now.
+			state.cron = job.Cron
+			state.nextRunAt = initialNextRunAt(job, now)
+		}
+		// Refresh the job so non-cron edits (content, reply channel, refs) take
+		// effect on the next fire without disturbing the schedule timing.
+		state.job = job
+		if now.Before(state.nextRunAt) {
+			continue
+		}
+		nextRunAt := state.nextRunAt
 		eventID := "cron:" + job.JobName + ":" + pythonUTCISO(nextRunAt)
 		replyChannel := contracts.ReplyChannel{Type: "log", Target: job.JobName}
 		if job.ReplyChannelType != "" {
@@ -234,7 +298,13 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 			ReplyChannel:  replyChannel,
 			DedupeKey:     eventID,
 		})
-		connector.nextRunAtByJob[job.JobName] = nextDueTime(job, now)
+		state.nextRunAt = nextDueTime(job, now)
+	}
+	// Drop scheduling state for schedules that are no longer active.
+	for scheduleID := range connector.states {
+		if !seen[scheduleID] {
+			delete(connector.states, scheduleID)
+		}
 	}
 	return envelopes, nil
 }

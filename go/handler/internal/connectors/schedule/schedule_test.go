@@ -222,6 +222,129 @@ func TestPollUsesConfiguredTimezoneAndReplyChannel(t *testing.T) {
 	}
 }
 
+type fakeSource struct {
+	scheduled []Scheduled
+}
+
+func (source *fakeSource) ActiveSchedules(context.Context) ([]Scheduled, error) {
+	return source.scheduled, nil
+}
+
+func TestPollFromSourceFiresDueScheduleOnce(t *testing.T) {
+	now := mustTime(t, "2026-03-09T12:34:56Z")
+	source := &fakeSource{scheduled: []Scheduled{
+		{
+			ScheduleID: "sched_a",
+			Job: Job{
+				JobName: "daily-note",
+				Content: "Write the daily note",
+				Cron:    "34 12 * * *",
+			},
+		},
+	}}
+	connector, err := NewFromSource(source, nil, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelopes) != 1 {
+		t.Fatalf("first poll envelopes = %#v", envelopes)
+	}
+	if envelopes[0].ID != "cron:daily-note:2026-03-09T12:34:00+00:00" {
+		t.Fatalf("ID = %q", envelopes[0].ID)
+	}
+
+	envelopes, err = connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelopes) != 0 {
+		t.Fatalf("second poll should not refire: %#v", envelopes)
+	}
+}
+
+func TestPollFromSourceStopsRemovedSchedule(t *testing.T) {
+	now := mustTime(t, "2026-03-09T12:34:56Z")
+	source := &fakeSource{scheduled: []Scheduled{
+		{
+			ScheduleID: "sched_a",
+			Job: Job{
+				JobName: "daily-note",
+				Content: "Write the daily note",
+				Cron:    "34 12 * * *",
+			},
+		},
+	}}
+	connector, err := NewFromSource(source, nil, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if envelopes, err := connector.Poll(context.Background()); err != nil || len(envelopes) != 1 {
+		t.Fatalf("first poll envelopes = %#v err = %v", envelopes, err)
+	}
+
+	// Remove the schedule and advance to the next due window; it must not fire.
+	source.scheduled = nil
+	now = mustTime(t, "2026-03-10T12:34:56Z")
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelopes) != 0 {
+		t.Fatalf("removed schedule should not fire: %#v", envelopes)
+	}
+	if _, ok := connector.states["sched_a"]; ok {
+		t.Fatal("state for removed schedule was not pruned")
+	}
+}
+
+func TestPollFromSourceRecomputesOnCronChange(t *testing.T) {
+	now := mustTime(t, "2026-03-09T11:00:00Z")
+	job := Scheduled{
+		ScheduleID: "sched_a",
+		Job: Job{
+			JobName: "daily-note",
+			Content: "Write the daily note",
+			Cron:    "0 12 * * *",
+		},
+	}
+	source := &fakeSource{scheduled: []Scheduled{job}}
+	connector, err := NewFromSource(source, nil, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if envelopes, err := connector.Poll(context.Background()); err != nil || len(envelopes) != 0 {
+		t.Fatalf("initial poll should not fire: %#v err = %v", envelopes, err)
+	}
+
+	// Change the cron so the next run moves from 12:00 to 13:00.
+	job.Job.Cron = "0 13 * * *"
+	source.scheduled = []Scheduled{job}
+
+	now = mustTime(t, "2026-03-09T12:00:00Z")
+	if envelopes, err := connector.Poll(context.Background()); err != nil || len(envelopes) != 0 {
+		t.Fatalf("must not fire at the old cron time after a cron change: %#v err = %v", envelopes, err)
+	}
+
+	now = mustTime(t, "2026-03-09T13:00:00Z")
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelopes) != 1 {
+		t.Fatalf("should fire at the new cron time: %#v", envelopes)
+	}
+	if envelopes[0].ID != "cron:daily-note:2026-03-09T13:00:00+00:00" {
+		t.Fatalf("ID = %q", envelopes[0].ID)
+	}
+}
+
 func mustTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, value)
