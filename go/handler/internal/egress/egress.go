@@ -40,7 +40,7 @@ type State interface {
 }
 
 type TelegramConversationState interface {
-	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error
+	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error
 }
 
 type Dispatcher interface {
@@ -376,7 +376,9 @@ func maybeRecordTelegramConversationTurn(ctx context.Context, state TelegramConv
 	if !ok {
 		return nil
 	}
-	return state.AppendConversationTurn(ctx, "telegram", dispatched.Target, "assistant", content, runID)
+	// Assistant turns carry no sender label; the "assistant" role already marks
+	// them as the bot's own replies when the history is rendered.
+	return state.AppendConversationTurn(ctx, "telegram", dispatched.Target, "assistant", content, "", runID)
 }
 
 func telegramConversationContent(message contracts.OutboundMessage) (string, bool) {

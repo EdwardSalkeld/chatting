@@ -50,10 +50,11 @@ type TelegramAttachmentCleanupState interface {
 type ConversationTurn struct {
 	Role    string
 	Content string
+	Sender  string
 }
 
 type TelegramConversationState interface {
-	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error
+	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error
 	ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error)
 }
 
@@ -252,20 +253,59 @@ func prepareTelegramEnvelope(ctx context.Context, state TelegramConversationStat
 	if err != nil {
 		return contracts.TaskEnvelope{}, err
 	}
+	currentSender := telegramSenderLabel(envelope)
 	enriched := envelope
 	if len(turns) > 0 {
 		lines := make([]string, 0, len(turns)+3)
 		lines = append(lines, "Recent conversation context (oldest first):")
 		for _, turn := range turns {
-			lines = append(lines, turn.Role+": "+turn.Content)
+			lines = append(lines, conversationTurnLabel(turn)+": "+turn.Content)
 		}
-		lines = append(lines, "", "Current user message:", envelope.Content)
+		header := "Current user message:"
+		if currentSender != "" {
+			header = "Current message from " + currentSender + ":"
+		}
+		lines = append(lines, "", header, envelope.Content)
 		enriched.Content = strings.Join(lines, "\n")
 	}
-	if err := state.AppendConversationTurn(ctx, "telegram", envelope.ReplyChannel.Target, "user", envelope.Content, runID); err != nil {
+	if err := state.AppendConversationTurn(ctx, "telegram", envelope.ReplyChannel.Target, "user", envelope.Content, currentSender, runID); err != nil {
 		return contracts.TaskEnvelope{}, err
 	}
 	return enriched, nil
+}
+
+// conversationTurnLabel prefers a stored sender label, falling back to the role
+// for turns recorded before sender attribution existed (or without a sender).
+func conversationTurnLabel(turn ConversationTurn) string {
+	if strings.TrimSpace(turn.Sender) != "" {
+		return turn.Sender
+	}
+	return turn.Role
+}
+
+// telegramSenderLabel derives a human-readable sender for the current inbound
+// message: the connector-provided reply_channel.metadata "sender" when present,
+// otherwise the display portion of the actor ("<id>:<username>" -> "<username>").
+func telegramSenderLabel(envelope contracts.TaskEnvelope) string {
+	if envelope.ReplyChannel.Metadata != nil {
+		if raw, ok := envelope.ReplyChannel.Metadata["sender"]; ok {
+			if label, ok := raw.(string); ok && strings.TrimSpace(label) != "" {
+				return strings.TrimSpace(label)
+			}
+		}
+	}
+	if envelope.Actor != nil {
+		actor := strings.TrimSpace(*envelope.Actor)
+		if index := strings.Index(actor, ":"); index != -1 {
+			if name := strings.TrimSpace(actor[index+1:]); name != "" {
+				return name
+			}
+		}
+		if actor != "" {
+			return actor
+		}
+	}
+	return ""
 }
 
 func ackEnvelope(ctx context.Context, connector Connector, envelopeID string) error {

@@ -336,8 +336,8 @@ func (state handlerIngressState) CleanupTelegramAttachmentsForRuntime(ctx contex
 	return state.store.CleanupTelegramAttachmentsForRuntime(ctx, attachmentRootDir, notAfter, maxAgeCutoff)
 }
 
-func (state handlerIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error {
-	return state.store.AppendConversationTurn(ctx, channel, target, role, content, runID)
+func (state handlerIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
+	return state.store.AppendConversationTurn(ctx, channel, target, role, content, sender, runID)
 }
 
 func (state handlerIngressState) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]handlerruntime.ConversationTurn, error) {
@@ -350,6 +350,7 @@ func (state handlerIngressState) ListRecentConversationTurns(ctx context.Context
 		result = append(result, handlerruntime.ConversationTurn{
 			Role:    turn.Role,
 			Content: turn.Content,
+			Sender:  turn.Sender,
 		})
 	}
 	return result, nil

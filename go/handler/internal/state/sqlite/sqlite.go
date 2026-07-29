@@ -93,6 +93,7 @@ type TelegramAttachmentCleanupResult struct {
 type ConversationTurn struct {
 	Role    string
 	Content string
+	Sender  string
 }
 
 type GitHubAssignmentCheckpoint struct {
@@ -222,6 +223,7 @@ func (store *Store) initialize(ctx context.Context) error {
 			target TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
+			sender TEXT,
 			run_id TEXT,
 			created_at TEXT NOT NULL
 		)`,
@@ -255,7 +257,47 @@ func (store *Store) initialize(ctx context.Context) error {
 			return err
 		}
 	}
+	// conversation_turns.sender was added after the table shipped. CREATE TABLE
+	// IF NOT EXISTS won't add a column to a pre-existing table, so migrate it in
+	// explicitly. Idempotent: only ALTER when the column is absent.
+	if err := store.ensureColumn(ctx, "conversation_turns", "sender", "TEXT"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (store *Store) ensureColumn(ctx context.Context, table string, column string, columnType string) error {
+	rows, err := store.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			primaryKey   int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Close before the ALTER: an open result set can hold a read lock that
+	// blocks the write on some SQLite drivers.
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	_, err = store.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+columnType)
+	return err
 }
 
 func (store *Store) GetGitHubAssignmentCheckpoint(ctx context.Context, scopeKey string) (*GitHubAssignmentCheckpoint, error) {
@@ -970,7 +1012,7 @@ func (store *Store) ListTelegramChats(ctx context.Context) ([]TelegramChatRecord
 	return records, rows.Err()
 }
 
-func (store *Store) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, runID string) error {
+func (store *Store) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
 	if strings.TrimSpace(channel) == "" {
 		return errors.New("channel is required")
 	}
@@ -993,14 +1035,16 @@ func (store *Store) AppendConversationTurn(ctx context.Context, channel string, 
 			target,
 			role,
 			content,
+			sender,
 			run_id,
 			created_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		channel,
 		target,
 		role,
 		content,
+		nullIfEmpty(sender),
 		nullIfEmpty(runID),
 		formatTimestamp(time.Now()),
 	)
@@ -1019,7 +1063,7 @@ func (store *Store) ListRecentConversationTurns(ctx context.Context, channel str
 	}
 	rows, err := store.db.QueryContext(
 		ctx,
-		`SELECT role, content
+		`SELECT role, content, sender
 		FROM conversation_turns
 		WHERE channel = ? AND target = ?
 		ORDER BY turn_id DESC
@@ -1035,9 +1079,11 @@ func (store *Store) ListRecentConversationTurns(ctx context.Context, channel str
 	reversed := make([]ConversationTurn, 0, limit)
 	for rows.Next() {
 		turn := ConversationTurn{}
-		if err := rows.Scan(&turn.Role, &turn.Content); err != nil {
+		var sender sql.NullString
+		if err := rows.Scan(&turn.Role, &turn.Content, &sender); err != nil {
 			return nil, err
 		}
+		turn.Sender = sender.String
 		reversed = append(reversed, turn)
 	}
 	if err := rows.Err(); err != nil {
