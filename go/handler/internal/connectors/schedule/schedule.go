@@ -239,6 +239,13 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 	return envelopes, nil
 }
 
+// Validate reports whether the job satisfies the schedule connector's requirements
+// without exposing the internal prepared job representation.
+func Validate(job Job) error {
+	_, err := prepareJob(job)
+	return err
+}
+
 func prepareJob(job Job) (Job, error) {
 	if strings.TrimSpace(job.JobName) == "" {
 		return Job{}, errors.New("job_name is required")
