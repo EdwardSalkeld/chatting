@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -53,11 +54,11 @@ func (fn DispatcherFunc) Dispatch(ctx context.Context, message contracts.Outboun
 }
 
 type Engine struct {
-	state             State
-	dispatcher        Dispatcher
-	allowedChannels   map[string]bool
-	onCompletion      func(context.Context, contracts.EgressQueueMessage) error
-	onDispatchFailure func(context.Context, contracts.EgressQueueMessage, string)
+	state           State
+	dispatcher      Dispatcher
+	allowedChannels map[string]bool
+	onCompletion    func(context.Context, contracts.EgressQueueMessage) error
+	onDrop          func(context.Context, contracts.EgressQueueMessage, string)
 }
 
 type Option func(*Engine)
@@ -77,12 +78,14 @@ func WithCompletionHook(hook func(context.Context, contracts.EgressQueueMessage)
 	}
 }
 
-// WithDispatchFailureHook registers a callback invoked when a single egress event
-// fails to dispatch. The event is dropped (acked) rather than crashing the handler,
-// so the hook is responsible for making the failure visible (log + operator email).
-func WithDispatchFailureHook(hook func(context.Context, contracts.EgressQueueMessage, string)) Option {
+// WithDropHook registers a callback invoked whenever the engine drops an egress
+// message for an error-class reason (bad payload, unknown task, disallowed channel,
+// dispatch failure). Dropping is treated as an operational error, so the engine always
+// logs a loud line; the hook is responsible for the operator alert (email). It is NOT
+// called for idempotency drops (a late/duplicate event after task completion).
+func WithDropHook(hook func(context.Context, contracts.EgressQueueMessage, string)) Option {
 	return func(engine *Engine) {
-		engine.onDispatchFailure = hook
+		engine.onDrop = hook
 	}
 }
 
@@ -120,14 +123,14 @@ const (
 func (engine *Engine) HandleRaw(ctx context.Context, raw []byte) (Result, error) {
 	message, err := contracts.DecodeEgressQueueMessage(raw)
 	if err != nil {
-		return Result{Status: StatusDropped, Reason: "invalid_payload"}, nil
+		return engine.surfaceDrop(ctx, message, "invalid_payload")
 	}
 	return engine.Handle(ctx, message)
 }
 
 func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueMessage) (Result, error) {
 	if err := message.Validate(); err != nil {
-		return Result{Status: StatusDropped, Reason: "invalid_payload"}, nil
+		return engine.surfaceDrop(ctx, message, "invalid_payload")
 	}
 
 	completed, err := engine.state.IsTaskCompleted(ctx, message.TaskID, message.EnvelopeID)
@@ -135,6 +138,9 @@ func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueM
 		return Result{}, err
 	}
 	if completed {
+		// Idempotency, not an error: a late or duplicate event after the task already
+		// completed. Log plainly and do not raise the operator alert.
+		log.Printf("egress_dropped_after_completion task_id=%s event_id=%s", message.TaskID, message.EventID)
 		return Result{Status: StatusDropped, Reason: "completed_task"}, nil
 	}
 
@@ -143,11 +149,11 @@ func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueM
 		return Result{}, err
 	}
 	if task == nil || task.EnvelopeID != message.EnvelopeID {
-		return Result{Status: StatusDropped, Reason: "unknown_task"}, nil
+		return engine.surfaceDrop(ctx, message, "unknown_task")
 	}
 
 	if !engine.channelAllowed(message, task) {
-		return Result{Status: StatusDropped, Reason: "disallowed_channel"}, nil
+		return engine.surfaceDrop(ctx, message, "disallowed_channel")
 	}
 
 	dispatched, err := engine.state.HasDispatchedEventID(ctx, message.TaskID, message.EventID)
@@ -160,7 +166,7 @@ func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueM
 
 	if message.Sequence == nil {
 		if message.EventKind == "completion" {
-			return Result{Status: StatusDropped, Reason: "invalid_payload"}, nil
+			return engine.surfaceDrop(ctx, message, "invalid_payload")
 		}
 		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
 			if reason, ok := dispatchFailureReason(err); ok {
@@ -239,7 +245,17 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 		}
 
 		if !engine.channelAllowed(message, task) {
-			return Result{}, fmt.Errorf("staged event %s has disallowed channel %q", staged.EventID, message.Message.Channel)
+			// A disallowed channel is a loud drop, not a fatal error: surface it and
+			// advance past the staged event so the flush is not stuck crash-looping.
+			result, err := engine.surfaceDrop(ctx, message, "disallowed_channel")
+			if err != nil {
+				return Result{}, err
+			}
+			if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
+				return Result{}, err
+			}
+			last = result
+			continue
 		}
 		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
 			reason, ok := dispatchFailureReason(err)
@@ -262,13 +278,46 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 	}
 }
 
-// dropFailedDispatch handles a permanent per-message dispatch failure: it surfaces
-// the failure (log + operator email via the hook), records the event as dispatched so
-// it is not retried, and reports the event as dropped. The egress message is acked by
-// the caller, so a single bad event no longer crash-loops the handler.
+// surfaceDrop makes an error-class drop loud: it emits a structured ERROR log line
+// (with a short body preview when present) and invokes the drop hook so the operator is
+// alerted. Every error-class drop must go through here so the engine logs uniformly for
+// all of them. It always reports the event as dropped and never returns an error.
+func (engine *Engine) surfaceDrop(ctx context.Context, message contracts.EgressQueueMessage, reason string) (Result, error) {
+	log.Printf("egress_message_dropped task_id=%s event_id=%s channel=%s target=%s event_kind=%s reason=%s%s",
+		message.TaskID, message.EventID, message.Message.Channel, message.Message.Target, message.EventKind, reason, egressBodyPreview(message))
+	if engine.onDrop != nil {
+		engine.onDrop(ctx, message, reason)
+	}
+	return Result{Status: StatusDropped, Reason: reason}, nil
+}
+
+// egressBodyPreview returns a truncated, single-line preview of the message body for
+// logging, or "" when there is no body. It never appears without a leading space.
+func egressBodyPreview(message contracts.EgressQueueMessage) string {
+	if message.Message.Body == nil {
+		return ""
+	}
+	body := strings.TrimSpace(*message.Message.Body)
+	if body == "" {
+		return ""
+	}
+	body = strings.Join(strings.Fields(body), " ")
+	const maxLen = 120
+	if runes := []rune(body); len(runes) > maxLen {
+		body = string(runes[:maxLen]) + "..."
+	}
+	return fmt.Sprintf(" body=%q", body)
+}
+
+// dropFailedDispatch handles a permanent per-message dispatch failure: it surfaces the
+// drop (loud log + operator alert via the hook), records the event as dispatched so it
+// is not retried, and reports the event as dropped. The egress message is acked by the
+// caller, so a single bad event no longer crash-loops the handler. reasonCode carries
+// the upstream API description for the log/alert; the Result reason stays "dispatch_failed"
+// so metrics bucket dispatch failures together.
 func (engine *Engine) dropFailedDispatch(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) (Result, error) {
-	if engine.onDispatchFailure != nil {
-		engine.onDispatchFailure(ctx, message, reasonCode)
+	if _, err := engine.surfaceDrop(ctx, message, reasonCode); err != nil {
+		return Result{}, err
 	}
 	if err := engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID); err != nil {
 		return Result{}, err

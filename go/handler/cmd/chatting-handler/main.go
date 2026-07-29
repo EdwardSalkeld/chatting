@@ -120,9 +120,10 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			_, err := store.MarkTelegramTaskAttachmentsEligible(ctx, message.TaskID, eligibleAfter)
 			return err
 		}),
-		egress.WithDispatchFailureHook(func(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) {
-			log.Printf("egress_dispatch_failed task_id=%s event_id=%s channel=%s target=%s reason=%s",
-				message.TaskID, message.EventID, message.Message.Channel, message.Message.Target, reasonCode)
+		egress.WithDropHook(func(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+			// The engine already logs a loud line for every error-class drop; this hook
+			// is only the operator alert. It sends SMTP directly (not via the egress
+			// engine) so it cannot recurse into another drop.
 			sendEgressDispatchErrorEmail(ctx, emailSender, errorEmailRecipient, message, reasonCode)
 		}),
 	}
@@ -427,9 +428,10 @@ func resolveErrorEmailRecipient(config handlerconfig.Config) string {
 	return ""
 }
 
-// sendEgressDispatchErrorEmail notifies the operator that a single egress event could
-// not be delivered. The event has already been dropped so the handler keeps running;
-// this is the visibility half of that trade-off.
+// sendEgressDispatchErrorEmail notifies the operator that a single egress message was
+// dropped (bad payload, unknown task, disallowed channel, or dispatch failure). The
+// event has already been dropped so the handler keeps running; this is the visibility
+// half of that trade-off.
 func sendEgressDispatchErrorEmail(ctx context.Context, sender dispatch.EmailSender, recipient string, message contracts.EgressQueueMessage, reasonCode string) {
 	if sender == nil || strings.TrimSpace(recipient) == "" {
 		return
@@ -438,9 +440,9 @@ func sendEgressDispatchErrorEmail(ctx context.Context, sender dispatch.EmailSend
 	if message.Sequence != nil {
 		sequence = strconv.Itoa(*message.Sequence)
 	}
-	subject := "Chatting handler dispatch error: " + reasonCode
+	subject := "Chatting handler egress message dropped: " + reasonCode
 	body := strings.Join([]string{
-		"Message-handler egress dispatch failed.",
+		"Message-handler dropped an egress message.",
 		"task_id: " + message.TaskID,
 		"envelope_id: " + message.EnvelopeID,
 		"trace_id: " + message.TraceID,
