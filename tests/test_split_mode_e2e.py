@@ -1,15 +1,85 @@
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.state import SQLiteStateStore
 from tests.e2e.handler_selector import message_handler_command
+
+
+def _seed_schedule(
+    handler_db_path: Path,
+    *,
+    job_name: str,
+    content: str,
+    cron: str,
+    context_refs: list[str],
+    reply_channel_type: str,
+    reply_channel_target: str,
+) -> None:
+    # The handler's schedule connector reads active schedules from its DB, not
+    # from a file, so seed the row the same way the API/UI would. Column layout
+    # mirrors the handler's schedules table; created_at uses RFC3339 so the Go
+    # store's parseTimestamp accepts it.
+    now = datetime.now(timezone.utc).isoformat()
+    connection = sqlite3.connect(str(handler_db_path))
+    try:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schedules (
+                row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schedule_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                job_name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                cron TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                context_refs TEXT NOT NULL,
+                prompt_context TEXT NOT NULL,
+                reply_channel_type TEXT NOT NULL,
+                reply_channel_target TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                superseded_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO schedules (
+                schedule_id, version, status, job_name, content, cron, timezone,
+                context_refs, prompt_context, reply_channel_type,
+                reply_channel_target, created_at, created_by, superseded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sched_ci_split_smoke",
+                1,
+                "active",
+                job_name,
+                content,
+                cron,
+                "UTC",
+                json.dumps(context_refs),
+                "[]",
+                reply_channel_type,
+                reply_channel_target,
+                now,
+                "test",
+                None,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -57,20 +127,8 @@ class SplitModeE2ETests(unittest.TestCase):
             temp_root = Path(tmpdir)
             handler_db_path = temp_root / "handler.db"
             worker_db_path = temp_root / "worker.db"
-            schedule_path = temp_root / "schedule.json"
             handler_config_path = temp_root / "message-handler.json"
             worker_config_path = temp_root / "worker.json"
-            schedule_payload = [
-                {
-                    "job_name": "ci-split-smoke",
-                    "content": "CI smoke task",
-                    "cron": "* * * * *",
-                    "context_refs": [f"repo:{repo_root}"],
-                    "reply_channel_type": "log",
-                    "reply_channel_target": "ci-split-smoke",
-                }
-            ]
-            schedule_path.write_text(json.dumps(schedule_payload), encoding="utf-8")
 
             handler_config_path.write_text(
                 json.dumps(
@@ -81,10 +139,21 @@ class SplitModeE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 1,
                         "max_loops": 20,
                         "allowed_egress_channels": ["log"],
-                        "schedule_file": str(schedule_path),
                     }
                 ),
                 encoding="utf-8",
+            )
+
+            # The connector reads active schedules from the handler DB (not a
+            # file), so seed the smoke schedule before the handler starts.
+            _seed_schedule(
+                handler_db_path,
+                job_name="ci-split-smoke",
+                content="CI smoke task",
+                cron="* * * * *",
+                context_refs=[f"repo:{repo_root}"],
+                reply_channel_type="log",
+                reply_channel_target="ci-split-smoke",
             )
             worker_config_path.write_text(
                 json.dumps(
