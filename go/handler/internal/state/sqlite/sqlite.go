@@ -91,9 +91,10 @@ type TelegramAttachmentCleanupResult struct {
 }
 
 type ConversationTurn struct {
-	Role    string
-	Content string
-	Sender  string
+	Role      string
+	Content   string
+	Sender    string
+	CreatedAt time.Time
 }
 
 type GitHubAssignmentCheckpoint struct {
@@ -1063,7 +1064,7 @@ func (store *Store) ListRecentConversationTurns(ctx context.Context, channel str
 	}
 	rows, err := store.db.QueryContext(
 		ctx,
-		`SELECT role, content, sender
+		`SELECT role, content, sender, created_at
 		FROM conversation_turns
 		WHERE channel = ? AND target = ?
 		ORDER BY turn_id DESC
@@ -1080,10 +1081,15 @@ func (store *Store) ListRecentConversationTurns(ctx context.Context, channel str
 	for rows.Next() {
 		turn := ConversationTurn{}
 		var sender sql.NullString
-		if err := rows.Scan(&turn.Role, &turn.Content, &sender); err != nil {
+		var createdAt string
+		if err := rows.Scan(&turn.Role, &turn.Content, &sender, &createdAt); err != nil {
 			return nil, err
 		}
 		turn.Sender = sender.String
+		turn.CreatedAt, err = parseTimestamp(createdAt)
+		if err != nil {
+			return nil, err
+		}
 		reversed = append(reversed, turn)
 	}
 	if err := rows.Err(); err != nil {

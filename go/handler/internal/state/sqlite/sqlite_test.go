@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -161,11 +160,32 @@ func TestConversationTurnsRoundTripScopedByChannelAndTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := turns, []ConversationTurn{
-		{Role: "user", Content: "hello", Sender: "@alice"},
-		{Role: "assistant", Content: "hi there", Sender: ""},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("turns = %#v, want %#v", got, want)
+	if len(turns) != 2 {
+		t.Fatalf("len(turns) = %d", len(turns))
+	}
+	if got, want := turns[0].Role, "user"; got != want {
+		t.Fatalf("turns[0].Role = %q, want %q", got, want)
+	}
+	if got, want := turns[0].Content, "hello"; got != want {
+		t.Fatalf("turns[0].Content = %q, want %q", got, want)
+	}
+	if got, want := turns[0].Sender, "@alice"; got != want {
+		t.Fatalf("turns[0].Sender = %q, want %q", got, want)
+	}
+	if turns[0].CreatedAt.IsZero() {
+		t.Fatal("turns[0].CreatedAt was zero")
+	}
+	if got, want := turns[1].Role, "assistant"; got != want {
+		t.Fatalf("turns[1].Role = %q, want %q", got, want)
+	}
+	if got, want := turns[1].Content, "hi there"; got != want {
+		t.Fatalf("turns[1].Content = %q, want %q", got, want)
+	}
+	if got, want := turns[1].Sender, ""; got != want {
+		t.Fatalf("turns[1].Sender = %q, want %q", got, want)
+	}
+	if turns[1].CreatedAt.IsZero() {
+		t.Fatal("turns[1].CreatedAt was zero")
 	}
 }
 
