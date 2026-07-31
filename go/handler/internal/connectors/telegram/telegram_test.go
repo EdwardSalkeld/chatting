@@ -321,6 +321,16 @@ func TestPollDownloadsPhotoAttachmentAndUsesCaptionAsContent(t *testing.T) {
 	if string(raw) != "jpeg-bytes" {
 		t.Fatalf("downloaded bytes = %q", string(raw))
 	}
+	// The worker runs as a separate OS user, so the attachment must be
+	// readable beyond the owner (see extractAttachments). Assert the
+	// group/other read bits survive rather than the file staying 0600.
+	info, err := os.Stat(downloadedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&0o044 != 0o044 {
+		t.Fatalf("attachment mode = %o, want group/other readable", perm)
+	}
 	if len(requestedURLs) != 3 {
 		t.Fatalf("requested URLs = %#v", requestedURLs)
 	}
