@@ -48,9 +48,10 @@ type TelegramAttachmentCleanupState interface {
 }
 
 type ConversationTurn struct {
-	Role    string
-	Content string
-	Sender  string
+	Role      string
+	Content   string
+	Sender    string
+	CreatedAt time.Time
 }
 
 type TelegramConversationState interface {
@@ -259,7 +260,7 @@ func prepareTelegramEnvelope(ctx context.Context, state TelegramConversationStat
 		lines := make([]string, 0, len(turns)+3)
 		lines = append(lines, "Recent conversation context (oldest first):")
 		for _, turn := range turns {
-			lines = append(lines, conversationTurnLabel(turn)+": "+turn.Content)
+			lines = append(lines, formatConversationTurn(turn))
 		}
 		header := "Current user message:"
 		if currentSender != "" {
@@ -281,6 +282,14 @@ func conversationTurnLabel(turn ConversationTurn) string {
 		return turn.Sender
 	}
 	return turn.Role
+}
+
+func formatConversationTurn(turn ConversationTurn) string {
+	label := conversationTurnLabel(turn) + ": " + turn.Content
+	if turn.CreatedAt.IsZero() {
+		return label
+	}
+	return "[" + turn.CreatedAt.UTC().Format("2006-01-02 15:04Z") + "] " + label
 }
 
 // telegramSenderLabel derives a human-readable sender for the current inbound

@@ -348,9 +348,10 @@ func (state handlerIngressState) ListRecentConversationTurns(ctx context.Context
 	result := make([]handlerruntime.ConversationTurn, 0, len(turns))
 	for _, turn := range turns {
 		result = append(result, handlerruntime.ConversationTurn{
-			Role:    turn.Role,
-			Content: turn.Content,
-			Sender:  turn.Sender,
+			Role:      turn.Role,
+			Content:   turn.Content,
+			Sender:    turn.Sender,
+			CreatedAt: turn.CreatedAt,
 		})
 	}
 	return result, nil

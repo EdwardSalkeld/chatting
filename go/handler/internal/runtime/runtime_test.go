@@ -231,8 +231,9 @@ func TestPublishIngressEnrichesTelegramEnvelopeWithRecentConversation(t *testing
 	state := newFakeIngressState()
 	for index := 0; index < 35; index++ {
 		state.turns["12345"] = append(state.turns["12345"], ConversationTurn{
-			Role:    "user",
-			Content: fmt.Sprintf("turn-%d", index),
+			Role:      "user",
+			Content:   fmt.Sprintf("turn-%d", index),
+			CreatedAt: mustTime(t, fmt.Sprintf("2026-03-09T11:%02d:00Z", index%60)),
 		})
 	}
 	envelope := contracts.TaskEnvelope{
@@ -270,10 +271,10 @@ func TestPublishIngressEnrichesTelegramEnvelopeWithRecentConversation(t *testing
 	if !strings.Contains(recorded.Envelope.Content, "Recent conversation context (oldest first):") {
 		t.Fatalf("content = %q", recorded.Envelope.Content)
 	}
-	if !strings.Contains(recorded.Envelope.Content, "user: turn-5") || !strings.Contains(recorded.Envelope.Content, "user: turn-34") {
+	if !strings.Contains(recorded.Envelope.Content, "[2026-03-09 11:05Z] user: turn-5") || !strings.Contains(recorded.Envelope.Content, "[2026-03-09 11:34Z] user: turn-34") {
 		t.Fatalf("content = %q", recorded.Envelope.Content)
 	}
-	if strings.Contains(recorded.Envelope.Content, "user: turn-4") {
+	if strings.Contains(recorded.Envelope.Content, "turn-4") {
 		t.Fatalf("content = %q", recorded.Envelope.Content)
 	}
 	if !strings.Contains(recorded.Envelope.Content, "Current user message:\nlatest-turn") {
@@ -289,8 +290,8 @@ func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
 	state.turns["12345"] = []ConversationTurn{
-		{Role: "user", Content: "earlier", Sender: "@alice"},
-		{Role: "assistant", Content: "billy replied"},
+		{Role: "user", Content: "earlier", Sender: "@alice", CreatedAt: mustTime(t, "2026-03-09T11:58:00Z")},
+		{Role: "assistant", Content: "billy replied", CreatedAt: mustTime(t, "2026-03-09T11:59:00Z")},
 	}
 	envelope := contracts.TaskEnvelope{
 		SchemaVersion: contracts.SchemaVersion,
@@ -319,10 +320,10 @@ func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := state.tasks["task:telegram:101"].Envelope.Content
-	if !strings.Contains(content, "@alice: earlier") {
+	if !strings.Contains(content, "[2026-03-09 11:58Z] @alice: earlier") {
 		t.Fatalf("history not attributed by sender: %q", content)
 	}
-	if !strings.Contains(content, "assistant: billy replied") {
+	if !strings.Contains(content, "[2026-03-09 11:59Z] assistant: billy replied") {
 		t.Fatalf("assistant turn should fall back to role: %q", content)
 	}
 	if !strings.Contains(content, "Current message from @bob (bot):\nlatest-turn") {
@@ -524,7 +525,12 @@ func (state *fakeIngressState) AppendConversationTurn(ctx context.Context, chann
 	if channel != "telegram" {
 		return nil
 	}
-	state.turns[target] = append(state.turns[target], ConversationTurn{Role: role, Content: content, Sender: sender})
+	state.turns[target] = append(state.turns[target], ConversationTurn{
+		Role:      role,
+		Content:   content,
+		Sender:    sender,
+		CreatedAt: time.Now().UTC(),
+	})
 	return nil
 }
 
