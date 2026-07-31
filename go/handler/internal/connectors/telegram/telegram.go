@@ -330,7 +330,16 @@ func (connector *Connector) extractAttachments(updateID int64, message telegramM
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(destination, raw, 0o600); err != nil {
+	if err := os.WriteFile(destination, raw, 0o644); err != nil {
+		return nil, err
+	}
+	// The worker/executor runs as a different OS user than the handler in the
+	// split deployment, so it must be able to read a file it never wrote.
+	// os.WriteFile's mode is masked by the process umask (the handler runs
+	// UMask=0077), which would leave the file 0600 and unreadable by the
+	// worker. An explicit Chmod is not subject to the umask, so force the
+	// readable mode here.
+	if err := os.Chmod(destination, 0o644); err != nil {
 		return nil, err
 	}
 	name := path.Base(metadata.FilePath)
