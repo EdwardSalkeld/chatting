@@ -1,0 +1,104 @@
+name: Open Lab Deploy PR
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      chatting_sha:
+        description: Optional chatting commit SHA to deploy. Defaults to the triggering SHA.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-lab-deploy-pr
+  cancel-in-progress: true
+
+jobs:
+  open-pr:
+    name: Update lab flake.lock
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve target SHA
+        id: target
+        env:
+          MANUAL_TARGET_SHA: ${{ inputs.chatting_sha }}
+          WORKFLOW_RUN_TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          target_sha="$MANUAL_TARGET_SHA"
+          if [ -z "$target_sha" ]; then
+            target_sha="$WORKFLOW_RUN_TARGET_SHA"
+          fi
+          if [ -z "$target_sha" ]; then
+            target_sha="${GITHUB_SHA}"
+          fi
+
+          case "$target_sha" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+              ;;
+            *)
+              echo "unexpected target sha: $target_sha" >&2
+              exit 64
+              ;;
+          esac
+
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${target_sha%${target_sha#????????}}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout lab
+        uses: actions/checkout@v7
+        with:
+          repository: EdwardSalkeld/lab
+          token: ${{ secrets.LAB_REPO_TOKEN }}
+          path: lab
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v19
+
+      - name: Update chatting lock entry
+        working-directory: lab
+        run: |
+          nix flake lock \
+            --override-input chatting github:EdwardSalkeld/chatting/${{ steps.target.outputs.sha }} \
+            --update-input chatting
+
+      - name: Compose PR body
+        working-directory: lab
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          cat > /tmp/lab-pr-body.md <<EOF
+          ## Summary
+          - bump the chatting flake input to ${TARGET_SHA}
+          - deploy the merged chatting main commit via lab-controlled rollout
+
+          ## Testing
+          - not run (automation-only flake.lock update)
+          EOF
+
+      - name: Create or update lab PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.LAB_REPO_TOKEN }}
+          path: lab
+          commit-message: Deploy chatting ${{ steps.target.outputs.short_sha }}
+          branch: billy/auto-deploy-chatting
+          base: main
+          delete-branch: true
+          title: Deploy chatting ${{ steps.target.outputs.short_sha }}
+          body-path: /tmp/lab-pr-body.md
