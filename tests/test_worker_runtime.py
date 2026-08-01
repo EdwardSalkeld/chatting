@@ -1,11 +1,12 @@
 import tempfile
+import time
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 
-from app.broker import TaskQueueMessage
+from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.internal_heartbeat import build_internal_heartbeat_envelope
 from app.internal_notices import (
     INTERNAL_NOTICE_METADATA_KEY,
@@ -82,6 +83,16 @@ class NoMessageExecutor:
 
 
 @dataclass(frozen=True)
+class SleepExecutor:
+    sleep_seconds: float
+
+    def execute(self, task):
+        del task
+        time.sleep(self.sleep_seconds)
+        return ExecutionResult(errors=[])
+
+
+@dataclass(frozen=True)
 class FinalAliasExecutor:
     def execute(self, task):
         del task
@@ -129,13 +140,13 @@ class WorkerRuntimeTests(unittest.TestCase):
         )
         return TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:1")
 
-    def _build_telegram_task_message(self) -> TaskQueueMessage:
+    def _build_telegram_task_message(self, *, content: str = "hello") -> TaskQueueMessage:
         envelope = TaskEnvelope(
             id="telegram:1",
             source="im",
             received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
             actor="8605042448:edsalkeld",
-            content="hello",
+            content=content,
             attachments=[],
             context_refs=[],
             reply_channel=ReplyChannel(
@@ -325,6 +336,12 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_requested_count"], 0
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_published_count"], 0
+            )
 
     def test_process_task_message_marks_telegram_success_without_visible_reply_as_execution_error(
         self,
@@ -352,6 +369,12 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.egress_messages[1].event_kind, "completion")
             self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 0
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_requested_count"], 0
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_published_count"], 0
             )
 
     def test_process_task_message_handles_internal_heartbeat_without_executor(
@@ -428,6 +451,94 @@ class WorkerRuntimeTests(unittest.TestCase):
             audit_event = store.list_audit_events()[0]
             self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 1
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_published_count"], 0
+            )
+
+    def test_process_task_message_sends_delayed_worker_pickup_for_long_telegram_task(
+        self,
+    ) -> None:
+        published: list[EgressQueueMessage] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_telegram_task_message(),
+                executor_impl=SleepExecutor(sleep_seconds=0.05),
+                max_attempts=1,
+                activity_monitor=self._build_monitor(store),
+                publish_incremental_egress=published.append,
+                telegram_pickup_delay_seconds=0.01,
+            )
+
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertEqual(len(published), 1)
+            pickup = published[0]
+            self.assertEqual(pickup.event_kind, "incremental")
+            self.assertEqual(pickup.message.channel, "telegram")
+            self.assertEqual(pickup.message.body, "Looking into that now 🤔")
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_requested_count"], 1
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_published_count"], 1
+            )
+
+    def test_process_task_message_skips_delayed_worker_pickup_for_fast_telegram_task(
+        self,
+    ) -> None:
+        published: list[EgressQueueMessage] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            process_task_message(
+                store=store,
+                task_message=self._build_telegram_task_message(),
+                executor_impl=SleepExecutor(sleep_seconds=0.005),
+                max_attempts=1,
+                activity_monitor=self._build_monitor(store),
+                publish_incremental_egress=published.append,
+                telegram_pickup_delay_seconds=0.05,
+            )
+
+            self.assertEqual(published, [])
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_requested_count"], 1
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_published_count"], 0
+            )
+
+    def test_process_task_message_skips_delayed_worker_pickup_when_task_requests_silence(
+        self,
+    ) -> None:
+        published: list[EgressQueueMessage] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            process_task_message(
+                store=store,
+                task_message=self._build_telegram_task_message(
+                    content=(
+                        "Run the import now. Only when something changed, "
+                        "do not send any Telegram message."
+                    )
+                ),
+                executor_impl=SleepExecutor(sleep_seconds=0.05),
+                max_attempts=1,
+                activity_monitor=self._build_monitor(store),
+                publish_incremental_egress=published.append,
+                telegram_pickup_delay_seconds=0.01,
+            )
+
+            self.assertEqual(published, [])
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_requested_count"], 0
+            )
+            self.assertEqual(
+                audit_event.detail["worker_pickup_send_published_count"], 0
             )
 
     def test_process_task_message_handles_internal_channel_notice_without_executor(

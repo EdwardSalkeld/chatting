@@ -6,7 +6,9 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from threading import Event, Timer
+from typing import TYPE_CHECKING, Callable
+
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor
 from app.internal_heartbeat import (
@@ -23,6 +25,10 @@ from app.state import SQLiteStateStore
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
+
+DelayedEgressPublisher = Callable[[EgressQueueMessage], None]
+
+DEFAULT_TELEGRAM_PICKUP_DELAY_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -44,10 +50,14 @@ def process_task_message(
     executor_impl: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
+    publish_incremental_egress: DelayedEgressPublisher | None = None,
+    telegram_pickup_delay_seconds: float = DEFAULT_TELEGRAM_PICKUP_DELAY_SECONDS,
 ) -> WorkerProcessResult:
     """Process one task message and persist run/audit records."""
     if max_attempts <= 0:
         raise ValueError("max_attempts must be positive")
+    if telegram_pickup_delay_seconds < 0:
+        raise ValueError("telegram_pickup_delay_seconds must be non-negative")
 
     envelope = task_message.envelope
     if is_internal_telegram_channel_not_enabled_envelope(envelope):
@@ -71,78 +81,101 @@ def process_task_message(
     last_error_stage: str | None = None
     execution_payload: dict[str, object] | None = None
     egress_messages: list[EgressQueueMessage] = []
+    delayed_pickup_state = {"published": False}
 
-    for attempt in range(1, max_attempts + 1):
-        attempt_count = attempt
+    def _mark_delayed_pickup_published() -> None:
+        delayed_pickup_state["published"] = True
 
-        try:
-            activity_monitor.record_executor_started(
-                task_message=task_message,
-                attempt=attempt,
-            )
-            execution_result = executor_impl.execute(envelope)
-            execution_payload = execution_result.to_dict()
-            if execution_result.stdout:
-                activity_monitor.record_executor_output(
+    delayed_pickup_requested = _should_send_delayed_pickup(
+        task_message=task_message,
+        publish_incremental_egress=publish_incremental_egress,
+    )
+    delayed_pickup_done = Event()
+    delayed_pickup_timer = _schedule_delayed_pickup(
+        store=store,
+        task_message=task_message,
+        publish_incremental_egress=publish_incremental_egress,
+        delay_seconds=telegram_pickup_delay_seconds,
+        done_event=delayed_pickup_done,
+        on_published=lambda: _mark_delayed_pickup_published(),
+    )
+
+    try:
+        for attempt in range(1, max_attempts + 1):
+            attempt_count = attempt
+
+            try:
+                activity_monitor.record_executor_started(
                     task_message=task_message,
-                    stream="stdout",
-                    content=execution_result.stdout,
+                    attempt=attempt,
                 )
-            if execution_result.stderr:
-                activity_monitor.record_executor_output(
-                    task_message=task_message,
-                    stream="stderr",
-                    content=execution_result.stderr,
-                )
+                execution_result = executor_impl.execute(envelope)
+                execution_payload = execution_result.to_dict()
+                if execution_result.stdout:
+                    activity_monitor.record_executor_output(
+                        task_message=task_message,
+                        stream="stdout",
+                        content=execution_result.stdout,
+                    )
+                if execution_result.stderr:
+                    activity_monitor.record_executor_output(
+                        task_message=task_message,
+                        stream="stderr",
+                        content=execution_result.stderr,
+                    )
 
-            published_incremental_reply_count = (
-                store.count_task_main_reply_egress_events(
-                    task_id=task_message.task_id
+                published_incremental_reply_count = (
+                    store.count_task_main_reply_egress_events(
+                        task_id=task_message.task_id
+                    )
                 )
-            )
-            reason_codes = []
-            if execution_result.errors:
-                reason_codes.append("executor_reported_errors")
-            if (
-                _requires_visible_telegram_reply(task_message)
-                and not execution_result.errors
-                and published_incremental_reply_count == 0
-            ):
-                reason_codes.append("missing_visible_reply")
-            result_status = _result_status(reason_codes)
+                reason_codes = []
+                if execution_result.errors:
+                    reason_codes.append("executor_reported_errors")
+                if (
+                    _requires_visible_telegram_reply(task_message)
+                    and not execution_result.errors
+                    and published_incremental_reply_count == 0
+                ):
+                    reason_codes.append("missing_visible_reply")
+                result_status = _result_status(reason_codes)
 
-            egress_messages = _build_completion_egress_messages(
-                task_message=task_message,
-                starting_sequence=0,
-                visible_error_body=_build_visible_error_body(
-                    task_message=task_message,
-                    reason_codes=reason_codes,
-                    execution_errors=execution_result.errors,
-                    last_error=None,
-                ),
-            )
-            break
-        except Exception as exc:  # noqa: BLE001
-            last_error = f"{type(exc).__name__}: {exc}"
-            last_error_stage = "executor"
-            activity_monitor.record_executor_failure(
-                task_message=task_message,
-                attempt=attempt,
-                error=last_error,
-            )
-            if attempt == max_attempts:
-                reason_codes = ["retry_exhausted"]
-                result_status = "dead_letter"
                 egress_messages = _build_completion_egress_messages(
                     task_message=task_message,
                     starting_sequence=0,
                     visible_error_body=_build_visible_error_body(
                         task_message=task_message,
                         reason_codes=reason_codes,
-                        execution_errors=[],
-                        last_error=last_error,
+                        execution_errors=execution_result.errors,
+                        last_error=None,
                     ),
                 )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{type(exc).__name__}: {exc}"
+                last_error_stage = "executor"
+                activity_monitor.record_executor_failure(
+                    task_message=task_message,
+                    attempt=attempt,
+                    error=last_error,
+                )
+                if attempt == max_attempts:
+                    reason_codes = ["retry_exhausted"]
+                    result_status = "dead_letter"
+                    egress_messages = _build_completion_egress_messages(
+                        task_message=task_message,
+                        starting_sequence=0,
+                        visible_error_body=_build_visible_error_body(
+                            task_message=task_message,
+                            reason_codes=reason_codes,
+                            execution_errors=[],
+                            last_error=last_error,
+                        ),
+                    )
+    finally:
+        delayed_pickup_done.set()
+        if delayed_pickup_timer is not None:
+            delayed_pickup_timer.cancel()
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     run_record = RunRecord(
@@ -177,6 +210,12 @@ def process_task_message(
                     store.count_task_main_reply_egress_events(
                         task_id=task_message.task_id
                     )
+                ),
+                "worker_pickup_send_requested_count": (
+                    1 if delayed_pickup_requested else 0
+                ),
+                "worker_pickup_send_published_count": (
+                    1 if delayed_pickup_state["published"] else 0
                 ),
                 "egress_message_count": len(egress_messages),
             },
@@ -274,6 +313,8 @@ def _process_internal_heartbeat(
                 },
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": 0,
+                "worker_pickup_send_requested_count": 0,
+                "worker_pickup_send_published_count": 0,
                 "egress_message_count": 2,
                 "heartbeat": json.loads(visible_egress_message.message.body or "{}"),
             },
@@ -335,6 +376,8 @@ def _process_internal_telegram_channel_not_enabled_notice(
                 },
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": 0,
+                "worker_pickup_send_requested_count": 0,
+                "worker_pickup_send_published_count": 0,
                 "egress_message_count": 2,
                 "internal_notice": (
                     task_message.envelope.reply_channel.metadata.get("internal_notice")
@@ -463,6 +506,117 @@ def _result_status(reason_codes: list[str]) -> str:
 
 def _requires_visible_telegram_reply(task_message: TaskQueueMessage) -> bool:
     return task_message.envelope.reply_channel.type == "telegram"
+
+
+def _should_send_delayed_pickup(
+    *,
+    task_message: TaskQueueMessage,
+    publish_incremental_egress: DelayedEgressPublisher | None,
+) -> bool:
+    if publish_incremental_egress is None:
+        return False
+    if not _requires_visible_telegram_reply(task_message):
+        return False
+    return not _prefers_telegram_silence(task_message.envelope.content)
+
+
+def _schedule_delayed_pickup(
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+    publish_incremental_egress: DelayedEgressPublisher | None,
+    delay_seconds: float,
+    done_event: Event,
+    on_published: Callable[[], None],
+) -> Timer | None:
+    if not _should_send_delayed_pickup(
+        task_message=task_message,
+        publish_incremental_egress=publish_incremental_egress,
+    ):
+        return None
+    assert publish_incremental_egress is not None
+
+    def _publish_if_still_running() -> None:
+        if done_event.is_set():
+            return
+        if store.count_task_main_reply_egress_events(task_id=task_message.task_id) > 0:
+            return
+        try:
+            publish_incremental_egress(
+                _build_delayed_pickup_egress(task_message=task_message)
+            )
+        except Exception:  # noqa: BLE001
+            return
+        on_published()
+
+    timer = Timer(delay_seconds, _publish_if_still_running)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def _build_delayed_pickup_egress(*, task_message: TaskQueueMessage) -> EgressQueueMessage:
+    emitted_at = datetime.now(timezone.utc)
+    return EgressQueueMessage(
+        task_id=task_message.task_id,
+        envelope_id=task_message.envelope.id,
+        trace_id=task_message.trace_id,
+        event_index=0,
+        event_count=1,
+        message=OutboundMessage(
+            channel="telegram",
+            target=task_message.envelope.reply_channel.target,
+            body=_build_delayed_pickup_body(task_message=task_message),
+        ),
+        emitted_at=emitted_at,
+        event_id=f"evt:{task_message.task_id}:incremental:worker-pickup",
+        sequence=None,
+        event_kind="incremental",
+        message_type="chatting.egress.v2",
+    )
+
+
+def _build_delayed_pickup_body(*, task_message: TaskQueueMessage) -> str:
+    content = task_message.envelope.content.lower()
+    if _looks_like_pull_request_task(content):
+        return "Checking the PR now 👀"
+    if _contains_any(content, ("import", "sync", "ingest")):
+        return "Running the import now 🔄"
+    if _contains_any(content, ("deploy", "release", "rollout")):
+        return "Checking the deploy now 🚀"
+    if _contains_any(content, ("error", "failure", "broken", "bug", "why did")):
+        return "Looking into that failure now 🔎"
+    if _contains_any(content, ("ssh", "server", "host", "docker", "container")):
+        return "Checking the host now 🖥️"
+    return "Looking into that now 🤔"
+
+
+def _prefers_telegram_silence(content: str) -> bool:
+    lowered = content.lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "do not send any telegram message",
+            "do not send any message",
+            "don't send any telegram message",
+            "don't send any message",
+            "only when something changed",
+            "only if something changed",
+            "only when there is a change",
+            "only if there is a change",
+        )
+    )
+
+
+def _contains_any(content: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in content for needle in needles)
+
+
+def _looks_like_pull_request_task(content: str) -> bool:
+    return _contains_any(
+        content,
+        ("pull request", "review", "pr #", "pr:", "pr ", "check the pr"),
+    )
 
 
 def _build_visible_error_body(

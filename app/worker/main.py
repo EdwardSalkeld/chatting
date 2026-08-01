@@ -423,6 +423,11 @@ def main() -> int:
                     executor_impl=executor,
                     max_attempts=max_attempts,
                     activity_monitor=activity_monitor,
+                    publish_incremental_egress=lambda egress_message: _publish_incremental_egress(
+                        broker=broker,
+                        egress_message=egress_message,
+                        activity_monitor=activity_monitor,
+                    ),
                 )
                 for egress_message in result.egress_messages:
                     _publish_egress_with_outbox(
@@ -458,6 +463,19 @@ def _publish_egress_with_outbox(
     activity_monitor.record_egress(
         egress_message=egress_message,
         publish_source="worker",
+    )
+
+
+def _publish_incremental_egress(
+    *,
+    broker: BBMBQueueAdapter,
+    egress_message: EgressQueueMessage,
+    activity_monitor: WorkerActivityMonitor,
+) -> None:
+    broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
+    activity_monitor.record_egress(
+        egress_message=egress_message,
+        publish_source="worker_pickup",
     )
 
 
