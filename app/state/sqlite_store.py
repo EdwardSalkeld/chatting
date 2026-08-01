@@ -738,6 +738,25 @@ class SQLiteStateStore:
             )
             connection.commit()
 
+    def count_task_main_reply_egress_events(self, *, task_id: str) -> int:
+        if not task_id:
+            raise ValueError("task_id is required")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT detail_json
+                FROM worker_activity_events
+                WHERE task_id = ? AND phase = 'egress_incremental'
+                """,
+                (task_id,),
+            ).fetchall()
+        count = 0
+        for row in rows:
+            detail = json.loads(row["detail_json"])
+            if detail.get("publish_source") == "main_reply":
+                count += 1
+        return count
+
     def list_recent_worker_activity(
         self,
         *,

@@ -95,15 +95,28 @@ def process_task_message(
                     content=execution_result.stderr,
                 )
 
-            reason_codes = (
-                ["executor_reported_errors"] if execution_result.errors else []
+            published_incremental_reply_count = (
+                store.count_task_main_reply_egress_events(
+                    task_id=task_message.task_id
+                )
             )
+            reason_codes = []
+            if execution_result.errors:
+                reason_codes.append("executor_reported_errors")
+            if (
+                _requires_visible_telegram_reply(task_message)
+                and not execution_result.errors
+                and published_incremental_reply_count == 0
+            ):
+                reason_codes.append("missing_visible_reply")
             result_status = _result_status(reason_codes)
 
             egress_messages = _build_completion_egress_messages(
                 task_message=task_message,
                 starting_sequence=0,
-                visible_error_body=_build_credit_exhausted_visible_error(
+                visible_error_body=_build_visible_error_body(
+                    task_message=task_message,
+                    reason_codes=reason_codes,
                     execution_errors=execution_result.errors,
                     last_error=None,
                 ),
@@ -123,7 +136,9 @@ def process_task_message(
                 egress_messages = _build_completion_egress_messages(
                     task_message=task_message,
                     starting_sequence=0,
-                    visible_error_body=_build_credit_exhausted_visible_error(
+                    visible_error_body=_build_visible_error_body(
+                        task_message=task_message,
+                        reason_codes=reason_codes,
                         execution_errors=[],
                         last_error=last_error,
                     ),
@@ -158,7 +173,11 @@ def process_task_message(
                 "last_error_stage": last_error_stage,
                 "execution_result": execution_payload,
                 "incremental_reply_send_requested_count": 0,
-                "incremental_reply_send_published_count": 0,
+                "incremental_reply_send_published_count": (
+                    store.count_task_main_reply_egress_events(
+                        task_id=task_message.task_id
+                    )
+                ),
                 "egress_message_count": len(egress_messages),
             },
             created_at=run_record.created_at,
@@ -435,9 +454,39 @@ def _build_completion_egress(
 def _result_status(reason_codes: list[str]) -> str:
     if "executor_reported_errors" in reason_codes:
         return "execution_error"
+    if "missing_visible_reply" in reason_codes:
+        return "execution_error"
     if "retry_exhausted" in reason_codes:
         return "dead_letter"
     return "success"
+
+
+def _requires_visible_telegram_reply(task_message: TaskQueueMessage) -> bool:
+    return task_message.envelope.reply_channel.type == "telegram"
+
+
+def _build_visible_error_body(
+    *,
+    task_message: TaskQueueMessage,
+    reason_codes: list[str],
+    execution_errors: list[str],
+    last_error: str | None,
+) -> str | None:
+    if "missing_visible_reply" in reason_codes:
+        return _build_missing_visible_reply_error(task_message=task_message)
+    return _build_credit_exhausted_visible_error(
+        execution_errors=execution_errors,
+        last_error=last_error,
+    )
+
+
+def _build_missing_visible_reply_error(*, task_message: TaskQueueMessage) -> str | None:
+    if not _requires_visible_telegram_reply(task_message):
+        return None
+    return (
+        "I finished the task internally but failed to publish the Telegram reply, "
+        "so this run was marked failed instead of completing silently."
+    )
 
 
 def _build_credit_exhausted_visible_error(
