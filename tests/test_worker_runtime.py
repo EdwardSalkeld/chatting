@@ -88,6 +88,29 @@ class FinalAliasExecutor:
         return ExecutionResult(errors=[])
 
 
+@dataclass(frozen=True)
+class MainReplyExecutor:
+    store: SQLiteStateStore
+
+    def execute(self, task):
+        self.store.append_worker_activity(
+            occurred_at=datetime.now(timezone.utc),
+            task_id=f"task:{task.id}",
+            envelope_id=task.id,
+            phase="egress_incremental",
+            summary="incremental egress to telegram",
+            detail={
+                "channel": "telegram",
+                "target": task.reply_channel.target,
+                "event_id": "evt:test:main-reply",
+                "event_kind": "incremental",
+                "publish_source": "main_reply",
+                "sequence": None,
+            },
+        )
+        return ExecutionResult(errors=[])
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
@@ -105,6 +128,24 @@ class WorkerRuntimeTests(unittest.TestCase):
             dedupe_key="email:1",
         )
         return TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:1")
+
+    def _build_telegram_task_message(self) -> TaskQueueMessage:
+        envelope = TaskEnvelope(
+            id="telegram:1",
+            source="im",
+            received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
+            actor="8605042448:edsalkeld",
+            content="hello",
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target="8605042448",
+                metadata={"message_id": 2471},
+            ),
+            dedupe_key="telegram:1",
+        )
+        return TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:1")
 
     def _build_internal_heartbeat_task_message(self) -> TaskQueueMessage:
         return TaskQueueMessage.from_envelope(
@@ -261,7 +302,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertLessEqual(len(result.error_summary), 240)
             self.assertTrue(result.error_summary.endswith("..."))
 
-    def test_process_task_message_emits_completion_even_when_executor_does_no_actions(
+    def test_process_task_message_keeps_non_telegram_success_without_visible_reply(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -285,24 +326,32 @@ class WorkerRuntimeTests(unittest.TestCase):
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
 
-    def test_process_task_message_ignores_incremental_reply_policy_when_executor_returns_completion_only(
+    def test_process_task_message_marks_telegram_success_without_visible_reply_as_execution_error(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             result = process_task_message(
                 store=store,
-                task_message=self._build_task_message(),
+                task_message=self._build_telegram_task_message(),
                 executor_impl=IncrementalReplyExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
 
-            self.assertEqual(len(result.egress_messages), 1)
-            self.assertEqual(result.egress_messages[0].event_kind, "completion")
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertEqual(result.reason_codes, ["missing_visible_reply"])
+            self.assertEqual(len(result.egress_messages), 2)
+            self.assertEqual(result.egress_messages[0].event_kind, "message")
+            self.assertEqual(result.egress_messages[0].message.channel, "telegram")
             audit_event = store.list_audit_events()[0]
-            self.assertNotIn(
-                "incremental_reply_send_not_allowed", audit_event.detail["reason_codes"]
+            self.assertIn(
+                "failed to publish the Telegram reply",
+                result.egress_messages[0].message.body,
+            )
+            self.assertEqual(result.egress_messages[1].event_kind, "completion")
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_published_count"], 0
             )
 
     def test_process_task_message_handles_internal_heartbeat_without_executor(
@@ -359,6 +408,27 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(terminal.message.channel, "internal")
             self.assertEqual(terminal.message.target, "task")
             self.assertEqual(terminal.sequence, 0)
+
+    def test_process_task_message_allows_telegram_success_when_main_reply_was_published(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_telegram_task_message(),
+                executor_impl=MainReplyExecutor(store=store),
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(len(result.egress_messages), 1)
+            self.assertEqual(result.egress_messages[0].event_kind, "completion")
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_published_count"], 1
+            )
 
     def test_process_task_message_handles_internal_channel_notice_without_executor(
         self,
