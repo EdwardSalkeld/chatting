@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from dataclasses import replace
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor
 from app.internal_heartbeat import (
@@ -18,11 +21,25 @@ from app.internal_notices import (
     build_internal_telegram_channel_not_enabled_egress,
     is_internal_telegram_channel_not_enabled_envelope,
 )
-from app.models import AuditEvent, OutboundMessage, RunRecord
+from app.models import (
+    AuditEvent,
+    ExecutionResult,
+    OutboundMessage,
+    PromptContext,
+    RunRecord,
+    TaskEnvelope,
+)
 from app.state import SQLiteStateStore
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
+
+_SUPERVISED_MARKER_RE = re.compile(r"(?<!\S)#super(?!\S)", re.IGNORECASE)
+_SUPERVISED_RECOVERY_INSTRUCTION = (
+    "The earlier executor pass finished without publishing any visible reply. "
+    "Do not redo side effects or rerun the task. Use the captured transcript below "
+    "to send exactly one visible reply with python3 -m app.main_reply, then stop."
+)
 
 
 @dataclass(frozen=True)
@@ -71,35 +88,60 @@ def process_task_message(
     last_error_stage: str | None = None
     execution_payload: dict[str, object] | None = None
     egress_messages: list[EgressQueueMessage] = []
+    executor_launch_count = 0
+    used_supervised_recovery = False
+    normalized_envelope = _normalize_executor_envelope(envelope)
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
 
         try:
+            active_envelope = normalized_envelope
+            executor_launch_count += 1
             activity_monitor.record_executor_started(
                 task_message=task_message,
-                attempt=attempt,
+                attempt=executor_launch_count,
             )
-            execution_result = executor_impl.execute(envelope)
+            execution_result = executor_impl.execute(active_envelope)
             execution_payload = execution_result.to_dict()
-            if execution_result.stdout:
-                activity_monitor.record_executor_output(
-                    task_message=task_message,
-                    stream="stdout",
-                    content=execution_result.stdout,
-                )
-            if execution_result.stderr:
-                activity_monitor.record_executor_output(
-                    task_message=task_message,
-                    stream="stderr",
-                    content=execution_result.stderr,
-                )
+            _record_execution_output(
+                activity_monitor=activity_monitor,
+                task_message=task_message,
+                execution_result=execution_result,
+            )
 
             published_incremental_reply_count = (
                 store.count_task_main_reply_egress_events(
                     task_id=task_message.task_id
                 )
             )
+            if (
+                _should_run_supervised_recovery(task_message)
+                and not execution_result.errors
+                and published_incremental_reply_count == 0
+            ):
+                used_supervised_recovery = True
+                active_envelope = _build_supervised_recovery_envelope(
+                    original_envelope=active_envelope,
+                    execution_result=execution_result,
+                )
+                executor_launch_count += 1
+                activity_monitor.record_executor_started(
+                    task_message=task_message,
+                    attempt=executor_launch_count,
+                )
+                execution_result = executor_impl.execute(active_envelope)
+                execution_payload = execution_result.to_dict()
+                _record_execution_output(
+                    activity_monitor=activity_monitor,
+                    task_message=task_message,
+                    execution_result=execution_result,
+                )
+                published_incremental_reply_count = (
+                    store.count_task_main_reply_egress_events(
+                        task_id=task_message.task_id
+                    )
+                )
             reason_codes = []
             if execution_result.errors:
                 reason_codes.append("executor_reported_errors")
@@ -127,7 +169,7 @@ def process_task_message(
             last_error_stage = "executor"
             activity_monitor.record_executor_failure(
                 task_message=task_message,
-                attempt=attempt,
+                attempt=executor_launch_count or attempt,
                 error=last_error,
             )
             if attempt == max_attempts:
@@ -168,9 +210,11 @@ def process_task_message(
                 "task_id": task_message.task_id,
                 "reason_codes": reason_codes,
                 "attempt_count": attempt_count,
+                "executor_launch_count": executor_launch_count,
                 "max_attempts": max_attempts,
                 "last_error": last_error,
                 "last_error_stage": last_error_stage,
+                "supervised_recovery_used": used_supervised_recovery,
                 "execution_result": execution_payload,
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": (
@@ -199,7 +243,7 @@ def process_task_message(
         task_message=task_message,
         run_id=run_record.run_id,
         result_status=run_record.result_status,
-        attempt_count=attempt_count,
+        attempt_count=executor_launch_count or attempt_count,
         reason_codes=reason_codes,
         latency_ms=latency_ms,
     )
@@ -220,7 +264,7 @@ def process_task_message(
         run_record=run_record,
         egress_messages=egress_messages,
         dead_lettered=dead_lettered,
-        attempt_count=attempt_count,
+        attempt_count=executor_launch_count or attempt_count,
         reason_codes=list(reason_codes),
         error_summary=error_summary,
     )
@@ -459,6 +503,74 @@ def _result_status(reason_codes: list[str]) -> str:
     if "retry_exhausted" in reason_codes:
         return "dead_letter"
     return "success"
+
+
+def _record_execution_output(
+    *,
+    activity_monitor: WorkerActivityMonitor,
+    task_message: TaskQueueMessage,
+    execution_result: ExecutionResult,
+) -> None:
+    if execution_result.stdout:
+        activity_monitor.record_executor_output(
+            task_message=task_message,
+            stream="stdout",
+            content=execution_result.stdout,
+        )
+    if execution_result.stderr:
+        activity_monitor.record_executor_output(
+            task_message=task_message,
+            stream="stderr",
+            content=execution_result.stderr,
+        )
+
+
+def _should_run_supervised_recovery(task_message: TaskQueueMessage) -> bool:
+    return _requires_visible_telegram_reply(task_message) and bool(
+        _SUPERVISED_MARKER_RE.search(task_message.envelope.content)
+    )
+
+
+def _normalize_executor_envelope(envelope: TaskEnvelope) -> TaskEnvelope:
+    normalized_content = _strip_supervised_marker(envelope.content)
+    if normalized_content == envelope.content:
+        return envelope
+    return replace(envelope, content=normalized_content)
+
+
+def _strip_supervised_marker(content: str) -> str:
+    stripped = _SUPERVISED_MARKER_RE.sub("", content)
+    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    stripped = stripped.strip()
+    return stripped or content
+
+
+def _build_supervised_recovery_envelope(
+    *,
+    original_envelope: TaskEnvelope,
+    execution_result: ExecutionResult,
+) -> TaskEnvelope:
+    transcript_parts = []
+    if execution_result.stdout:
+        transcript_parts.append("Captured stdout:\n" + execution_result.stdout.strip())
+    if execution_result.stderr:
+        transcript_parts.append("Captured stderr:\n" + execution_result.stderr.strip())
+    transcript = "\n\n".join(part for part in transcript_parts if part.strip())
+    recovery_instruction = _SUPERVISED_RECOVERY_INSTRUCTION
+    if transcript:
+        recovery_instruction = recovery_instruction + "\n\n" + transcript
+    prompt_context = original_envelope.prompt_context
+    return replace(
+        original_envelope,
+        prompt_context=PromptContext(
+            global_instructions=list(prompt_context.global_instructions),
+            source_instructions=list(prompt_context.source_instructions),
+            reply_channel_instructions=list(prompt_context.reply_channel_instructions),
+            task_instructions=list(prompt_context.task_instructions)
+            + [recovery_instruction],
+        ),
+    )
 
 
 def _requires_visible_telegram_reply(task_message: TaskQueueMessage) -> bool:

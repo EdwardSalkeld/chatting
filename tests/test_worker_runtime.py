@@ -111,6 +111,69 @@ class MainReplyExecutor:
         return ExecutionResult(errors=[])
 
 
+class RecordingExecutor:
+    def __init__(self, results: list[ExecutionResult]) -> None:
+        self._results = list(results)
+        self.calls: list[TaskEnvelope] = []
+
+    def execute(self, task):
+        self.calls.append(task)
+        if not self._results:
+            raise AssertionError("unexpected executor call")
+        return self._results.pop(0)
+
+
+class ReplyOnSecondPassExecutor:
+    def __init__(self, store: SQLiteStateStore) -> None:
+        self.store = store
+        self.calls: list[TaskEnvelope] = []
+
+    def execute(self, task):
+        self.calls.append(task)
+        if len(self.calls) == 2:
+            self.store.append_worker_activity(
+                occurred_at=datetime.now(timezone.utc),
+                task_id=f"task:{task.id}",
+                envelope_id=task.id,
+                phase="egress_incremental",
+                summary="incremental egress to telegram",
+                detail={
+                    "channel": "telegram",
+                    "target": task.reply_channel.target,
+                    "event_id": "evt:test:recovery-main-reply",
+                    "event_kind": "incremental",
+                    "publish_source": "main_reply",
+                    "sequence": None,
+                },
+            )
+        return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
+
+
+class MainReplyRecordingExecutor:
+    def __init__(self, store: SQLiteStateStore) -> None:
+        self.store = store
+        self.calls: list[TaskEnvelope] = []
+
+    def execute(self, task):
+        self.calls.append(task)
+        self.store.append_worker_activity(
+            occurred_at=datetime.now(timezone.utc),
+            task_id=f"task:{task.id}",
+            envelope_id=task.id,
+            phase="egress_incremental",
+            summary="incremental egress to telegram",
+            detail={
+                "channel": "telegram",
+                "target": task.reply_channel.target,
+                "event_id": "evt:test:recording-main-reply",
+                "event_kind": "incremental",
+                "publish_source": "main_reply",
+                "sequence": None,
+            },
+        )
+        return ExecutionResult(errors=[])
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
@@ -146,6 +209,26 @@ class WorkerRuntimeTests(unittest.TestCase):
             dedupe_key="telegram:1",
         )
         return TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:1")
+
+    def _build_supervised_telegram_task_message(self) -> TaskQueueMessage:
+        envelope = TaskEnvelope(
+            id="telegram:super:1",
+            source="im",
+            received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
+            actor="8605042448:edsalkeld",
+            content="hello #super",
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target="8605042448",
+                metadata={"message_id": 2471},
+            ),
+            dedupe_key="telegram:super:1",
+        )
+        return TaskQueueMessage.from_envelope(
+            envelope, trace_id="trace:telegram:super:1"
+        )
 
     def _build_internal_heartbeat_task_message(self) -> TaskQueueMessage:
         return TaskQueueMessage.from_envelope(
@@ -353,6 +436,106 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
+
+    def test_process_task_message_keeps_untagged_telegram_on_standard_single_pass(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            executor = RecordingExecutor([ExecutionResult(errors=[], stdout="pass 1")])
+            result = process_task_message(
+                store=store,
+                task_message=self._build_telegram_task_message(),
+                executor_impl=executor,
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertEqual(result.attempt_count, 1)
+            self.assertEqual(len(executor.calls), 1)
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(audit_event.detail["executor_launch_count"], 1)
+            self.assertEqual(audit_event.detail["supervised_recovery_used"], False)
+
+    def test_process_task_message_strips_supervised_marker_before_executor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            executor = MainReplyRecordingExecutor(store=store)
+            result = process_task_message(
+                store=store,
+                task_message=self._build_supervised_telegram_task_message(),
+                executor_impl=executor,
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(len(executor.calls), 1)
+            self.assertEqual(executor.calls[0].content, "hello")
+
+    def test_process_task_message_runs_supervised_recovery_for_tagged_telegram(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            executor = RecordingExecutor(
+                [
+                    ExecutionResult(errors=[], stdout="first pass transcript"),
+                    ExecutionResult(errors=[], stdout="second pass transcript"),
+                ]
+            )
+            result = process_task_message(
+                store=store,
+                task_message=self._build_supervised_telegram_task_message(),
+                executor_impl=executor,
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertEqual(result.reason_codes, ["missing_visible_reply"])
+            self.assertEqual(result.attempt_count, 2)
+            self.assertEqual(len(executor.calls), 2)
+            self.assertEqual(executor.calls[0].content, "hello")
+            self.assertEqual(executor.calls[1].content, "hello")
+            self.assertIn(
+                "Do not redo side effects or rerun the task.",
+                executor.calls[1].prompt_context.task_instructions[-1],
+            )
+            self.assertIn(
+                "Captured stdout:\nfirst pass transcript",
+                executor.calls[1].prompt_context.task_instructions[-1],
+            )
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(audit_event.detail["executor_launch_count"], 2)
+            self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
+
+    def test_process_task_message_supervised_recovery_can_publish_reply_and_succeed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            executor = ReplyOnSecondPassExecutor(store=store)
+            result = process_task_message(
+                store=store,
+                task_message=self._build_supervised_telegram_task_message(),
+                executor_impl=executor,
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(result.attempt_count, 2)
+            self.assertEqual(len(executor.calls), 2)
+            self.assertEqual(result.reason_codes, [])
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_published_count"], 1
+            )
+            self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
 
     def test_process_task_message_handles_internal_heartbeat_without_executor(
         self,
