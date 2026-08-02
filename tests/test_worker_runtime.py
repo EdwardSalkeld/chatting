@@ -512,6 +512,11 @@ class WorkerRuntimeTests(unittest.TestCase):
             audit_event = store.list_audit_events()[0]
             self.assertEqual(audit_event.detail["executor_launch_count"], 2)
             self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
+            self.assertEqual(
+                audit_event.detail["execution_result"]["stdout"],
+                "First pass stdout:\nfirst pass transcript\n\n"
+                "Recovery pass stdout:\nsecond pass transcript",
+            )
 
     def test_process_task_message_supervised_recovery_can_publish_reply_and_succeed(
         self,
@@ -535,6 +540,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 1
             )
+            self.assertEqual(audit_event.detail["executor_launch_count"], 2)
             self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
 
     def test_process_task_message_handles_internal_heartbeat_without_executor(
