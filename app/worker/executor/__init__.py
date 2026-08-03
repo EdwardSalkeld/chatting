@@ -2,5 +2,6 @@
 
 from app.worker.executor.base import Executor
 from app.worker.executor.codex import CodexExecutor
+from app.worker.executor.supervised import SupervisedReplyRecoveryExecutor
 
-__all__ = ["Executor", "CodexExecutor"]
+__all__ = ["Executor", "CodexExecutor", "SupervisedReplyRecoveryExecutor"]
