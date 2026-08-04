@@ -417,9 +417,10 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.E
 			return nil, nil, fmt.Errorf("missing Telegram bot token env var: %s", config.TelegramBotTokenEnv)
 		}
 		sender, err := dispatch.NewTelegramMessageSender(dispatch.TelegramConfig{
-			BotToken:   token,
-			APIBaseURL: config.TelegramAPIBaseURL,
-			Timeout:    10 * time.Second,
+			BotToken:              token,
+			APIBaseURL:            config.TelegramAPIBaseURL,
+			Timeout:               10 * time.Second,
+			AttachmentAllowedDirs: config.EgressAttachmentAllowedDirs,
 		})
 		if err != nil {
 			return nil, nil, err

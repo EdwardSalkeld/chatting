@@ -4,5 +4,6 @@
   "max_attempts": 2,
   "poll_timeout_seconds": 2,
   "sleep_seconds": 0.2,
-  "codex_command": "python3 /app/tests/e2e/fake_codex.py"
+  "codex_command": "python3 /app/tests/e2e/fake_codex.py",
+  "handler_egress_url": "http://handler:9467/egress"
 }

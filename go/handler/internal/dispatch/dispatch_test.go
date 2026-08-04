@@ -341,7 +341,7 @@ func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
 	}))
 	defer server.Close()
-	sender := newTestTelegramSender(t, server.URL)
+	sender := newTestTelegramSender(t, server.URL, tempDir)
 	body := "what is this?"
 
 	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
@@ -371,7 +371,7 @@ func TestTelegramMessageSenderSendsDocumentAttachmentFromFileURI(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
 	}))
 	defer server.Close()
-	sender := newTestTelegramSender(t, server.URL)
+	sender := newTestTelegramSender(t, server.URL, tempDir)
 
 	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
 		Channel: "telegram",
@@ -384,6 +384,41 @@ func TestTelegramMessageSenderSendsDocumentAttachmentFromFileURI(t *testing.T) {
 	}
 	if multipartCall.path != "/bottoken/sendDocument" || multipartCall.fileField != "document" {
 		t.Fatalf("multipart call = %#v", multipartCall)
+	}
+}
+
+func TestTelegramMessageSenderRejectsAttachmentOutsideAllowedDirs(t *testing.T) {
+	tempDir := t.TempDir()
+	allowedDir := filepath.Join(tempDir, "allowed")
+	if err := os.MkdirAll(allowedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A real file, but outside the allowlist — must be refused before any read.
+	outsidePath := filepath.Join(tempDir, "secret.txt")
+	if err := os.WriteFile(outsidePath, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sender := newTestTelegramSender(t, "http://127.0.0.1", allowedDir)
+
+	err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+		Channel: "telegram",
+		Target:  "12345",
+		Attachment: &contracts.AttachmentRef{
+			URI: "file://" + outsidePath,
+		},
+	})
+	if err == nil || err.Error() != "telegram_attachment_path_not_allowed" {
+		t.Fatalf("err = %v, want telegram_attachment_path_not_allowed", err)
+	}
+	// Traversal out of an allowed dir must also be refused.
+	traversal := filepath.Join(allowedDir, "..", "secret.txt")
+	err = sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+		Channel:    "telegram",
+		Target:     "12345",
+		Attachment: &contracts.AttachmentRef{URI: "file://" + traversal},
+	})
+	if err == nil || err.Error() != "telegram_attachment_path_not_allowed" {
+		t.Fatalf("traversal err = %v, want telegram_attachment_path_not_allowed", err)
 	}
 }
 
@@ -483,9 +518,13 @@ type telegramMultipartCall struct {
 	fileName  string
 }
 
-func newTestTelegramSender(t *testing.T, apiBaseURL string) *TelegramMessageSender {
+func newTestTelegramSender(t *testing.T, apiBaseURL string, allowedDirs ...string) *TelegramMessageSender {
 	t.Helper()
-	sender, err := NewTelegramMessageSender(TelegramConfig{BotToken: "token", APIBaseURL: apiBaseURL})
+	sender, err := NewTelegramMessageSender(TelegramConfig{
+		BotToken:              "token",
+		APIBaseURL:            apiBaseURL,
+		AttachmentAllowedDirs: allowedDirs,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,14 @@ def main():
     reply_channel = task.get("reply_channel", {})
     channel = reply_channel.get("type", "log")
     target = reply_channel.get("target", "test")
+    # Some ingress sources (e.g. webhook/auxiliary-ingress) declare a reply
+    # channel that the handler has no dispatcher for, so a reply there is
+    # undeliverable by design. Send the reply on "log" in that case rather than
+    # emitting an undeliverable one: main_reply is now synchronous and would
+    # exit non-zero on a dropped send, failing this run.
+    _DELIVERABLE = {"email", "telegram", "telegram_reaction", "github", "log"}
+    if channel not in _DELIVERABLE:
+        channel = "log"
 
     subprocess.run(
         [
