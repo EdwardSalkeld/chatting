@@ -141,7 +141,18 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	// The handler writes to this DB from two places concurrently now: the
+	// ingress Run loop and the synchronous egress HTTP endpoint. Without a busy
+	// timeout the second writer fails immediately with SQLITE_BUSY ("database is
+	// locked"); busy_timeout makes it wait for the lock instead, and WAL lets
+	// reads proceed alongside a writer. Applied per-connection via the modernc
+	// DSN so every pooled connection gets them.
+	separator := "?"
+	if strings.Contains(dbPath, "?") {
+		separator = "&"
+	}
+	dsn := dbPath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
