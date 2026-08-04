@@ -32,10 +32,13 @@ func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := broker.ensured, []string{TaskQueueName, EgressQueueName}; !reflect.DeepEqual(got, want) {
+	// Egress no longer flows over BBMB, so Run only ensures the task queue.
+	if got, want := broker.ensured, []string{TaskQueueName}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ensured = %#v, want %#v", got, want)
 	}
-	if len(broker.pickups) != 1 {
+	// No broker pickups: ingress is published from connectors and egress no
+	// longer drains a queue, so the loop never picks up from BBMB.
+	if len(broker.pickups) != 0 {
 		t.Fatalf("pickup calls = %#v", broker.pickups)
 	}
 	if len(handler.rawPayloads) != 0 {
@@ -419,9 +422,8 @@ func TestRunRecordsLoopAndEgressMetrics(t *testing.T) {
 	if snapshot["loops_total"] != 1 {
 		t.Fatalf("loops_total = %v", snapshot["loops_total"])
 	}
-	if snapshot["egress_loops_total"] != 1 {
-		t.Fatalf("egress_loops_total = %v", snapshot["egress_loops_total"])
-	}
+	// egress_loops_total is no longer driven by Run: egress does not flow over
+	// BBMB, so the loop performs no egress drain.
 	if snapshot["last_loop_completed_timestamp_seconds"] != float64(mustTime(t, "2026-03-09T12:00:02Z").Unix()) {
 		t.Fatalf("last_loop_completed_timestamp_seconds = %v", snapshot["last_loop_completed_timestamp_seconds"])
 	}

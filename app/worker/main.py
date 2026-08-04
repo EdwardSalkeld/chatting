@@ -15,11 +15,11 @@ from typing import Mapping
 
 from app.broker import (
     BBMBQueueAdapter,
-    EGRESS_QUEUE_NAME,
     EgressQueueMessage,
     TASK_QUEUE_NAME,
     TaskQueueMessage,
 )
+from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.worker.activity import (
     DEFAULT_ACTIVITY_HISTORY_LIMIT,
     DEFAULT_ACTIVITY_HOST,
@@ -112,6 +112,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--db-path", help="Path to worker SQLite state DB.")
     parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
+    parser.add_argument(
+        "--handler-egress-url",
+        help="Handler synchronous egress endpoint URL (default the worker config's handler_egress_url).",
+    )
     parser.add_argument(
         "--max-attempts",
         type=_positive_int,
@@ -338,6 +342,12 @@ def main() -> int:
         default_value="127.0.0.1:9876",
         setting_name="bbmb_address",
     )
+    handler_egress_url = _resolve_str(
+        args.handler_egress_url,
+        config.get("handler_egress_url"),
+        default_value=DEFAULT_HANDLER_EGRESS_URL,
+        setting_name="handler_egress_url",
+    )
     max_attempts = _resolve_positive_int(
         args.max_attempts,
         config.get("max_attempts"),
@@ -387,22 +397,20 @@ def main() -> int:
     )
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)
-    broker.ensure_queue(EGRESS_QUEUE_NAME)
 
     executor = _build_executor(args, config)
-    replay_done = False
 
     try:
         loop_count = 0
         while True:
             loop_count += 1
-            if not replay_done:
-                _replay_egress_outbox(
-                    store=store,
-                    broker=broker,
-                    activity_monitor=activity_monitor,
-                )
-                replay_done = True
+            # Replay any egress still pending in the outbox (a prior POST that
+            # failed transiently, or a crash before ack). Cheap when empty.
+            _replay_egress_outbox(
+                store=store,
+                handler_egress_url=handler_egress_url,
+                activity_monitor=activity_monitor,
+            )
             picked = broker.pickup_json(
                 TASK_QUEUE_NAME,
                 timeout_seconds=poll_timeout_seconds,
@@ -428,7 +436,7 @@ def main() -> int:
                 for egress_message in result.egress_messages:
                     _publish_egress_with_outbox(
                         store=store,
-                        broker=broker,
+                        handler_egress_url=handler_egress_url,
                         egress_message=egress_message,
                         activity_monitor=activity_monitor,
                     )
@@ -447,17 +455,20 @@ def main() -> int:
 def _publish_egress_with_outbox(
     *,
     store: SQLiteStateStore,
-    broker: BBMBQueueAdapter,
+    handler_egress_url: str,
     egress_message: EgressQueueMessage,
     activity_monitor: WorkerActivityMonitor,
 ) -> None:
+    # Persist to the outbox first (write-ahead), then submit to the handler. If
+    # the submit fails transiently the event stays pending and is replayed on a
+    # later loop; the task is still acked, so we never re-run the executor just
+    # because a reply could not be delivered yet.
     store.queue_egress_outbox_event(egress_message)
-    broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
-    if egress_message.event_id is None:
-        return
-    store.mark_egress_outbox_event_published(event_id=egress_message.event_id)
-    activity_monitor.record_egress(
+    _deliver_egress_event(
+        store=store,
+        handler_egress_url=handler_egress_url,
         egress_message=egress_message,
+        activity_monitor=activity_monitor,
         publish_source="worker",
     )
 
@@ -465,22 +476,80 @@ def _publish_egress_with_outbox(
 def _replay_egress_outbox(
     *,
     store: SQLiteStateStore,
-    broker: BBMBQueueAdapter,
+    handler_egress_url: str,
     activity_monitor: WorkerActivityMonitor,
 ) -> None:
     replayable = store.list_replayable_egress_outbox_events()
     if not replayable:
         return
+    delivered = 0
     for message in replayable:
-        broker.publish_json(EGRESS_QUEUE_NAME, message.to_dict())
-        if message.event_id is None:
-            continue
-        store.mark_egress_outbox_event_published(event_id=message.event_id)
-        activity_monitor.record_egress(
+        if _deliver_egress_event(
+            store=store,
+            handler_egress_url=handler_egress_url,
             egress_message=message,
+            activity_monitor=activity_monitor,
             publish_source="outbox_replay",
+        ):
+            delivered += 1
+    LOGGER.info(
+        "worker_egress_outbox_replayed pending=%s delivered=%s",
+        len(replayable),
+        delivered,
+    )
+
+
+def _deliver_egress_event(
+    *,
+    store: SQLiteStateStore,
+    handler_egress_url: str,
+    egress_message: EgressQueueMessage,
+    activity_monitor: WorkerActivityMonitor,
+    publish_source: str,
+) -> bool:
+    """Submit one egress event to the handler and settle its outbox row.
+
+    Returns True when the handler accepted it (delivered). 2xx acks the row;
+    a 422 is a permanent drop — logged loudly and acked so it is not retried
+    forever; anything else (handler unreachable / 5xx) leaves the row pending
+    for the next replay.
+    """
+    status_code, response = submit_egress(handler_egress_url, egress_message.to_dict())
+    reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
+
+    if status_code in (200, 202):
+        if egress_message.event_id is not None:
+            store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
+        activity_monitor.record_egress(
+            egress_message=egress_message,
+            publish_source=publish_source,
         )
-    LOGGER.info("worker_egress_outbox_replayed count=%s", len(replayable))
+        return True
+
+    if status_code == 422:
+        # The handler rejected it for good (bad payload, unknown task,
+        # disallowed channel, dispatch failure). Dropping egress is an error, so
+        # make it loud; ack the row so it does not replay endlessly.
+        LOGGER.error(
+            "worker_egress_dropped_by_handler task_id=%s event_id=%s channel=%s reason=%s",
+            egress_message.task_id,
+            egress_message.event_id,
+            egress_message.message.channel,
+            reason or "unknown",
+        )
+        if egress_message.event_id is not None:
+            store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
+        return False
+
+    # Handler unreachable or server error: leave the row pending for replay.
+    LOGGER.warning(
+        "worker_egress_delivery_deferred task_id=%s event_id=%s http_status=%s reason=%s",
+        egress_message.task_id,
+        egress_message.event_id,
+        status_code,
+        reason or "unknown",
+    )
+    return False
 
 
 if __name__ == "__main__":

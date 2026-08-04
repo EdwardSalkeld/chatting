@@ -137,9 +137,10 @@ func (runner *Runner) Run(ctx context.Context) error {
 	if err := runner.broker.EnsureQueue(ctx, TaskQueueName); err != nil {
 		return err
 	}
-	if err := runner.broker.EnsureQueue(ctx, EgressQueueName); err != nil {
-		return err
-	}
+	// Egress no longer travels over BBMB: the worker submits each egress message
+	// straight to the handler's synchronous HTTP endpoint, so this loop only
+	// pumps ingress. DrainEgress and the egress queue remain for its tests but
+	// are no longer part of the live path.
 
 	loopCount := 0
 	for {
@@ -149,9 +150,6 @@ func (runner *Runner) Run(ctx context.Context) error {
 		loopCount++
 		published, err := runner.PublishIngress(ctx)
 		if err != nil {
-			return err
-		}
-		if _, err := runner.DrainEgress(ctx); err != nil {
 			return err
 		}
 		if err := runner.cleanupTelegramAttachments(ctx); err != nil {

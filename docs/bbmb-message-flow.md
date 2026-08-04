@@ -75,25 +75,25 @@ Worker behavior:
 - the worker emits only the completion event for normal task processing
 - heartbeat tasks skip the normal executor path and emit a log pong followed by completion
 
-`app.main_reply` does not use BBMB. It POSTs the egress payload to the handler's synchronous
-egress endpoint (`handler_egress_url`, default `http://127.0.0.1:9467/egress`) and gets the
-delivery outcome back: HTTP 200 for a dispatched reply, 422 when the handler drops it (bad payload,
-unknown task, disallowed channel, dispatch failure such as a missing attachment), 503 when the
-handler is unreachable. The exit code follows suit (0 delivered, 1 dropped, 3 transient), so the
-executor learns immediately whether a reply landed instead of publishing fire-and-forget and never
-hearing back. The handler runs the identical engine path either way, serialized so the endpoint and
-the BBMB drain loop share one engine.
+Egress does not use BBMB at all. Every egress message — the executor's visible replies via
+`app.main_reply`, and the worker's own `completion`/sequenced events — is POSTed to the handler's
+synchronous egress endpoint (`handler_egress_url`, default `http://127.0.0.1:9467/egress`) and the
+delivery outcome comes straight back: HTTP 200 for a dispatched/completed message, 202 for a
+sequenced event staged pending an earlier one, 422 when the handler drops it (bad payload, unknown
+task, disallowed channel, dispatch failure such as a missing attachment), 503 when the handler is
+unreachable. `app.main_reply` maps this to an exit code (0 delivered, 1 dropped, 3 transient) so the
+executor learns immediately whether a reply landed instead of publishing fire-and-forget.
 
-Completion (`event_kind="completion"`) and any sequenced events still travel through BBMB. Before
-publishing each of those, the worker writes it to the SQLite egress outbox so it can replay
-unpublished or unacked egress after restart.
+The worker still writes each of its own egress events to the SQLite egress outbox first, as a
+write-ahead log: on a 2xx the row is acked; a 422 is logged loudly and acked (a permanent drop is an
+error, not something to retry forever); anything else leaves the row pending and it is replayed on a
+later loop or after restart. Crucially the task-queue message is acked once processing completes
+regardless of egress delivery — a transient egress failure never re-runs the executor, it just
+defers the reply to the outbox replay.
 
-The task queue message is only acked after processing completes and egress has been published to the
-outbox/BBMB path.
+### 3. Message-handler dispatches egress
 
-### 3. Message-handler consumes egress
-
-`message-handler` picks one payload from `chatting.egress.v1` and then:
+The handler receives each egress POST on its egress endpoint and then:
 - validates `message_type == "chatting.egress.v2"`
 - validates that the task exists in the ingress ledger
 - drops unknown-task egress

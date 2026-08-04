@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -138,7 +139,6 @@ class SplitModeE2ETests(unittest.TestCase):
                         "bbmb_address": bbmb_address,
                         "poll_interval_seconds": 0.1,
                         "poll_timeout_seconds": 1,
-                        "max_loops": 20,
                         "allowed_egress_channels": ["log"],
                         "egress_http_port": egress_http_port,
                     }
@@ -209,8 +209,13 @@ class SplitModeE2ETests(unittest.TestCase):
                     text=True,
                 )
 
-                handler_out, handler_err = handler_proc.communicate(timeout=45)
+                # Egress is delivered synchronously worker -> handler, so the
+                # handler must stay up until the worker is done. The handler runs
+                # until terminated (no max_loops); wait for the bounded worker
+                # first, then stop the handler and collect its output.
                 worker_out, worker_err = worker_proc.communicate(timeout=45)
+                handler_proc.terminate()
+                handler_out, handler_err = handler_proc.communicate(timeout=15)
             finally:
                 for proc in (handler_proc, worker_proc, server_proc):
                     if proc is None:
@@ -227,10 +232,12 @@ class SplitModeE2ETests(unittest.TestCase):
                     if proc.stderr is not None:
                         proc.stderr.close()
 
-            self.assertEqual(
+            # The handler runs until we terminate it, so a clean self-exit (0)
+            # or the SIGTERM we send are both fine; anything else is a crash.
+            self.assertIn(
                 handler_proc.returncode,
-                0,
-                msg=f"message-handler exited non-zero\nstdout:\n{handler_out}\nstderr:\n{handler_err}",
+                (0, -signal.SIGTERM),
+                msg=f"message-handler exited unexpectedly\nstdout:\n{handler_out}\nstderr:\n{handler_err}",
             )
             self.assertEqual(
                 worker_proc.returncode,

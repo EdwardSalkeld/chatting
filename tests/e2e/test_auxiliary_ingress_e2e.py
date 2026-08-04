@@ -151,7 +151,9 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "bbmb_address": main_bbmb_address,
                         "poll_interval_seconds": 0.1,
                         "poll_timeout_seconds": 1,
-                        "max_loops": max_loops,
+                        # No max_loops: egress is delivered synchronously to the
+                        # handler, so it must stay up until the worker is done.
+                        # The finally block terminates it.
                         "allowed_egress_channels": ["log"],
                         "metrics_port": handler_metrics_port,
                         "egress_http_port": egress_http_port,
