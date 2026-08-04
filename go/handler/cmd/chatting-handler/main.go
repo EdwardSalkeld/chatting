@@ -293,6 +293,16 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		_ = store.Close()
 		return nil, err
 	}
+	// A dedicated loopback server for synchronous egress submits from the worker
+	// reply script. Kept off the metrics mux on purpose: metrics may bind
+	// 0.0.0.0 for scraping, but sending messages to the world must stay
+	// loopback-only, like BBMB.
+	egressServer, err := egress.StartHTTPServer(config.EgressHTTPHost, config.EgressHTTPPort, engine)
+	if err != nil {
+		_ = metricsServer.Close()
+		_ = store.Close()
+		return nil, err
+	}
 	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
 		result, err := engine.HandleRaw(ctx, raw)
 		if err == nil {
@@ -301,11 +311,12 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		return err
 	}), handlerruntime.WithIngress(handlerIngressState{store: store}, connectors...), handlerruntime.WithMetrics(metricRecorder))
 	if err != nil {
+		_ = egressServer.Close()
 		_ = metricsServer.Close()
 		_ = store.Close()
 		return nil, err
 	}
-	return &closingRunner{runner: runner, closers: []closer{metricsServer, store}}, nil
+	return &closingRunner{runner: runner, closers: []closer{egressServer, metricsServer, store}}, nil
 }
 
 type githubCheckpointStore struct {

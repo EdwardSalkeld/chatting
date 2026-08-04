@@ -76,6 +76,7 @@ class EmailE2ETests(unittest.TestCase):
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
         bbmb_port = _reserve_port()
         bbmb_metrics_port = _reserve_port()
+        egress_http_port = _reserve_port()
         bbmb_address = f"127.0.0.1:{bbmb_port}"
 
         server_proc = None
@@ -104,6 +105,7 @@ class EmailE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 2,
                         "max_loops": 200,
                         "allowed_egress_channels": ["email", "log"],
+                        "egress_http_port": egress_http_port,
                         "imap_host": "127.0.0.1",
                         "imap_port": 3143,
                         "imap_username": "bot",
@@ -129,6 +131,7 @@ class EmailE2ETests(unittest.TestCase):
                         "sleep_seconds": 0.2,
                         "max_loops": 200,
                         "codex_command": f"{sys.executable} {fake_codex}",
+                        "handler_egress_url": f"http://127.0.0.1:{egress_http_port}/egress",
                     }
                 ),
                 encoding="utf-8",

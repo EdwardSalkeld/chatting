@@ -7,15 +7,62 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.broker import BBMBQueueAdapter, EGRESS_QUEUE_NAME, EgressQueueMessage
+from app.broker import EgressQueueMessage
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
 from app.task_ledger import TaskLedgerStore
 from app.telegram_text import normalize_telegram_outbound_text
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
+
+# The reply script submits synchronously to the handler's loopback egress
+# endpoint and learns the delivery outcome, instead of publishing to BBMB
+# fire-and-forget. The handler default binds 127.0.0.1:9467 (see the handler's
+# DefaultEgressHTTPHost/Port); a shared default means no extra config is needed
+# when worker and handler run on the same host.
+DEFAULT_HANDLER_EGRESS_URL = "http://127.0.0.1:9467/egress"
+_SUBMIT_TIMEOUT_SECONDS = 30
+
+# Exit codes the executor can act on. 0 = delivered; DROPPED = the handler
+# rejected the message for good (bad payload, unknown task, disallowed channel,
+# dispatch failure such as a missing attachment) so the caller should fall back
+# rather than retry the same send; TRANSIENT = the handler was unreachable or
+# returned a server error, so a retry may succeed. (2 stays the usage/validation
+# error from the ValueError path.)
+EXIT_DROPPED = 1
+EXIT_TRANSIENT = 3
+
+
+def _submit_egress(url: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_SUBMIT_TIMEOUT_SECONDS) as response:
+            return response.status, _decode_body(response.read())
+    except urllib.error.HTTPError as error:
+        return error.code, _decode_body(error.read())
+    except urllib.error.URLError as error:
+        # Connection refused / DNS / timeout: the handler never processed it.
+        return 0, {"reason": f"egress endpoint unreachable: {error.reason}"}
+
+
+def _decode_body(raw: bytes) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw.decode("utf-8", "replace"))
+    except json.JSONDecodeError:
+        return {"reason": raw.decode("utf-8", "replace")}
+    return parsed if isinstance(parsed, dict) else {"reason": str(parsed)}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -55,7 +102,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--trace-id", help="Trace id (defaults to trace:<envelope_id>)."
     )
-    parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
+    parser.add_argument(
+        "--handler-egress-url",
+        help="Handler synchronous egress endpoint URL (default the worker config's handler_egress_url).",
+    )
     parser.add_argument(
         "--config",
         help=(
@@ -185,11 +235,11 @@ def main() -> int:
     args = _parse_args()
     config = _load_config(args.config, os.environ)
 
-    bbmb_address = _resolve_str(
-        args.bbmb_address,
-        config.get("bbmb_address"),
-        default_value="127.0.0.1:9876",
-        setting_name="bbmb_address",
+    handler_egress_url = _resolve_str(
+        args.handler_egress_url,
+        config.get("handler_egress_url"),
+        default_value=DEFAULT_HANDLER_EGRESS_URL,
+        setting_name="handler_egress_url",
     )
 
     envelope_id = _resolve_envelope_id(args.task_id, args.envelope_id)
@@ -213,10 +263,15 @@ def main() -> int:
         message_type="chatting.egress.v2",
     )
 
-    broker = BBMBQueueAdapter(address=bbmb_address)
-    broker.ensure_queue(EGRESS_QUEUE_NAME)
-    guid = broker.publish_json(EGRESS_QUEUE_NAME, egress_message.to_dict())
-    if db_path is not None:
+    status_code, response = _submit_egress(handler_egress_url, egress_message.to_dict())
+    result_status = str(response.get("status", "")) if isinstance(response, dict) else ""
+    reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
+
+    delivered = status_code in (200, 202)
+    if delivered and db_path is not None:
+        # Only record the activity event on confirmed delivery: the supervised
+        # reply-recovery loop counts these to decide whether a visible reply was
+        # actually sent, so a dropped send must not look like a success.
         SQLiteStateStore(db_path).append_worker_activity(
             occurred_at=egress_message.emitted_at,
             task_id=egress_message.task_id,
@@ -234,25 +289,30 @@ def main() -> int:
                 "message_type": egress_message.message_type,
                 "publish_source": "main_reply",
                 "sequence": egress_message.sequence,
+                "result_status": result_status,
             },
             is_internal=egress_message.message.channel in {"internal", "log"},
         )
 
-    print(
-        json.dumps(
-            {
-                "status": "published",
-                "queue": EGRESS_QUEUE_NAME,
-                "guid": guid,
-                "task_id": egress_message.task_id,
-                "event_id": egress_message.event_id,
-                "event_kind": egress_message.event_kind,
-                "sequence": egress_message.sequence,
-            },
-            sort_keys=True,
-        )
-    )
-    return 0
+    payload = {
+        "status": result_status or ("dispatched" if delivered else "error"),
+        "http_status": status_code,
+        "task_id": egress_message.task_id,
+        "event_id": egress_message.event_id,
+        "event_kind": egress_message.event_kind,
+        "sequence": egress_message.sequence,
+        "reason": reason,
+    }
+    if delivered:
+        print(json.dumps(payload, sort_keys=True))
+        return 0
+
+    # Not delivered: surface loudly on stderr so the executor transcript shows
+    # it and the exit code drives a fallback (or retry).
+    print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+    if status_code == 422:
+        return EXIT_DROPPED
+    return EXIT_TRANSIENT
 
 
 def _resolve_optional_db_path(config: dict[str, object]) -> str | None:

@@ -117,6 +117,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
         auxiliary_port = _reserve_port()
         handler_metrics_port = _reserve_port()
         worker_activity_port = _reserve_port()
+        egress_http_port = _reserve_port()
         main_bbmb_address = f"127.0.0.1:{main_bbmb_port}"
         auxiliary_bbmb_address = f"127.0.0.1:{auxiliary_bbmb_port}"
 
@@ -153,6 +154,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "max_loops": max_loops,
                         "allowed_egress_channels": ["log"],
                         "metrics_port": handler_metrics_port,
+                        "egress_http_port": egress_http_port,
                         "auxiliary_ingress_enabled": True,
                         "auxiliary_ingress_bbmb_address": auxiliary_bbmb_address,
                         "auxiliary_ingress_queues": ["generic-post"],
@@ -171,6 +173,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "max_loops": max_loops,
                         "activity_port": worker_activity_port,
                         "codex_command": f"{sys.executable} {fake_codex}",
+                        "handler_egress_url": f"http://127.0.0.1:{egress_http_port}/egress",
                     }
                 ),
                 encoding="utf-8",

@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -54,6 +55,9 @@ func (fn DispatcherFunc) Dispatch(ctx context.Context, message contracts.Outboun
 }
 
 type Engine struct {
+	// mu serializes handling so the BBMB drain loop and the synchronous HTTP
+	// submit endpoint can share one engine without racing on the state store.
+	mu              sync.Mutex
 	state           State
 	dispatcher      Dispatcher
 	allowedChannels map[string]bool
@@ -120,15 +124,28 @@ const (
 	StatusDeduped    = "deduped"
 )
 
+// HandleRaw decodes a raw egress payload and dispatches it. Safe for concurrent
+// callers: handling is serialized so the BBMB drain loop and the HTTP submit
+// endpoint can share one engine.
 func (engine *Engine) HandleRaw(ctx context.Context, raw []byte) (Result, error) {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
 	message, err := contracts.DecodeEgressQueueMessage(raw)
 	if err != nil {
 		return engine.surfaceDrop(ctx, message, "invalid_payload")
 	}
-	return engine.Handle(ctx, message)
+	return engine.handleLocked(ctx, message)
 }
 
+// Handle validates and dispatches a decoded egress message, serialized against
+// other callers.
 func (engine *Engine) Handle(ctx context.Context, message contracts.EgressQueueMessage) (Result, error) {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	return engine.handleLocked(ctx, message)
+}
+
+func (engine *Engine) handleLocked(ctx context.Context, message contracts.EgressQueueMessage) (Result, error) {
 	if err := message.Validate(); err != nil {
 		return engine.surfaceDrop(ctx, message, "invalid_payload")
 	}

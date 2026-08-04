@@ -21,6 +21,8 @@ const (
 	DefaultPollTimeoutSeconds      = 2
 	DefaultMetricsHost             = "127.0.0.1"
 	DefaultMetricsPort             = 9464
+	DefaultEgressHTTPHost          = "127.0.0.1"
+	DefaultEgressHTTPPort          = 9467
 )
 
 var allowedKeys = map[string]bool{
@@ -31,6 +33,8 @@ var allowedKeys = map[string]bool{
 	"poll_timeout_seconds":    true,
 	"metrics_host":            true,
 	"metrics_port":            true,
+	"egress_http_host":        true,
+	"egress_http_port":        true,
 	"allowed_egress_channels": true,
 	"global_prompt_context":   true,
 	"cron_prompt_context":     true,
@@ -85,6 +89,8 @@ type Config struct {
 	PollTimeoutSeconds    int
 	MetricsHost           string
 	MetricsPort           int
+	EgressHTTPHost        string
+	EgressHTTPPort        int
 	AllowedEgressChannels []string
 	GlobalPromptContext   []string
 	CronPromptContext     []string
@@ -140,6 +146,8 @@ func Defaults() Config {
 		PollTimeoutSeconds:    DefaultPollTimeoutSeconds,
 		MetricsHost:           DefaultMetricsHost,
 		MetricsPort:           DefaultMetricsPort,
+		EgressHTTPHost:        DefaultEgressHTTPHost,
+		EgressHTTPPort:        DefaultEgressHTTPPort,
 		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		GlobalPromptContext:   []string{},
 		CronPromptContext:     []string{},
@@ -282,6 +290,18 @@ func Load(raw []byte) (Config, error) {
 	}
 	if rawValue, ok := payload["metrics_port"]; ok && !isNull(rawValue) {
 		config.MetricsPort, err = decodePositiveInt(rawValue, "metrics_port")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["egress_http_host"]; ok && !isNull(rawValue) {
+		config.EgressHTTPHost, err = decodeNonEmptyString(rawValue, "egress_http_host")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["egress_http_port"]; ok && !isNull(rawValue) {
+		config.EgressHTTPPort, err = decodePositiveInt(rawValue, "egress_http_port")
 		if err != nil {
 			return Config{}, err
 		}

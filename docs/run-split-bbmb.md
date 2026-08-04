@@ -139,9 +139,10 @@ Edit message-handler config:
 
 ## 6) Publish a visible reply from worker side
 
-Use the worker-side CLI to push a visible egress event directly to BBMB. Executors should use this
-path for both quick acknowledgements and final user-visible answers instead of returning replies in
-their stdout/stderr transcript:
+Use the worker-side CLI to submit a visible egress event to the handler's synchronous egress
+endpoint (it POSTs to `handler_egress_url`, not BBMB, and exits non-zero if the handler drops or
+can't reach the send). Executors should use this path for both quick acknowledgements and final
+user-visible answers instead of returning replies in their stdout/stderr transcript:
 
 ```bash
 docker compose exec worker python -m app.main_reply task:email:53 \

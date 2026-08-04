@@ -43,6 +43,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "codex_working_dir",
         "db_path",
         "activity_history_limit",
+        "handler_egress_url",
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
