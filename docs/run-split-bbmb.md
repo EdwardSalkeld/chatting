@@ -11,15 +11,15 @@ GitHub assignment polling is part of the Go `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
-Queues:
+Queues (ingress only — egress does not use BBMB):
 - auxiliary ingress uses one configured queue per route
 - `chatting.tasks.v1`
-- `chatting.egress.v1`
 
-Egress payload contract is v2-only:
-- Queue name `chatting.egress.v1` is transport-level only.
-- Worker publishes `message_type: "chatting.egress.v2"`.
-- `message-handler` rejects legacy `chatting.egress.v1` payload types.
+Egress is a synchronous HTTP call, not a queue:
+- The worker (and `app.main_reply`) POST `message_type: "chatting.egress.v2"` payloads to the
+  handler's egress endpoint (`handler_egress_url`, default `http://127.0.0.1:9467/egress`) and get
+  the delivery outcome back.
+- The `chatting.egress.v1` queue is retired from the live path.
 
 For a worked message example and the full message-handler <-> worker conversation, see
 [BBMB Message Flow](bbmb-message-flow.md).
