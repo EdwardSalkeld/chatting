@@ -118,6 +118,7 @@ class SplitModeE2ETests(unittest.TestCase):
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
         bbmb_port = _reserve_port()
         bbmb_metrics_port = _reserve_port()
+        egress_http_port = _reserve_port()
         bbmb_address = f"127.0.0.1:{bbmb_port}"
         server_proc: subprocess.Popen[str] | None = None
         worker_proc: subprocess.Popen[str] | None = None
@@ -139,6 +140,7 @@ class SplitModeE2ETests(unittest.TestCase):
                         "poll_timeout_seconds": 1,
                         "max_loops": 20,
                         "allowed_egress_channels": ["log"],
+                        "egress_http_port": egress_http_port,
                     }
                 ),
                 encoding="utf-8",
@@ -166,6 +168,7 @@ class SplitModeE2ETests(unittest.TestCase):
                         "max_loops": 20,
                         "activity_port": 0,
                         "codex_command": f"{sys.executable} {fake_codex}",
+                        "handler_egress_url": f"http://127.0.0.1:{egress_http_port}/egress",
                     }
                 ),
                 encoding="utf-8",

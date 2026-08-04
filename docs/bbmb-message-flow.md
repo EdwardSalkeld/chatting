@@ -70,13 +70,23 @@ Worker behavior:
 - the executor returns only completion metadata, actions, config updates, and errors
 - the executor must publish any visible reply itself with `app.main_reply`
 - terminal task closure uses `event_kind="completion"` and is internal-only
-- worker-side `app.main_reply` publishes unsequenced `event_kind="incremental"` messages for both
+- worker-side `app.main_reply` submits unsequenced `event_kind="incremental"` messages for both
   intermediate acknowledgements and final user-visible replies
 - the worker emits only the completion event for normal task processing
 - heartbeat tasks skip the normal executor path and emit a log pong followed by completion
 
-Before publishing each egress message, the worker writes it to the SQLite egress outbox. That lets
-the worker replay unpublished or unacked egress after restart.
+`app.main_reply` does not use BBMB. It POSTs the egress payload to the handler's synchronous
+egress endpoint (`handler_egress_url`, default `http://127.0.0.1:9467/egress`) and gets the
+delivery outcome back: HTTP 200 for a dispatched reply, 422 when the handler drops it (bad payload,
+unknown task, disallowed channel, dispatch failure such as a missing attachment), 503 when the
+handler is unreachable. The exit code follows suit (0 delivered, 1 dropped, 3 transient), so the
+executor learns immediately whether a reply landed instead of publishing fire-and-forget and never
+hearing back. The handler runs the identical engine path either way, serialized so the endpoint and
+the BBMB drain loop share one engine.
+
+Completion (`event_kind="completion"`) and any sequenced events still travel through BBMB. Before
+publishing each of those, the worker writes it to the SQLite egress outbox so it can replay
+unpublished or unacked egress after restart.
 
 The task queue message is only acked after processing completes and egress has been published to the
 outbox/BBMB path.

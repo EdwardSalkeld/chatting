@@ -4,6 +4,7 @@
   "poll_interval_seconds": 0.5,
   "poll_timeout_seconds": 2,
   "allowed_egress_channels": ["email", "log"],
+  "egress_http_host": "0.0.0.0",
   "imap_host": "greenmail",
   "imap_port": 3143,
   "imap_username": "bot",

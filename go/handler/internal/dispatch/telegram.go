@@ -26,13 +26,20 @@ type TelegramConfig struct {
 	ParseMode  *string
 	Timeout    time.Duration
 	HTTPClient *http.Client
+	// AttachmentAllowedDirs constrains which local files may be sent as
+	// attachments. The path in an outbound attachment is caller-controlled
+	// (the executor via app.main_reply), so without this a caller could make
+	// the handler read and exfiltrate an arbitrary file. Empty means no file
+	// attachment is permitted (fail closed).
+	AttachmentAllowedDirs []string
 }
 
 type TelegramMessageSender struct {
-	botToken   string
-	apiBaseURL string
-	parseMode  *string
-	client     *http.Client
+	botToken              string
+	apiBaseURL            string
+	parseMode             *string
+	client                *http.Client
+	attachmentAllowedDirs []string
 }
 
 func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, error) {
@@ -61,11 +68,20 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
+	allowedDirs := make([]string, 0, len(config.AttachmentAllowedDirs))
+	for _, dir := range config.AttachmentAllowedDirs {
+		trimmed := strings.TrimSpace(dir)
+		if trimmed == "" {
+			continue
+		}
+		allowedDirs = append(allowedDirs, filepath.Clean(trimmed))
+	}
 	return &TelegramMessageSender{
-		botToken:   config.BotToken,
-		apiBaseURL: strings.TrimRight(config.APIBaseURL, "/"),
-		parseMode:  parseMode,
-		client:     client,
+		botToken:              config.BotToken,
+		apiBaseURL:            strings.TrimRight(config.APIBaseURL, "/"),
+		parseMode:             parseMode,
+		client:                client,
+		attachmentAllowedDirs: allowedDirs,
 	}, nil
 }
 
@@ -80,7 +96,7 @@ func (sender *TelegramMessageSender) Send(ctx context.Context, target string, me
 		return sender.sendText(ctx, target, *message.Body)
 	}
 
-	filePath, err := resolveTelegramAttachmentPath(message.Attachment.URI)
+	filePath, err := resolveTelegramAttachmentPath(message.Attachment.URI, sender.attachmentAllowedDirs)
 	if err != nil {
 		return err
 	}
@@ -237,7 +253,7 @@ func (sender *TelegramMessageSender) methodURL(method string) string {
 	return sender.apiBaseURL + "/bot" + sender.botToken + "/" + method
 }
 
-func resolveTelegramAttachmentPath(rawURI string) (string, error) {
+func resolveTelegramAttachmentPath(rawURI string, allowedDirs []string) (string, error) {
 	parsed, err := url.Parse(rawURI)
 	if err != nil {
 		return "", errors.New("telegram_attachment_unsupported_uri")
@@ -261,11 +277,39 @@ func resolveTelegramAttachmentPath(rawURI string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errors.New("telegram_attachment_path_not_absolute")
 	}
-	info, err := os.Stat(path)
+	// The path is caller-controlled, so confine it to an allowlisted directory
+	// before touching the filesystem — otherwise a caller could have the handler
+	// read and send an arbitrary file. Cleaning first collapses any ".." so the
+	// containment check can't be walked out of.
+	cleaned := filepath.Clean(path)
+	if !pathWithinAllowedDir(cleaned, allowedDirs) {
+		return "", errors.New("telegram_attachment_path_not_allowed")
+	}
+	info, err := os.Stat(cleaned)
 	if err != nil || info.IsDir() {
 		return "", errors.New("telegram_attachment_missing")
 	}
-	return path, nil
+	return cleaned, nil
+}
+
+// pathWithinAllowedDir reports whether cleaned (already filepath.Clean'd and
+// absolute) sits inside one of allowedDirs. Empty allowedDirs denies everything
+// (fail closed).
+func pathWithinAllowedDir(cleaned string, allowedDirs []string) bool {
+	for _, dir := range allowedDirs {
+		rel, err := filepath.Rel(dir, cleaned)
+		if err != nil {
+			continue
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if filepath.IsAbs(rel) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func telegramAPIMethodForAttachment(filePath string) string {

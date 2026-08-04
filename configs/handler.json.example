@@ -5,6 +5,8 @@
   "poll_timeout_seconds": 2,
   "metrics_host": "0.0.0.0",
   "metrics_port": 9464,
+  "egress_http_host": "0.0.0.0",
+  "egress_http_port": 9467,
   "allowed_egress_channels": ["email", "telegram", "github", "log"],
   "imap_host": "imap.example.com",
   "imap_port": 993,

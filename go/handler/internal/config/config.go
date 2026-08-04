@@ -21,36 +21,41 @@ const (
 	DefaultPollTimeoutSeconds      = 2
 	DefaultMetricsHost             = "127.0.0.1"
 	DefaultMetricsPort             = 9464
+	DefaultEgressHTTPHost          = "127.0.0.1"
+	DefaultEgressHTTPPort          = 9467
 )
 
 var allowedKeys = map[string]bool{
-	"bbmb_address":            true,
-	"db_path":                 true,
-	"max_loops":               true,
-	"poll_interval_seconds":   true,
-	"poll_timeout_seconds":    true,
-	"metrics_host":            true,
-	"metrics_port":            true,
-	"allowed_egress_channels": true,
-	"global_prompt_context":   true,
-	"cron_prompt_context":     true,
-	"email_prompt_context":    true,
-	"context_refs":            true,
-	"schedule_file":           true,
-	"imap_host":               true,
-	"imap_port":               true,
-	"imap_username":           true,
-	"imap_password_env":       true,
-	"imap_mailbox":            true,
-	"imap_search":             true,
-	"imap_use_ssl":            true,
-	"smtp_host":               true,
-	"smtp_port":               true,
-	"smtp_username":           true,
-	"smtp_password_env":       true,
-	"smtp_from":               true,
-	"smtp_starttls":           true,
-	"smtp_use_ssl":            true,
+	"bbmb_address":                   true,
+	"db_path":                        true,
+	"max_loops":                      true,
+	"poll_interval_seconds":          true,
+	"poll_timeout_seconds":           true,
+	"metrics_host":                   true,
+	"metrics_port":                   true,
+	"egress_http_host":               true,
+	"egress_http_port":               true,
+	"egress_attachment_allowed_dirs": true,
+	"allowed_egress_channels":        true,
+	"global_prompt_context":          true,
+	"cron_prompt_context":            true,
+	"email_prompt_context":           true,
+	"context_refs":                   true,
+	"schedule_file":                  true,
+	"imap_host":                      true,
+	"imap_port":                      true,
+	"imap_username":                  true,
+	"imap_password_env":              true,
+	"imap_mailbox":                   true,
+	"imap_search":                    true,
+	"imap_use_ssl":                   true,
+	"smtp_host":                      true,
+	"smtp_port":                      true,
+	"smtp_username":                  true,
+	"smtp_password_env":              true,
+	"smtp_from":                      true,
+	"smtp_starttls":                  true,
+	"smtp_use_ssl":                   true,
 
 	"telegram_enabled":              true,
 	"telegram_bot_token_env":        true,
@@ -78,34 +83,37 @@ var allowedKeys = map[string]bool{
 }
 
 type Config struct {
-	BBMBAddress           string
-	DBPath                string
-	MaxLoops              int
-	PollIntervalSeconds   float64
-	PollTimeoutSeconds    int
-	MetricsHost           string
-	MetricsPort           int
-	AllowedEgressChannels []string
-	GlobalPromptContext   []string
-	CronPromptContext     []string
-	EmailPromptContext    []string
-	ContextRefs           []string
-	ScheduleFile          string
-	IMAPHost              string
-	IMAPPort              int
-	IMAPUsername          string
-	IMAPPasswordEnv       string
-	IMAPMailbox           string
-	IMAPSearch            string
-	IMAPUseSSL            bool
-	SMTPHost              string
-	SMTPPort              int
-	SMTPUsername          string
-	SMTPPasswordEnv       string
-	SMTPFrom              string
-	SMTPStartTLS          bool
-	SMTPUseSSL            bool
-	ErrorEmailTo          string
+	BBMBAddress                 string
+	DBPath                      string
+	MaxLoops                    int
+	PollIntervalSeconds         float64
+	PollTimeoutSeconds          int
+	MetricsHost                 string
+	MetricsPort                 int
+	EgressHTTPHost              string
+	EgressHTTPPort              int
+	EgressAttachmentAllowedDirs []string
+	AllowedEgressChannels       []string
+	GlobalPromptContext         []string
+	CronPromptContext           []string
+	EmailPromptContext          []string
+	ContextRefs                 []string
+	ScheduleFile                string
+	IMAPHost                    string
+	IMAPPort                    int
+	IMAPUsername                string
+	IMAPPasswordEnv             string
+	IMAPMailbox                 string
+	IMAPSearch                  string
+	IMAPUseSSL                  bool
+	SMTPHost                    string
+	SMTPPort                    int
+	SMTPUsername                string
+	SMTPPasswordEnv             string
+	SMTPFrom                    string
+	SMTPStartTLS                bool
+	SMTPUseSSL                  bool
+	ErrorEmailTo                string
 
 	TelegramEnabled                       bool
 	TelegramBotTokenEnv                   string
@@ -133,34 +141,37 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		BBMBAddress:           DefaultBBMBAddress,
-		DBPath:                filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
-		MaxLoops:              0,
-		PollIntervalSeconds:   DefaultPollIntervalSeconds,
-		PollTimeoutSeconds:    DefaultPollTimeoutSeconds,
-		MetricsHost:           DefaultMetricsHost,
-		MetricsPort:           DefaultMetricsPort,
-		AllowedEgressChannels: []string{"email", "telegram", "telegram_reaction", "github", "log"},
-		GlobalPromptContext:   []string{},
-		CronPromptContext:     []string{},
-		EmailPromptContext:    []string{},
-		ContextRefs:           []string{},
-		ScheduleFile:          "",
-		IMAPHost:              "",
-		IMAPPort:              993,
-		IMAPUsername:          "",
-		IMAPPasswordEnv:       "CHATTING_IMAP_PASSWORD",
-		IMAPMailbox:           "INBOX",
-		IMAPSearch:            "UNSEEN",
-		IMAPUseSSL:            true,
-		SMTPHost:              "",
-		SMTPPort:              465,
-		SMTPUsername:          "",
-		SMTPPasswordEnv:       "CHATTING_SMTP_PASSWORD",
-		SMTPFrom:              "",
-		SMTPStartTLS:          false,
-		SMTPUseSSL:            true,
-		ErrorEmailTo:          "",
+		BBMBAddress:                 DefaultBBMBAddress,
+		DBPath:                      filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
+		MaxLoops:                    0,
+		PollIntervalSeconds:         DefaultPollIntervalSeconds,
+		PollTimeoutSeconds:          DefaultPollTimeoutSeconds,
+		MetricsHost:                 DefaultMetricsHost,
+		MetricsPort:                 DefaultMetricsPort,
+		EgressHTTPHost:              DefaultEgressHTTPHost,
+		EgressHTTPPort:              DefaultEgressHTTPPort,
+		EgressAttachmentAllowedDirs: []string{},
+		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
+		GlobalPromptContext:         []string{},
+		CronPromptContext:           []string{},
+		EmailPromptContext:          []string{},
+		ContextRefs:                 []string{},
+		ScheduleFile:                "",
+		IMAPHost:                    "",
+		IMAPPort:                    993,
+		IMAPUsername:                "",
+		IMAPPasswordEnv:             "CHATTING_IMAP_PASSWORD",
+		IMAPMailbox:                 "INBOX",
+		IMAPSearch:                  "UNSEEN",
+		IMAPUseSSL:                  true,
+		SMTPHost:                    "",
+		SMTPPort:                    465,
+		SMTPUsername:                "",
+		SMTPPasswordEnv:             "CHATTING_SMTP_PASSWORD",
+		SMTPFrom:                    "",
+		SMTPStartTLS:                false,
+		SMTPUseSSL:                  true,
+		ErrorEmailTo:                "",
 
 		TelegramEnabled:                       false,
 		TelegramBotTokenEnv:                   "CHATTING_TELEGRAM_BOT_TOKEN",
@@ -282,6 +293,24 @@ func Load(raw []byte) (Config, error) {
 	}
 	if rawValue, ok := payload["metrics_port"]; ok && !isNull(rawValue) {
 		config.MetricsPort, err = decodePositiveInt(rawValue, "metrics_port")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["egress_http_host"]; ok && !isNull(rawValue) {
+		config.EgressHTTPHost, err = decodeNonEmptyString(rawValue, "egress_http_host")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["egress_http_port"]; ok && !isNull(rawValue) {
+		config.EgressHTTPPort, err = decodePositiveInt(rawValue, "egress_http_port")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["egress_attachment_allowed_dirs"]; ok && !isNull(rawValue) {
+		config.EgressAttachmentAllowedDirs, err = decodeStringList(rawValue, "egress_attachment_allowed_dirs")
 		if err != nil {
 			return Config{}, err
 		}

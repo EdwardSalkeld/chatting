@@ -7,32 +7,43 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
-from app.main_reply import main
+from app.main_reply import (
+    DEFAULT_HANDLER_EGRESS_URL,
+    EXIT_DROPPED,
+    EXIT_TRANSIENT,
+    main,
+)
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.task_ledger import TaskLedgerStore
 
 
-class _FakeBroker:
-    def __init__(self, address: str):
-        self.address = address
-        self.ensured: list[str] = []
-        self.published: list[tuple[str, dict[str, object]]] = []
+class _FakeSubmit:
+    """Stand-in for main_reply._submit_egress: records calls, returns a canned
+    (status_code, response) so tests don't do real HTTP."""
 
-    def ensure_queue(self, queue_name: str) -> None:
-        self.ensured.append(queue_name)
+    def __init__(
+        self, status: int = 200, response: dict[str, object] | None = None
+    ) -> None:
+        self.status = status
+        self.response = (
+            response if response is not None else {"status": "dispatched", "reason": ""}
+        )
+        self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def publish_json(self, queue_name: str, payload: dict[str, object]) -> str:
-        self.published.append((queue_name, payload))
-        return "guid-1"
+    def __call__(
+        self, url: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        self.calls.append((url, payload))
+        return self.status, dict(self.response)
 
 
 class MainReplyCliTests(unittest.TestCase):
-    def test_main_reply_publishes_unsequenced_incremental_v2_payload(self) -> None:
-        broker = _FakeBroker("127.0.0.1:9876")
+    def test_main_reply_posts_unsequenced_incremental_v2_payload(self) -> None:
+        submit = _FakeSubmit()
         stdout = io.StringIO()
         with (
-            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+            patch("app.main_reply._submit_egress", submit),
             patch("sys.stdout", stdout),
             patch(
                 "sys.argv",
@@ -53,10 +64,9 @@ class MainReplyCliTests(unittest.TestCase):
             exit_code = main()
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(broker.ensured, ["chatting.egress.v1"])
-        self.assertEqual(len(broker.published), 1)
-        queue_name, payload = broker.published[0]
-        self.assertEqual(queue_name, "chatting.egress.v1")
+        self.assertEqual(len(submit.calls), 1)
+        url, payload = submit.calls[0]
+        self.assertEqual(url, DEFAULT_HANDLER_EGRESS_URL)
         self.assertEqual(payload["task_id"], "task:email:53")
         self.assertEqual(payload["envelope_id"], "email:53")
         self.assertEqual(payload["trace_id"], "trace:email:53")
@@ -66,22 +76,21 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertNotIn("sequence", payload)
 
         printed = json.loads(stdout.getvalue())
-        self.assertEqual(printed["status"], "published")
-        self.assertEqual(printed["guid"], "guid-1")
+        self.assertEqual(printed["status"], "dispatched")
+        self.assertEqual(printed["http_status"], 200)
         self.assertIsNone(printed["sequence"])
 
-    def test_main_reply_uses_bbmb_address_from_worker_config(self) -> None:
+    def test_main_reply_uses_handler_egress_url_from_worker_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "worker.json"
             config_path.write_text(
-                json.dumps({"bbmb_address": "10.0.0.5:9999"}), encoding="utf-8"
+                json.dumps({"handler_egress_url": "http://10.0.0.5:9999/egress"}),
+                encoding="utf-8",
             )
-            broker = _FakeBroker("placeholder")
+            submit = _FakeSubmit()
             stdout = io.StringIO()
             with (
-                patch(
-                    "app.main_reply.BBMBQueueAdapter", return_value=broker
-                ) as broker_ctor,
+                patch("app.main_reply._submit_egress", submit),
                 patch("sys.stdout", stdout),
                 patch(
                     "sys.argv",
@@ -102,8 +111,77 @@ class MainReplyCliTests(unittest.TestCase):
                 exit_code = main()
 
         self.assertEqual(exit_code, 0)
-        broker_ctor.assert_called_once_with(address="10.0.0.5:9999")
-        self.assertEqual(broker.ensured, ["chatting.egress.v1"])
+        self.assertEqual(submit.calls[0][0], "http://10.0.0.5:9999/egress")
+
+    def test_main_reply_returns_dropped_exit_and_stays_quiet_in_db(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.db"
+            config_path = Path(tmpdir) / "worker.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
+            submit = _FakeSubmit(
+                status=422,
+                response={"status": "dropped", "reason": "telegram_attachment_missing"},
+            )
+            stderr = io.StringIO()
+            with (
+                patch("app.main_reply._submit_egress", submit),
+                patch("sys.stderr", stderr),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "task:telegram:53",
+                        "--message",
+                        "here is the screenshot",
+                        "--channel",
+                        "telegram",
+                        "--target",
+                        "8605042448",
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            activity = SQLiteStateStore(str(db_path)).list_recent_worker_activity(
+                limit=10,
+                include_internal=True,
+            )
+
+        self.assertEqual(exit_code, EXIT_DROPPED)
+        printed = json.loads(stderr.getvalue())
+        self.assertEqual(printed["status"], "dropped")
+        self.assertEqual(printed["reason"], "telegram_attachment_missing")
+        # A drop is not a delivery, so it must not be recorded as one — the
+        # supervised recovery loop keys off these activity rows.
+        self.assertEqual(activity, [])
+
+    def test_main_reply_returns_transient_exit_when_handler_unreachable(self) -> None:
+        submit = _FakeSubmit(status=0, response={"reason": "egress endpoint unreachable"})
+        stderr = io.StringIO()
+        with (
+            patch("app.main_reply._submit_egress", submit),
+            patch("sys.stderr", stderr),
+            patch(
+                "sys.argv",
+                [
+                    "main_reply.py",
+                    "task:email:53",
+                    "--message",
+                    "working on it",
+                    "--channel",
+                    "email",
+                    "--target",
+                    "alice@example.com",
+                ],
+            ),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, EXIT_TRANSIENT)
 
     def test_main_reply_requires_envelope_id_for_non_prefixed_task_id(self) -> None:
         with patch(
@@ -122,12 +200,12 @@ class MainReplyCliTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "envelope_id is required"):
                 main()
 
-    def test_main_reply_publishes_telegram_reaction_using_explicit_message_id(
+    def test_main_reply_posts_telegram_reaction_using_explicit_message_id(
         self,
     ) -> None:
-        broker = _FakeBroker("127.0.0.1:9876")
+        submit = _FakeSubmit()
         with (
-            patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+            patch("app.main_reply._submit_egress", submit),
             patch(
                 "sys.argv",
                 [
@@ -147,12 +225,12 @@ class MainReplyCliTests(unittest.TestCase):
             exit_code = main()
 
         self.assertEqual(exit_code, 0)
-        _, payload = broker.published[0]
+        _, payload = submit.calls[0]
         self.assertEqual(payload["message"]["channel"], "telegram_reaction")
         self.assertEqual(payload["message"]["body"], "👍")
         self.assertEqual(payload["message"]["metadata"], {"message_id": 123})
 
-    def test_main_reply_publishes_telegram_reaction_using_task_ledger_message_id(
+    def test_main_reply_posts_telegram_reaction_using_task_ledger_message_id(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,9 +259,9 @@ class MainReplyCliTests(unittest.TestCase):
                 TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53")
             )
 
-            broker = _FakeBroker("127.0.0.1:9876")
+            submit = _FakeSubmit()
             with (
-                patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+                patch("app.main_reply._submit_egress", submit),
                 patch(
                     "sys.argv",
                     [
@@ -203,16 +281,16 @@ class MainReplyCliTests(unittest.TestCase):
                 exit_code = main()
 
         self.assertEqual(exit_code, 0)
-        _, payload = broker.published[0]
+        _, payload = submit.calls[0]
         self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
 
-    def test_main_reply_publishes_attachment_message(self) -> None:
-        broker = _FakeBroker("127.0.0.1:9876")
+    def test_main_reply_posts_attachment_message(self) -> None:
+        submit = _FakeSubmit()
         with tempfile.TemporaryDirectory() as tmpdir:
             attachment_path = Path(tmpdir) / "menu.pdf"
             attachment_path.write_bytes(b"%PDF-1.4\n")
             with (
-                patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+                patch("app.main_reply._submit_egress", submit),
                 patch(
                     "sys.argv",
                     [
@@ -234,25 +312,23 @@ class MainReplyCliTests(unittest.TestCase):
                 exit_code = main()
 
         self.assertEqual(exit_code, 0)
-        _, payload = broker.published[0]
+        _, payload = submit.calls[0]
         self.assertEqual(payload["message"]["body"], "This week's menu")
         self.assertEqual(payload["message"]["attachment"]["name"], "menu.pdf")
         self.assertEqual(
             payload["message"]["attachment"]["uri"], attachment_path.as_uri()
         )
 
-    def test_main_reply_records_worker_activity_when_db_path_is_configured(
-        self,
-    ) -> None:
+    def test_main_reply_records_worker_activity_on_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
             config_path.write_text(
                 json.dumps({"db_path": str(db_path)}), encoding="utf-8"
             )
-            broker = _FakeBroker("127.0.0.1:9876")
+            submit = _FakeSubmit()
             with (
-                patch("app.main_reply.BBMBQueueAdapter", return_value=broker),
+                patch("app.main_reply._submit_egress", submit),
                 patch(
                     "sys.argv",
                     [
