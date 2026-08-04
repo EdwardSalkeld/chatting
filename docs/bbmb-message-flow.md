@@ -19,24 +19,32 @@ Use it as the source of truth for:
 
 ## Queues
 
-There are three BBMB queue roles:
+BBMB now carries ingress only. Egress does not use BBMB — see [Egress transport](#egress-transport).
 
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
 | `generic-post` or any configured auxiliary ingress queue | `auxiliary-ingress` | `message-handler` | Carries raw JSON webhook bodies as `chatting.auxiliary_ingress.v1` payloads |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
-| `chatting.egress.v1` | `worker` | `message-handler` | Carries `chatting.egress.v2` payloads for visible executor-published incrementals and internal completion |
 
 Important details:
-- Task and egress queue names are hardcoded; auxiliary ingress queue names are configured per route.
+- The task queue name is hardcoded; auxiliary ingress queue names are configured per route.
 - There is no separate BBMB retry queue, dead-letter queue, or approval queue.
 - Retries, dead letters, ingress dedupe state, the task ledger, and the worker egress outbox all
   live in SQLite, not in BBMB.
-- The worker emits `chatting.egress.v2` payloads on `chatting.egress.v1`. The queue name is
-  transport-level; the `message_type` inside the JSON is the payload contract version.
-- `message-handler` enforces this contract and rejects legacy `chatting.egress.v1` payload types.
 - `auxiliary-ingress` only publishes `event_id`, `received_at`, and the parsed JSON `body`; HTTP
   request metadata is intentionally not forwarded into the worker-visible task.
+
+### Egress transport
+
+Egress does not flow over BBMB. Every egress message — the executor's visible replies via
+`app.main_reply` and the worker's own `completion`/sequenced events — is POSTed to the handler's
+synchronous egress endpoint (`handler_egress_url`, default `http://127.0.0.1:9467/egress`), and the
+delivery outcome is returned in the HTTP status. The `chatting.egress.v2` payload contract is
+unchanged; only the transport moved from a queue to a request/response call so the sender learns
+whether the send landed. The `chatting.egress.v1` queue and the handler's `DrainEgress` loop are
+retired from the live path (the code is retained only for its tests, pending removal). The endpoint
+binds loopback only by default, independent of the metrics bind, since it can send messages to the
+outside world.
 
 ## End-To-End Flow
 
@@ -151,10 +159,10 @@ An IMAP message from `alice@example.com` turns into a `chatting.task.v1` payload
 }
 ```
 
-### Example reply on `chatting.egress.v1`
+### Example reply
 
-If the worker decides to send one email reply, it publishes a `chatting.egress.v2` payload
-like this:
+If the worker decides to send one email reply, it POSTs a `chatting.egress.v2` payload
+to the egress endpoint like this:
 
 ```json
 {
@@ -210,7 +218,7 @@ Each message-handler loop also emits one internal heartbeat task by default.
 Flow:
 - `message-handler` creates an internal `TaskEnvelope`
 - it publishes that envelope to `chatting.tasks.v1`
-- `worker` turns it into a log-based pong on `chatting.egress.v1`, then emits completion
+- `worker` turns it into a log-based pong POSTed to the egress endpoint, then emits completion
 - `message-handler` accepts and logs that pong even if `log` is not otherwise allowlisted
 - `message-handler` closes the heartbeat task when the completion event arrives
 
@@ -251,7 +259,9 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
 ### Message-handler egress and observability config
 
 - `poll_timeout_seconds`
-  How long the message-handler waits on `chatting.egress.v1` for one egress payload each loop.
+  Bounds how long the message-handler blocks on a BBMB pickup per loop iteration. (Egress no
+  longer drains a queue, so this no longer gates egress; it applies to the retained-for-tests
+  egress drain and any auxiliary-ingress pickups.)
 - `allowed_egress_channels`
   Main control for what the worker is allowed to cause externally. Internal heartbeat pong on
   `log/heartbeat` is the only built-in exception.

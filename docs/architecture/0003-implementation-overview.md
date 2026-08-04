@@ -20,7 +20,7 @@ The deployment model is private, single-user, split mode.
 
 - `go/handler/cmd/chatting-handler`: ingress + egress dispatch in split mode
 - `app.main_worker`: task execution in split mode
-- `app.main_reply`: publish visible worker-side incremental egress for acknowledgements and final replies
+- `app.main_reply`: submit visible worker-side incremental egress (POST to the handler egress endpoint) for acknowledgements and final replies
 
 ## Persistence tables (SQLite)
 

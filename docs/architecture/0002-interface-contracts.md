@@ -43,7 +43,9 @@ Operational extensions:
 
 The BBMB payload contracts are:
 - `chatting.task.v1` on `chatting.tasks.v1`
-- `chatting.egress.v2` on `chatting.egress.v1`
+
+Egress uses the same `chatting.egress.v2` payload but is no longer a BBMB queue: it is POSTed to
+the handler's synchronous egress endpoint (see [BBMB Message Flow](../bbmb-message-flow.md)).
 
 All top-level payload objects include `schema_version` and enforce strict required fields.
 

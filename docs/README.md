@@ -21,3 +21,5 @@
 - [0001 Split-Mode Architecture For Private Single-User Automation](architecture/0001-python-prototype-architecture.md)
 - [0002 Interface Contracts And BBMB Payload Schemas](architecture/0002-interface-contracts.md)
 - [0003 Current Implementation Overview (Split Mode)](architecture/0003-implementation-overview.md)
+- [0004 Separate Visible Egress From Task Completion](architecture/0004-egress-completion-semantics.md)
+- [0005 Synchronous Egress Transport (No BBMB)](architecture/0005-synchronous-egress-transport.md)
