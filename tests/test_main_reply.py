@@ -43,7 +43,7 @@ class MainReplyCliTests(unittest.TestCase):
         submit = _FakeSubmit()
         stdout = io.StringIO()
         with (
-            patch("app.main_reply._submit_egress", submit),
+            patch("app.main_reply.submit_egress", submit),
             patch("sys.stdout", stdout),
             patch(
                 "sys.argv",
@@ -90,7 +90,7 @@ class MainReplyCliTests(unittest.TestCase):
             submit = _FakeSubmit()
             stdout = io.StringIO()
             with (
-                patch("app.main_reply._submit_egress", submit),
+                patch("app.main_reply.submit_egress", submit),
                 patch("sys.stdout", stdout),
                 patch(
                     "sys.argv",
@@ -126,7 +126,7 @@ class MainReplyCliTests(unittest.TestCase):
             )
             stderr = io.StringIO()
             with (
-                patch("app.main_reply._submit_egress", submit),
+                patch("app.main_reply.submit_egress", submit),
                 patch("sys.stderr", stderr),
                 patch(
                     "sys.argv",
@@ -163,7 +163,7 @@ class MainReplyCliTests(unittest.TestCase):
         submit = _FakeSubmit(status=0, response={"reason": "egress endpoint unreachable"})
         stderr = io.StringIO()
         with (
-            patch("app.main_reply._submit_egress", submit),
+            patch("app.main_reply.submit_egress", submit),
             patch("sys.stderr", stderr),
             patch(
                 "sys.argv",
@@ -205,7 +205,7 @@ class MainReplyCliTests(unittest.TestCase):
     ) -> None:
         submit = _FakeSubmit()
         with (
-            patch("app.main_reply._submit_egress", submit),
+            patch("app.main_reply.submit_egress", submit),
             patch(
                 "sys.argv",
                 [
@@ -261,7 +261,7 @@ class MainReplyCliTests(unittest.TestCase):
 
             submit = _FakeSubmit()
             with (
-                patch("app.main_reply._submit_egress", submit),
+                patch("app.main_reply.submit_egress", submit),
                 patch(
                     "sys.argv",
                     [
@@ -290,7 +290,7 @@ class MainReplyCliTests(unittest.TestCase):
             attachment_path = Path(tmpdir) / "menu.pdf"
             attachment_path.write_bytes(b"%PDF-1.4\n")
             with (
-                patch("app.main_reply._submit_egress", submit),
+                patch("app.main_reply.submit_egress", submit),
                 patch(
                     "sys.argv",
                     [
@@ -328,7 +328,7 @@ class MainReplyCliTests(unittest.TestCase):
             )
             submit = _FakeSubmit()
             with (
-                patch("app.main_reply._submit_egress", submit),
+                patch("app.main_reply.submit_egress", submit),
                 patch(
                     "sys.argv",
                     [

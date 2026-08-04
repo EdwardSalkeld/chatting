@@ -7,25 +7,16 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.broker import EgressQueueMessage
+from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
 from app.task_ledger import TaskLedgerStore
 from app.telegram_text import normalize_telegram_outbound_text
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
-
-# The reply script submits synchronously to the handler's loopback egress
-# endpoint and learns the delivery outcome, instead of publishing to BBMB
-# fire-and-forget. The handler default binds 127.0.0.1:9467 (see the handler's
-# DefaultEgressHTTPHost/Port); a shared default means no extra config is needed
-# when worker and handler run on the same host.
-DEFAULT_HANDLER_EGRESS_URL = "http://127.0.0.1:9467/egress"
-_SUBMIT_TIMEOUT_SECONDS = 30
 
 # Exit codes the executor can act on. 0 = delivered; DROPPED = the handler
 # rejected the message for good (bad payload, unknown task, disallowed channel,
@@ -35,34 +26,6 @@ _SUBMIT_TIMEOUT_SECONDS = 30
 # error from the ValueError path.)
 EXIT_DROPPED = 1
 EXIT_TRANSIENT = 3
-
-
-def _submit_egress(url: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=_SUBMIT_TIMEOUT_SECONDS) as response:
-            return response.status, _decode_body(response.read())
-    except urllib.error.HTTPError as error:
-        return error.code, _decode_body(error.read())
-    except urllib.error.URLError as error:
-        # Connection refused / DNS / timeout: the handler never processed it.
-        return 0, {"reason": f"egress endpoint unreachable: {error.reason}"}
-
-
-def _decode_body(raw: bytes) -> dict[str, object]:
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw.decode("utf-8", "replace"))
-    except json.JSONDecodeError:
-        return {"reason": raw.decode("utf-8", "replace")}
-    return parsed if isinstance(parsed, dict) else {"reason": str(parsed)}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -263,7 +226,7 @@ def main() -> int:
         message_type="chatting.egress.v2",
     )
 
-    status_code, response = _submit_egress(handler_egress_url, egress_message.to_dict())
+    status_code, response = submit_egress(handler_egress_url, egress_message.to_dict())
     result_status = str(response.get("status", "")) if isinstance(response, dict) else ""
     reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
 

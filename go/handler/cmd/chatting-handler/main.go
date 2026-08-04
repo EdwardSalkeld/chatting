@@ -297,12 +297,17 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	// reply script. Kept off the metrics mux on purpose: metrics may bind
 	// 0.0.0.0 for scraping, but sending messages to the world must stay
 	// loopback-only, like BBMB.
-	egressServer, err := egress.StartHTTPServer(config.EgressHTTPHost, config.EgressHTTPPort, engine)
+	egressServer, err := egress.StartHTTPServer(config.EgressHTTPHost, config.EgressHTTPPort, engine, func(result egress.Result) {
+		metricRecorder.RecordEgressResult(result.Status, result.Reason)
+	})
 	if err != nil {
 		_ = metricsServer.Close()
 		_ = store.Close()
 		return nil, err
 	}
+	// Egress no longer flows through BBMB: the worker submits every egress
+	// message to the loopback endpoint above. The runner's egress handler is
+	// retained only for the (now unused in prod) DrainEgress path and its tests.
 	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
 		result, err := engine.HandleRaw(ctx, raw)
 		if err == nil {

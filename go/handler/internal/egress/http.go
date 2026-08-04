@@ -22,10 +22,12 @@ type submitResponse struct {
 }
 
 // RegisterHTTPRoutes wires the synchronous egress-submit endpoint onto mux. It
-// lets the worker's reply script submit an egress message and learn the delivery
-// outcome synchronously, instead of publishing to BBMB fire-and-forget and never
-// hearing whether the send actually happened.
-func RegisterHTTPRoutes(mux *http.ServeMux, engine *Engine) {
+// lets the worker (and the reply script) submit an egress message and learn the
+// delivery outcome synchronously, instead of publishing to BBMB fire-and-forget
+// and never hearing whether the send actually happened. onResult, if non-nil,
+// is invoked with each terminal Result so callers can record metrics (this is
+// the only egress path now, so metrics live here rather than the drain loop).
+func RegisterHTTPRoutes(mux *http.ServeMux, engine *Engine, onResult func(Result)) {
 	mux.HandleFunc(EgressRoutePath, func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost {
 			writeSubmitJSON(writer, http.StatusMethodNotAllowed, submitResponse{Status: "error", Reason: "method not allowed"})
@@ -42,6 +44,9 @@ func RegisterHTTPRoutes(mux *http.ServeMux, engine *Engine) {
 			// should retry. Mirrors the BBMB path leaving the message un-acked.
 			writeSubmitJSON(writer, http.StatusServiceUnavailable, submitResponse{Status: "error", Reason: err.Error()})
 			return
+		}
+		if onResult != nil {
+			onResult(result)
 		}
 		writeSubmitJSON(writer, statusCodeForResult(result), submitResponse{Status: result.Status, Reason: result.Reason})
 	})
@@ -84,9 +89,9 @@ type Server struct {
 // bind may be 0.0.0.0 (so Prometheus can scrape), but the ability to send
 // messages to the outside world must stay reachable only from the local host,
 // matching BBMB's loopback posture.
-func StartHTTPServer(host string, port int, engine *Engine) (*Server, error) {
+func StartHTTPServer(host string, port int, engine *Engine, onResult func(Result)) (*Server, error) {
 	mux := http.NewServeMux()
-	RegisterHTTPRoutes(mux, engine)
+	RegisterHTTPRoutes(mux, engine, onResult)
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return nil, err

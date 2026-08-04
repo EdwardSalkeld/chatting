@@ -3,17 +3,84 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from app.broker import EgressQueueMessage
 from app.models import OutboundMessage, RunRecord
+from app.state import SQLiteStateStore
 from app.worker.main import (
     WORKER_CONFIG_PATH_ENV_VAR,
     _build_executor_env,
     _log_worker_processed,
     _load_config,
+    _publish_egress_with_outbox,
     _resolve_non_negative_int,
 )
 from app.worker.runtime import WorkerProcessResult
+
+
+class _RecordingMonitor:
+    def __init__(self) -> None:
+        self.egress_calls: list[str] = []
+
+    def record_egress(self, *, egress_message, publish_source: str) -> None:
+        self.egress_calls.append(publish_source)
+
+
+def _completion_egress(event_id: str = "evt:task:1:0:completion") -> EgressQueueMessage:
+    return EgressQueueMessage(
+        task_id="task:1",
+        envelope_id="email:1",
+        trace_id="trace:1",
+        event_index=0,
+        event_count=1,
+        message=OutboundMessage(channel="log", target="task", body="done"),
+        emitted_at=datetime(2026, 6, 7, 22, 30, tzinfo=timezone.utc),
+        event_id=event_id,
+        sequence=0,
+        event_kind="completion",
+        message_type="chatting.egress.v2",
+    )
+
+
+class PublishEgressWithOutboxTests(unittest.TestCase):
+    def _run(self, submit_return):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = SQLiteStateStore(str(Path(tmp.name) / "worker.db"))
+        monitor = _RecordingMonitor()
+        with patch("app.worker.main.submit_egress", return_value=submit_return):
+            _publish_egress_with_outbox(
+                store=store,
+                handler_egress_url="http://handler.test/egress",
+                egress_message=_completion_egress(),
+                activity_monitor=monitor,
+            )
+        return store, monitor
+
+    def test_delivered_2xx_acks_outbox_and_records_activity(self) -> None:
+        store, monitor = self._run((200, {"status": "completed"}))
+        # Acked -> not replayable.
+        self.assertEqual(store.list_replayable_egress_outbox_events(), [])
+        self.assertEqual(monitor.egress_calls, ["worker"])
+
+    def test_transient_failure_leaves_event_pending_for_replay(self) -> None:
+        store, monitor = self._run((0, {"reason": "unreachable"}))
+        replayable = store.list_replayable_egress_outbox_events()
+        self.assertEqual(len(replayable), 1)
+        self.assertEqual(monitor.egress_calls, [])
+
+    def test_permanent_drop_422_is_loud_and_acked(self) -> None:
+        with self.assertLogs("app.worker.main", level="ERROR") as captured:
+            store, monitor = self._run(
+                (422, {"status": "dropped", "reason": "disallowed_channel"})
+            )
+        # Acked so it does not replay forever, but not counted as delivered.
+        self.assertEqual(store.list_replayable_egress_outbox_events(), [])
+        self.assertEqual(monitor.egress_calls, [])
+        self.assertTrue(
+            any("worker_egress_dropped_by_handler" in line for line in captured.output)
+        )
 
 
 class MainWorkerTests(unittest.TestCase):

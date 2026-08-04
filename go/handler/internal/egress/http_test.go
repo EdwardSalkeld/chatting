@@ -12,7 +12,7 @@ import (
 func submitEgress(t *testing.T, engine *Engine, method string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	mux := http.NewServeMux()
-	RegisterHTTPRoutes(mux, engine)
+	RegisterHTTPRoutes(mux, engine, nil)
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
