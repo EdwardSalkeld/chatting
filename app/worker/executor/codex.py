@@ -98,12 +98,17 @@ def _task_payload(
         .isoformat()
         .replace("+00:00", "Z"),
         "reply_contract": {
-            "visible_replies_must_use": "python3 -m app.main_reply",
+            # -P (safe path) is required: it stops Python prepending the current
+            # working directory to sys.path, so this always runs the deployed
+            # app.main_reply even when the cwd is a chatting checkout in the
+            # workspace whose stale app/ would otherwise shadow it (a shadowing
+            # copy still publishes to BBMB and the reply is lost).
+            "visible_replies_must_use": "python3 -P -m app.main_reply",
             "visible_replies_must_not_be_returned_in_executor_output": True,
             "executor_exit_status_drives_completion": True,
             "executor_stdout_stderr_are_operator_transcript": True,
             "visible_reply_exit_status": (
-                "python3 -m app.main_reply now sends synchronously and its exit code tells "
+                "python3 -P -m app.main_reply now sends synchronously and its exit code tells "
                 "you whether the user actually received the reply: 0 = delivered; 1 = the "
                 "handler rejected it for good (for example a missing or unreadable "
                 "attachment) so you must adjust and resend, e.g. send the text without the "
