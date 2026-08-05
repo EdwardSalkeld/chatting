@@ -92,7 +92,7 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(payload["task"]["reply_channel"]["type"], "email")
         self.assertEqual(
             payload["reply_contract"]["visible_replies_must_use"],
-            "python3 -m app.main_reply",
+            "python3 -P -m app.main_reply",
         )
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
         self.assertEqual(run_mock.call_args.kwargs["env"], {"TOKEN": "secret"})
