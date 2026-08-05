@@ -373,6 +373,8 @@ func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage, task 
 	if task != nil && heartbeat.IsLogPong(message.Message, task.TaskMessage.Envelope) {
 		return true
 	}
+	// Explicit outbound channels are gated only by the handler allowlist.
+	// "final" remains the one default-route alias that resolves through reply_channel.
 	if task != nil && message.Message.Channel == "final" {
 		return engine.allowedChannels[task.TaskMessage.Envelope.ReplyChannel.Type]
 	}
