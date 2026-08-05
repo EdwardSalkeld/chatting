@@ -28,15 +28,49 @@ EXIT_DROPPED = 1
 EXIT_TRANSIENT = 3
 
 
+# Reply fields that a --spec-file JSON may set. These map 1:1 onto the argparse
+# namespace attributes below so the rest of the module is agnostic to whether a
+# reply came from a spec file or from flags.
+_SPEC_FIELDS = (
+    "task_id",
+    "channel",
+    "target",
+    "message",
+    "attachment_path",
+    "attachment_name",
+    "telegram_reaction",
+    "telegram_message_id",
+    "event_id",
+    "envelope_id",
+    "trace_id",
+)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Publish one visible egress message. "
-            "Executors should use this for user-visible acknowledgements and final replies."
+            "Executors should use this for user-visible acknowledgements and final replies. "
+            "Prefer --spec-file: it carries the whole reply (including the body) as a JSON "
+            "file so nothing is passed through the shell."
         )
     )
-    parser.add_argument("task_id", help="Task identifier (for example: task:email:53).")
-    parser.add_argument("--message", help="Reply body text.")
+    # Reply body text is deliberately NOT a flag: passing arbitrary prose on the
+    # command line let the shell mangle backticks/quotes/$ and corrupt or split
+    # replies. The body only ever comes from --spec-file (a file the executor
+    # writes directly, never through the shell).
+    parser.add_argument(
+        "--spec-file",
+        help=(
+            "Path to a JSON file describing the whole reply "
+            f"({', '.join(_SPEC_FIELDS)}). The only way to send a text body."
+        ),
+    )
+    # task_id/channel/target may come from the spec file, so they are optional at
+    # the argparse layer and validated after the spec is applied.
+    parser.add_argument(
+        "task_id", nargs="?", help="Task identifier (for example: task:email:53)."
+    )
     parser.add_argument(
         "--attachment-path",
         help="Absolute path to a local file to send as an attachment.",
@@ -46,10 +80,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--channel",
-        required=True,
         help="Outbound channel (for example: email, telegram, github).",
     )
-    parser.add_argument("--target", required=True, help="Outbound channel target.")
+    parser.add_argument("--target", help="Outbound channel target.")
     parser.add_argument(
         "--telegram-reaction",
         help="React to the Telegram source message instead of sending a text message.",
@@ -76,7 +109,43 @@ def _parse_args() -> argparse.Namespace:
             f"{WORKER_CONFIG_PATH_ENV_VAR}."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    # message only exists via the spec file; give the namespace the attribute so
+    # the resolution code below can read it uniformly.
+    args.message = None
+    _apply_spec_file(args)
+    if not args.task_id:
+        parser.error("task_id is required (as a positional argument or in --spec-file)")
+    if not args.channel:
+        parser.error("channel is required (via --channel or in --spec-file)")
+    if not args.target:
+        parser.error("target is required (via --target or in --spec-file)")
+    return args
+
+
+def _apply_spec_file(args: argparse.Namespace) -> None:
+    if args.spec_file is None:
+        return
+    try:
+        raw = Path(args.spec_file).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"spec-file could not be read: {error}") from error
+    try:
+        spec = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"spec-file is not valid JSON: {error}") from error
+    if not isinstance(spec, dict):
+        raise ValueError("spec-file must contain a JSON object")
+    unknown = sorted(set(spec) - set(_SPEC_FIELDS))
+    if unknown:
+        raise ValueError("spec-file contains unknown fields: " + ", ".join(unknown))
+    # The spec file is authoritative: it supplies the whole reply, so it wins
+    # over any overlapping flags (there should be none in normal use).
+    for field in _SPEC_FIELDS:
+        if field in spec and spec[field] is not None:
+            setattr(args, field, spec[field])
+    if isinstance(args.telegram_message_id, str) and args.telegram_message_id.strip():
+        args.telegram_message_id = int(args.telegram_message_id)
 
 
 def _resolve_envelope_id(task_id: str, explicit_value: str | None) -> str:

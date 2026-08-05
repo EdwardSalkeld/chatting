@@ -142,30 +142,30 @@ Edit message-handler config:
 Use the worker-side CLI to submit a visible egress event to the handler's synchronous egress
 endpoint (it POSTs to `handler_egress_url`, not BBMB, and exits non-zero if the handler drops or
 can't reach the send). Executors should use this path for both quick acknowledgements and final
-user-visible answers instead of returning replies in their stdout/stderr transcript:
+user-visible answers instead of returning replies in their stdout/stderr transcript.
+
+The reply is described by a JSON spec file (written with the executor's editor, never via the
+shell) and passed with `--spec-file`, so the body is never a shell argument. Run it with `-P` so a
+workspace checkout's stale `app/` can't shadow the deployed module:
 
 ```bash
-docker compose exec worker python -m app.main_reply task:email:53 \
-  --message "working on it" \
-  --channel email \
-  --target alice@example.com \
+cat > /tmp/reply.json <<'JSON'
+{"task_id": "task:email:53", "channel": "email", "target": "alice@example.com",
+ "message": "working on it"}
+JSON
+docker compose exec worker python -P -m app.main_reply --spec-file /tmp/reply.json \
   --config /config/worker.json
 ```
 
 Notes:
 - `message_type` is `chatting.egress.v2` with `event_kind=incremental`.
 - These events are intentionally unsequenced and dispatch immediately at `message-handler`.
+- The inline `--message` flag is retired: the body only ever comes from `--spec-file`, so shell
+  metacharacters (backticks, `$`, quotes, newlines) can't mangle or split the reply.
 - Executor stdout/stderr are treated as operator transcript and audit detail, not user-visible reply transport.
-- `--event-id` can be supplied for stable idempotency across retries.
-- Telegram reactions use the same CLI, but publish `telegram_reaction` egress under the hood:
-
-```bash
-docker compose exec worker python -m app.main_reply task:telegram:53 \
-  --channel telegram \
-  --target 8605042448 \
-  --telegram-reaction "👍" \
-  --config /config/worker.json
-```
+- `event_id` in the spec can be supplied for stable idempotency across retries.
+- Telegram reactions go in the spec too (`"telegram_reaction": "👍"`); if `telegram_message_id`
+  is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 

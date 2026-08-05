@@ -98,22 +98,35 @@ def _task_payload(
         .isoformat()
         .replace("+00:00", "Z"),
         "reply_contract": {
-            # -P (safe path) is required: it stops Python prepending the current
-            # working directory to sys.path, so this always runs the deployed
-            # app.main_reply even when the cwd is a chatting checkout in the
-            # workspace whose stale app/ would otherwise shadow it (a shadowing
-            # copy still publishes to BBMB and the reply is lost).
-            "visible_replies_must_use": "python3 -P -m app.main_reply",
+            # -P (safe path) stops Python prepending the cwd to sys.path, so this
+            # always runs the deployed app.main_reply even when the cwd is a
+            # chatting checkout in the workspace whose stale app/ would otherwise
+            # shadow it (a shadowing copy publishes to BBMB and the reply is lost).
+            "visible_replies_must_use": "python3 -P -m app.main_reply --spec-file <path>",
+            "reply_spec_instructions": (
+                "Write the whole reply as a JSON file using your file-editing tool (NOT a "
+                "shell command like echo/printf/heredoc), then pass it with --spec-file. "
+                "Never put the reply text on the command line: the shell mangles backticks, "
+                "quotes, $, and newlines, which corrupts or splits the reply. Spec fields: "
+                "task_id, channel, target, message, and optionally attachment_path, "
+                "attachment_name, telegram_reaction, telegram_message_id, event_id."
+            ),
+            "reply_spec_example": {
+                "task_id": "task:telegram:123",
+                "channel": "telegram",
+                "target": "8605042448",
+                "message": "Any text is safe here: backticks, $vars, \"quotes\", newlines.",
+            },
             "visible_replies_must_not_be_returned_in_executor_output": True,
             "executor_exit_status_drives_completion": True,
             "executor_stdout_stderr_are_operator_transcript": True,
             "visible_reply_exit_status": (
-                "python3 -P -m app.main_reply now sends synchronously and its exit code tells "
-                "you whether the user actually received the reply: 0 = delivered; 1 = the "
+                "python3 -P -m app.main_reply --spec-file sends synchronously and its exit code "
+                "tells you whether the user actually received the reply: 0 = delivered; 1 = the "
                 "handler rejected it for good (for example a missing or unreadable "
-                "attachment) so you must adjust and resend, e.g. send the text without the "
-                "attachment; 3 = the handler was unreachable so you may retry. A non-zero "
-                "exit means the reply did NOT reach the user — do not treat it as sent."
+                "attachment) so you must adjust and resend, e.g. without the attachment; "
+                "3 = the handler was unreachable so you may retry. A non-zero exit means the "
+                "reply did NOT reach the user — do not treat it as sent."
             ),
         },
     }

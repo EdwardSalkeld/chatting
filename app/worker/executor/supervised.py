@@ -11,7 +11,8 @@ from app.worker.executor.base import Executor
 _SUPERVISED_RECOVERY_INSTRUCTION = (
     "The earlier executor pass finished without publishing any visible reply. "
     "Do not redo side effects or rerun the task. Use the captured transcript below "
-    "to send exactly one visible reply with python3 -P -m app.main_reply, then stop."
+    "to send exactly one visible reply: write the reply JSON to a file with your editor, "
+    "then run python3 -P -m app.main_reply --spec-file <path>, then stop."
 )
 
 
