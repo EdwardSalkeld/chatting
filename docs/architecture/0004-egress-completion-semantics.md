@@ -35,9 +35,11 @@ Completion is internal-only:
 
 1. A successful task emits exactly one `completion` event.
 2. The executor must not return visible replies in stdout/stderr transcript output.
-3. Any visible reply must be sent by the executor itself, with `python3 -P -m app.main_reply` (the
-   `-P` keeps Python from importing a workspace checkout's stale `app.main_reply` instead of the
-   deployed one).
+3. Any visible reply must be sent by the executor itself, with
+   `python3 -P -m app.main_reply --spec-file <path>`: the executor writes the whole reply as a JSON
+   file (with its editor, never the shell) and passes only the path, so the body can't be mangled by
+   the shell. The `-P` keeps Python from importing a workspace checkout's stale `app.main_reply`
+   instead of the deployed one. The inline `--message` flag is retired.
 4. If a task emits no visible replies, completion alone closes it.
 5. `incremental` is the visible reply path for both intermediate and final executor-published text.
 6. Conversation memory stores only externally visible assistant text on the real reply channel.

@@ -19,7 +19,7 @@ from app.task_ledger import TaskLedgerStore
 
 
 class _FakeSubmit:
-    """Stand-in for main_reply._submit_egress: records calls, returns a canned
+    """Stand-in for main_reply.submit_egress: records calls, returns a canned
     (status_code, response) so tests don't do real HTTP."""
 
     def __init__(
@@ -38,30 +38,33 @@ class _FakeSubmit:
         return self.status, dict(self.response)
 
 
+def _write_spec(directory: Path, spec: dict[str, object]) -> str:
+    path = directory / "reply-spec.json"
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    return str(path)
+
+
 class MainReplyCliTests(unittest.TestCase):
-    def test_main_reply_posts_unsequenced_incremental_v2_payload(self) -> None:
+    def test_spec_file_posts_unsequenced_incremental_v2_payload(self) -> None:
         submit = _FakeSubmit()
         stdout = io.StringIO()
-        with (
-            patch("app.main_reply.submit_egress", submit),
-            patch("sys.stdout", stdout),
-            patch(
-                "sys.argv",
-                [
-                    "main_reply.py",
-                    "task:email:53",
-                    "--message",
-                    "working on it",
-                    "--channel",
-                    "email",
-                    "--target",
-                    "alice@example.com",
-                    "--event-id",
-                    "evt:custom:1",
-                ],
-            ),
-        ):
-            exit_code = main()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                    "event_id": "evt:custom:1",
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", stdout),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(submit.calls), 1)
@@ -73,39 +76,82 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(payload["event_id"], "evt:custom:1")
         self.assertEqual(payload["event_kind"], "incremental")
         self.assertEqual(payload["message_type"], "chatting.egress.v2")
+        self.assertEqual(payload["message"]["body"], "working on it")
         self.assertNotIn("sequence", payload)
 
         printed = json.loads(stdout.getvalue())
         self.assertEqual(printed["status"], "dispatched")
         self.assertEqual(printed["http_status"], 200)
-        self.assertIsNone(printed["sequence"])
 
-    def test_main_reply_uses_handler_egress_url_from_worker_config(self) -> None:
+    def test_spec_file_preserves_shell_dangerous_text_verbatim(self) -> None:
+        # The whole point of the spec file: prose that would be mangled as a
+        # shell argument (backticks, $, quotes, newlines) arrives intact.
+        dangerous = "Use `nix shell` for $HOME, say \"hi\".\nSecond line."
+        submit = _FakeSubmit()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": dangerous,
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", io.StringIO()),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        _, payload = submit.calls[0]
+        self.assertEqual(payload["message"]["body"], dangerous)
+
+    def test_inline_message_flag_is_rejected(self) -> None:
+        # The inline body path is retired: --message must not exist, so passing
+        # it fails hard rather than risking a shell-mangled send.
+        with patch(
+            "sys.argv",
+            [
+                "main_reply.py",
+                "task:email:53",
+                "--channel",
+                "email",
+                "--target",
+                "alice@example.com",
+                "--message",
+                "inline text",
+            ],
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                main()
+        self.assertNotEqual(raised.exception.code, 0)
+
+    def test_spec_file_uses_handler_egress_url_from_worker_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "worker.json"
             config_path.write_text(
                 json.dumps({"handler_egress_url": "http://10.0.0.5:9999/egress"}),
                 encoding="utf-8",
             )
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                },
+            )
             submit = _FakeSubmit()
-            stdout = io.StringIO()
             with (
                 patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", stdout),
+                patch("sys.stdout", io.StringIO()),
                 patch(
                     "sys.argv",
-                    [
-                        "main_reply.py",
-                        "task:email:53",
-                        "--message",
-                        "working on it",
-                        "--channel",
-                        "email",
-                        "--target",
-                        "alice@example.com",
-                        "--config",
-                        str(config_path),
-                    ],
+                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
                 ),
             ):
                 exit_code = main()
@@ -113,12 +159,21 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(submit.calls[0][0], "http://10.0.0.5:9999/egress")
 
-    def test_main_reply_returns_dropped_exit_and_stays_quiet_in_db(self) -> None:
+    def test_dropped_exit_and_stays_quiet_in_db(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
             config_path.write_text(
                 json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "here is the screenshot",
+                },
             )
             submit = _FakeSubmit(
                 status=422,
@@ -130,18 +185,7 @@ class MainReplyCliTests(unittest.TestCase):
                 patch("sys.stderr", stderr),
                 patch(
                     "sys.argv",
-                    [
-                        "main_reply.py",
-                        "task:telegram:53",
-                        "--message",
-                        "here is the screenshot",
-                        "--channel",
-                        "telegram",
-                        "--target",
-                        "8605042448",
-                        "--config",
-                        str(config_path),
-                    ],
+                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
                 ),
             ):
                 exit_code = main()
@@ -155,54 +199,63 @@ class MainReplyCliTests(unittest.TestCase):
         printed = json.loads(stderr.getvalue())
         self.assertEqual(printed["status"], "dropped")
         self.assertEqual(printed["reason"], "telegram_attachment_missing")
-        # A drop is not a delivery, so it must not be recorded as one — the
-        # supervised recovery loop keys off these activity rows.
+        # A drop is not a delivery, so it must not be recorded as one.
         self.assertEqual(activity, [])
 
-    def test_main_reply_returns_transient_exit_when_handler_unreachable(self) -> None:
+    def test_transient_exit_when_handler_unreachable(self) -> None:
         submit = _FakeSubmit(status=0, response={"reason": "egress endpoint unreachable"})
         stderr = io.StringIO()
-        with (
-            patch("app.main_reply.submit_egress", submit),
-            patch("sys.stderr", stderr),
-            patch(
-                "sys.argv",
-                [
-                    "main_reply.py",
-                    "task:email:53",
-                    "--message",
-                    "working on it",
-                    "--channel",
-                    "email",
-                    "--target",
-                    "alice@example.com",
-                ],
-            ),
-        ):
-            exit_code = main()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stderr", stderr),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
 
         self.assertEqual(exit_code, EXIT_TRANSIENT)
 
-    def test_main_reply_requires_envelope_id_for_non_prefixed_task_id(self) -> None:
-        with patch(
-            "sys.argv",
-            [
-                "main_reply.py",
-                "email:53",
-                "--message",
-                "working on it",
-                "--channel",
-                "email",
-                "--target",
-                "alice@example.com",
-            ],
-        ):
-            with self.assertRaisesRegex(ValueError, "envelope_id is required"):
-                main()
+    def test_requires_envelope_id_for_non_prefixed_task_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                },
+            )
+            with patch("sys.argv", ["main_reply.py", "--spec-file", spec]):
+                with self.assertRaisesRegex(ValueError, "envelope_id is required"):
+                    main()
 
-    def test_main_reply_posts_telegram_reaction_using_explicit_message_id(
-        self,
-    ) -> None:
+    def test_spec_file_rejects_unknown_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "hi",
+                    "bogus": "nope",
+                },
+            )
+            with patch("sys.argv", ["main_reply.py", "--spec-file", spec]):
+                with self.assertRaisesRegex(ValueError, "unknown fields"):
+                    main()
+
+    def test_reaction_via_flags_using_explicit_message_id(self) -> None:
         submit = _FakeSubmit()
         with (
             patch("app.main_reply.submit_egress", submit),
@@ -230,9 +283,7 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(payload["message"]["body"], "👍")
         self.assertEqual(payload["message"]["metadata"], {"message_id": 123})
 
-    def test_main_reply_posts_telegram_reaction_using_task_ledger_message_id(
-        self,
-    ) -> None:
+    def test_reaction_via_spec_file_using_task_ledger_message_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
@@ -259,23 +310,21 @@ class MainReplyCliTests(unittest.TestCase):
                 TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53")
             )
 
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "telegram_reaction": "👍",
+                },
+            )
             submit = _FakeSubmit()
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch(
                     "sys.argv",
-                    [
-                        "main_reply.py",
-                        "task:telegram:53",
-                        "--channel",
-                        "telegram",
-                        "--target",
-                        "8605042448",
-                        "--telegram-reaction",
-                        "👍",
-                        "--config",
-                        str(config_path),
-                    ],
+                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
                 ),
             ):
                 exit_code = main()
@@ -284,30 +333,26 @@ class MainReplyCliTests(unittest.TestCase):
         _, payload = submit.calls[0]
         self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
 
-    def test_main_reply_posts_attachment_message(self) -> None:
+    def test_spec_file_attachment_message(self) -> None:
         submit = _FakeSubmit()
         with tempfile.TemporaryDirectory() as tmpdir:
             attachment_path = Path(tmpdir) / "menu.pdf"
             attachment_path.write_bytes(b"%PDF-1.4\n")
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "This week's menu",
+                    "attachment_path": str(attachment_path),
+                    "attachment_name": "menu.pdf",
+                },
+            )
             with (
                 patch("app.main_reply.submit_egress", submit),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "task:telegram:53",
-                        "--channel",
-                        "telegram",
-                        "--target",
-                        "8605042448",
-                        "--message",
-                        "This week's menu",
-                        "--attachment-path",
-                        str(attachment_path),
-                        "--attachment-name",
-                        "menu.pdf",
-                    ],
-                ),
+                patch("sys.stdout", io.StringIO()),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
             ):
                 exit_code = main()
 
@@ -319,32 +364,30 @@ class MainReplyCliTests(unittest.TestCase):
             payload["message"]["attachment"]["uri"], attachment_path.as_uri()
         )
 
-    def test_main_reply_records_worker_activity_on_delivery(self) -> None:
+    def test_records_worker_activity_on_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
             config_path.write_text(
                 json.dumps({"db_path": str(db_path)}), encoding="utf-8"
             )
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                    "event_id": "evt:custom:1",
+                },
+            )
             submit = _FakeSubmit()
             with (
                 patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", io.StringIO()),
                 patch(
                     "sys.argv",
-                    [
-                        "main_reply.py",
-                        "task:email:53",
-                        "--message",
-                        "working on it",
-                        "--channel",
-                        "email",
-                        "--target",
-                        "alice@example.com",
-                        "--event-id",
-                        "evt:custom:1",
-                        "--config",
-                        str(config_path),
-                    ],
+                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
                 ),
             ):
                 exit_code = main()

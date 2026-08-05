@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 
 def main():
@@ -31,19 +32,22 @@ def main():
     if channel not in _DELIVERABLE:
         channel = "log"
 
+    # Send via a spec file, like the real reply contract now requires, so the
+    # reply body never passes through the shell.
+    spec = {
+        "task_id": task_id,
+        "channel": channel,
+        "target": target,
+        "message": "E2E fake codex reply",
+    }
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", prefix="fake-codex-reply-", delete=False
+    ) as spec_file:
+        json.dump(spec, spec_file)
+        spec_path = spec_file.name
+
     subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "app.main_reply",
-            task_id,
-            "--message",
-            "E2E fake codex reply",
-            "--channel",
-            channel,
-            "--target",
-            target,
-        ],
+        [sys.executable, "-m", "app.main_reply", "--spec-file", spec_path],
         check=True,
     )
 
