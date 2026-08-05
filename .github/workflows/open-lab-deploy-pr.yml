@@ -68,7 +68,7 @@ jobs:
           path: lab
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v19
+        uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Update chatting lock entry
         working-directory: lab
