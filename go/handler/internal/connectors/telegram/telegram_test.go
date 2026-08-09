@@ -244,6 +244,68 @@ func TestPollBuildsInternalNoticeForDisallowedChannelPost(t *testing.T) {
 	}
 }
 
+func TestPollBuildsInternalNoticeForDisallowedGroupMessage(t *testing.T) {
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(`{
+			"ok": true,
+			"result": [
+				{
+					"update_id": 2201,
+					"message": {
+						"message_id": 29,
+						"date": 1779345600,
+						"chat": {"id": -100888, "type": "supergroup", "title": "Ops Group"},
+						"from": {"id": 7, "username": "sender"},
+						"text": "hello group"
+					}
+				}
+			]
+		}`), nil
+	}}
+	observed := []ChatObservation{}
+	connector, err := New(Config{
+		BotToken:       "token",
+		AllowedChatIDs: []string{"12345"},
+		HTTPClient:     client,
+		ObserveChat: func(ctx context.Context, observation ChatObservation) error {
+			observed = append(observed, observation)
+			return nil
+		},
+		Now: func() time.Time { return mustTime(t, "2026-05-21T06:40:00Z") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(envelopes) != 1 {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+	envelope := envelopes[0]
+	if envelope.Source != "internal" {
+		t.Fatalf("source = %q", envelope.Source)
+	}
+	if envelope.ReplyChannel.Type != "telegram" || envelope.ReplyChannel.Target != "-100888" {
+		t.Fatalf("reply channel = %#v", envelope.ReplyChannel)
+	}
+	if envelope.Content != "Not enabled in group -100888. Add this id to telegram_allowed_chat_ids to enable replies here." {
+		t.Fatalf("content = %q", envelope.Content)
+	}
+	if envelope.ReplyChannel.Metadata["internal_notice"] != "telegram_group_not_enabled" {
+		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
+	}
+	if envelope.ReplyChannel.Metadata["message_id"] != float64(29) && envelope.ReplyChannel.Metadata["message_id"] != int64(29) {
+		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
+	}
+	if len(observed) != 1 || observed[0].ChatID != "-100888" || observed[0].UpdateKind != "message" {
+		t.Fatalf("observed = %#v", observed)
+	}
+}
+
 func TestPollDownloadsPhotoAttachmentAndUsesCaptionAsContent(t *testing.T) {
 	attachmentDir := t.TempDir()
 	requestedURLs := []string{}

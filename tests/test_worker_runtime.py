@@ -10,6 +10,7 @@ from app.internal_heartbeat import build_internal_heartbeat_envelope
 from app.internal_notices import (
     INTERNAL_NOTICE_METADATA_KEY,
     TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE,
+    TELEGRAM_GROUP_NOT_ENABLED_NOTICE,
 )
 from app.models import (
     ExecutionResult,
@@ -266,6 +267,33 @@ class WorkerRuntimeTests(unittest.TestCase):
         return TaskQueueMessage.from_envelope(
             envelope,
             trace_id="trace:internal:telegram-disallowed-channel:2101",
+        )
+
+    def _build_internal_group_notice_task_message(self) -> TaskQueueMessage:
+        envelope = TaskEnvelope(
+            id="telegram-disallowed-group:2201",
+            source="internal",
+            received_at=datetime(2026, 6, 25, 8, 5, tzinfo=timezone.utc),
+            actor="message-handler",
+            content=(
+                "Not enabled in group -100888. "
+                "Add this id to telegram_allowed_chat_ids to enable replies here."
+            ),
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target="-100888",
+                metadata={
+                    INTERNAL_NOTICE_METADATA_KEY: TELEGRAM_GROUP_NOT_ENABLED_NOTICE,
+                    "message_id": 29,
+                },
+            ),
+            dedupe_key="telegram-disallowed-group:2201",
+        )
+        return TaskQueueMessage.from_envelope(
+            envelope,
+            trace_id="trace:internal:telegram-disallowed-group:2201",
         )
 
     def test_process_task_message_emits_completion_only_for_successful_task(
@@ -653,6 +681,42 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 audit_event.detail["internal_notice"],
                 "telegram_channel_not_enabled",
+            )
+
+    def test_process_task_message_handles_internal_group_notice_without_executor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_internal_group_notice_task_message(),
+                executor_impl=AlwaysFailExecutor(),
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(result.run_record.source, "internal")
+            self.assertEqual(len(result.egress_messages), 2)
+            visible_egress_message = result.egress_messages[0]
+            completion_egress_message = result.egress_messages[1]
+            self.assertEqual(visible_egress_message.event_kind, "message")
+            self.assertEqual(visible_egress_message.message.channel, "telegram")
+            self.assertEqual(visible_egress_message.message.target, "-100888")
+            self.assertEqual(
+                visible_egress_message.message.body,
+                "Not enabled in group -100888. Add this id to telegram_allowed_chat_ids to enable replies here.",
+            )
+            self.assertEqual(completion_egress_message.event_kind, "completion")
+            self.assertEqual(completion_egress_message.sequence, 1)
+            self.assertEqual(result.reason_codes, ["internal_notice"])
+            self.assertIsNone(result.error_summary)
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(audit_event.detail["reason_codes"], ["internal_notice"])
+            self.assertEqual(
+                audit_event.detail["internal_notice"],
+                "telegram_group_not_enabled",
             )
 
     def test_build_error_summary_prefers_execution_error_then_last_error_then_fallback(
