@@ -23,6 +23,7 @@ const Source = "im"
 
 const internalNoticeKey = "internal_notice"
 const telegramChannelNotEnabledNotice = "telegram_channel_not_enabled"
+const telegramGroupNotEnabledNotice = "telegram_group_not_enabled"
 
 type ChatObservation struct {
 	ChatID      string
@@ -186,6 +187,9 @@ func (connector *Connector) normalizeMessage(ctx context.Context, updateID int64
 		return nil, err
 	}
 	if len(connector.allowedChatIDs) > 0 && !connector.allowedChatIDs[chatID] {
+		if message.Chat.Type == "group" || message.Chat.Type == "supergroup" {
+			return connector.buildDisallowedGroupNoticeEnvelope(updateID, message, chatID), nil
+		}
 		return nil, nil
 	}
 	return connector.buildEnvelope(updateID, message, chatID, actor)
@@ -210,7 +214,36 @@ func (connector *Connector) normalizeChannelPost(ctx context.Context, updateID i
 }
 
 func (connector *Connector) buildDisallowedChannelNoticeEnvelope(updateID int64, message telegramMessage, chatID string) *contracts.TaskEnvelope {
-	eventID := "telegram-disallowed-channel:" + strconv.FormatInt(updateID, 10)
+	return connector.buildDisallowedTelegramNoticeEnvelope(
+		updateID,
+		message,
+		chatID,
+		telegramChannelNotEnabledNotice,
+		fmt.Sprintf("Not enabled in channel %s. Add this id to telegram_allowed_channel_ids to enable replies here.", chatID),
+		"telegram-disallowed-channel:",
+	)
+}
+
+func (connector *Connector) buildDisallowedGroupNoticeEnvelope(updateID int64, message telegramMessage, chatID string) *contracts.TaskEnvelope {
+	return connector.buildDisallowedTelegramNoticeEnvelope(
+		updateID,
+		message,
+		chatID,
+		telegramGroupNotEnabledNotice,
+		fmt.Sprintf("Not enabled in group %s. Add this id to telegram_allowed_chat_ids to enable replies here.", chatID),
+		"telegram-disallowed-group:",
+	)
+}
+
+func (connector *Connector) buildDisallowedTelegramNoticeEnvelope(
+	updateID int64,
+	message telegramMessage,
+	chatID string,
+	noticeType string,
+	content string,
+	eventPrefix string,
+) *contracts.TaskEnvelope {
+	eventID := eventPrefix + strconv.FormatInt(updateID, 10)
 	actor := "message-handler"
 	return &contracts.TaskEnvelope{
 		SchemaVersion: contracts.SchemaVersion,
@@ -218,7 +251,7 @@ func (connector *Connector) buildDisallowedChannelNoticeEnvelope(updateID int64,
 		Source:        "internal",
 		ReceivedAt:    contracts.NewTimestamp(parseTelegramDate(message.Date, connector.now())),
 		Actor:         &actor,
-		Content:       fmt.Sprintf("Not enabled in channel %s. Add this id to telegram_allowed_channel_ids to enable replies here.", chatID),
+		Content:       content,
 		Attachments:   []contracts.AttachmentRef{},
 		ContextRefs:   []string{},
 		ReplyChannel: contracts.ReplyChannel{
@@ -226,7 +259,7 @@ func (connector *Connector) buildDisallowedChannelNoticeEnvelope(updateID int64,
 			Target: chatID,
 			Metadata: map[string]any{
 				"message_id":      message.MessageID,
-				internalNoticeKey: telegramChannelNotEnabledNotice,
+				internalNoticeKey: noticeType,
 			},
 		},
 		DedupeKey: eventID,

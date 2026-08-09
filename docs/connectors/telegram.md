@@ -46,6 +46,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - When a message includes both text and a Telegram `location`, the location block is appended to the text so the worker can reason over both in one prompt.
 - `channel_post` updates from allowlisted channel IDs are ingested normally.
 - `channel_post` updates from other channel IDs still update `telegram_chat_registry`, then trigger an automatic Telegram reply that includes the channel ID so it can be copied into `telegram_allowed_channel_ids`.
+- `message` updates from non-allowlisted `group` and `supergroup` chats still update `telegram_chat_registry`, then trigger an automatic Telegram reply that includes the chat ID so it can be copied into `telegram_allowed_chat_ids`.
 - Each observed `message`, `channel_post`, and `my_chat_member` chat is upserted into the handler SQLite table `telegram_chat_registry` before allowlist filtering. Query that table to discover new DM/group/supergroup/channel IDs, titles, usernames, and the latest retrieval timestamp.
 - Offset is advanced as `highest_update_id + 1` each poll.
 - The message handler tracks downloaded Telegram attachments in its SQLite DB and only makes them cleanup-eligible after the task reaches terminal completion.
