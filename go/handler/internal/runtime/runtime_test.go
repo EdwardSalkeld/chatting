@@ -390,6 +390,28 @@ func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 	}
 }
 
+func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
+	broker := &fakeBroker{}
+	handler := &fakeEgressHandler{}
+	config := handlerconfig.Defaults()
+	config.MaxLoops = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	connector := &fakeCancelingConnector{onPoll: cancel}
+	runner, err := NewRunner(
+		config,
+		broker,
+		handler,
+		WithIngress(newFakeIngressState(), connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runner.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunRecordsLoopAndEgressMetrics(t *testing.T) {
 	broker := &fakeBroker{
 		picked: []*bbmb.PickedMessage{
@@ -568,6 +590,17 @@ func (connector *fakeAckingConnector) Poll(ctx context.Context) ([]contracts.Tas
 func (connector *fakeAckingConnector) AckEnvelope(ctx context.Context, envelopeID string) error {
 	connector.acked = append(connector.acked, envelopeID)
 	return nil
+}
+
+type fakeCancelingConnector struct {
+	onPoll func()
+}
+
+func (connector *fakeCancelingConnector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
+	if connector.onPoll != nil {
+		connector.onPoll()
+	}
+	return nil, context.Canceled
 }
 
 type fakeMetricsClock struct {
