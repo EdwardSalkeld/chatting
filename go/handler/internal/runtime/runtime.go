@@ -150,9 +150,15 @@ func (runner *Runner) Run(ctx context.Context) error {
 		loopCount++
 		published, err := runner.PublishIngress(ctx)
 		if err != nil {
+			if isGracefulContextStop(ctx, err) {
+				return nil
+			}
 			return err
 		}
 		if err := runner.cleanupTelegramAttachments(ctx); err != nil {
+			if isGracefulContextStop(ctx, err) {
+				return nil
+			}
 			return err
 		}
 		if runner.metrics != nil {
@@ -165,6 +171,13 @@ func (runner *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func isGracefulContextStop(ctx context.Context, err error) bool {
+	if err == nil || ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (runner *Runner) cleanupTelegramAttachments(ctx context.Context) error {
