@@ -95,6 +95,56 @@ func TestHandleAllowsFinalChannelWhenEnvelopeReplyChannelAllowed(t *testing.T) {
 	}
 }
 
+func TestHandleAllowsExplicitTelegramFromEmailTaskWhenGloballyAllowed(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{}
+	engine := newTestEngineWithAllowedChannels(t, state, dispatcher, []string{"email", "telegram"})
+	message := testEgressMessage(t, task, nil, "evt:telegram:1", "incremental")
+	message.Message.Channel = "telegram"
+	message.Message.Target = "12345"
+
+	result, err := engine.Handle(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusDispatched {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(dispatcher.messages) != 1 {
+		t.Fatalf("dispatch count = %d", len(dispatcher.messages))
+	}
+	if dispatcher.messages[0].Channel != "telegram" || dispatcher.messages[0].Target != "12345" {
+		t.Fatalf("dispatch = %#v", dispatcher.messages[0])
+	}
+}
+
+func TestHandleAllowsExplicitEmailFromTelegramTaskWhenGloballyAllowed(t *testing.T) {
+	task := testTelegramTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{}
+	engine := newTestEngineWithAllowedChannels(t, state, dispatcher, []string{"email", "telegram"})
+	message := testEgressMessage(t, task, nil, "evt:email:1", "incremental")
+	message.Message.Channel = "email"
+	message.Message.Target = "alice@example.com"
+
+	result, err := engine.Handle(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusDispatched {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(dispatcher.messages) != 1 {
+		t.Fatalf("dispatch count = %d", len(dispatcher.messages))
+	}
+	if dispatcher.messages[0].Channel != "email" || dispatcher.messages[0].Target != "alice@example.com" {
+		t.Fatalf("dispatch = %#v", dispatcher.messages[0])
+	}
+}
+
 func TestHandleAllowsInternalHeartbeatLogPongWhenLogDisallowed(t *testing.T) {
 	task := contracts.NewTaskQueueMessage(
 		heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z")),
@@ -671,7 +721,7 @@ func newTestEngine(t *testing.T, state *fakeState, dispatcher *recordingDispatch
 	if dispatcher == nil {
 		dispatcher = &recordingDispatcher{}
 	}
-	return newTestEngineWithState(t, state, dispatcher)
+	return newTestEngineWithAllowedChannels(t, state, dispatcher, []string{"email"})
 }
 
 func newTestEngineWithState(t *testing.T, state State, dispatcher *recordingDispatcher, options ...Option) *Engine {
@@ -684,6 +734,11 @@ func newTestEngineWithState(t *testing.T, state State, dispatcher *recordingDisp
 		t.Fatal(err)
 	}
 	return engine
+}
+
+func newTestEngineWithAllowedChannels(t *testing.T, state State, dispatcher *recordingDispatcher, channels []string) *Engine {
+	t.Helper()
+	return newTestEngineWithState(t, state, dispatcher, WithAllowedChannels(channels))
 }
 
 func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
@@ -705,6 +760,11 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 }
 
 func telegramTaskMessage(t *testing.T) contracts.TaskQueueMessage {
+	t.Helper()
+	return testTelegramTaskMessage(t)
+}
+
+func testTelegramTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 	t.Helper()
 	actor := "8605042448"
 	return contracts.NewTaskQueueMessage(contracts.TaskEnvelope{

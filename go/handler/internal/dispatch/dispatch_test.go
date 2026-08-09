@@ -83,6 +83,33 @@ func TestDispatcherFormatsEmailReplySubjectAndQuotedOriginal(t *testing.T) {
 	}
 }
 
+func TestDispatcherSendsPlainEmailForNonEmailSource(t *testing.T) {
+	body := "Here is the answer."
+	sender := &recordingEmailSender{}
+	message := contracts.OutboundMessage{
+		Channel: "email",
+		Target:  "alice@example.com",
+		Body:    &body,
+	}
+
+	_, err := (Dispatcher{EmailSender: sender}).Dispatch(
+		context.Background(),
+		message,
+		telegramEnvelope("12345"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sent := sender.messages[0]
+	if sent.subject != nil {
+		t.Fatalf("subject = %#v", sent.subject)
+	}
+	if sent.body != "Here is the answer." {
+		t.Fatalf("body = %q", sent.body)
+	}
+}
+
 func TestDispatcherStripsLeadingSubjectLineFromEmailBody(t *testing.T) {
 	body := "Subject: Re: Ice-cream\n\nGreat choice. Let's go classic."
 	sender := &recordingEmailSender{}
@@ -586,6 +613,24 @@ func emailEnvelope(subject string, body string) contracts.TaskEnvelope {
 			Target: "alice@example.com",
 		},
 		DedupeKey: "email:1",
+	}
+}
+
+func telegramEnvelope(target string) contracts.TaskEnvelope {
+	actor := "7:sender"
+	return contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:1",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime("2026-03-06T11:00:00Z")),
+		Actor:         &actor,
+		Content:       "telegram source body",
+		ReplyChannel: contracts.ReplyChannel{
+			Type:     "telegram",
+			Target:   target,
+			Metadata: map[string]any{"message_id": float64(42)},
+		},
+		DedupeKey: "telegram:1",
 	}
 }
 
