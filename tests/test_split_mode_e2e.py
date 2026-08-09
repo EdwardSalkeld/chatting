@@ -119,6 +119,7 @@ class SplitModeE2ETests(unittest.TestCase):
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
         bbmb_port = _reserve_port()
         bbmb_metrics_port = _reserve_port()
+        handler_metrics_port = _reserve_port()
         egress_http_port = _reserve_port()
         bbmb_address = f"127.0.0.1:{bbmb_port}"
         server_proc: subprocess.Popen[str] | None = None
@@ -139,6 +140,7 @@ class SplitModeE2ETests(unittest.TestCase):
                         "bbmb_address": bbmb_address,
                         "poll_interval_seconds": 0.1,
                         "poll_timeout_seconds": 1,
+                        "metrics_port": handler_metrics_port,
                         "allowed_egress_channels": ["log"],
                         "egress_http_port": egress_http_port,
                     }
@@ -188,6 +190,15 @@ class SplitModeE2ETests(unittest.TestCase):
                 )
                 _wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
 
+                handler_proc = subprocess.Popen(
+                    message_handler_command(handler_config_path),
+                    cwd=repo_root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                _wait_for_port("127.0.0.1", egress_http_port, timeout_seconds=30.0)
+
                 worker_proc = subprocess.Popen(
                     [
                         sys.executable,
@@ -196,13 +207,6 @@ class SplitModeE2ETests(unittest.TestCase):
                         "--config",
                         str(worker_config_path),
                     ],
-                    cwd=repo_root,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                handler_proc = subprocess.Popen(
-                    message_handler_command(handler_config_path),
                     cwd=repo_root,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
