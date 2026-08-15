@@ -21,6 +21,12 @@ import (
 // ErrScheduleNotFound is returned when an operation targets a schedule that has no active version.
 var ErrScheduleNotFound = errors.New("schedule not found")
 
+// Reminder lifecycle errors are stable sentinels for API status mapping.
+var (
+	ErrReminderNotFound            = errors.New("reminder not found")
+	ErrReminderIdempotencyConflict = errors.New("reminder idempotency key conflicts with a different request")
+)
+
 type Store struct {
 	db *sql.DB
 }
@@ -263,6 +269,30 @@ func (store *Store) initialize(ctx context.Context) error {
 			superseded_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_schedules_schedule_id_status ON schedules (schedule_id, status)`,
+		`CREATE TABLE IF NOT EXISTS reminders (
+			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			reminder_id TEXT NOT NULL,
+			revision INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			run_at TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			context_refs TEXT NOT NULL,
+			prompt_context TEXT NOT NULL,
+			reply_channel_type TEXT NOT NULL,
+			reply_channel_target TEXT NOT NULL,
+			reply_channel_metadata TEXT NOT NULL,
+			created_from_task_id TEXT NOT NULL,
+			created_by TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL UNIQUE,
+			request_fingerprint TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			fired_at TEXT,
+			cancelled_at TEXT,
+			UNIQUE (reminder_id, revision)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_reminders_status_run_at ON reminders (status, run_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_reminders_reminder_id_revision ON reminders (reminder_id, revision DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {

@@ -3,6 +3,7 @@ package schedules
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -160,8 +161,14 @@ func (service *Service) deleteSchedule(writer http.ResponseWriter, request *http
 func decodeScheduleInput(writer http.ResponseWriter, request *http.Request) (sqlitestate.ScheduleInput, bool) {
 	var body scheduleRequest
 	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		writeError(writer, http.StatusBadRequest, "malformed request body")
+		writeError(writer, http.StatusBadRequest, "malformed request body: "+err.Error())
+		return sqlitestate.ScheduleInput{}, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		writeError(writer, http.StatusBadRequest, "request body must contain one JSON object")
 		return sqlitestate.ScheduleInput{}, false
 	}
 	job := schedule.Job{
@@ -232,5 +239,22 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 }
 
 func writeError(writer http.ResponseWriter, status int, message string) {
-	writeJSON(writer, status, map[string]string{"error": message})
+	payload := map[string]any{"error": message}
+	if status >= 400 && status < 500 {
+		payload["usage"] = map[string]any{
+			"endpoints": map[string]string{
+				"create": "POST /api/schedules", "list": "GET /api/schedules",
+				"get":     "GET /api/schedules/{schedule_id}?history=1",
+				"replace": "PUT /api/schedules/{schedule_id}", "delete": "DELETE /api/schedules/{schedule_id}",
+			},
+			"request_body": map[string]any{
+				"job_name": "daily-summary", "content": "Prepare the daily summary",
+				"cron": "0 9 * * *", "timezone": "Europe/London",
+				"context_refs": []string{}, "prompt_context": []string{},
+				"reply_channel_type": "telegram", "reply_channel_target": "-1001234567890", "created_by": "worker",
+			},
+			"notes": []string{"cron uses exactly five fields", "timezone defaults to UTC", "reply channel type and target must be supplied together"},
+		}
+	}
+	writeJSON(writer, status, payload)
 }

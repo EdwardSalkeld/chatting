@@ -15,7 +15,7 @@ from app.models import (
     TaskEnvelope,
 )
 
-SourceType = Literal["cron", "email", "im", "webhook", "internal"]
+SourceType = Literal["cron", "email", "im", "webhook", "internal", "reminder"]
 
 _TASK_MESSAGE_TYPE = "chatting.task.v1"
 _EGRESS_MESSAGE_TYPE_V2 = "chatting.egress.v2"

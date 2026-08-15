@@ -44,6 +44,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "db_path",
         "activity_history_limit",
         "handler_egress_url",
+        "handler_api_url",
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
@@ -115,6 +116,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--handler-egress-url",
         help="Handler synchronous egress endpoint URL (default the worker config's handler_egress_url).",
+    )
+    parser.add_argument(
+        "--handler-api-url",
+        help="Handler schedule/reminder API base URL (default http://127.0.0.1:9464).",
     )
     parser.add_argument(
         "--max-attempts",
@@ -312,7 +317,18 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         raise ValueError("codex_command or claude_command must be configured")
 
     executor_env = _build_executor_env(args.config, os.environ)
-    return CodexExecutor(command=command, cwd=codex_working_dir, env=executor_env)
+    handler_api_url = _resolve_str(
+        args.handler_api_url,
+        config.get("handler_api_url"),
+        default_value="http://127.0.0.1:9464",
+        setting_name="handler_api_url",
+    )
+    return CodexExecutor(
+        command=command,
+        cwd=codex_working_dir,
+        env=executor_env,
+        handler_api_url=handler_api_url,
+    )
 
 
 def _build_executor_env(

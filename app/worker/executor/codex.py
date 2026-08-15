@@ -19,13 +19,18 @@ class CodexExecutor:
     cwd: str | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
+    handler_api_url: str = "http://127.0.0.1:9464"
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
         payload = json.dumps(
-            _task_payload(envelope, current_time=self.now_provider())
+            _task_payload(
+                envelope,
+                current_time=self.now_provider(),
+                handler_api_url=self.handler_api_url,
+            )
         )
         try:
             completed = subprocess.run(
@@ -60,7 +65,10 @@ class CodexExecutor:
 
 
 def _task_payload(
-    envelope: TaskEnvelope, *, current_time: datetime
+    envelope: TaskEnvelope,
+    *,
+    current_time: datetime,
+    handler_api_url: str = "http://127.0.0.1:9464",
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -73,9 +81,7 @@ def _task_payload(
         .replace("+00:00", "Z"),
         "source": envelope.source,
         "content": envelope.content,
-        "context": [
-            parse_context_ref(ref).to_dict() for ref in envelope.context_refs
-        ],
+        "context": [parse_context_ref(ref).to_dict() for ref in envelope.context_refs],
         "reply_channel": {
             "type": envelope.reply_channel.type,
             "target": envelope.reply_channel.target,
@@ -115,7 +121,7 @@ def _task_payload(
                 "task_id": "task:telegram:123",
                 "channel": "telegram",
                 "target": "8605042448",
-                "message": "Any text is safe here: backticks, $vars, \"quotes\", newlines.",
+                "message": 'Any text is safe here: backticks, $vars, "quotes", newlines.',
             },
             "visible_replies_must_not_be_returned_in_executor_output": True,
             "executor_exit_status_drives_completion": True,
@@ -127,6 +133,19 @@ def _task_payload(
                 "attachment) so you must adjust and resend, e.g. without the attachment; "
                 "3 = the handler was unreachable so you may retry. A non-zero exit means the "
                 "reply did NOT reach the user — do not treat it as sent."
+            ),
+        },
+        "scheduling_contract": {
+            "handler_api_url": handler_api_url.rstrip("/"),
+            "schedule_api": "/api/schedules",
+            "reminder_api": "/api/reminders",
+            "instructions": (
+                "Use the handler JSON APIs directly; there is no scheduling CLI. For POST/PUT, "
+                "write JSON to a temporary file and use curl --data-binary @<path>. Copy the "
+                "current task reply_channel unless the user explicitly requests another target. "
+                "Reminder run_at values must include Z or an explicit offset and every reminder "
+                "POST/PUT needs an idempotency_key. Any 4xx JSON response includes a usage object "
+                "with endpoints, an example body, and correction notes."
             ),
         },
     }

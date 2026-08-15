@@ -84,6 +84,18 @@ class PublishEgressWithOutboxTests(unittest.TestCase):
 
 
 class MainWorkerTests(unittest.TestCase):
+    def test_load_config_accepts_handler_api_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "worker.json"
+            config_path.write_text(
+                json.dumps({"handler_api_url": "http://handler:9464"}),
+                encoding="utf-8",
+            )
+
+            payload = _load_config(str(config_path))
+
+        self.assertEqual(payload["handler_api_url"], "http://handler:9464")
+
     def test_load_config_accepts_activity_port(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "worker.json"
@@ -180,7 +192,9 @@ class MainWorkerTests(unittest.TestCase):
             log_line,
         )
 
-    def test_log_worker_processed_includes_failure_context_for_dead_letter(self) -> None:
+    def test_log_worker_processed_includes_failure_context_for_dead_letter(
+        self,
+    ) -> None:
         result = self._build_result(
             result_status="dead_letter",
             reason_codes=["retry_exhausted"],

@@ -82,6 +82,7 @@ class CodexExecutorTests(unittest.TestCase):
                 cwd="/workspace/chatting",
                 env={"TOKEN": "secret"},
                 timeout_seconds=123,
+                handler_api_url="http://handler.test:9464/",
                 now_provider=lambda: datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc),
             )
             executor.execute(_envelope())
@@ -93,6 +94,14 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -P -m app.main_reply --spec-file <path>",
+        )
+        self.assertEqual(
+            payload["scheduling_contract"]["handler_api_url"],
+            "http://handler.test:9464",
+        )
+        self.assertIn(
+            "no scheduling CLI",
+            payload["scheduling_contract"]["instructions"],
         )
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
         self.assertEqual(run_mock.call_args.kwargs["env"], {"TOKEN": "secret"})

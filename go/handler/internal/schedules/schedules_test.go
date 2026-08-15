@@ -148,13 +148,17 @@ func TestSchedulesAPIValidationRejectsBadCron(t *testing.T) {
 		t.Fatalf("expected 400 for invalid cron, got %d", response.StatusCode)
 	}
 	var wrapper struct {
-		Error string `json:"error"`
+		Error string         `json:"error"`
+		Usage map[string]any `json:"usage"`
 	}
 	if err := json.Unmarshal(readBody(t, response), &wrapper); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
 	if wrapper.Error == "" {
 		t.Fatal("expected an error message in the 400 response")
+	}
+	if wrapper.Usage["request_body"] == nil {
+		t.Fatal("expected corrective API usage in the 400 response")
 	}
 }
 

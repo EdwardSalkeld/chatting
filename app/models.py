@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-SOURCE_TYPES = ("cron", "email", "im", "webhook", "internal")
+SOURCE_TYPES = ("cron", "email", "im", "webhook", "internal", "reminder")
 SCHEMA_VERSION = "1.0"
 
 
@@ -192,7 +192,7 @@ class TaskEnvelope:
     """Normalized input event schema."""
 
     id: str
-    source: Literal["cron", "email", "im", "webhook", "internal"]
+    source: Literal["cron", "email", "im", "webhook", "internal", "reminder"]
     received_at: datetime
     actor: str | None
     content: str
@@ -319,7 +319,7 @@ class RunRecord:
 
     run_id: str
     envelope_id: str
-    source: Literal["cron", "email", "im", "webhook", "internal"]
+    source: Literal["cron", "email", "im", "webhook", "internal", "reminder"]
     workflow: str
     latency_ms: int
     result_status: str
@@ -360,7 +360,7 @@ class AuditEvent:
 
     run_id: str
     envelope_id: str
-    source: Literal["cron", "email", "im", "webhook", "internal"]
+    source: Literal["cron", "email", "im", "webhook", "internal", "reminder"]
     workflow: str
     result_status: str
     detail: dict[str, Any]
