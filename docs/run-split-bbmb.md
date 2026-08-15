@@ -164,7 +164,8 @@ Notes:
   metacharacters (backticks, `$`, quotes, newlines) can't mangle or split the reply.
 - Executor stdout/stderr are treated as operator transcript and audit detail, not user-visible reply transport.
 - `event_id` in the spec can be supplied for stable idempotency across retries.
-- Telegram reactions go in the spec too (`"telegram_reaction": "👍"`); if `telegram_message_id`
+- Telegram reactions go in the spec too (`"telegram_reaction": "👍"`). When a reaction is
+  supplied with a message or attachment, `app.main_reply` sends both. If `telegram_message_id`
   is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.

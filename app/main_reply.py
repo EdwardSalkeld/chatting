@@ -60,8 +60,9 @@ _SPEC_FIELDS = (
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Publish one visible egress message. "
+            "Publish visible egress. "
             "Executors should use this for user-visible acknowledgements and final replies. "
+            "A Telegram reaction may be combined with a message or attachment; both are sent. "
             "Prefer --spec-file: it carries the whole reply (including the body) as a JSON "
             "file so nothing is passed through the shell."
         )
@@ -220,9 +221,10 @@ def _resolve_telegram_message_id(
     raise ValueError("telegram_message_id is required")
 
 
-def _resolve_reply_message(
+def _resolve_reply_messages(
     args: argparse.Namespace, config: dict[str, object]
-) -> OutboundMessage:
+) -> list[OutboundMessage]:
+    messages: list[OutboundMessage] = []
     if args.telegram_reaction is not None:
         if args.channel != "telegram":
             raise ValueError("telegram reactions require --channel telegram")
@@ -239,11 +241,13 @@ def _resolve_reply_message(
             explicit_value=args.telegram_message_id,
             config=config,
         )
-        return OutboundMessage(
-            channel="telegram_reaction",
-            target=args.target,
-            body=emoji,
-            metadata={"message_id": message_id},
+        messages.append(
+            OutboundMessage(
+                channel="telegram_reaction",
+                target=args.target,
+                body=emoji,
+                metadata={"message_id": message_id},
+            )
         )
 
     attachment: AttachmentRef | None = None
@@ -268,15 +272,34 @@ def _resolve_reply_message(
     body: str | None = None
     if args.message is not None:
         body = normalize_telegram_outbound_text(args.message).strip()
-        if not body:
+        if not body and not messages and attachment is None:
             raise ValueError("message must not be empty")
+        if not body:
+            body = None
 
-    if body is None and attachment is None:
+    if body is not None or attachment is not None:
+        messages.append(
+            OutboundMessage(
+                channel=args.channel,
+                target=args.target,
+                body=body,
+                attachment=attachment,
+            )
+        )
+
+    if not messages:
         raise ValueError("message or attachment is required")
 
-    return OutboundMessage(
-        channel=args.channel, target=args.target, body=body, attachment=attachment
-    )
+    return messages
+
+
+def _message_event_id(
+    base_event_id: str, message: OutboundMessage, *, message_count: int
+) -> str:
+    if message_count == 1:
+        return base_event_id
+    suffix = "reaction" if message.channel == "telegram_reaction" else "message"
+    return f"{base_event_id}:{suffix}"
 
 
 def main() -> int:
@@ -292,75 +315,99 @@ def main() -> int:
 
     envelope_id = _resolve_envelope_id(args.task_id, args.envelope_id)
     trace_id = _resolve_trace_id(envelope_id, args.trace_id)
-    event_id = _resolve_event_id(args.task_id, args.event_id)
+    base_event_id = _resolve_event_id(args.task_id, args.event_id)
 
-    outbound_message = _resolve_reply_message(args, config)
+    outbound_messages = _resolve_reply_messages(args, config)
     db_path = _resolve_optional_db_path(config)
+    results: list[dict[str, object]] = []
+    all_delivered = True
+    has_transient_failure = False
 
-    egress_message = EgressQueueMessage(
-        task_id=args.task_id,
-        envelope_id=envelope_id,
-        trace_id=trace_id,
-        event_index=0,
-        event_count=1,
-        message=outbound_message,
-        emitted_at=datetime.now(timezone.utc),
-        event_id=event_id,
-        sequence=None,
-        event_kind="incremental",
-        message_type="chatting.egress.v2",
-    )
-
-    status_code, response = submit_egress(handler_egress_url, egress_message.to_dict())
-    result_status = str(response.get("status", "")) if isinstance(response, dict) else ""
-    reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
-
-    delivered = status_code in (200, 202)
-    if delivered and db_path is not None:
-        # Only record the activity event on confirmed delivery: the supervised
-        # reply-recovery loop counts these to decide whether a visible reply was
-        # actually sent, so a dropped send must not look like a success.
-        SQLiteStateStore(db_path).append_worker_activity(
-            occurred_at=egress_message.emitted_at,
-            task_id=egress_message.task_id,
-            envelope_id=egress_message.envelope_id,
-            phase=f"egress_{egress_message.event_kind}",
-            summary=f"{egress_message.event_kind} egress to {egress_message.message.channel}",
-            detail={
-                "channel": egress_message.message.channel,
-                "target": egress_message.message.target,
-                "body": egress_message.message.body,
-                "event_id": egress_message.event_id,
-                "event_kind": egress_message.event_kind,
-                "event_count": egress_message.event_count,
-                "event_index": egress_message.event_index,
-                "message_type": egress_message.message_type,
-                "publish_source": "main_reply",
-                "sequence": egress_message.sequence,
-                "result_status": result_status,
-            },
-            is_internal=egress_message.message.channel in {"internal", "log"},
+    for outbound_message in outbound_messages:
+        egress_message = EgressQueueMessage(
+            task_id=args.task_id,
+            envelope_id=envelope_id,
+            trace_id=trace_id,
+            event_index=0,
+            event_count=1,
+            message=outbound_message,
+            emitted_at=datetime.now(timezone.utc),
+            event_id=_message_event_id(
+                base_event_id,
+                outbound_message,
+                message_count=len(outbound_messages),
+            ),
+            sequence=None,
+            event_kind="incremental",
+            message_type="chatting.egress.v2",
         )
 
-    payload = {
-        "status": result_status or ("dispatched" if delivered else "error"),
-        "http_status": status_code,
-        "task_id": egress_message.task_id,
-        "event_id": egress_message.event_id,
-        "event_kind": egress_message.event_kind,
-        "sequence": egress_message.sequence,
-        "reason": reason,
-    }
-    if delivered:
+        status_code, response = submit_egress(
+            handler_egress_url, egress_message.to_dict()
+        )
+        result_status = (
+            str(response.get("status", "")) if isinstance(response, dict) else ""
+        )
+        reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
+        delivered = status_code in (200, 202)
+        all_delivered = all_delivered and delivered
+        has_transient_failure = has_transient_failure or (
+            not delivered and status_code != 422
+        )
+
+        if delivered and db_path is not None:
+            # Only record the activity event on confirmed delivery: the supervised
+            # reply-recovery loop counts these to decide whether visible egress was
+            # actually sent, so a dropped send must not look like a success.
+            SQLiteStateStore(db_path).append_worker_activity(
+                occurred_at=egress_message.emitted_at,
+                task_id=egress_message.task_id,
+                envelope_id=egress_message.envelope_id,
+                phase=f"egress_{egress_message.event_kind}",
+                summary=(
+                    f"{egress_message.event_kind} egress to "
+                    f"{egress_message.message.channel}"
+                ),
+                detail={
+                    "channel": egress_message.message.channel,
+                    "target": egress_message.message.target,
+                    "body": egress_message.message.body,
+                    "event_id": egress_message.event_id,
+                    "event_kind": egress_message.event_kind,
+                    "event_count": egress_message.event_count,
+                    "event_index": egress_message.event_index,
+                    "message_type": egress_message.message_type,
+                    "publish_source": "main_reply",
+                    "sequence": egress_message.sequence,
+                    "result_status": result_status,
+                },
+                is_internal=egress_message.message.channel in {"internal", "log"},
+            )
+
+        results.append(
+            {
+                "status": result_status or ("dispatched" if delivered else "error"),
+                "http_status": status_code,
+                "task_id": egress_message.task_id,
+                "event_id": egress_message.event_id,
+                "event_kind": egress_message.event_kind,
+                "channel": egress_message.message.channel,
+                "sequence": egress_message.sequence,
+                "reason": reason,
+            }
+        )
+
+    payload = results[0] if len(results) == 1 else {"results": results}
+    if all_delivered:
         print(json.dumps(payload, sort_keys=True))
         return 0
 
-    # Not delivered: surface loudly on stderr so the executor transcript shows
-    # it and the exit code drives a fallback (or retry).
+    # Not fully delivered: surface loudly on stderr so the executor transcript
+    # shows every outcome. Both sends are attempted even if the first one fails.
     print(json.dumps(payload, sort_keys=True), file=sys.stderr)
-    if status_code == 422:
-        return EXIT_DROPPED
-    return EXIT_TRANSIENT
+    if has_transient_failure:
+        return EXIT_TRANSIENT
+    return EXIT_DROPPED
 
 
 def _resolve_optional_db_path(config: dict[str, object]) -> str | None:

@@ -103,7 +103,9 @@ def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str
                 "Never put the reply text on the command line: the shell mangles backticks, "
                 "quotes, $, and newlines, which corrupts or splits the reply. Spec fields: "
                 "task_id, channel, target, message, and optionally attachment_path, "
-                "attachment_name, telegram_reaction, telegram_message_id, event_id."
+                "attachment_name, telegram_reaction, telegram_message_id, event_id. "
+                "If telegram_reaction is supplied with message or attachment, main_reply "
+                "sends both."
             ),
             "reply_spec_example": {
                 "task_id": "task:telegram:123",
