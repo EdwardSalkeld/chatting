@@ -27,6 +27,17 @@ from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_s
 EXIT_DROPPED = 1
 EXIT_TRANSIENT = 3
 
+# Telegram's Bot API accepts only these values for ReactionTypeEmoji. Keep the
+# validation here, at the executor boundary, so an unsupported Unicode emoji is
+# rejected locally instead of becoming handler alert noise.
+# Source: https://core.telegram.org/bots/api#reactiontypeemoji
+TELEGRAM_STANDARD_REACTION_EMOJI = tuple(
+    "❤ 👍 👎 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡 🥱 🥴 😍 🐳 "
+    "❤‍🔥 🌚 🌭 💯 🤣 ⚡ 🍌 🏆 💔 🤨 😐 🍓 🍾 💋 🖕 😈 😴 😭 🤓 👻 👨‍💻 👀 🎃 "
+    "🙈 😇 😨 🤝 ✍ 🤗 🫡 🎅 🎄 ☃ 💅 🤪 🗿 🆒 💘 🙉 🦄 😘 💊 🙊 😎 👾 🤷‍♂ "
+    "🤷 🤷‍♀ 😡".split()
+)
+
 
 # Reply fields that a --spec-file JSON may set. These map 1:1 onto the argparse
 # namespace attributes below so the rest of the module is agnostic to whether a
@@ -218,6 +229,11 @@ def _resolve_reply_message(
         emoji = args.telegram_reaction.strip()
         if not emoji:
             raise ValueError("telegram_reaction must not be empty")
+        if emoji not in TELEGRAM_STANDARD_REACTION_EMOJI:
+            raise ValueError(
+                f"telegram_reaction {emoji!r} is not supported by Telegram; "
+                "choose one of: " + " ".join(TELEGRAM_STANDARD_REACTION_EMOJI)
+            )
         message_id = _resolve_telegram_message_id(
             task_id=args.task_id,
             explicit_value=args.telegram_message_id,
