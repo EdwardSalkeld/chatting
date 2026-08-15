@@ -283,6 +283,34 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(payload["message"]["body"], "👍")
         self.assertEqual(payload["message"]["metadata"], {"message_id": 123})
 
+    def test_unsupported_reaction_is_rejected_before_handler_submission(self) -> None:
+        submit = _FakeSubmit()
+        with (
+            patch("app.main_reply.submit_egress", submit),
+            patch(
+                "sys.argv",
+                [
+                    "main_reply.py",
+                    "task:telegram:53",
+                    "--channel",
+                    "telegram",
+                    "--target",
+                    "8605042448",
+                    "--telegram-reaction",
+                    "🔎",
+                    "--telegram-message-id",
+                    "123",
+                ],
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "telegram_reaction '🔎' is not supported by Telegram",
+            ):
+                main()
+
+        self.assertEqual(submit.calls, [])
+
     def test_reaction_via_spec_file_using_task_ledger_message_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
