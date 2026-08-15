@@ -84,18 +84,6 @@ class PublishEgressWithOutboxTests(unittest.TestCase):
 
 
 class MainWorkerTests(unittest.TestCase):
-    def test_load_config_accepts_handler_api_url(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"handler_api_url": "http://handler:9464"}),
-                encoding="utf-8",
-            )
-
-            payload = _load_config(str(config_path))
-
-        self.assertEqual(payload["handler_api_url"], "http://handler:9464")
-
     def test_load_config_accepts_activity_port(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "worker.json"

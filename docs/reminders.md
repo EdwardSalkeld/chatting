@@ -42,9 +42,9 @@ key returns the existing revision; reusing the key with different data returns
 example body, and correction notes so an agent can repair its request.
 
 Workers should write request JSON to a temporary file and use `curl
---data-binary @<path>` against the `scheduling_contract.handler_api_url` supplied
-in every task. They should copy the current task's reply channel unless another
-destination was explicitly requested.
+--data-binary @<path>` against the handler API, as they do for schedules. They
+should copy the current task's reply channel unless another destination was
+explicitly requested.
 
 ## Delivery semantics
 

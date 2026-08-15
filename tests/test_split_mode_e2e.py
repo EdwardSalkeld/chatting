@@ -241,7 +241,6 @@ class SplitModeE2ETests(unittest.TestCase):
                         "activity_port": 0,
                         "codex_command": f"{sys.executable} {fake_codex}",
                         "handler_egress_url": f"http://127.0.0.1:{egress_http_port}/egress",
-                        "handler_api_url": f"http://127.0.0.1:{handler_metrics_port}",
                     }
                 ),
                 encoding="utf-8",

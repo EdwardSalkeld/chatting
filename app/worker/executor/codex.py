@@ -19,19 +19,12 @@ class CodexExecutor:
     cwd: str | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
-    handler_api_url: str = "http://127.0.0.1:9464"
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
-        payload = json.dumps(
-            _task_payload(
-                envelope,
-                current_time=self.now_provider(),
-                handler_api_url=self.handler_api_url,
-            )
-        )
+        payload = json.dumps(_task_payload(envelope, current_time=self.now_provider()))
         try:
             completed = subprocess.run(
                 self.command,
@@ -64,12 +57,7 @@ class CodexExecutor:
         )
 
 
-def _task_payload(
-    envelope: TaskEnvelope,
-    *,
-    current_time: datetime,
-    handler_api_url: str = "http://127.0.0.1:9464",
-) -> dict[str, Any]:
+def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
     task_dict: dict[str, Any] = {
@@ -136,7 +124,6 @@ def _task_payload(
             ),
         },
         "scheduling_contract": {
-            "handler_api_url": handler_api_url.rstrip("/"),
             "schedule_api": "/api/schedules",
             "reminder_api": "/api/reminders",
             "instructions": (
