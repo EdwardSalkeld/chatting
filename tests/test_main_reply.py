@@ -311,6 +311,77 @@ class MainReplyCliTests(unittest.TestCase):
 
         self.assertEqual(submit.calls, [])
 
+    def test_spec_file_sends_reaction_and_message(self) -> None:
+        submit = _FakeSubmit()
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "I found the problem.",
+                    "telegram_reaction": "👀",
+                    "telegram_message_id": 123,
+                    "event_id": "evt:custom:both",
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", stdout),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(submit.calls), 2)
+        reaction = submit.calls[0][1]
+        message = submit.calls[1][1]
+        self.assertEqual(reaction["event_id"], "evt:custom:both:reaction")
+        self.assertEqual(reaction["message"]["channel"], "telegram_reaction")
+        self.assertEqual(reaction["message"]["body"], "👀")
+        self.assertEqual(message["event_id"], "evt:custom:both:message")
+        self.assertEqual(message["message"]["channel"], "telegram")
+        self.assertEqual(message["message"]["body"], "I found the problem.")
+        printed = json.loads(stdout.getvalue())
+        self.assertEqual(len(printed["results"]), 2)
+
+    def test_combined_reply_attempts_message_when_reaction_is_dropped(self) -> None:
+        class _ReactionDropSubmit(_FakeSubmit):
+            def __call__(
+                self, url: str, payload: dict[str, object]
+            ) -> tuple[int, dict[str, object]]:
+                self.calls.append((url, payload))
+                message = payload["message"]
+                if message["channel"] == "telegram_reaction":
+                    return 422, {"status": "dropped", "reason": "REACTION_INVALID"}
+                return 200, {"status": "dispatched", "reason": ""}
+
+        submit = _ReactionDropSubmit()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "The answer still gets sent.",
+                    "telegram_reaction": "👀",
+                    "telegram_message_id": 123,
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stderr", io.StringIO()),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, EXIT_DROPPED)
+        self.assertEqual(len(submit.calls), 2)
+        self.assertEqual(submit.calls[1][1]["message"]["channel"], "telegram")
+
     def test_reaction_via_spec_file_using_task_ledger_message_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
