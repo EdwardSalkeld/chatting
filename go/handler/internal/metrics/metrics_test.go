@@ -20,6 +20,12 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 	recorder.RecordEgressResult("completed", "")
 	recorder.RecordEgressResult("deduped", "")
 	recorder.RecordEgressResult("dropped", "unknown_task")
+	recorder.RecordReminderCreated(false)
+	recorder.RecordReminderCreated(true)
+	recorder.RecordReminderCancelled()
+	recorder.RecordReminderDue(true, false)
+	recorder.RecordReminderDue(false, true)
+	recorder.RecordReminderFired()
 
 	snapshot := recorder.Snapshot()
 	if snapshot["loops_total"] != 1 {
@@ -43,6 +49,9 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 	if snapshot["dedupe_hit_rate_pct"] != 25 {
 		t.Fatalf("dedupe_hit_rate_pct = %v", snapshot["dedupe_hit_rate_pct"])
 	}
+	if snapshot["reminder_created_total"] != 1 || snapshot["reminder_cancelled_total"] != 1 || snapshot["reminder_due_total"] != 1 || snapshot["reminder_retried_total"] != 1 || snapshot["reminder_late_total"] != 1 || snapshot["reminder_published_total"] != 1 || snapshot["reminder_fired_total"] != 1 {
+		t.Fatalf("unexpected reminder metrics: %#v", snapshot)
+	}
 
 	rendered := RenderPrometheus(snapshot)
 	for _, expected := range []string{
@@ -51,6 +60,8 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 		"chatting_message_handler_egress_received_total 4",
 		"chatting_message_handler_egress_dedupe_hit_rate_pct 25",
 		"chatting_message_handler_egress_dropped_unknown_task_total 1",
+		"chatting_message_handler_reminder_created_total 1",
+		"chatting_message_handler_reminder_fired_total 1",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("rendered metrics missing %q:\n%s", expected, rendered)

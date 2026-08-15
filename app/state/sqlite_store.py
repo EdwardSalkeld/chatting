@@ -894,7 +894,7 @@ def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
     return TaskEnvelope(
         id=str(payload["id"]),
         source=cast(
-            Literal["cron", "email", "im", "webhook", "internal"],
+            Literal["cron", "email", "im", "webhook", "internal", "reminder"],
             str(payload["source"]),
         ),
         received_at=_parse_rfc3339_utc(str(payload["received_at"])),

@@ -3,6 +3,7 @@
 Implemented connector docs:
 
 - [Interval Schedule](interval-schedule.md)
+- [One-off reminders](../reminders.md)
 - [IMAP Email](imap-email.md)
 - [Telegram](telegram.md)
 - [Webhook](webhook.md)

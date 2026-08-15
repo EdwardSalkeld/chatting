@@ -21,6 +21,7 @@ var validSources = map[string]bool{
 	"im":       true,
 	"webhook":  true,
 	"internal": true,
+	"reminder": true,
 }
 
 type Timestamp struct {

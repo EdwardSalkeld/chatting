@@ -41,6 +41,13 @@ type Recorder struct {
 	egressIncremental int64
 	egressMessage     int64
 	egressCompletion  int64
+	reminderCreated   int64
+	reminderCancelled int64
+	reminderDue       int64
+	reminderPublished int64
+	reminderRetried   int64
+	reminderLate      int64
+	reminderFired     int64
 	lastLoopAt        time.Time
 	lastEgressLoopAt  time.Time
 }
@@ -97,6 +104,41 @@ func (recorder *Recorder) RecordEgressResult(status string, reason string) {
 	}
 }
 
+func (recorder *Recorder) RecordReminderCreated(replayed bool) {
+	if replayed {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.reminderCreated++
+}
+
+func (recorder *Recorder) RecordReminderCancelled() {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.reminderCancelled++
+}
+
+func (recorder *Recorder) RecordReminderDue(late bool, retry bool) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if retry {
+		recorder.reminderRetried++
+		return
+	}
+	recorder.reminderDue++
+	if late {
+		recorder.reminderLate++
+	}
+}
+
+func (recorder *Recorder) RecordReminderFired() {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.reminderPublished++
+	recorder.reminderFired++
+}
+
 func (recorder *Recorder) Snapshot() map[string]float64 {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -118,6 +160,13 @@ func (recorder *Recorder) Snapshot() map[string]float64 {
 		"telegram_attachment_cleanup_missing_total":         0,
 		"telegram_attachment_cleanup_failed_total":          0,
 		"telegram_attachment_cleanup_reclaimed_bytes_total": 0,
+		"reminder_created_total":                            float64(recorder.reminderCreated),
+		"reminder_cancelled_total":                          float64(recorder.reminderCancelled),
+		"reminder_due_total":                                float64(recorder.reminderDue),
+		"reminder_published_total":                          float64(recorder.reminderPublished),
+		"reminder_retried_total":                            float64(recorder.reminderRetried),
+		"reminder_late_total":                               float64(recorder.reminderLate),
+		"reminder_fired_total":                              float64(recorder.reminderFired),
 		"last_loop_completed_timestamp_seconds":             unixTimestamp(recorder.lastLoopAt),
 		"egress_loops_total":                                float64(recorder.egressLoopsTotal),
 		"last_egress_loop_completed_timestamp_seconds":      unixTimestamp(recorder.lastEgressLoopAt),
@@ -261,6 +310,13 @@ var definitions = []metricDefinition{
 	{"chatting_message_handler_telegram_attachment_cleanup_missing_total", "counter", "Tracked Telegram attachment files already missing from disk during cleanup.", "telegram_attachment_cleanup_missing_total"},
 	{"chatting_message_handler_telegram_attachment_cleanup_failed_total", "counter", "Telegram attachment cleanup attempts that failed.", "telegram_attachment_cleanup_failed_total"},
 	{"chatting_message_handler_telegram_attachment_cleanup_reclaimed_bytes_total", "counter", "Bytes reclaimed by Telegram attachment cleanup.", "telegram_attachment_cleanup_reclaimed_bytes_total"},
+	{"chatting_message_handler_reminder_created_total", "counter", "One-off reminders created through the handler API.", "reminder_created_total"},
+	{"chatting_message_handler_reminder_cancelled_total", "counter", "Scheduled reminders cancelled through the handler API.", "reminder_cancelled_total"},
+	{"chatting_message_handler_reminder_due_total", "counter", "Reminder revisions first observed as due.", "reminder_due_total"},
+	{"chatting_message_handler_reminder_published_total", "counter", "Reminder tasks accepted into the worker queue.", "reminder_published_total"},
+	{"chatting_message_handler_reminder_retried_total", "counter", "Due reminders emitted again before publish acknowledgement.", "reminder_retried_total"},
+	{"chatting_message_handler_reminder_late_total", "counter", "Reminder revisions first observed after their requested run time.", "reminder_late_total"},
+	{"chatting_message_handler_reminder_fired_total", "counter", "Reminder revisions marked fired after publish acknowledgement or handler dedupe.", "reminder_fired_total"},
 	{"chatting_message_handler_last_loop_completed_timestamp_seconds", "gauge", "Unix timestamp of the most recently completed loop.", "last_loop_completed_timestamp_seconds"},
 	{"chatting_message_handler_egress_loops_total", "counter", "Completed egress polling loops.", "egress_loops_total"},
 	{"chatting_message_handler_last_egress_loop_completed_timestamp_seconds", "gauge", "Unix timestamp of the most recently completed egress loop.", "last_egress_loop_completed_timestamp_seconds"},

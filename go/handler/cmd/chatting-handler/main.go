@@ -21,12 +21,14 @@ import (
 	githubconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
+	reminderconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/reminder"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/telegram"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/reminders"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
@@ -136,6 +138,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		_ = store.Close()
 		return nil, err
 	}
+	metricRecorder := metrics.New(time.Time{}, nil)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
 	scheduleConnector, err := schedule.NewFromSource(
 		schedule.NewStoreSource(store),
@@ -148,6 +151,18 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		return nil, err
 	}
 	connectors = append(connectors, scheduleConnector)
+	reminderConnector, err := reminderconnector.New(
+		reminderconnector.NewStoreSource(store),
+		config.GlobalPromptContext,
+		[]string{"This task was created as a one-off reminder. Carry out the stored prompt at the requested time and reply through the supplied channel."},
+		nil,
+		metricRecorder,
+	)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	connectors = append(connectors, reminderConnector)
 	if config.IMAPHost != "" {
 		password := os.Getenv(config.IMAPPasswordEnv)
 		if password == "" {
@@ -283,11 +298,13 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			connectors = append(connectors, connector)
 		}
 	}
-	metricRecorder := metrics.New(time.Time{}, nil)
 	scheduleService := schedules.NewService(store)
+	reminderService := reminders.NewService(store, metricRecorder)
 	metricsServer, err := metrics.StartServer(metricRecorder, config.MetricsHost, config.MetricsPort, func(mux *http.ServeMux) {
 		schedules.RegisterRoutes(mux, scheduleService)
 		schedules.RegisterUIRoutes(mux, scheduleService)
+		reminders.RegisterRoutes(mux, reminderService)
+		reminders.RegisterUIRoutes(mux, reminderService)
 	})
 	if err != nil {
 		_ = store.Close()

@@ -94,6 +94,11 @@ class CodexExecutorTests(unittest.TestCase):
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -P -m app.main_reply --spec-file <path>",
         )
+        self.assertIn(
+            "no scheduling CLI",
+            payload["scheduling_contract"]["instructions"],
+        )
+        self.assertNotIn("handler_api_url", payload["scheduling_contract"])
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
         self.assertEqual(run_mock.call_args.kwargs["env"], {"TOKEN": "secret"})
         self.assertEqual(run_mock.call_args.kwargs["timeout"], 123)

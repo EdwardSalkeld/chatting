@@ -83,6 +83,72 @@ def _seed_schedule(
         connection.close()
 
 
+def _seed_due_reminder(handler_db_path: Path, *, context_refs: list[str]) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    connection = sqlite3.connect(str(handler_db_path))
+    try:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminders (
+                row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reminder_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                run_at TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                context_refs TEXT NOT NULL,
+                prompt_context TEXT NOT NULL,
+                reply_channel_type TEXT NOT NULL,
+                reply_channel_target TEXT NOT NULL,
+                reply_channel_metadata TEXT NOT NULL,
+                created_from_task_id TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                request_fingerprint TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                fired_at TEXT,
+                cancelled_at TEXT,
+                UNIQUE (reminder_id, revision)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO reminders (
+                reminder_id, revision, status, run_at, prompt, context_refs,
+                prompt_context, reply_channel_type, reply_channel_target,
+                reply_channel_metadata, created_from_task_id, created_by,
+                idempotency_key, request_fingerprint, created_at, updated_at,
+                fired_at, cancelled_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rem_ci_split_smoke",
+                1,
+                "scheduled",
+                now,
+                "CI reminder smoke task",
+                json.dumps(context_refs),
+                "[]",
+                "log",
+                "ci-reminder-smoke",
+                "{}",
+                "task:test:seed",
+                "test",
+                "test:reminder:seed",
+                "seed",
+                now,
+                now,
+                None,
+                None,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def _is_port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
@@ -158,6 +224,10 @@ class SplitModeE2ETests(unittest.TestCase):
                 context_refs=[f"repo:{repo_root}"],
                 reply_channel_type="log",
                 reply_channel_target="ci-split-smoke",
+            )
+            _seed_due_reminder(
+                handler_db_path,
+                context_refs=[f"repo:{repo_root}"],
             )
             worker_config_path.write_text(
                 json.dumps(
@@ -260,6 +330,14 @@ class SplitModeE2ETests(unittest.TestCase):
                 matching_worker_runs,
                 msg="missing worker run for cron:ci-split-smoke",
             )
+            self.assertTrue(
+                any(
+                    run.envelope_id == "reminder:rem_ci_split_smoke:1"
+                    and run.result_status == "success"
+                    for run in worker_runs
+                ),
+                msg="missing successful worker run for one-off reminder",
+            )
             expected_envelope_id = matching_worker_runs[0].envelope_id
             self.assertTrue(
                 any(
@@ -282,6 +360,13 @@ class SplitModeE2ETests(unittest.TestCase):
                     event_id=expected_event_id,
                 )
             )
+            with sqlite3.connect(str(handler_db_path)) as connection:
+                reminder_status, fired_at = connection.execute(
+                    "SELECT status, fired_at FROM reminders WHERE reminder_id = ? AND revision = ?",
+                    ("rem_ci_split_smoke", 1),
+                ).fetchone()
+            self.assertEqual(reminder_status, "fired")
+            self.assertIsNotNone(fired_at)
 
 
 if __name__ == "__main__":

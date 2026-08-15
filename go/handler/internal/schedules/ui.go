@@ -123,6 +123,7 @@ var listTemplate = template.Must(template.New("list").Parse(`<!doctype html>
 </head>
 <body>
 <h1>Schedules</h1>
+<p><a href="/reminders">One-off reminders</a></p>
 <a class="new" href="/schedules/new">+ New schedule</a>
 <table>
 <thead><tr><th>Job name</th><th>Cron</th><th>Timezone</th><th>Reply target</th></tr></thead>
