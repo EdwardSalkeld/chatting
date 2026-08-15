@@ -502,9 +502,7 @@ def _record_execution_output(
 
 
 def _should_run_supervised_recovery(task_message: TaskQueueMessage) -> bool:
-    return _requires_visible_telegram_reply(task_message) and bool(
-        _SUPERVISED_MARKER_RE.search(task_message.envelope.content)
-    )
+    return _requires_visible_telegram_reply(task_message)
 
 
 def _normalize_executor_envelope(envelope: TaskEnvelope) -> TaskEnvelope:
