@@ -465,12 +465,17 @@ class WorkerRuntimeTests(unittest.TestCase):
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
 
-    def test_process_task_message_keeps_untagged_telegram_on_standard_single_pass(
+    def test_process_task_message_runs_supervised_recovery_for_untagged_telegram(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            executor = RecordingExecutor([ExecutionResult(errors=[], stdout="pass 1")])
+            executor = RecordingExecutor(
+                [
+                    ExecutionResult(errors=[], stdout="pass 1"),
+                    ExecutionResult(errors=[], stdout="pass 2"),
+                ]
+            )
             result = process_task_message(
                 store=store,
                 task_message=self._build_telegram_task_message(),
@@ -480,11 +485,11 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertEqual(result.attempt_count, 1)
-            self.assertEqual(len(executor.calls), 1)
+            self.assertEqual(result.attempt_count, 2)
+            self.assertEqual(len(executor.calls), 2)
             audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.detail["executor_launch_count"], 1)
-            self.assertEqual(audit_event.detail["supervised_recovery_used"], False)
+            self.assertEqual(audit_event.detail["executor_launch_count"], 2)
+            self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
 
     def test_process_task_message_strips_supervised_marker_before_executor(
         self,
