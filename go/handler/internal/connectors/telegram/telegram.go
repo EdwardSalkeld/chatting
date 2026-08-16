@@ -24,6 +24,7 @@ const Source = "im"
 const internalNoticeKey = "internal_notice"
 const telegramChannelNotEnabledNotice = "telegram_channel_not_enabled"
 const telegramGroupNotEnabledNotice = "telegram_group_not_enabled"
+const telegramBotDownloadLimitBytes int64 = 20 * 1024 * 1024
 
 type ChatObservation struct {
 	ChatID      string
@@ -286,9 +287,20 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 	}
 	if content == "" {
 		if len(attachments) == 0 {
-			return nil, nil
+			if message.Document == nil {
+				return nil, nil
+			}
+		} else if message.Document == nil {
+			content = "[photo attached]"
 		}
-		content = "[photo attached]"
+	}
+	if message.Document != nil {
+		documentContext := formatDocumentContent(*message.Document, len(attachments) > 0)
+		if content == "" {
+			content = documentContext
+		} else {
+			content += "\n\n" + documentContext
+		}
 	}
 	if message.MessageThreadID != nil {
 		content = fmt.Sprintf("[thread_id=%d] %s", *message.MessageThreadID, content)
@@ -321,6 +333,9 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 }
 
 func (connector *Connector) extractAttachments(updateID int64, message telegramMessage) ([]contracts.AttachmentRef, error) {
+	if message.Document != nil {
+		return connector.extractDocumentAttachment(updateID, message.MessageID, *message.Document)
+	}
 	if len(message.Photo) == 0 {
 		return []contracts.AttachmentRef{}, nil
 	}
@@ -382,6 +397,63 @@ func (connector *Connector) extractAttachments(updateID int64, message telegramM
 	return []contracts.AttachmentRef{{
 		URI:  (&url.URL{Scheme: "file", Path: filepath.ToSlash(destination)}).String(),
 		Name: &name,
+	}}, nil
+}
+
+func (connector *Connector) extractDocumentAttachment(updateID int64, messageID int64, document telegramDocument) ([]contracts.AttachmentRef, error) {
+	if strings.TrimSpace(document.FileID) == "" {
+		return nil, errors.New("telegram_document_missing_file_id")
+	}
+	if document.FileSize > telegramBotDownloadLimitBytes {
+		return []contracts.AttachmentRef{}, nil
+	}
+	metadata, err := connector.resolveFileMetadata(document.FileID)
+	if err != nil {
+		return nil, err
+	}
+	displayName := telegramDocumentName(document, metadata.FilePath)
+	suffix := filepath.Ext(displayName)
+	if suffix == "" {
+		suffix = filepath.Ext(metadata.FilePath)
+	}
+	uniqueFragment := strings.TrimSpace(document.FileUniqueID)
+	if uniqueFragment == "" {
+		uniqueFragment = document.FileID
+	}
+	localName := fmt.Sprintf(
+		"telegram-%d-%d-%s%s",
+		updateID,
+		messageID,
+		safePathFragment(uniqueFragment),
+		suffix,
+	)
+	rootDir := connector.config.AttachmentRootDir
+	if strings.TrimSpace(rootDir) == "" {
+		rootDir = filepath.Join(os.TempDir(), "chatting-telegram-attachments")
+	}
+	destination, err := filepath.Abs(filepath.Join(rootDir, localName))
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return nil, err
+	}
+	raw, err := connector.fetchRaw(connector.buildFileDownloadURL(metadata.FilePath))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > telegramBotDownloadLimitBytes {
+		return nil, errors.New("telegram_document_too_large")
+	}
+	if err := os.WriteFile(destination, raw, 0o644); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(destination, 0o644); err != nil {
+		return nil, err
+	}
+	return []contracts.AttachmentRef{{
+		URI:  (&url.URL{Scheme: "file", Path: filepath.ToSlash(destination)}).String(),
+		Name: &displayName,
 	}}, nil
 }
 
@@ -557,6 +629,7 @@ type telegramMessage struct {
 	Caption         string            `json:"caption"`
 	Location        *telegramLocation `json:"location"`
 	Photo           []telegramPhoto   `json:"photo"`
+	Document        *telegramDocument `json:"document"`
 }
 
 type telegramPhoto struct {
@@ -565,6 +638,14 @@ type telegramPhoto struct {
 	FileSize     int64  `json:"file_size"`
 	Width        int64  `json:"width"`
 	Height       int64  `json:"height"`
+}
+
+type telegramDocument struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	FileName     string `json:"file_name"`
+	MIMEType     string `json:"mime_type"`
+	FileSize     int64  `json:"file_size"`
 }
 
 type telegramChat struct {
@@ -680,6 +761,29 @@ func selectBestPhoto(photos []telegramPhoto) telegramPhoto {
 		}
 	}
 	return best
+}
+
+func telegramDocumentName(document telegramDocument, filePath string) string {
+	name := strings.TrimSpace(document.FileName)
+	if name == "" {
+		name = path.Base(filePath)
+	}
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if name == "." || name == "/" || name == "" {
+		return "document"
+	}
+	return name
+}
+
+func formatDocumentContent(document telegramDocument, downloaded bool) string {
+	name := telegramDocumentName(document, "")
+	if downloaded {
+		return "[document attached: " + name + "]"
+	}
+	if document.FileSize > telegramBotDownloadLimitBytes {
+		return "[document not downloaded: " + name + " exceeds Telegram's 20 MB bot download limit]"
+	}
+	return "[document not downloaded: " + name + "]"
 }
 
 func safePathFragment(value string) string {

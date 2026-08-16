@@ -13,7 +13,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_bot_token_env` (default `CHATTING_TELEGRAM_BOT_TOKEN`)
 - `telegram_api_base_url` (default `https://api.telegram.org`)
 - `telegram_poll_timeout_seconds` (default `20`)
-- `telegram_attachment_dir` (optional local directory for downloaded photo attachments; defaults to a temp-dir path if omitted)
+- `telegram_attachment_dir` (optional local directory for downloaded photo and document attachments; defaults to a temp-dir path if omitted)
 - `telegram_attachment_cleanup_grace_seconds` (default `604800`, or 7 days)
 - `telegram_attachment_max_age_seconds` (default `2592000`, or 30 days)
 - `telegram_allowed_chat_ids` (optional list)
@@ -32,8 +32,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
 - `reply_channel.metadata.sender`: human-readable sender label — `@username`, else first/last name, else the numeric id; suffixed with ` (bot)` when the sender is a bot. Falls back to the sending chat (title/username) for channel posts.
 - `actor`: `<user_id>:<username>` when available
-- `content`: text body, photo caption, or a synthesized location block (thread id is prefixed when present)
-- `attachments`: downloaded photo stored as a local `file://` attachment when the update contains a photo
+- `content`: text body, photo caption, a synthesized location block, or a document marker containing its filename (thread id is prefixed when present)
+- `attachments`: downloaded photo or document stored as a local `file://` attachment
 
 ## Notes
 
@@ -42,6 +42,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - Conversation memory attributes each turn to its sender. Recent-context lines render as `<sender>: <content>` (falling back to the `user`/`assistant` role when no sender was stored, e.g. rows predating this feature), and the live turn is headed `Current message from <sender>:`. The per-turn sender is persisted in `conversation_turns.sender`; this is not applied retrospectively to turns recorded before the column existed.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
+- Document messages are accepted and preserve Telegram's original filename. Their content includes `[document attached: <filename>]`, including when the document has no caption, so subsequent conversation history identifies the file that was sent.
+- Documents larger than Telegram's 20 MB bot download limit are not downloaded; the task and conversation history instead contain a clear unavailable-document marker.
 - Location-only messages are accepted with synthesized content that includes latitude, longitude, and a map URL.
 - When a message includes both text and a Telegram `location`, the location block is appended to the text so the worker can reason over both in one prompt.
 - `channel_post` updates from allowlisted channel IDs are ingested normally.

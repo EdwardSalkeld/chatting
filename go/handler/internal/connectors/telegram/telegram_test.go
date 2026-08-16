@@ -449,6 +449,149 @@ func TestPollAcceptsPhotoOnlyMessageWithPlaceholderContent(t *testing.T) {
 	}
 }
 
+func TestPollDownloadsStandaloneDocumentAndPreservesOriginalFilename(t *testing.T) {
+	attachmentDir := t.TempDir()
+	requestCount := 0
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		switch {
+		case strings.Contains(req.URL.Path, "/getUpdates"):
+			return jsonResponse(`{
+				"ok": true,
+				"result": [{
+					"update_id": 3003,
+					"message": {
+						"message_id": 79,
+						"date": 1779345600,
+						"chat": {"id": 12345, "type": "private"},
+						"from": {"id": 7, "username": "sender"},
+						"document": {
+							"file_id": "document-file-id",
+							"file_unique_id": "document/unique",
+							"file_name": "quarterly-report.pdf",
+							"mime_type": "application/pdf",
+							"file_size": 14
+						}
+					}
+				}]
+			}`), nil
+		case strings.Contains(req.URL.Path, "/getFile"):
+			if got := req.URL.Query().Get("file_id"); got != "document-file-id" {
+				t.Fatalf("getFile file_id = %q", got)
+			}
+			return jsonResponse(`{"ok": true, "result": {"file_path": "documents/file_42.dat"}}`), nil
+		case strings.Contains(req.URL.Path, "/file/bottoken/documents/file_42.dat"):
+			return bytesResponse("pdf-file-bytes"), nil
+		default:
+			t.Fatalf("unexpected request URL: %s", req.URL.String())
+			return nil, nil
+		}
+	}}
+	connector, err := New(Config{
+		BotToken:          "token",
+		AllowedChatIDs:    []string{"12345"},
+		AttachmentRootDir: attachmentDir,
+		HTTPClient:        client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(envelopes) != 1 {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+	envelope := envelopes[0]
+	if envelope.Content != "[document attached: quarterly-report.pdf]" {
+		t.Fatalf("content = %q", envelope.Content)
+	}
+	if len(envelope.Attachments) != 1 {
+		t.Fatalf("attachments = %#v", envelope.Attachments)
+	}
+	attachment := envelope.Attachments[0]
+	if deref(attachment.Name) != "quarterly-report.pdf" {
+		t.Fatalf("attachment name = %#v", attachment.Name)
+	}
+	if !strings.HasPrefix(attachment.URI, "file://") || !strings.Contains(attachment.URI, "telegram-3003-79-document_unique.pdf") {
+		t.Fatalf("attachment URI = %q", attachment.URI)
+	}
+	downloadedPath := filepath.Join(attachmentDir, "telegram-3003-79-document_unique.pdf")
+	raw, err := os.ReadFile(downloadedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "pdf-file-bytes" {
+		t.Fatalf("downloaded bytes = %q", string(raw))
+	}
+	info, err := os.Stat(downloadedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&0o044 != 0o044 {
+		t.Fatalf("attachment mode = %o, want group/other readable", perm)
+	}
+	if requestCount != 3 {
+		t.Fatalf("request count = %d", requestCount)
+	}
+}
+
+func TestPollKeepsOversizedDocumentVisibleWithoutDownloadingIt(t *testing.T) {
+	requestCount := 0
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		if !strings.Contains(req.URL.Path, "/getUpdates") {
+			t.Fatalf("unexpected download request for oversized document: %s", req.URL.String())
+		}
+		return jsonResponse(`{
+			"ok": true,
+			"result": [{
+				"update_id": 3004,
+				"message": {
+					"message_id": 80,
+					"date": 1779345600,
+					"chat": {"id": 12345, "type": "private"},
+					"document": {
+						"file_id": "too-large",
+						"file_unique_id": "too-large-unique",
+						"file_name": "archive.zip",
+						"file_size": 20971521
+					}
+				}
+			}]
+		}`), nil
+	}}
+	connector, err := New(Config{
+		BotToken:       "token",
+		AllowedChatIDs: []string{"12345"},
+		HTTPClient:     client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(envelopes) != 1 {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+	if envelopes[0].Content != "[document not downloaded: archive.zip exceeds Telegram's 20 MB bot download limit]" {
+		t.Fatalf("content = %q", envelopes[0].Content)
+	}
+	if len(envelopes[0].Attachments) != 0 {
+		t.Fatalf("attachments = %#v", envelopes[0].Attachments)
+	}
+	if requestCount != 1 {
+		t.Fatalf("request count = %d", requestCount)
+	}
+}
+
 type fakeHTTPClient struct {
 	do func(*http.Request) (*http.Response, error)
 }
