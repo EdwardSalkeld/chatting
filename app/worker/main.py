@@ -30,7 +30,12 @@ from app.worker.activity import (
 )
 from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
-from app.worker.runtime import process_task_message
+from app.worker.inbox import InboxCollector
+from app.worker.runtime import (
+    build_coalesced_task_result,
+    build_recovered_delivered_task_result,
+    process_task_message,
+)
 
 WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
 LOGGER = logging.getLogger(__name__)
@@ -386,6 +391,7 @@ def main() -> int:
     )
 
     store = SQLiteStateStore(db_path)
+    store.recover_inbox_tasks()
     activity_monitor = WorkerActivityMonitor(
         store=store,
         history_limit=activity_history_limit,
@@ -404,6 +410,7 @@ def main() -> int:
         loop_count = 0
         while True:
             loop_count += 1
+            active_task_id: str | None = None
             # Replay any egress still pending in the outbox (a prior POST that
             # failed transiently, or a crash before ack). Cheap when empty.
             _replay_egress_outbox(
@@ -411,28 +418,56 @@ def main() -> int:
                 handler_egress_url=handler_egress_url,
                 activity_monitor=activity_monitor,
             )
-            picked = broker.pickup_json(
-                TASK_QUEUE_NAME,
-                timeout_seconds=poll_timeout_seconds,
-                wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
-            )
-            if picked is None:
-                LOGGER.info("worker_loop_empty loop=%s", loop_count)
-                if max_loops and loop_count >= max_loops:
-                    break
-                time.sleep(sleep_seconds)
-                continue
-
             try:
-                task_message = TaskQueueMessage.from_dict(picked.payload)
-                activity_monitor.record_task_received(task_message=task_message)
-                result = process_task_message(
-                    store=store,
-                    task_message=task_message,
-                    executor_impl=executor,
-                    max_attempts=max_attempts,
-                    activity_monitor=activity_monitor,
-                )
+                inbox_task = store.claim_next_inbox_task()
+                if inbox_task is None:
+                    picked = broker.pickup_json(
+                        TASK_QUEUE_NAME,
+                        timeout_seconds=poll_timeout_seconds,
+                        wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
+                    )
+                    if picked is None:
+                        LOGGER.info("worker_loop_empty loop=%s", loop_count)
+                        if max_loops and loop_count >= max_loops:
+                            break
+                        time.sleep(sleep_seconds)
+                        continue
+                    task_message = TaskQueueMessage.from_dict(picked.payload)
+                    inserted = store.stage_inbox_task(
+                        task_message, broker_guid=picked.guid
+                    )
+                    broker.ack(TASK_QUEUE_NAME, picked.guid)
+                    if inserted:
+                        activity_monitor.record_task_received(task_message=task_message)
+                    inbox_task = store.claim_next_inbox_task()
+                    if inbox_task is None:
+                        raise RuntimeError("staged inbox task could not be claimed")
+
+                task_message = inbox_task.task_message
+                active_task_id = task_message.task_id
+                if inbox_task.state == "closing":
+                    result = build_recovered_delivered_task_result(
+                        store=store,
+                        task_message=task_message,
+                    )
+                else:
+                    collector = InboxCollector(
+                        broker=broker,
+                        store=store,
+                        activity_monitor=activity_monitor,
+                        pickup_timeout_seconds=poll_timeout_seconds,
+                    )
+                    collector.start()
+                    try:
+                        result = process_task_message(
+                            store=store,
+                            task_message=task_message,
+                            executor_impl=executor,
+                            max_attempts=max_attempts,
+                            activity_monitor=activity_monitor,
+                        )
+                    finally:
+                        collector.stop()
                 for egress_message in result.egress_messages:
                     _publish_egress_with_outbox(
                         store=store,
@@ -440,10 +475,34 @@ def main() -> int:
                         egress_message=egress_message,
                         activity_monitor=activity_monitor,
                     )
-                broker.ack(TASK_QUEUE_NAME, picked.guid)
+
+                closing_followups = store.list_closing_inbox_followups(
+                    parent_task_id=task_message.task_id
+                )
+                for followup in closing_followups:
+                    coalesced_result = build_coalesced_task_result(
+                        store=store,
+                        task_message=followup.task_message,
+                        parent_task_id=task_message.task_id,
+                        parent_run_id=result.run_record.run_id,
+                    )
+                    for egress_message in coalesced_result.egress_messages:
+                        _publish_egress_with_outbox(
+                            store=store,
+                            handler_egress_url=handler_egress_url,
+                            egress_message=egress_message,
+                            activity_monitor=activity_monitor,
+                        )
+                    _log_worker_processed(
+                        task_id=followup.task_message.task_id,
+                        result=coalesced_result,
+                    )
+                store.finish_inbox_task(parent_task_id=task_message.task_id)
                 _log_worker_processed(task_id=task_message.task_id, result=result)
             except Exception:  # noqa: BLE001
-                LOGGER.exception("worker_processing_failed guid=%s", picked.guid)
+                LOGGER.exception("worker_processing_failed")
+                if active_task_id is not None:
+                    store.release_active_inbox_task(task_id=active_task_id)
 
             if max_loops and loop_count >= max_loops:
                 break

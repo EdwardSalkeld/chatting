@@ -60,8 +60,7 @@ class LongExecutionErrorExecutor:
         del task
         return ExecutionResult(
             errors=[
-                "executor_exit_nonzero:1:"
-                + "permission denied\nconfig.toml " * 30
+                "executor_exit_nonzero:1:" + "permission denied\nconfig.toml " * 30
             ],
         )
 
@@ -175,6 +174,34 @@ class MainReplyRecordingExecutor:
         return ExecutionResult(errors=[])
 
 
+class ResolveFollowupsOnSecondPassExecutor:
+    def __init__(self, store: SQLiteStateStore) -> None:
+        self.store = store
+        self.calls: list[TaskEnvelope] = []
+
+    def execute(self, task):
+        self.calls.append(task)
+        task_id = f"task:{task.id}"
+        self.store.append_worker_activity(
+            occurred_at=datetime.now(timezone.utc),
+            task_id=task_id,
+            envelope_id=task.id,
+            phase="egress_incremental",
+            summary="incremental egress to telegram",
+            detail={
+                "channel": "telegram_reaction" if len(self.calls) == 1 else "telegram",
+                "target": task.reply_channel.target,
+                "event_id": f"evt:test:followups:{len(self.calls)}",
+                "event_kind": "incremental",
+                "publish_source": "main_reply",
+                "sequence": None,
+            },
+        )
+        if len(self.calls) == 2:
+            self.store.mark_inbox_reply_delivered(parent_task_id=task_id)
+        return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
@@ -256,9 +283,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 type="telegram",
                 target="-100777",
                 metadata={
-                    INTERNAL_NOTICE_METADATA_KEY: (
-                        TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE
-                    ),
+                    INTERNAL_NOTICE_METADATA_KEY: (TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE),
                     "message_id": 19,
                 },
             ),
@@ -576,6 +601,49 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(audit_event.detail["executor_launch_count"], 2)
             self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
 
+    def test_supervisor_recovers_when_reaction_precedes_claimed_followups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            parent = self._build_telegram_task_message()
+            followup_envelope = TaskEnvelope(
+                id="telegram:2",
+                source="im",
+                received_at=datetime(2026, 3, 6, 13, 1, tzinfo=timezone.utc),
+                actor="8605042448:edsalkeld",
+                content="one more thing",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="8605042448",
+                    metadata={"message_id": 2472},
+                ),
+                dedupe_key="telegram:2",
+            )
+            followup = TaskQueueMessage.from_envelope(
+                followup_envelope, trace_id="trace:telegram:2"
+            )
+            store.stage_inbox_task(parent)
+            store.stage_inbox_task(followup)
+            store.claim_next_inbox_task()
+            store.claim_conversation_followups(parent_task_id=parent.task_id)
+            executor = ResolveFollowupsOnSecondPassExecutor(store)
+
+            result = process_task_message(
+                store=store,
+                task_message=parent,
+                executor_impl=executor,
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(len(executor.calls), 2)
+            self.assertIn(
+                "claimed newer messages",
+                executor.calls[1].prompt_context.task_instructions[-1],
+            )
+
     def test_process_task_message_handles_internal_heartbeat_without_executor(
         self,
     ) -> None:
@@ -735,7 +803,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             "executor_exit_nonzero:1: boom",
         )
         self.assertEqual(
-            _build_error_summary(execution_errors=[], last_error="RuntimeError:\n boom"),
+            _build_error_summary(
+                execution_errors=[], last_error="RuntimeError:\n boom"
+            ),
             "RuntimeError: boom",
         )
         self.assertEqual(

@@ -10,10 +10,11 @@ from app.broker import TaskQueueMessage
 from app.main_reply import (
     DEFAULT_HANDLER_EGRESS_URL,
     EXIT_DROPPED,
+    EXIT_FOLLOWUPS,
     EXIT_TRANSIENT,
     main,
 )
-from app.models import ReplyChannel, TaskEnvelope
+from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.task_ledger import TaskLedgerStore
 
@@ -44,7 +45,119 @@ def _write_spec(directory: Path, spec: dict[str, object]) -> str:
     return str(path)
 
 
+def _telegram_task_message(
+    number: int,
+    *,
+    content: str,
+    attachments: list[AttachmentRef] | None = None,
+) -> TaskQueueMessage:
+    envelope = TaskEnvelope(
+        id=f"telegram:{number}",
+        source="im",
+        received_at=datetime(2026, 8, 16, 10, number % 60, tzinfo=timezone.utc),
+        actor="8605042448:edsalkeld",
+        content=content,
+        attachments=attachments or [],
+        context_refs=[],
+        reply_channel=ReplyChannel(
+            type="telegram",
+            target="8605042448",
+            metadata={"message_id": number},
+        ),
+        dedupe_key=f"telegram:{number}",
+    )
+    return TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:telegram:{number}")
+
+
 class MainReplyCliTests(unittest.TestCase):
+    def test_telegram_reply_claims_followups_and_withholds_stale_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            db_path = directory / "state.db"
+            config_path = directory / "worker.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
+            store = SQLiteStateStore(str(db_path))
+            parent = _telegram_task_message(53, content="Initial question")
+            followup = _telegram_task_message(
+                54,
+                content="[document attached: details.pdf]",
+                attachments=[
+                    AttachmentRef(uri="file:///tmp/details.pdf", name="details.pdf")
+                ],
+            )
+            store.stage_inbox_task(parent)
+            store.stage_inbox_task(followup)
+            store.claim_next_inbox_task()
+            spec = _write_spec(
+                directory,
+                {
+                    "task_id": parent.task_id,
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "A now-stale answer",
+                },
+            )
+            submit = _FakeSubmit()
+            stdout = io.StringIO()
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", stdout),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(exit_code, EXIT_FOLLOWUPS)
+            self.assertEqual(submit.calls, [])
+            self.assertEqual(payload["status"], "follow_ups_claimed")
+            self.assertEqual(payload["follow_ups"][0]["task_id"], followup.task_id)
+            self.assertEqual(
+                payload["follow_ups"][0]["attachments"],
+                [{"uri": "file:///tmp/details.pdf", "name": "details.pdf"}],
+            )
+            self.assertTrue(
+                store.has_unresolved_attached_followups(parent_task_id=parent.task_id)
+            )
+
+            # A later call has already seen the attached turns, so it may send
+            # the current response and atomically close the whole bundle.
+            stdout = io.StringIO()
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", stdout),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                second_exit_code = main()
+
+            self.assertEqual(second_exit_code, 0)
+            self.assertEqual(len(submit.calls), 1)
+            self.assertEqual(
+                store.get_inbox_task(task_id=parent.task_id).state, "closing"
+            )
+            self.assertEqual(
+                store.get_inbox_task(task_id=followup.task_id).state, "closing"
+            )
+
     def test_spec_file_posts_unsequenced_incremental_v2_payload(self) -> None:
         submit = _FakeSubmit()
         stdout = io.StringIO()
@@ -86,7 +199,7 @@ class MainReplyCliTests(unittest.TestCase):
     def test_spec_file_preserves_shell_dangerous_text_verbatim(self) -> None:
         # The whole point of the spec file: prose that would be mangled as a
         # shell argument (backticks, $, quotes, newlines) arrives intact.
-        dangerous = "Use `nix shell` for $HOME, say \"hi\".\nSecond line."
+        dangerous = 'Use `nix shell` for $HOME, say "hi".\nSecond line.'
         submit = _FakeSubmit()
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = _write_spec(
@@ -151,7 +264,13 @@ class MainReplyCliTests(unittest.TestCase):
                 patch("sys.stdout", io.StringIO()),
                 patch(
                     "sys.argv",
-                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
                 ),
             ):
                 exit_code = main()
@@ -185,7 +304,13 @@ class MainReplyCliTests(unittest.TestCase):
                 patch("sys.stderr", stderr),
                 patch(
                     "sys.argv",
-                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
                 ),
             ):
                 exit_code = main()
@@ -203,7 +328,9 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(activity, [])
 
     def test_transient_exit_when_handler_unreachable(self) -> None:
-        submit = _FakeSubmit(status=0, response={"reason": "egress endpoint unreachable"})
+        submit = _FakeSubmit(
+            status=0, response={"reason": "egress endpoint unreachable"}
+        )
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = _write_spec(
@@ -423,7 +550,13 @@ class MainReplyCliTests(unittest.TestCase):
                 patch("app.main_reply.submit_egress", submit),
                 patch(
                     "sys.argv",
-                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
                 ),
             ):
                 exit_code = main()
@@ -486,7 +619,13 @@ class MainReplyCliTests(unittest.TestCase):
                 patch("sys.stdout", io.StringIO()),
                 patch(
                     "sys.argv",
-                    ["main_reply.py", "--spec-file", spec, "--config", str(config_path)],
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
                 ),
             ):
                 exit_code = main()

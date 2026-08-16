@@ -89,7 +89,8 @@ synchronous egress endpoint (`handler_egress_url`, default `http://127.0.0.1:946
 delivery outcome comes straight back: HTTP 200 for a dispatched/completed message, 202 for a
 sequenced event staged pending an earlier one, 422 when the handler drops it (bad payload, unknown
 task, disallowed channel, dispatch failure such as a missing attachment), 503 when the handler is
-unreachable. `app.main_reply` maps this to an exit code (0 delivered, 1 dropped, 3 transient) so the
+unreachable. `app.main_reply` maps this to an exit code (0 delivered, 1 dropped, 3 transient, 4
+same-conversation follow-ups claimed and the drafted content withheld) so the
 executor learns immediately whether a reply landed instead of publishing fire-and-forget.
 
 The worker still writes each of its own egress events to the SQLite egress outbox first, as a

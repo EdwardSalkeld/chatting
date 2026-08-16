@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import uuid
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
 
-from app.broker import EgressQueueMessage
+from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.models import (
     AttachmentRef,
     AuditEvent,
@@ -19,6 +21,14 @@ from app.models import (
     RunRecord,
     TaskEnvelope,
 )
+
+
+@dataclass(frozen=True)
+class InboxTask:
+    task_message: TaskQueueMessage
+    conversation_id: str
+    state: str
+    parent_task_id: str | None
 
 
 class SQLiteStateStore:
@@ -146,7 +156,348 @@ class SQLiteStateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_routes (
+                    route_type TEXT NOT NULL,
+                    route_key TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (route_type, route_key),
+                    UNIQUE (conversation_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS worker_inbox (
+                    task_id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    task_payload_json TEXT NOT NULL,
+                    broker_guid TEXT,
+                    state TEXT NOT NULL,
+                    parent_task_id TEXT,
+                    staged_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    reply_delivered_at TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS worker_inbox_conversation_state
+                ON worker_inbox (conversation_id, state, staged_at)
+                """
+            )
             connection.commit()
+
+    def stage_inbox_task(
+        self, task_message: TaskQueueMessage, *, broker_guid: str | None = None
+    ) -> bool:
+        """Durably stage a broker task before its BBMB message is acknowledged."""
+        route_type, route_key = _conversation_route(task_message)
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT conversation_id FROM conversation_routes
+                WHERE route_type = ? AND route_key = ?
+                """,
+                (route_type, route_key),
+            ).fetchone()
+            if row is None:
+                conversation_id = f"conv_{uuid.uuid4().hex}"
+                connection.execute(
+                    """
+                    INSERT INTO conversation_routes (
+                        route_type, route_key, conversation_id, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (route_type, route_key, conversation_id, now),
+                )
+            else:
+                conversation_id = str(row["conversation_id"])
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO worker_inbox (
+                    task_id, conversation_id, task_payload_json, broker_guid,
+                    state, parent_task_id, staged_at, updated_at, reply_delivered_at
+                ) VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)
+                """,
+                (
+                    task_message.task_id,
+                    conversation_id,
+                    json.dumps(task_message.to_dict(), sort_keys=True),
+                    broker_guid,
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+        return cursor.rowcount > 0
+
+    def claim_next_inbox_task(self) -> InboxTask | None:
+        """Atomically lease the oldest pending inbox task to this worker."""
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM worker_inbox
+                WHERE state = 'pending'
+                   OR (state = 'closing' AND parent_task_id IS NULL)
+                ORDER BY CASE state WHEN 'closing' THEN 0 ELSE 1 END,
+                         staged_at ASC, task_id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            claimed_state = str(row["state"])
+            if claimed_state == "pending":
+                connection.execute(
+                    """
+                    UPDATE worker_inbox SET state = 'active', updated_at = ?
+                    WHERE task_id = ? AND state = 'pending'
+                    """,
+                    (now, row["task_id"]),
+                )
+            connection.commit()
+        return _inbox_task_from_row(
+            row, state="active" if claimed_state == "pending" else claimed_state
+        )
+
+    def recover_inbox_tasks(self) -> None:
+        """Recover leases after restart without replaying already-delivered work."""
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE worker_inbox
+                SET state = 'pending', updated_at = ?
+                WHERE state = 'active' AND reply_delivered_at IS NULL
+                """,
+                (now,),
+            )
+            connection.execute(
+                """
+                UPDATE worker_inbox
+                SET state = 'closing', updated_at = ?
+                WHERE state = 'active' AND reply_delivered_at IS NOT NULL
+                """,
+                (now,),
+            )
+            connection.execute(
+                """
+                UPDATE worker_inbox
+                SET state = 'pending', parent_task_id = NULL, updated_at = ?
+                WHERE state = 'attached'
+                  AND parent_task_id NOT IN (
+                      SELECT task_id FROM worker_inbox WHERE state = 'closing'
+                  )
+                """,
+                (now,),
+            )
+            connection.commit()
+
+    def release_active_inbox_task(self, *, task_id: str) -> None:
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE worker_inbox SET state = 'pending', updated_at = ?
+                WHERE task_id = ? AND state = 'active'
+                """,
+                (now, task_id),
+            )
+            connection.commit()
+
+    def claim_conversation_followups(self, *, parent_task_id: str) -> list[InboxTask]:
+        """Attach all currently pending Telegram turns in the parent's conversation."""
+        if not parent_task_id:
+            raise ValueError("parent_task_id is required")
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            parent = connection.execute(
+                "SELECT conversation_id, state FROM worker_inbox WHERE task_id = ?",
+                (parent_task_id,),
+            ).fetchone()
+            if parent is None or parent["state"] not in {"active", "attached"}:
+                connection.commit()
+                return []
+            rows = connection.execute(
+                """
+                SELECT * FROM worker_inbox
+                WHERE conversation_id = ? AND state = 'pending' AND task_id != ?
+                ORDER BY staged_at ASC, task_id ASC
+                """,
+                (parent["conversation_id"], parent_task_id),
+            ).fetchall()
+            for row in rows:
+                message = TaskQueueMessage.from_dict(
+                    json.loads(row["task_payload_json"])
+                )
+                if message.envelope.reply_channel.type != "telegram":
+                    continue
+                connection.execute(
+                    """
+                    UPDATE worker_inbox
+                    SET state = 'attached', parent_task_id = ?, updated_at = ?
+                    WHERE task_id = ? AND state = 'pending'
+                    """,
+                    (parent_task_id, now, row["task_id"]),
+                )
+            connection.commit()
+        return [
+            _inbox_task_from_row(row, state="attached", parent_task_id=parent_task_id)
+            for row in rows
+            if TaskQueueMessage.from_dict(
+                json.loads(row["task_payload_json"])
+            ).envelope.reply_channel.type
+            == "telegram"
+        ]
+
+    def has_unresolved_attached_followups(self, *, parent_task_id: str) -> bool:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM worker_inbox
+                WHERE parent_task_id = ? AND state = 'attached'
+                LIMIT 1
+                """,
+                (parent_task_id,),
+            ).fetchone()
+        return row is not None
+
+    def mark_inbox_reply_delivered(self, *, parent_task_id: str) -> bool:
+        """Record delivery, closing only when incorporated turns are resolved.
+
+        An early pickup reaction or progress message must not stop later calls
+        from peeking at the conversation. With no attached turns the parent
+        therefore stays active until normal executor completion; the timestamp
+        still lets restart recovery avoid rerunning already-visible work.
+        """
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE worker_inbox
+                SET reply_delivered_at = ?, updated_at = ?
+                WHERE task_id = ? AND state IN ('active', 'attached')
+                """,
+                (now, now, parent_task_id),
+            )
+            if cursor.rowcount:
+                attached = connection.execute(
+                    """
+                    SELECT 1 FROM worker_inbox
+                    WHERE parent_task_id = ? AND state = 'attached' LIMIT 1
+                    """,
+                    (parent_task_id,),
+                ).fetchone()
+                if attached is not None:
+                    connection.execute(
+                        """
+                        UPDATE worker_inbox SET state = 'closing', updated_at = ?
+                        WHERE task_id = ?
+                        """,
+                        (now, parent_task_id),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE worker_inbox
+                        SET state = 'closing', reply_delivered_at = ?, updated_at = ?
+                        WHERE parent_task_id = ? AND state = 'attached'
+                        """,
+                        (now, now, parent_task_id),
+                    )
+            connection.commit()
+        return cursor.rowcount > 0
+
+    def finish_inbox_task(self, *, parent_task_id: str) -> list[InboxTask]:
+        """Complete a delivered bundle, or release unresolved children separately."""
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            parent = connection.execute(
+                "SELECT state FROM worker_inbox WHERE task_id = ?",
+                (parent_task_id,),
+            ).fetchone()
+            if parent is None:
+                connection.commit()
+                return []
+            children = connection.execute(
+                """
+                SELECT * FROM worker_inbox
+                WHERE parent_task_id = ? AND state IN ('attached', 'closing')
+                ORDER BY staged_at ASC, task_id ASC
+                """,
+                (parent_task_id,),
+            ).fetchall()
+            delivered = parent["state"] == "closing"
+            if delivered:
+                connection.execute(
+                    """
+                    UPDATE worker_inbox SET state = 'completed', updated_at = ?
+                    WHERE task_id = ? OR parent_task_id = ?
+                    """,
+                    (now, parent_task_id, parent_task_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE worker_inbox SET state = 'completed', updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (now, parent_task_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE worker_inbox
+                    SET state = 'pending', parent_task_id = NULL, updated_at = ?
+                    WHERE parent_task_id = ? AND state = 'attached'
+                    """,
+                    (now, parent_task_id),
+                )
+            connection.commit()
+        if not delivered:
+            return []
+        return [_inbox_task_from_row(row, state="completed") for row in children]
+
+    def list_closing_inbox_followups(self, *, parent_task_id: str) -> list[InboxTask]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM worker_inbox
+                WHERE parent_task_id = ? AND state = 'closing'
+                ORDER BY staged_at ASC, task_id ASC
+                """,
+                (parent_task_id,),
+            ).fetchall()
+        return [_inbox_task_from_row(row) for row in rows]
+
+    def count_inbox_followups(self, *, parent_task_id: str) -> int:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM worker_inbox
+                WHERE parent_task_id = ?
+                """,
+                (parent_task_id,),
+            ).fetchone()
+        return 0 if row is None else int(row["count"])
+
+    def get_inbox_task(self, *, task_id: str) -> InboxTask | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM worker_inbox WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return None if row is None else _inbox_task_from_row(row)
 
     def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
         idempotency_columns = connection.execute(
@@ -864,6 +1215,51 @@ def _parse_rfc3339_utc(value: str) -> datetime:
     if value.endswith("Z"):
         value = value.replace("Z", "+00:00")
     return datetime.fromisoformat(value)
+
+
+def _serialize_rfc3339_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _conversation_route(task_message: TaskQueueMessage) -> tuple[str, str]:
+    """Return the transport mapping used to look up an opaque conversation ID.
+
+    Conversation IDs deliberately do not encode Telegram identity. A later route
+    can therefore point email, web, or another transport at the same ID without
+    changing inbox rows or the reply-time claiming protocol.
+    """
+    reply = task_message.envelope.reply_channel
+    thread_metadata = {
+        key: reply.metadata[key]
+        for key in ("message_thread_id", "thread_id")
+        if key in reply.metadata
+    }
+    route_key = json.dumps(
+        {"target": reply.target, "thread": thread_metadata}, sort_keys=True
+    )
+    return reply.type, route_key
+
+
+def _inbox_task_from_row(
+    row: sqlite3.Row,
+    *,
+    state: str | None = None,
+    parent_task_id: str | None = None,
+) -> InboxTask:
+    return InboxTask(
+        task_message=TaskQueueMessage.from_dict(json.loads(row["task_payload_json"])),
+        conversation_id=str(row["conversation_id"]),
+        state=state or str(row["state"]),
+        parent_task_id=(
+            parent_task_id
+            if parent_task_id is not None
+            else (
+                str(row["parent_task_id"])
+                if row["parent_task_id"] is not None
+                else None
+            )
+        ),
+    )
 
 
 def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:

@@ -167,6 +167,13 @@ Notes:
 - Telegram reactions go in the spec too (`"telegram_reaction": "👍"`). When a reaction is
   supplied with a message or attachment, `app.main_reply` sends both. If `telegram_message_id`
   is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
+- For Telegram, the worker keeps draining BBMB into a durable inbox while Codex runs. At reply
+  time, `app.main_reply` peeks by opaque conversation ID. If newer same-chat/topic turns exist,
+  exit code `4` returns them in `follow_ups`, withholds the drafted text or attachment, and tells
+  the executor to incorporate them and call `main_reply` again. A combined reaction may still be
+  sent as acknowledgement. Other chats are never claimed.
+- Incorporated tasks receive their own completion and run record without launching another
+  executor. Their run page links to the parent run that answered the bundle.
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 

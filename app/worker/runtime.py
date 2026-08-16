@@ -85,6 +85,7 @@ def process_task_message(
     executor_launch_count = 0
     used_supervised_recovery = False
     normalized_envelope = _normalize_executor_envelope(envelope)
+    inbox_task = store.get_inbox_task(task_id=task_message.task_id)
     active_executor: Executor = executor_impl
     if _should_run_supervised_recovery(task_message):
         active_executor = SupervisedReplyRecoveryExecutor(
@@ -114,9 +115,7 @@ def process_task_message(
             )
 
             published_incremental_reply_count = (
-                store.count_task_main_reply_egress_events(
-                    task_id=task_message.task_id
-                )
+                store.count_task_main_reply_egress_events(task_id=task_message.task_id)
             )
             reason_codes = []
             if execution_result.errors:
@@ -127,6 +126,10 @@ def process_task_message(
                 and published_incremental_reply_count == 0
             ):
                 reason_codes.append("missing_visible_reply")
+            if store.has_unresolved_attached_followups(
+                parent_task_id=task_message.task_id
+            ):
+                reason_codes.append("unresolved_conversation_followups")
             result_status = _result_status(reason_codes)
 
             egress_messages = _build_completion_egress_messages(
@@ -199,6 +202,12 @@ def process_task_message(
                     )
                 ),
                 "egress_message_count": len(egress_messages),
+                "conversation_id": (
+                    inbox_task.conversation_id if inbox_task is not None else None
+                ),
+                "coalesced_followup_count": store.count_inbox_followups(
+                    parent_task_id=task_message.task_id
+                ),
             },
             created_at=run_record.created_at,
         )
@@ -230,7 +239,9 @@ def process_task_message(
         if execution_payload is not None:
             raw_errors = execution_payload.get("errors")
             if isinstance(raw_errors, list):
-                execution_errors = [error for error in raw_errors if isinstance(error, str)]
+                execution_errors = [
+                    error for error in raw_errors if isinstance(error, str)
+                ]
         error_summary = _build_error_summary(
             execution_errors=execution_errors,
             last_error=last_error,
@@ -243,6 +254,124 @@ def process_task_message(
         attempt_count=executor_launch_count or attempt_count,
         reason_codes=list(reason_codes),
         error_summary=error_summary,
+    )
+
+
+def build_coalesced_task_result(
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+    parent_task_id: str,
+    parent_run_id: str,
+) -> WorkerProcessResult:
+    """Record a queued turn as completed by the parent's delivered reply."""
+    created_at = datetime.now(timezone.utc)
+    run_record = RunRecord(
+        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+        envelope_id=task_message.envelope.id,
+        source=task_message.envelope.source,
+        workflow="default",
+        latency_ms=max(
+            int((created_at - task_message.emitted_at).total_seconds() * 1000), 0
+        ),
+        result_status="success",
+        created_at=created_at,
+    )
+    store.append_run(run_record)
+    store.append_audit_event(
+        AuditEvent(
+            run_id=run_record.run_id,
+            envelope_id=run_record.envelope_id,
+            source=run_record.source,
+            workflow=run_record.workflow,
+            result_status=run_record.result_status,
+            detail={
+                "trace_id": task_message.trace_id,
+                "task_id": task_message.task_id,
+                "reason_codes": ["coalesced_into_conversation"],
+                "attempt_count": 0,
+                "executor_launch_count": 0,
+                "coalesced_into_task_id": parent_task_id,
+                "coalesced_into_run_id": parent_run_id,
+                "egress_message_count": 1,
+            },
+            created_at=created_at,
+        )
+    )
+    store.append_worker_activity(
+        occurred_at=created_at,
+        task_id=task_message.task_id,
+        envelope_id=task_message.envelope.id,
+        run_id=run_record.run_id,
+        source=task_message.envelope.source,
+        workflow="default",
+        phase="task_coalesced",
+        summary=f"coalesced into {parent_task_id}",
+        detail={
+            "parent_task_id": parent_task_id,
+            "parent_run_id": parent_run_id,
+            "result_status": "success",
+        },
+        is_internal=False,
+    )
+    egress_messages = _build_completion_egress_messages(
+        task_message=task_message,
+        starting_sequence=0,
+    )
+    return WorkerProcessResult(
+        run_record=run_record,
+        egress_messages=egress_messages,
+        dead_lettered=False,
+        attempt_count=0,
+        reason_codes=["coalesced_into_conversation"],
+        error_summary=None,
+    )
+
+
+def build_recovered_delivered_task_result(
+    *, store: SQLiteStateStore, task_message: TaskQueueMessage
+) -> WorkerProcessResult:
+    """Finish a reply-delivered inbox group after a worker restart."""
+    created_at = datetime.now(timezone.utc)
+    run_record = RunRecord(
+        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+        envelope_id=task_message.envelope.id,
+        source=task_message.envelope.source,
+        workflow="default",
+        latency_ms=max(
+            int((created_at - task_message.emitted_at).total_seconds() * 1000), 0
+        ),
+        result_status="success",
+        created_at=created_at,
+    )
+    store.append_run(run_record)
+    store.append_audit_event(
+        AuditEvent(
+            run_id=run_record.run_id,
+            envelope_id=run_record.envelope_id,
+            source=run_record.source,
+            workflow=run_record.workflow,
+            result_status=run_record.result_status,
+            detail={
+                "trace_id": task_message.trace_id,
+                "task_id": task_message.task_id,
+                "reason_codes": ["reply_delivered_before_worker_restart"],
+                "attempt_count": 0,
+                "executor_launch_count": 0,
+                "egress_message_count": 1,
+            },
+            created_at=created_at,
+        )
+    )
+    return WorkerProcessResult(
+        run_record=run_record,
+        egress_messages=_build_completion_egress_messages(
+            task_message=task_message, starting_sequence=0
+        ),
+        dead_lettered=False,
+        attempt_count=0,
+        reason_codes=["reply_delivered_before_worker_restart"],
+        error_summary=None,
     )
 
 
@@ -616,5 +745,7 @@ def _event_id_for_sequence(
 __all__ = [
     "WorkerProcessResult",
     "_build_error_summary",
+    "build_coalesced_task_result",
+    "build_recovered_delivered_task_result",
     "process_task_message",
 ]
