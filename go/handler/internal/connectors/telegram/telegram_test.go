@@ -28,6 +28,7 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 						"date": 1779345600,
 						"chat": {"id": 12345, "type": "private", "username": "edward"},
 						"from": {"id": 7, "username": "sender"},
+						"reply_to_message": {"message_id": 41},
 						"text": "hello from telegram"
 					}
 				},
@@ -89,6 +90,12 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 	}
 	if envelope.ReplyChannel.Metadata["message_id"] != float64(55) && envelope.ReplyChannel.Metadata["message_id"] != int64(55) {
 		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
+	}
+	if envelope.ReplyChannel.Metadata["reply_to_message_id"] != int64(41) {
+		t.Fatalf("reply anchor metadata = %#v", envelope.ReplyChannel.Metadata)
+	}
+	if envelope.ReplyChannel.Metadata["original_content"] != "hello from telegram" {
+		t.Fatalf("original content metadata = %#v", envelope.ReplyChannel.Metadata)
 	}
 	if deref(envelope.Actor) != "7:sender" {
 		t.Fatalf("actor = %#v", envelope.Actor)

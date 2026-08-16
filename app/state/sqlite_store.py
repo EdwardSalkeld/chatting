@@ -31,6 +31,20 @@ class InboxTask:
     parent_task_id: str | None
 
 
+@dataclass(frozen=True)
+class TelegramHistoryTurn:
+    target: str
+    message_id: int
+    reply_to_message_id: int | None
+    role: Literal["user", "assistant"]
+    sender: str | None
+    content: str | None
+    attachments: list[AttachmentRef]
+    occurred_at: datetime
+    task_id: str | None
+    event_id: str | None
+
+
 class SQLiteStateStore:
     """Persist dedupe keys and run records in SQLite."""
 
@@ -189,6 +203,31 @@ class SQLiteStateStore:
                 ON worker_inbox (conversation_id, state, staged_at)
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS worker_telegram_history (
+                    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    reply_to_message_id INTEGER,
+                    role TEXT NOT NULL,
+                    sender TEXT,
+                    content TEXT,
+                    attachments_json TEXT NOT NULL,
+                    task_id TEXT,
+                    event_id TEXT,
+                    occurred_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (target, message_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS worker_telegram_history_target_message
+                ON worker_telegram_history (target, message_id)
+                """
+            )
             connection.commit()
 
     def stage_inbox_task(
@@ -234,8 +273,144 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+            self._record_telegram_inbound(connection, task_message, created_at=now)
             connection.commit()
         return cursor.rowcount > 0
+
+    def _record_telegram_inbound(
+        self,
+        connection: sqlite3.Connection,
+        task_message: TaskQueueMessage,
+        *,
+        created_at: str,
+    ) -> None:
+        envelope = task_message.envelope
+        if envelope.reply_channel.type != "telegram":
+            return
+        metadata = envelope.reply_channel.metadata
+        message_id = _positive_metadata_int(metadata, "message_id")
+        if message_id is None:
+            return
+        original_content = metadata.get("original_content")
+        content = (
+            original_content.strip()
+            if isinstance(original_content, str) and original_content.strip()
+            else envelope.content.strip()
+        )
+        sender = metadata.get("sender")
+        if not isinstance(sender, str) or not sender.strip():
+            sender = envelope.actor
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO worker_telegram_history (
+                target, message_id, reply_to_message_id, role, sender,
+                content, attachments_json, task_id, event_id,
+                occurred_at, created_at
+            ) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                envelope.reply_channel.target,
+                message_id,
+                _positive_metadata_int(metadata, "reply_to_message_id"),
+                sender.strip() if isinstance(sender, str) and sender.strip() else None,
+                content or None,
+                _serialize_attachments(envelope.attachments),
+                task_message.task_id,
+                _serialize_rfc3339_utc(envelope.received_at),
+                created_at,
+            ),
+        )
+
+    def record_telegram_outbound(
+        self,
+        *,
+        target: str,
+        message_id: int,
+        content: str | None,
+        attachment: AttachmentRef | None,
+        task_id: str,
+        event_id: str,
+        occurred_at: datetime,
+    ) -> None:
+        if not target.strip():
+            raise ValueError("target is required")
+        if message_id <= 0:
+            raise ValueError("message_id must be positive")
+        if not task_id.strip():
+            raise ValueError("task_id is required")
+        if not event_id.strip():
+            raise ValueError("event_id is required")
+        if occurred_at.tzinfo is None:
+            raise ValueError("occurred_at must be timezone-aware")
+        attachments = [] if attachment is None else [attachment]
+        normalized_content = content.strip() if content is not None else ""
+        if not normalized_content and not attachments:
+            raise ValueError("content or attachment is required")
+        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO worker_telegram_history (
+                    target, message_id, reply_to_message_id, role, sender,
+                    content, attachments_json, task_id, event_id,
+                    occurred_at, created_at
+                ) VALUES (?, ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target,
+                    message_id,
+                    normalized_content or None,
+                    _serialize_attachments(attachments),
+                    task_id,
+                    event_id,
+                    _serialize_rfc3339_utc(occurred_at),
+                    now,
+                ),
+            )
+            connection.commit()
+
+    def list_telegram_history_around(
+        self,
+        *,
+        target: str,
+        message_id: int,
+        before: int = 12,
+        after: int = 12,
+    ) -> list[TelegramHistoryTurn]:
+        if not target.strip():
+            raise ValueError("target is required")
+        if message_id <= 0:
+            raise ValueError("message_id must be positive")
+        if before < 0 or after < 0:
+            raise ValueError("before and after must be non-negative")
+        with closing(self._connect()) as connection:
+            anchor = connection.execute(
+                """
+                SELECT message_id FROM worker_telegram_history
+                WHERE target = ? AND message_id = ?
+                """,
+                (target, message_id),
+            ).fetchone()
+            if anchor is None:
+                return []
+            earlier = connection.execute(
+                """
+                SELECT * FROM worker_telegram_history
+                WHERE target = ? AND message_id <= ?
+                ORDER BY message_id DESC LIMIT ?
+                """,
+                (target, message_id, before + 1),
+            ).fetchall()
+            later = connection.execute(
+                """
+                SELECT * FROM worker_telegram_history
+                WHERE target = ? AND message_id > ?
+                ORDER BY message_id ASC LIMIT ?
+                """,
+                (target, message_id, after),
+            ).fetchall()
+        rows = list(reversed(earlier)) + list(later)
+        return [_telegram_history_turn_from_row(row) for row in rows]
 
     def claim_next_inbox_task(self) -> InboxTask | None:
         """Atomically lease the oldest pending inbox task to this worker."""
@@ -1219,6 +1394,49 @@ def _parse_rfc3339_utc(value: str) -> datetime:
 
 def _serialize_rfc3339_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _positive_metadata_int(metadata: dict[str, object], key: str) -> int | None:
+    value = metadata.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    if isinstance(value, float) and value > 0 and value.is_integer():
+        return int(value)
+    return None
+
+
+def _serialize_attachments(attachments: list[AttachmentRef]) -> str:
+    return json.dumps(
+        [
+            {"uri": attachment.uri, "name": attachment.name}
+            for attachment in attachments
+        ],
+        sort_keys=True,
+    )
+
+
+def _telegram_history_turn_from_row(row: sqlite3.Row) -> TelegramHistoryTurn:
+    raw_attachments = json.loads(row["attachments_json"])
+    attachments = [
+        AttachmentRef(uri=str(item["uri"]), name=item.get("name"))
+        for item in raw_attachments
+    ]
+    return TelegramHistoryTurn(
+        target=str(row["target"]),
+        message_id=int(row["message_id"]),
+        reply_to_message_id=(
+            int(row["reply_to_message_id"])
+            if row["reply_to_message_id"] is not None
+            else None
+        ),
+        role=cast(Literal["user", "assistant"], str(row["role"])),
+        sender=str(row["sender"]) if row["sender"] is not None else None,
+        content=str(row["content"]) if row["content"] is not None else None,
+        attachments=attachments,
+        occurred_at=_parse_rfc3339_utc(str(row["occurred_at"])),
+        task_id=str(row["task_id"]) if row["task_id"] is not None else None,
+        event_id=str(row["event_id"]) if row["event_id"] is not None else None,
+    )
 
 
 def _conversation_route(task_message: TaskQueueMessage) -> tuple[str, str]:

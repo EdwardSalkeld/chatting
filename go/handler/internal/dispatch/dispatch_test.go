@@ -260,7 +260,7 @@ func TestTelegramMessageSenderSendsTextAndFallsBackWithoutParseMode(t *testing.T
 			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities"})
 			return
 		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 501}})
 	}))
 	defer server.Close()
 	sender := newTestTelegramSender(t, server.URL)
@@ -291,7 +291,7 @@ func TestTelegramMessageSenderSendsReaction(t *testing.T) {
 	var call telegramHTTPCall
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		call = recordTelegramJSONCall(t, request)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": true})
 	}))
 	defer server.Close()
 	sender := newTestTelegramSender(t, server.URL)
@@ -338,7 +338,7 @@ func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
 	var multipartCall telegramMultipartCall
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		multipartCall = recordTelegramMultipartCall(t, request)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 503}})
 	}))
 	defer server.Close()
 	sender := newTestTelegramSender(t, server.URL, tempDir)
@@ -368,7 +368,7 @@ func TestTelegramMessageSenderSendsDocumentAttachmentFromFileURI(t *testing.T) {
 	var multipartCall telegramMultipartCall
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		multipartCall = recordTelegramMultipartCall(t, request)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 504}})
 	}))
 	defer server.Close()
 	sender := newTestTelegramSender(t, server.URL, tempDir)

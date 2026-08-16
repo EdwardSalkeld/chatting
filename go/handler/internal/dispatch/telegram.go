@@ -86,19 +86,27 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 }
 
 func (sender *TelegramMessageSender) Send(ctx context.Context, target string, message contracts.OutboundMessage) error {
+	_, err := sender.SendWithResult(ctx, target, message)
+	return err
+}
+
+// SendWithResult delivers a Telegram message and retains the Telegram-assigned
+// message id. The ordinary Send method remains for dispatcher/test compatibility;
+// callers that own a history ledger can opt into the richer result.
+func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target string, message contracts.OutboundMessage) (TelegramSendResult, error) {
 	if strings.TrimSpace(target) == "" {
-		return errors.New("target is required")
+		return TelegramSendResult{}, errors.New("target is required")
 	}
 	if message.Attachment == nil {
 		if message.Body == nil || strings.TrimSpace(*message.Body) == "" {
-			return errors.New("body is required")
+			return TelegramSendResult{}, errors.New("body is required")
 		}
 		return sender.sendText(ctx, target, *message.Body)
 	}
 
 	filePath, err := resolveTelegramAttachmentPath(message.Attachment.URI, sender.attachmentAllowedDirs)
 	if err != nil {
-		return err
+		return TelegramSendResult{}, err
 	}
 	method := telegramAPIMethodForAttachment(filePath)
 	fileField := "document"
@@ -114,16 +122,16 @@ func (sender *TelegramMessageSender) Send(ctx context.Context, target string, me
 	}
 	response, err := sender.postMultipart(ctx, method, payload, fileField, filePath)
 	if err == nil && response.OK {
-		return nil
+		return telegramSendResult(response)
 	}
 	if err == nil && sender.parseMode != nil && message.Body != nil && isTelegramParseModeError(response) {
 		fallback := map[string]string{"chat_id": target, "caption": *message.Body}
 		response, err = sender.postMultipart(ctx, method, fallback, fileField, filePath)
 		if err == nil && response.OK {
-			return nil
+			return telegramSendResult(response)
 		}
 	}
-	return errors.New(describeTelegramResponseError("telegram_attachment_send_failed", response))
+	return TelegramSendResult{}, errors.New(describeTelegramResponseError("telegram_attachment_send_failed", response))
 }
 
 func (sender *TelegramMessageSender) React(ctx context.Context, target string, messageID int64, emoji string) error {
@@ -150,7 +158,7 @@ func (sender *TelegramMessageSender) React(ctx context.Context, target string, m
 	return nil
 }
 
-func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string) error {
+func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string) (TelegramSendResult, error) {
 	normalizedBody := normalizeTelegramOutboundText(body)
 	payload := map[string]any{
 		"chat_id": target,
@@ -161,21 +169,38 @@ func (sender *TelegramMessageSender) sendText(ctx context.Context, target string
 	}
 	response, err := sender.postJSON(ctx, "sendMessage", payload)
 	if err == nil && response.OK {
-		return nil
+		return telegramSendResult(response)
 	}
 	if err == nil && sender.parseMode != nil && isTelegramParseModeError(response) {
 		fallback := map[string]any{"chat_id": target, "text": normalizedBody}
 		response, err = sender.postJSON(ctx, "sendMessage", fallback)
 		if err == nil && response.OK {
-			return nil
+			return telegramSendResult(response)
 		}
 	}
-	return errors.New(describeTelegramResponseError("telegram_send_failed", response))
+	return TelegramSendResult{}, errors.New(describeTelegramResponseError("telegram_send_failed", response))
+}
+
+type TelegramSendResult struct {
+	MessageID int64
 }
 
 type telegramAPIResponse struct {
-	OK          bool   `json:"ok"`
-	Description string `json:"description"`
+	OK          bool            `json:"ok"`
+	Description string          `json:"description"`
+	Result      json.RawMessage `json:"result,omitempty"`
+}
+
+type telegramAPIMessage struct {
+	MessageID int64 `json:"message_id"`
+}
+
+func telegramSendResult(response telegramAPIResponse) (TelegramSendResult, error) {
+	var result telegramAPIMessage
+	if len(response.Result) == 0 || json.Unmarshal(response.Result, &result) != nil || result.MessageID <= 0 {
+		return TelegramSendResult{}, errors.New("telegram_response_missing_message_id")
+	}
+	return TelegramSendResult{MessageID: result.MessageID}, nil
 }
 
 func (sender *TelegramMessageSender) postJSON(ctx context.Context, method string, payload any) (telegramAPIResponse, error) {

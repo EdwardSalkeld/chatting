@@ -112,8 +112,9 @@ func New(state State, dispatcher Dispatcher, options ...Option) (*Engine, error)
 }
 
 type Result struct {
-	Status string
-	Reason string
+	Status   string
+	Reason   string
+	Metadata map[string]any
 }
 
 const (
@@ -185,13 +186,14 @@ func (engine *Engine) handleLocked(ctx context.Context, message contracts.Egress
 		if message.EventKind == "completion" {
 			return engine.surfaceDrop(ctx, message, "invalid_payload")
 		}
-		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
+		dispatchedMessage, err := engine.dispatchAndMark(ctx, task, message)
+		if err != nil {
 			if reason, ok := dispatchFailureReason(err); ok {
 				return engine.dropFailedDispatch(ctx, message, reason)
 			}
 			return Result{}, err
 		}
-		return Result{Status: StatusDispatched}, nil
+		return Result{Status: StatusDispatched, Metadata: outboundMetadata(dispatchedMessage)}, nil
 	}
 
 	if err := engine.state.StageEgressEvent(ctx, message); err != nil {
@@ -274,7 +276,8 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			last = result
 			continue
 		}
-		if err := engine.dispatchAndMark(ctx, task, message); err != nil {
+		dispatchedMessage, err := engine.dispatchAndMark(ctx, task, message)
+		if err != nil {
 			reason, ok := dispatchFailureReason(err)
 			if !ok {
 				return Result{}, err
@@ -291,7 +294,7 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 		if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
 			return Result{}, err
 		}
-		last = Result{Status: StatusDispatched}
+		last = Result{Status: StatusDispatched, Metadata: outboundMetadata(dispatchedMessage)}
 	}
 }
 
@@ -353,17 +356,27 @@ func dispatchFailureReason(err error) (string, bool) {
 	return "", false
 }
 
-func (engine *Engine) dispatchAndMark(ctx context.Context, task *TaskRecord, message contracts.EgressQueueMessage) error {
+func (engine *Engine) dispatchAndMark(ctx context.Context, task *TaskRecord, message contracts.EgressQueueMessage) (*contracts.OutboundMessage, error) {
 	dispatched, err := engine.dispatcher.Dispatch(ctx, message.Message, task.TaskMessage.Envelope)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if memoryState, ok := engine.state.(TelegramConversationState); ok {
 		if err := maybeRecordTelegramConversationTurn(ctx, memoryState, task, dispatched, message.TaskID); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID)
+	if err := engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID); err != nil {
+		return nil, err
+	}
+	return dispatched, nil
+}
+
+func outboundMetadata(message *contracts.OutboundMessage) map[string]any {
+	if message == nil || len(message.Metadata) == 0 {
+		return nil
+	}
+	return message.Metadata
 }
 
 func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage, task *TaskRecord) bool {

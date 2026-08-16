@@ -17,10 +17,16 @@ def _telegram_task(
     content: str | None = None,
     attachment: AttachmentRef | None = None,
     thread_id: int | None = None,
+    reply_to_message_id: int | None = None,
+    original_content: str | None = None,
 ) -> TaskQueueMessage:
     metadata: dict[str, object] = {"message_id": 100 + number}
     if thread_id is not None:
         metadata["message_thread_id"] = thread_id
+    if reply_to_message_id is not None:
+        metadata["reply_to_message_id"] = reply_to_message_id
+    if original_content is not None:
+        metadata["original_content"] = original_content
     envelope = TaskEnvelope(
         id=f"telegram:{number}",
         source="im",
@@ -37,6 +43,52 @@ def _telegram_task(
 
 
 class WorkerInboxTests(unittest.TestCase):
+    def test_staging_records_clean_inbound_turn_and_reply_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            anchor = _telegram_task(1, original_content="The old subject")
+            reply = _telegram_task(
+                2,
+                content="Recent conversation context...\n\nCurrent message: Continue this",
+                original_content="Continue this",
+                reply_to_message_id=101,
+            )
+            store.stage_inbox_task(anchor)
+            store.stage_inbox_task(reply)
+
+            turns = store.list_telegram_history_around(
+                target="chat-a", message_id=101, before=0, after=4
+            )
+
+            self.assertEqual([turn.message_id for turn in turns], [101, 102])
+            self.assertEqual(turns[0].content, "The old subject")
+            self.assertEqual(turns[1].content, "Continue this")
+            self.assertEqual(turns[1].reply_to_message_id, 101)
+            self.assertEqual(turns[1].sender, "8605042448:edsalkeld")
+
+    def test_records_outbound_turn_using_telegram_message_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            inbound = _telegram_task(1)
+            store.stage_inbox_task(inbound)
+            store.record_telegram_outbound(
+                target="chat-a",
+                message_id=102,
+                content="A reply",
+                attachment=None,
+                task_id=inbound.task_id,
+                event_id="evt:reply:1",
+                occurred_at=datetime(2026, 8, 16, 10, 1, 2, tzinfo=timezone.utc),
+            )
+
+            turns = store.list_telegram_history_around(
+                target="chat-a", message_id=102, before=2, after=0
+            )
+
+            self.assertEqual([turn.role for turn in turns], ["user", "assistant"])
+            self.assertEqual(turns[-1].content, "A reply")
+            self.assertEqual(turns[-1].event_id, "evt:reply:1")
+
     def test_collector_persists_before_acknowledging_broker(self) -> None:
         class RecordingBroker:
             def __init__(self, store: SQLiteStateStore, task: TaskQueueMessage) -> None:
