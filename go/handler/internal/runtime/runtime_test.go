@@ -338,6 +338,60 @@ func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
 	}
 }
 
+func TestPublishIngressIncludesStandaloneDocumentInLaterConversationHistory(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	documentEnvelope := contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:document",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:00:00Z")),
+		Content:       "[document attached: rota.pdf]",
+		Attachments:   []contracts.AttachmentRef{{URI: "file:///tmp/rota.pdf"}},
+		ReplyChannel: contracts.ReplyChannel{
+			Type:     "telegram",
+			Target:   "12345",
+			Metadata: map[string]any{"sender": "@alice"},
+		},
+		DedupeKey: "telegram:document",
+	}
+	messageEnvelope := contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:message",
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:01:00Z")),
+		Content:       "What does it say?",
+		ReplyChannel: contracts.ReplyChannel{
+			Type:     "telegram",
+			Target:   "12345",
+			Metadata: map[string]any{"sender": "@alice"},
+		},
+		DedupeKey: "telegram:message",
+	}
+	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{documentEnvelope, messageEnvelope}}
+	runner, err := NewRunner(
+		handlerconfig.Defaults(),
+		broker,
+		&fakeEgressHandler{},
+		WithIngress(state, connector),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runner.PublishIngress(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	content := state.tasks["task:telegram:message"].Envelope.Content
+	if !strings.Contains(content, "@alice: [document attached: rota.pdf]") {
+		t.Fatalf("document missing from conversation history: %q", content)
+	}
+	if !strings.Contains(content, "Current message from @alice:\nWhat does it say?") {
+		t.Fatalf("current message missing from enriched content: %q", content)
+	}
+}
+
 func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
