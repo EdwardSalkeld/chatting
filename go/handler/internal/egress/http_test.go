@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func submitEgress(t *testing.T, engine *Engine, method string, body []byte) *httptest.ResponseRecorder {
@@ -36,7 +38,12 @@ func TestSubmitEndpointDeliversAndReturnsOK(t *testing.T) {
 	task := testTaskMessage(t)
 	state := newFakeState()
 	state.addTask(task)
-	dispatcher := &recordingDispatcher{}
+	dispatcher := &recordingDispatcher{result: &contracts.OutboundMessage{
+		Channel:  "telegram",
+		Target:   task.Envelope.ReplyChannel.Target,
+		Body:     stringPtr("sent"),
+		Metadata: map[string]any{"message_id": int64(901)},
+	}}
 	engine := newTestEngine(t, state, dispatcher)
 
 	raw, err := json.Marshal(testEgressMessage(t, task, nil, "evt:http:1", "incremental"))
@@ -48,7 +55,7 @@ func TestSubmitEndpointDeliversAndReturnsOK(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if response := decodeSubmit(t, recorder); response.Status != StatusDispatched {
+	if response := decodeSubmit(t, recorder); response.Status != StatusDispatched || response.Metadata["message_id"] != float64(901) {
 		t.Fatalf("response = %#v", response)
 	}
 	if len(dispatcher.messages) != 1 {

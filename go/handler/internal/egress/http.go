@@ -17,8 +17,9 @@ const EgressRoutePath = "/egress"
 const maxEgressBodyBytes = 5 << 20
 
 type submitResponse struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Status   string         `json:"status"`
+	Reason   string         `json:"reason,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // RegisterHTTPRoutes wires the synchronous egress-submit endpoint onto mux. It
@@ -48,7 +49,7 @@ func RegisterHTTPRoutes(mux *http.ServeMux, engine *Engine, onResult func(Result
 		if onResult != nil {
 			onResult(result)
 		}
-		writeSubmitJSON(writer, statusCodeForResult(result), submitResponse{Status: result.Status, Reason: result.Reason})
+		writeSubmitJSON(writer, statusCodeForResult(result), submitResponse{Status: result.Status, Reason: result.Reason, Metadata: result.Metadata})
 	})
 }
 

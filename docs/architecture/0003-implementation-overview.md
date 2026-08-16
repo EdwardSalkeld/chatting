@@ -19,13 +19,17 @@ The deployment model is private, single-user, split mode.
    opaque conversation ID. It returns them to the executor and withholds stale text/attachments;
    a subsequent current reply completes the incorporated tasks together.
 5. Message-handler validates egress against the ingress ledger, dispatches allowed visible messages, and marks tasks complete on internal completion events.
-6. `SQLiteStateStore` persists idempotency, run history, audit, dead letters, conversation memory, worker inbox, conversation routes, and worker egress outbox state.
+6. `SQLiteStateStore` persists idempotency, run history, audit, dead letters, conversation memory,
+   worker inbox, conversation routes, worker-owned Telegram message history, and worker egress
+   outbox state. Handler conversation-memory writes remain enabled while the worker ledger builds
+   up independently.
 
 ## Entrypoints
 
 - `go/handler/cmd/chatting-handler`: ingress + egress dispatch in split mode
 - `app.main_worker`: task execution in split mode
 - `app.main_reply`: submit visible worker-side incremental egress (POST to the handler egress endpoint) for acknowledgements and final replies
+- `app.main_history`: retrieve a worker-owned history window around a Telegram chat/message id
 
 ## Persistence tables (SQLite)
 
@@ -39,6 +43,7 @@ The deployment model is private, single-user, split mode.
 - `egress_outbox`
 - `conversation_routes`
 - `worker_inbox`
+- `worker_telegram_history`
 
 ## Safety controls implemented
 

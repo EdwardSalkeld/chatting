@@ -18,6 +18,10 @@ type TelegramSender interface {
 	React(ctx context.Context, target string, messageID int64, emoji string) error
 }
 
+type telegramResultSender interface {
+	SendWithResult(ctx context.Context, target string, message contracts.OutboundMessage) (TelegramSendResult, error)
+}
+
 type GitHubSender interface {
 	Send(ctx context.Context, target string, body string) error
 }
@@ -60,6 +64,17 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 	case "telegram":
 		if dispatcher.TelegramSender == nil {
 			return nil, nil
+		}
+		if sender, ok := dispatcher.TelegramSender.(telegramResultSender); ok {
+			result, err := sender.SendWithResult(ctx, target, message)
+			if err != nil {
+				return nil, MessageDispatchError{ReasonCode: telegramDispatchReasonCode(message, err)}
+			}
+			if normalized.Metadata == nil {
+				normalized.Metadata = map[string]any{}
+			}
+			normalized.Metadata["message_id"] = result.MessageID
+			return &normalized, nil
 		}
 		if err := dispatcher.TelegramSender.Send(ctx, target, message); err != nil {
 			return nil, MessageDispatchError{ReasonCode: telegramDispatchReasonCode(message, err)}

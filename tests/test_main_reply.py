@@ -196,6 +196,62 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(printed["status"], "dispatched")
         self.assertEqual(printed["http_status"], 200)
 
+    def test_delivered_telegram_reply_is_recorded_with_returned_message_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            db_path = directory / "worker.db"
+            config_path = directory / "worker.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
+            store = SQLiteStateStore(str(db_path))
+            task = _telegram_task_message(53, content="Question")
+            store.stage_inbox_task(task)
+            store.claim_next_inbox_task()
+            spec = _write_spec(
+                directory,
+                {
+                    "task_id": task.task_id,
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "Recorded answer",
+                    "event_id": "evt:answer:1",
+                },
+            )
+            submit = _FakeSubmit(
+                response={
+                    "status": "dispatched",
+                    "metadata": {"message_id": 9001},
+                }
+            )
+            stdout = io.StringIO()
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", stdout),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            turns = store.list_telegram_history_around(
+                target="8605042448", message_id=9001, before=1, after=0
+            )
+            self.assertEqual(turns[-1].role, "assistant")
+            self.assertEqual(turns[-1].content, "Recorded answer")
+            self.assertEqual(turns[-1].event_id, "evt:answer:1")
+            self.assertEqual(
+                json.loads(stdout.getvalue())["telegram_message_id"], 9001
+            )
+
     def test_spec_file_preserves_shell_dangerous_text_verbatim(self) -> None:
         # The whole point of the spec file: prose that would be mangled as a
         # shell argument (backticks, $, quotes, newlines) arrives intact.

@@ -307,6 +307,10 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 	}
 	eventID := "telegram:" + strconv.FormatInt(updateID, 10)
 	metadata := map[string]any{"message_id": message.MessageID}
+	metadata["original_content"] = content
+	if message.ReplyToMessage != nil && message.ReplyToMessage.MessageID > 0 {
+		metadata["reply_to_message_id"] = message.ReplyToMessage.MessageID
+	}
 	if label := senderLabel(message); label != "" {
 		metadata["sender"] = label
 	}
@@ -630,6 +634,7 @@ type telegramMessage struct {
 	Location        *telegramLocation `json:"location"`
 	Photo           []telegramPhoto   `json:"photo"`
 	Document        *telegramDocument `json:"document"`
+	ReplyToMessage  *telegramMessage  `json:"reply_to_message"`
 }
 
 type telegramPhoto struct {

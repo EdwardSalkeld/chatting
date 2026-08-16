@@ -29,6 +29,8 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `id` / `dedupe_key`: `telegram:<update_id>`
 - `reply_channel`: `telegram:<chat_id>`
 - `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
+- `reply_channel.metadata.reply_to_message_id`: quoted Telegram message id when the inbound message uses Telegram's native Reply gesture
+- `reply_channel.metadata.original_content`: the clean connector-normalized live turn, before the handler adds recent conversation context
 - `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
 - `reply_channel.metadata.sender`: human-readable sender label — `@username`, else first/last name, else the numeric id; suffixed with ` (bot)` when the sender is a bot. Falls back to the sending chat (title/username) for channel posts.
 - `actor`: `<user_id>:<username>` when available
@@ -40,6 +42,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
   global `prompt_context`, then `telegram_prompt_context`, then the task content itself.
 - Conversation memory attributes each turn to its sender. Recent-context lines render as `<sender>: <content>` (falling back to the `user`/`assistant` role when no sender was stored, e.g. rows predating this feature), and the live turn is headed `Current message from <sender>:`. The per-turn sender is persisted in `conversation_turns.sender`; this is not applied retrospectively to turns recorded before the column existed.
+- The worker also starts its own append-only Telegram history at deployment time. It records inbound and successfully delivered outbound turns by `(chat_id, message_id)`, including reply anchors and attachments, while handler conversation memory remains unchanged during the transition.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
 - Document messages are accepted and preserve Telegram's original filename. Their content includes `[document attached: <filename>]`, including when the document has no caption, so subsequent conversation history identifies the file that was sent.
@@ -74,3 +77,4 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
   - the referenced file must already exist on disk when dispatch runs
   - upload/API failures surface deterministic Telegram reason codes such as `telegram_attachment_missing` and `telegram_attachment_send_failed`
 - Outbound attachments under `telegram_attachment_dir` are tracked in the same cleanup ledger as inbound downloads and become cleanup-eligible after task completion.
+- Successful send responses retain Telegram's returned `message_id`; `app.main_reply` stores that id in the worker history ledger.

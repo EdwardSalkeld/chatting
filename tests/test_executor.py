@@ -29,6 +29,34 @@ def _envelope() -> TaskEnvelope:
 
 
 class CodexExecutorTests(unittest.TestCase):
+    def test_reply_quoted_telegram_task_exposes_supported_history_lookup(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["codex"], returncode=0, stdout="{}", stderr=""
+        )
+        envelope = TaskEnvelope(
+            id="telegram:9",
+            source="im",
+            received_at=datetime(2026, 8, 16, 11, 0, tzinfo=timezone.utc),
+            actor="8605042448:edsalkeld",
+            content="Continue this",
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type="telegram",
+                target="-4974044081",
+                metadata={"message_id": 2930, "reply_to_message_id": 2400},
+            ),
+            dedupe_key="telegram:9",
+        )
+        with patch(
+            "app.worker.executor.codex.subprocess.run", return_value=completed
+        ) as run_mock:
+            CodexExecutor(command=("codex",)).execute(envelope)
+
+        payload = json.loads(run_mock.call_args.kwargs["input"])
+        self.assertEqual(payload["history_contract"]["anchor"]["message_id"], 2400)
+        self.assertIn("app.main_history", payload["history_contract"]["retrieve_command"])
+
     def test_execute_returns_stdout_and_stderr_on_success(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["codex"],

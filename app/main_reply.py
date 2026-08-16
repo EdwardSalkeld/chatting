@@ -379,6 +379,34 @@ def main() -> int:
             not delivered and status_code != 422
         )
 
+        response_metadata = (
+            response.get("metadata") if isinstance(response, dict) else None
+        )
+        sent_message_id = (
+            response_metadata.get("message_id")
+            if isinstance(response_metadata, dict)
+            else None
+        )
+
+        if (
+            delivered
+            and db_path is not None
+            and outbound_message.channel == "telegram"
+            and isinstance(sent_message_id, int)
+            and not isinstance(sent_message_id, bool)
+            and sent_message_id > 0
+            and egress_message.event_id is not None
+        ):
+            SQLiteStateStore(db_path).record_telegram_outbound(
+                target=outbound_message.target,
+                message_id=sent_message_id,
+                content=outbound_message.body,
+                attachment=outbound_message.attachment,
+                task_id=egress_message.task_id,
+                event_id=egress_message.event_id,
+                occurred_at=egress_message.emitted_at,
+            )
+
         if delivered and db_path is not None:
             # Only record the activity event on confirmed delivery: the supervised
             # reply-recovery loop counts these to decide whether visible egress was
@@ -408,18 +436,19 @@ def main() -> int:
                 is_internal=egress_message.message.channel in {"internal", "log"},
             )
 
-        results.append(
-            {
-                "status": result_status or ("dispatched" if delivered else "error"),
-                "http_status": status_code,
-                "task_id": egress_message.task_id,
-                "event_id": egress_message.event_id,
-                "event_kind": egress_message.event_kind,
-                "channel": egress_message.message.channel,
-                "sequence": egress_message.sequence,
-                "reason": reason,
-            }
-        )
+        result_payload: dict[str, object] = {
+            "status": result_status or ("dispatched" if delivered else "error"),
+            "http_status": status_code,
+            "task_id": egress_message.task_id,
+            "event_id": egress_message.event_id,
+            "event_kind": egress_message.event_kind,
+            "channel": egress_message.message.channel,
+            "sequence": egress_message.sequence,
+            "reason": reason,
+        }
+        if isinstance(sent_message_id, int) and sent_message_id > 0:
+            result_payload["telegram_message_id"] = sent_message_id
+        results.append(result_payload)
 
     if claimed_followups:
         payload: dict[str, object] = {

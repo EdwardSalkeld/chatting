@@ -85,7 +85,7 @@ def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str
         task_dict["prompt_context"] = envelope.prompt_context.to_dict()
     if envelope.reply_channel.metadata:
         task_dict["reply_channel"]["metadata"] = envelope.reply_channel.metadata
-    return {
+    payload = {
         "schema_version": SCHEMA_VERSION,
         "task": task_dict,
         "current_time": current_time.astimezone(timezone.utc)
@@ -141,6 +141,32 @@ def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str
             ),
         },
     }
+    reply_to_message_id = envelope.reply_channel.metadata.get("reply_to_message_id")
+    if (
+        envelope.reply_channel.type == "telegram"
+        and isinstance(reply_to_message_id, int)
+        and not isinstance(reply_to_message_id, bool)
+        and reply_to_message_id > 0
+    ):
+        payload["history_contract"] = {
+            "anchor": {
+                "channel": "telegram",
+                "target": envelope.reply_channel.target,
+                "message_id": reply_to_message_id,
+            },
+            "retrieve_command": (
+                "python3 -P -m app.main_history --channel telegram "
+                f"--target {envelope.reply_channel.target} "
+                f"--around-message-id {reply_to_message_id}"
+            ),
+            "instructions": (
+                "This message reply-quotes an earlier Telegram message. Use the supported "
+                "history command if the quoted exchange or nearby turns would help; do not "
+                "query SQLite directly. Worker-owned history starts at deployment, so an old "
+                "anchor may not yet be present."
+            ),
+        }
+    return payload
 
 
 def _error_result(

@@ -174,6 +174,10 @@ Notes:
   sent as acknowledgement. Other chats are never claimed.
 - Incorporated tasks receive their own completion and run record without launching another
   executor. Their run page links to the parent run that answered the bundle.
+- Telegram's native reply metadata is preserved. For a reply-quoted task, the executor receives a
+  `history_contract` with the supported `app.main_history` command for retrieving nearby turns
+  around the quoted `(chat_id, message_id)` anchor. The worker ledger starts at deployment time,
+  so older anchors may initially be absent; no handler-history migration or cutover is required.
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 
