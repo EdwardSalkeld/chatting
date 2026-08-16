@@ -711,6 +711,25 @@ def _render_run_detail_html(
         if reply
         else "<div class='preview-box muted'>No reply sent for this run.</div>"
     )
+    coalesced_markup = ""
+    parent_run_id = audit_detail.get("coalesced_into_run_id")
+    parent_task_id = audit_detail.get("coalesced_into_task_id")
+    if isinstance(parent_run_id, str) and parent_run_id:
+        parent_href = _with_query(
+            f"/runs/{_quote_path_segment(parent_run_id)}",
+            include_internal=include_internal,
+        )
+        parent_label = (
+            parent_task_id
+            if isinstance(parent_task_id, str) and parent_task_id
+            else parent_run_id
+        )
+        coalesced_markup = (
+            "<section class='panel'><h2>Coalesced conversation turn</h2>"
+            "<p>This message was incorporated into "
+            f"<a href='{html.escape(parent_href)}'>{html.escape(parent_label)}</a> "
+            "and did not launch a separate executor.</p></section>"
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -788,6 +807,7 @@ def _render_run_detail_html(
       <h2>Current message</h2>
       {preview_markup}
     </section>
+    {coalesced_markup}
     <section class="panel">
       <h2>Billy's reply</h2>
       {reply_markup}
@@ -853,7 +873,7 @@ def _exec_command(block_text: str) -> str:
     marker = " -lc "
     if marker in command:
         rest = command.split(marker, 1)[1].strip()
-        if rest[:1] in ("\"", "'"):
+        if rest[:1] in ('"', "'"):
             quote = rest[0]
             end = rest.rfind(quote)
             command = rest[1:end] if end > 0 else rest[1:]
@@ -921,7 +941,9 @@ def _render_run_timeline(events: list[object]) -> str:
                 "</details>"
             )
         else:
-            message_markup = f"<div class='timeline-message'>{html.escape(message)}</div>"
+            message_markup = (
+                f"<div class='timeline-message'>{html.escape(message)}</div>"
+            )
         items.append(
             "<li class='timeline-item'>"
             "<div class='timeline-kicker'>"

@@ -121,8 +121,11 @@ def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str
                 "tells you whether the user actually received the reply: 0 = delivered; 1 = the "
                 "handler rejected it for good (for example a missing or unreadable "
                 "attachment) so you must adjust and resend, e.g. without the attachment; "
-                "3 = the handler was unreachable so you may retry. A non-zero exit means the "
-                "reply did NOT reach the user — do not treat it as sent."
+                "3 = the handler was unreachable so you may retry; 4 = newer messages from "
+                "this conversation were claimed and returned in stdout, so the drafted "
+                "message/attachment was withheld: incorporate every follow-up and call "
+                "main_reply again before exiting. Except for a reaction included alongside "
+                "exit 4, a non-zero exit means the reply did NOT reach the user."
             ),
         },
         "scheduling_contract": {

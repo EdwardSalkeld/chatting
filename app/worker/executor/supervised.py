@@ -15,6 +15,13 @@ _SUPERVISED_RECOVERY_INSTRUCTION = (
     "then run python3 -P -m app.main_reply --spec-file <path>, then stop."
 )
 
+_FOLLOWUP_RECOVERY_INSTRUCTION = (
+    "The earlier pass claimed newer messages from this conversation but exited "
+    "without resolving them. Read the main_reply result in the captured transcript, "
+    "incorporate every follow-up, and publish one current visible reply. Do not redo "
+    "side effects that the first pass already completed."
+)
+
 
 @dataclass
 class SupervisedReplyRecoveryExecutor:
@@ -34,7 +41,12 @@ class SupervisedReplyRecoveryExecutor:
         after_first_count = self.store.count_task_main_reply_egress_events(
             task_id=task_id
         )
-        if first_result.errors or after_first_count > before_count:
+        unresolved_followups = self.store.has_unresolved_attached_followups(
+            parent_task_id=task_id
+        )
+        if first_result.errors or (
+            after_first_count > before_count and not unresolved_followups
+        ):
             return first_result
 
         self.last_recovery_attempted = True
@@ -42,6 +54,7 @@ class SupervisedReplyRecoveryExecutor:
         recovery_envelope = _build_supervised_recovery_envelope(
             original_envelope=envelope,
             execution_result=first_result,
+            unresolved_followups=unresolved_followups,
         )
         second_result = self.inner.execute(recovery_envelope)
         return ExecutionResult(
@@ -59,6 +72,7 @@ def _build_supervised_recovery_envelope(
     *,
     original_envelope: TaskEnvelope,
     execution_result: ExecutionResult,
+    unresolved_followups: bool = False,
 ) -> TaskEnvelope:
     transcript_parts = []
     if execution_result.stdout:
@@ -66,7 +80,11 @@ def _build_supervised_recovery_envelope(
     if execution_result.stderr:
         transcript_parts.append("Captured stderr:\n" + execution_result.stderr.strip())
     transcript = "\n\n".join(part for part in transcript_parts if part.strip())
-    recovery_instruction = _SUPERVISED_RECOVERY_INSTRUCTION
+    recovery_instruction = (
+        _FOLLOWUP_RECOVERY_INSTRUCTION
+        if unresolved_followups
+        else _SUPERVISED_RECOVERY_INSTRUCTION
+    )
     if transcript:
         recovery_instruction = recovery_instruction + "\n\n" + transcript
     prompt_context = original_envelope.prompt_context

@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.broker import EgressQueueMessage
+from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
@@ -26,6 +26,7 @@ from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_s
 # error from the ValueError path.)
 EXIT_DROPPED = 1
 EXIT_TRANSIENT = 3
+EXIT_FOLLOWUPS = 4
 
 # Telegram's Bot API accepts only these values for ReactionTypeEmoji. Keep the
 # validation here, at the executor boundary, so an unsupported Unicode emoji is
@@ -319,9 +320,28 @@ def main() -> int:
 
     outbound_messages = _resolve_reply_messages(args, config)
     db_path = _resolve_optional_db_path(config)
+    intended_content = any(
+        message.channel != "telegram_reaction" for message in outbound_messages
+    )
+    claimed_followups = []
+    if db_path is not None and args.channel == "telegram":
+        claimed_followups = SQLiteStateStore(db_path).claim_conversation_followups(
+            parent_task_id=args.task_id
+        )
+    if claimed_followups:
+        # A reaction is still useful as an immediate acknowledgement. Text and
+        # attachments are held because they were drafted before the new turns
+        # were visible to the executor.
+        outbound_messages = [
+            message
+            for message in outbound_messages
+            if message.channel == "telegram_reaction"
+        ]
     results: list[dict[str, object]] = []
     all_delivered = True
     has_transient_failure = False
+    any_delivered = False
+    delivered_content = False
 
     for outbound_message in outbound_messages:
         egress_message = EgressQueueMessage(
@@ -350,6 +370,10 @@ def main() -> int:
         )
         reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
         delivered = status_code in (200, 202)
+        any_delivered = any_delivered or delivered
+        delivered_content = delivered_content or (
+            delivered and outbound_message.channel != "telegram_reaction"
+        )
         all_delivered = all_delivered and delivered
         has_transient_failure = has_transient_failure or (
             not delivered and status_code != 422
@@ -397,6 +421,30 @@ def main() -> int:
             }
         )
 
+    if claimed_followups:
+        payload: dict[str, object] = {
+            "status": "follow_ups_claimed",
+            "instruction": (
+                "Do not finish this run. Incorporate every follow-up below, then "
+                "call main_reply again with an up-to-date reply."
+            ),
+            "withheld": ["message_or_attachment"] if intended_content else [],
+            "follow_ups": [
+                _followup_payload(item.task_message) for item in claimed_followups
+            ],
+        }
+        if results:
+            payload["results"] = results
+        print(json.dumps(payload, sort_keys=True))
+        return EXIT_FOLLOWUPS
+
+    if db_path is not None:
+        resolution_delivered = delivered_content if intended_content else any_delivered
+        if resolution_delivered:
+            SQLiteStateStore(db_path).mark_inbox_reply_delivered(
+                parent_task_id=args.task_id
+            )
+
     payload = results[0] if len(results) == 1 else {"results": results}
     if all_delivered:
         print(json.dumps(payload, sort_keys=True))
@@ -417,6 +465,22 @@ def _resolve_optional_db_path(config: dict[str, object]) -> str | None:
     if not isinstance(raw_db_path, str) or not raw_db_path.strip():
         raise ValueError("config db_path must be a non-empty string")
     return raw_db_path
+
+
+def _followup_payload(task_message: TaskQueueMessage) -> dict[str, object]:
+    envelope = task_message.envelope
+    return {
+        "task_id": task_message.task_id,
+        "actor": envelope.actor,
+        "received_at": envelope.received_at.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "content": envelope.content,
+        "attachments": [
+            {"uri": attachment.uri, "name": attachment.name}
+            for attachment in envelope.attachments
+        ],
+    }
 
 
 if __name__ == "__main__":
