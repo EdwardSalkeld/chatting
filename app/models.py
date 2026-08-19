@@ -314,6 +314,80 @@ class ExecutionResult:
 
 
 @dataclass(frozen=True)
+class UsageWindow:
+    """One rate-limit window reported by the executor backend."""
+
+    used_percent: float
+    window_minutes: int
+    resets_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.resets_at is not None and self.resets_at.tzinfo is None:
+            raise ValueError("resets_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "used_percent": self.used_percent,
+            "window_minutes": self.window_minutes,
+        }
+        if self.resets_at is not None:
+            payload["resets_at"] = (
+                self.resets_at.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        return payload
+
+
+@dataclass(frozen=True)
+class UsageReport:
+    """Executor account usage snapshot, gathered without running model work.
+
+    The backend only publishes these figures while it is running a task, so the
+    snapshot is as old as the last real run. `observed_at` is what makes the
+    numbers interpretable and must be surfaced wherever they are.
+    """
+
+    observed_at: datetime | None = None
+    model: str | None = None
+    plan_type: str | None = None
+    limit_id: str | None = None
+    primary: UsageWindow | None = None
+    secondary: UsageWindow | None = None
+    credit_balance: str | None = None
+    has_credits: bool | None = None
+    unlimited_credits: bool = False
+    errors: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _validate_string_list(self.errors, field_name="errors")
+        if self.observed_at is not None and self.observed_at.tzinfo is None:
+            raise ValueError("observed_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"errors": self.errors}
+        if self.observed_at is not None:
+            payload["observed_at"] = (
+                self.observed_at.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        for name in ("model", "plan_type", "limit_id", "credit_balance"):
+            value = getattr(self, name)
+            if value is not None:
+                payload[name] = value
+        if self.primary is not None:
+            payload["primary"] = self.primary.to_dict()
+        if self.secondary is not None:
+            payload["secondary"] = self.secondary.to_dict()
+        if self.has_credits is not None:
+            payload["has_credits"] = self.has_credits
+        if self.unlimited_credits:
+            payload["unlimited_credits"] = True
+        return payload
+
+
+@dataclass(frozen=True)
 class RunRecord:
     """Persisted execution record for observability and audit history."""
 
