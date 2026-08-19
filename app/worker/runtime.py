@@ -11,11 +11,16 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor
+from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
 from app.internal_heartbeat import (
     build_internal_completion_egress,
     build_internal_heartbeat_egress,
     is_internal_heartbeat_envelope,
+)
+from app.usage_command import (
+    build_usage_egress,
+    format_usage_report,
+    is_usage_command_envelope,
 )
 from app.internal_notices import (
     build_internal_telegram_channel_not_enabled_egress,
@@ -70,6 +75,12 @@ def process_task_message(
         return _process_internal_heartbeat(
             store=store,
             task_message=task_message,
+        )
+    if is_usage_command_envelope(envelope):
+        return _process_usage_command(
+            store=store,
+            task_message=task_message,
+            executor_impl=executor_impl,
         )
 
     run_id = f"run:{task_message.task_id}:{time.time_ns()}"
@@ -498,6 +509,76 @@ def _process_internal_telegram_channel_not_enabled_notice(
         dead_lettered=False,
         attempt_count=1,
         reason_codes=["internal_notice"],
+        error_summary=None,
+    )
+
+
+def _process_usage_command(
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+    executor_impl: Executor,
+) -> WorkerProcessResult:
+    emitted_at = datetime.now(timezone.utc)
+    if isinstance(executor_impl, UsageReporter):
+        report = executor_impl.usage_report()
+        body = format_usage_report(report, now=emitted_at)
+        report_detail = report.to_dict()
+    else:
+        body = "This executor does not report usage."
+        report_detail = None
+    visible_egress_message = build_usage_egress(
+        task_message=task_message,
+        body=body,
+        emitted_at=emitted_at,
+    )
+    completion_egress_message = build_internal_completion_egress(
+        task_message=task_message,
+        sequence=1,
+        emitted_at=emitted_at,
+    )
+    run_record = RunRecord(
+        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+        envelope_id=task_message.envelope.id,
+        source=task_message.envelope.source,
+        workflow="default",
+        latency_ms=0,
+        result_status="success",
+        created_at=emitted_at,
+    )
+    store.append_run(run_record)
+    store.append_audit_event(
+        AuditEvent(
+            run_id=run_record.run_id,
+            envelope_id=run_record.envelope_id,
+            source=run_record.source,
+            workflow=run_record.workflow,
+            result_status=run_record.result_status,
+            detail={
+                "trace_id": task_message.trace_id,
+                "task_id": task_message.task_id,
+                "reason_codes": ["usage_command"],
+                "attempt_count": 1,
+                "max_attempts": 1,
+                "last_error": None,
+                "last_error_stage": None,
+                "execution_result": {
+                    "errors": [],
+                },
+                "incremental_reply_send_requested_count": 0,
+                "incremental_reply_send_published_count": 0,
+                "egress_message_count": 2,
+                "usage_report": report_detail,
+            },
+            created_at=run_record.created_at,
+        )
+    )
+    return WorkerProcessResult(
+        run_record=run_record,
+        egress_messages=[visible_egress_message, completion_egress_message],
+        dead_lettered=False,
+        attempt_count=1,
+        reason_codes=["usage_command"],
         error_summary=None,
     )
 

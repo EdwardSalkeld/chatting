@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from app.models import ExecutionResult, PromptContext, TaskEnvelope
+from app.models import ExecutionResult, PromptContext, TaskEnvelope, UsageReport
 from app.state import SQLiteStateStore
-from app.worker.executor.base import Executor
+from app.worker.executor.base import Executor, UsageReporter
 
 _SUPERVISED_RECOVERY_INSTRUCTION = (
     "The earlier executor pass finished without publishing any visible reply. "
@@ -66,6 +66,11 @@ class SupervisedReplyRecoveryExecutor:
                 first_result.stderr, second_result.stderr, label="stderr"
             ),
         )
+
+    def usage_report(self) -> UsageReport:
+        if not isinstance(self.inner, UsageReporter):
+            return UsageReport(errors=["executor_usage_unsupported"])
+        return self.inner.usage_report()
 
 
 def _build_supervised_recovery_envelope(
