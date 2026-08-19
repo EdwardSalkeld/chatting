@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from app.worker.executor.harness import run_harness
+from app.worker.executor.payload import build_task_payload
 from app.models import (
     ExecutionResult,
     TaskEnvelope,
@@ -37,13 +38,38 @@ class CodexExecutor:
     )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
-        return run_harness(
-            command=self.command,
-            envelope=envelope,
-            current_time=self.now_provider(),
-            cwd=self.cwd,
-            env=self.env,
-            timeout_seconds=self.timeout_seconds,
+        payload = json.dumps(
+            build_task_payload(envelope, current_time=self.now_provider())
+        )
+        try:
+            completed = subprocess.run(
+                self.command,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+                cwd=self.cwd,
+                env=dict(self.env) if self.env is not None else None,
+            )
+        except subprocess.TimeoutExpired:
+            return _error_result("executor_timeout")
+
+        if completed.returncode != 0:
+            error = f"executor_exit_nonzero:{completed.returncode}"
+            stderr = completed.stderr.strip()
+            if stderr:
+                error = f"{error}:{stderr}"
+            return _error_result(
+                error,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+        return ExecutionResult(
+            errors=[],
+            stdout=completed.stdout,
+            stderr=completed.stderr,
         )
 
     def usage_report(self) -> UsageReport:
@@ -183,6 +209,19 @@ def _optional_str(value: object) -> str | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return str(value)
     return None
+
+
+def _error_result(
+    error: str,
+    *,
+    stdout: str | None = None,
+    stderr: str | None = None,
+) -> ExecutionResult:
+    return ExecutionResult(
+        errors=[error],
+        stdout=stdout,
+        stderr=stderr,
+    )
 
 
 __all__ = ["CodexExecutor"]

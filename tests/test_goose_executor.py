@@ -9,7 +9,7 @@ from app.models import PromptContext, ReplyChannel, TaskEnvelope
 from app.worker.executor import CodexExecutor, GooseExecutor, UsageReporter
 from app.worker.main import _build_executor
 
-_HARNESS_RUN = "app.worker.executor.harness.subprocess.run"
+_HARNESS_RUN = "app.worker.executor.goose.subprocess.run"
 
 
 def _envelope() -> TaskEnvelope:

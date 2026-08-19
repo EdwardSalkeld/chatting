@@ -49,15 +49,13 @@ class CodexExecutorTests(unittest.TestCase):
             dedupe_key="telegram:9",
         )
         with patch(
-            "app.worker.executor.harness.subprocess.run", return_value=completed
+            "app.worker.executor.codex.subprocess.run", return_value=completed
         ) as run_mock:
             CodexExecutor(command=("codex",)).execute(envelope)
 
         payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(payload["history_contract"]["anchor"]["message_id"], 2400)
-        self.assertIn(
-            "app.main_history", payload["history_contract"]["retrieve_command"]
-        )
+        self.assertIn("app.main_history", payload["history_contract"]["retrieve_command"])
 
     def test_execute_returns_stdout_and_stderr_on_success(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -66,9 +64,7 @@ class CodexExecutorTests(unittest.TestCase):
             stdout='{"status":"ok"}',
             stderr="operator log",
         )
-        with patch(
-            "app.worker.executor.harness.subprocess.run", return_value=completed
-        ):
+        with patch("app.worker.executor.codex.subprocess.run", return_value=completed):
             result = CodexExecutor(command=("codex",)).execute(_envelope())
 
         self.assertEqual(result.errors, [])
@@ -77,7 +73,7 @@ class CodexExecutorTests(unittest.TestCase):
 
     def test_execute_returns_timeout_error(self) -> None:
         with patch(
-            "app.worker.executor.harness.subprocess.run",
+            "app.worker.executor.codex.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["codex"], timeout=1),
         ):
             result = CodexExecutor(command=("codex",), timeout_seconds=1).execute(
@@ -93,9 +89,7 @@ class CodexExecutorTests(unittest.TestCase):
             stdout="",
             stderr="boom",
         )
-        with patch(
-            "app.worker.executor.harness.subprocess.run", return_value=completed
-        ):
+        with patch("app.worker.executor.codex.subprocess.run", return_value=completed):
             result = CodexExecutor(command=("codex",)).execute(_envelope())
 
         self.assertEqual(result.errors, ["executor_exit_nonzero:7:boom"])
@@ -108,7 +102,7 @@ class CodexExecutorTests(unittest.TestCase):
             stderr="",
         )
         with patch(
-            "app.worker.executor.harness.subprocess.run",
+            "app.worker.executor.codex.subprocess.run",
             return_value=completed,
         ) as run_mock:
             executor = CodexExecutor(

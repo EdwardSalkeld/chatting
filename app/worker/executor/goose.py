@@ -13,20 +13,24 @@ The default argv covers what an unattended run needs:
 - `--max-turns` and `--max-tool-repetitions` bound a runaway loop, which Codex has
   no equivalent for; on pay-per-token billing an unbounded loop spends real money
 
-Note goose reports failures as Rust panics exiting 101 rather than clean errors.
-That satisfies the executor contract, which only needs a non-zero status, but the
-panic text does not use the wording `_looks_like_credit_exhaustion` looks for, so
-credit exhaustion on this executor surfaces as a generic failure.
+`execute` is intentionally its own copy rather than shared with the Codex
+executor. The two harnesses are expected to diverge — goose reports failure as a
+Rust panic exiting 101 rather than a clean error, and while a non-zero status is
+all the executor contract needs today, handling that shape properly is likely to
+mean treating its streams differently. Sharing the body would make every such
+tweak a change to the Codex path as well.
 """
 
 from __future__ import annotations
 
+import json
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Mapping
 
 from app.models import ExecutionResult, TaskEnvelope
-from app.worker.executor.harness import run_harness
+from app.worker.executor.payload import build_task_payload
 
 DEFAULT_MAX_TURNS = 40
 DEFAULT_MAX_TOOL_REPETITIONS = 5
@@ -57,14 +61,52 @@ class GooseExecutor:
     )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
-        return run_harness(
-            command=self.command,
-            envelope=envelope,
-            current_time=self.now_provider(),
-            cwd=self.cwd,
-            env=self.env,
-            timeout_seconds=self.timeout_seconds,
+        payload = json.dumps(
+            build_task_payload(envelope, current_time=self.now_provider())
         )
+        try:
+            completed = subprocess.run(
+                self.command,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+                cwd=self.cwd,
+                env=dict(self.env) if self.env is not None else None,
+            )
+        except subprocess.TimeoutExpired:
+            return _error_result("executor_timeout")
+
+        if completed.returncode != 0:
+            error = f"executor_exit_nonzero:{completed.returncode}"
+            stderr = completed.stderr.strip()
+            if stderr:
+                error = f"{error}:{stderr}"
+            return _error_result(
+                error,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+        return ExecutionResult(
+            errors=[],
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+
+def _error_result(
+    error: str,
+    *,
+    stdout: str | None = None,
+    stderr: str | None = None,
+) -> ExecutionResult:
+    return ExecutionResult(
+        errors=[error],
+        stdout=stdout,
+        stderr=stderr,
+    )
 
 
 __all__ = ["DEFAULT_MAX_TOOL_REPETITIONS", "DEFAULT_MAX_TURNS", "GooseExecutor"]
