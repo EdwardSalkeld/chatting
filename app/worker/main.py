@@ -28,7 +28,7 @@ from app.worker.activity import (
     WorkerActivityServer,
     start_worker_activity_server,
 )
-from app.worker.executor import CodexExecutor, Executor
+from app.worker.executor import CodexExecutor, Executor, GooseExecutor
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
 from app.worker.runtime import (
@@ -45,6 +45,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "bbmb_address",
         "claude_command",
         "codex_command",
+        "goose_command",
         "codex_working_dir",
         "db_path",
         "activity_history_limit",
@@ -144,6 +145,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--claude-command", help="Executor command to launch for Claude runs."
+    )
+    parser.add_argument(
+        "--goose-command", help="Executor command to launch for goose runs."
     )
     parser.add_argument(
         "--activity-history-limit",
@@ -294,7 +298,10 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         setting_name="codex_working_dir",
     )
 
-    # Prefer codex_command if set, fall back to claude_command
+    # Prefer codex_command if set, fall back to claude_command, then goose_command.
+    # Codex keeps precedence so an existing deployment cannot change harness by
+    # gaining a key; trialling goose means setting goose_command and dropping the
+    # other two.
     codex_raw = _resolve_optional_str(
         args.codex_command,
         config.get("codex_command"),
@@ -305,6 +312,20 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         config.get("claude_command"),
         setting_name="claude_command",
     )
+    goose_raw = _resolve_optional_str(
+        getattr(args, "goose_command", None),
+        config.get("goose_command"),
+        setting_name="goose_command",
+    )
+
+    executor_env = _build_executor_env(args.config, os.environ)
+
+    if goose_raw and not codex_raw and not claude_raw:
+        return GooseExecutor(
+            command=tuple(shlex.split(goose_raw)),
+            cwd=codex_working_dir,
+            env=executor_env,
+        )
 
     if codex_raw:
         command = tuple(shlex.split(codex_raw))
@@ -316,7 +337,6 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
     if not command:
         raise ValueError("codex_command or claude_command must be configured")
 
-    executor_env = _build_executor_env(args.config, os.environ)
     return CodexExecutor(command=command, cwd=codex_working_dir, env=executor_env)
 
 
