@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from app.models import PromptContext, ReplyChannel, TaskEnvelope
 from app.worker.executor import CodexExecutor, GooseExecutor, UsageReporter
+from app.worker.executor.goose import DEFAULT_GOOSE_COMMAND
 from app.worker.main import _build_executor
 
 _HARNESS_RUN = "app.worker.executor.goose.subprocess.run"
@@ -118,6 +119,7 @@ class GooseExecutorExecuteTests(unittest.TestCase):
 
 def _args(**overrides: object) -> argparse.Namespace:
     defaults: dict[str, object] = {
+        "executor": None,
         "codex_command": None,
         "claude_command": None,
         "goose_command": None,
@@ -128,39 +130,74 @@ def _args(**overrides: object) -> argparse.Namespace:
     return argparse.Namespace(**defaults)
 
 
-class BuildExecutorSelectionTests(unittest.TestCase):
-    def test_goose_command_alone_selects_the_goose_executor(self) -> None:
+class ExecutorSelectionTests(unittest.TestCase):
+    def test_defaults_to_codex_when_executor_is_unset(self) -> None:
+        self.assertIsInstance(_build_executor(_args(), {}), CodexExecutor)
+
+    def test_codex_stays_selected_even_with_a_goose_command_present(self) -> None:
+        # Both commands can sit in config; only the selector decides.
         executor = _build_executor(
-            _args(), {"goose_command": "goose run --no-session -i -"}
+            _args(), {"codex_command": "codex exec", "goose_command": "goose run"}
+        )
+
+        self.assertIsInstance(executor, CodexExecutor)
+
+    def test_executor_goose_selects_goose(self) -> None:
+        executor = _build_executor(
+            _args(),
+            {
+                "executor": "goose",
+                "codex_command": "codex exec",
+                "goose_command": "goose run --no-session -i -",
+            },
         )
 
         self.assertIsInstance(executor, GooseExecutor)
         assert isinstance(executor, GooseExecutor)
         self.assertEqual(executor.command, ("goose", "run", "--no-session", "-i", "-"))
 
-    def test_codex_command_keeps_precedence_over_goose(self) -> None:
-        # A deployment that already sets codex_command must not switch harness by
-        # gaining a goose key.
+    def test_goose_without_a_command_uses_the_packaged_default(self) -> None:
+        executor = _build_executor(_args(), {"executor": "goose"})
+
+        assert isinstance(executor, GooseExecutor)
+        self.assertEqual(executor.command, DEFAULT_GOOSE_COMMAND)
+
+    def test_selector_is_case_and_whitespace_insensitive(self) -> None:
+        executor = _build_executor(_args(), {"executor": "  Goose \n"})
+
+        self.assertIsInstance(executor, GooseExecutor)
+
+    def test_cli_flag_overrides_the_config_selector(self) -> None:
         executor = _build_executor(
-            _args(),
-            {"codex_command": "codex exec", "goose_command": "goose run"},
+            _args(executor="goose"), {"executor": "codex", "goose_command": "goose run"}
+        )
+
+        self.assertIsInstance(executor, GooseExecutor)
+
+    def test_unknown_executor_is_rejected(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            _build_executor(_args(), {"executor": "openrouter"})
+
+        self.assertIn("codex", str(caught.exception))
+
+    def test_claude_requires_its_own_command(self) -> None:
+        with self.assertRaises(ValueError):
+            _build_executor(_args(), {"executor": "claude"})
+
+    def test_claude_selector_builds_from_claude_command(self) -> None:
+        executor = _build_executor(
+            _args(), {"executor": "claude", "claude_command": "claude -p"}
         )
 
         self.assertIsInstance(executor, CodexExecutor)
+        assert isinstance(executor, CodexExecutor)
+        self.assertEqual(executor.command, ("claude", "-p"))
 
-    def test_claude_command_also_keeps_precedence_over_goose(self) -> None:
-        executor = _build_executor(
-            _args(),
-            {"claude_command": "claude", "goose_command": "goose run"},
-        )
-
-        self.assertIsInstance(executor, CodexExecutor)
-
-    def test_goose_working_dir_comes_from_the_shared_setting(self) -> None:
+    def test_working_dir_applies_to_goose_too(self) -> None:
         executor = _build_executor(
             _args(),
             {
-                "goose_command": "goose run",
+                "executor": "goose",
                 "codex_working_dir": "/srv/chatting/workspace",
             },
         )
@@ -172,12 +209,7 @@ class BuildExecutorSelectionTests(unittest.TestCase):
         # Rejected upstream by _resolve_optional_str, in common with every other
         # string setting; asserted here so the goose path is covered by it too.
         with self.assertRaises(ValueError):
-            _build_executor(_args(), {"goose_command": "   "})
-
-    def test_no_command_at_all_still_defaults_to_codex(self) -> None:
-        executor = _build_executor(_args(), {})
-
-        self.assertIsInstance(executor, CodexExecutor)
+            _build_executor(_args(), {"executor": "goose", "goose_command": "   "})
 
 
 if __name__ == "__main__":

@@ -35,24 +35,26 @@ from app.worker.executor.payload import build_task_payload
 DEFAULT_MAX_TURNS = 40
 DEFAULT_MAX_TOOL_REPETITIONS = 5
 
+DEFAULT_GOOSE_COMMAND = (
+    "goose",
+    "run",
+    "--no-session",
+    "--with-builtin",
+    "developer",
+    "--max-turns",
+    str(DEFAULT_MAX_TURNS),
+    "--max-tool-repetitions",
+    str(DEFAULT_MAX_TOOL_REPETITIONS),
+    "-i",
+    "-",
+)
+
 
 @dataclass(frozen=True)
 class GooseExecutor:
     """Run goose as a subprocess and capture stdout/stderr as transcript."""
 
-    command: tuple[str, ...] = (
-        "goose",
-        "run",
-        "--no-session",
-        "--with-builtin",
-        "developer",
-        "--max-turns",
-        str(DEFAULT_MAX_TURNS),
-        "--max-tool-repetitions",
-        str(DEFAULT_MAX_TOOL_REPETITIONS),
-        "-i",
-        "-",
-    )
+    command: tuple[str, ...] = DEFAULT_GOOSE_COMMAND
     cwd: str | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
@@ -109,4 +111,9 @@ def _error_result(
     )
 
 
-__all__ = ["DEFAULT_MAX_TOOL_REPETITIONS", "DEFAULT_MAX_TURNS", "GooseExecutor"]
+__all__ = [
+    "DEFAULT_GOOSE_COMMAND",
+    "DEFAULT_MAX_TOOL_REPETITIONS",
+    "DEFAULT_MAX_TURNS",
+    "GooseExecutor",
+]
