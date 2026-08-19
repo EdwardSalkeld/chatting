@@ -292,7 +292,8 @@ instructions assembled in this order before the task content itself:
   Retry budget before the task becomes a dead letter.
 - `use_stub_executor`
   Replaces the real executor path for testing/smoke runs.
-- `codex_command`, `codex_working_dir`
+- `executor` (`codex`, `claude` or `goose`; defaults to `codex`)
+- `codex_command`, `claude_command`, `goose_command`, `codex_working_dir`
   Shape the real executor subprocess.
 
 ## Recommendations
