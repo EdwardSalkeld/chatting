@@ -210,18 +210,17 @@ class WorkerActivityMonitor:
         )
 
     def snapshot(self, *, include_internal: bool = False) -> dict[str, object]:
-        with self._lock:
-            current_executor = (
-                {"active": False, "phase": "idle"}
-                if self._active_executor is None
-                else dict(self._active_executor)
-            )
+        current_executor = self._current_executor()
         activity = self._store.list_recent_worker_activity(
             limit=self._history_limit,
             include_internal=include_internal,
         )
         return {
             "current_executor": current_executor,
+            "current_run": self._build_current_run_summary(
+                current_executor=current_executor,
+                include_internal=include_internal,
+            ),
             "recent_activity": activity,
             "history_limit": self._history_limit,
             "history_truncated": len(activity) >= self._history_limit,
@@ -231,12 +230,7 @@ class WorkerActivityMonitor:
     def list_runs_snapshot(
         self, *, include_internal: bool = False
     ) -> dict[str, object]:
-        with self._lock:
-            current_executor = (
-                {"active": False, "phase": "idle"}
-                if self._active_executor is None
-                else dict(self._active_executor)
-            )
+        current_executor = self._current_executor()
         runs = []
         for run in self._store.list_recent_runs(
             limit=self._history_limit,
@@ -250,6 +244,10 @@ class WorkerActivityMonitor:
                 runs.append(run_summary)
         return {
             "current_executor": current_executor,
+            "current_run": self._build_current_run_summary(
+                current_executor=current_executor,
+                include_internal=include_internal,
+            ),
             "runs": runs,
             "history_limit": self._history_limit,
             "history_truncated": len(runs) >= self._history_limit,
@@ -262,12 +260,7 @@ class WorkerActivityMonitor:
         run_id: str,
         include_internal: bool = False,
     ) -> dict[str, object] | None:
-        with self._lock:
-            current_executor = (
-                {"active": False, "phase": "idle"}
-                if self._active_executor is None
-                else dict(self._active_executor)
-            )
+        current_executor = self._current_executor()
         run_summary = self._build_run_summary(
             run_id=run_id,
             include_internal=include_internal,
@@ -278,6 +271,58 @@ class WorkerActivityMonitor:
             "current_executor": current_executor,
             "run": run_summary,
             "include_internal": include_internal,
+        }
+
+    def _current_executor(self) -> dict[str, object]:
+        with self._lock:
+            return (
+                {"active": False, "phase": "idle"}
+                if self._active_executor is None
+                else dict(self._active_executor)
+            )
+
+    def _build_current_run_summary(
+        self,
+        *,
+        current_executor: dict[str, object],
+        include_internal: bool,
+    ) -> dict[str, object] | None:
+        if not current_executor.get("active"):
+            return None
+        task_id = current_executor.get("task_id")
+        envelope_id = current_executor.get("envelope_id")
+        if not isinstance(task_id, str) or not isinstance(envelope_id, str):
+            return None
+        events = self._store.list_worker_activity_for_task(
+            task_id=task_id,
+            envelope_id=envelope_id,
+            include_internal=include_internal,
+        )
+        task_event = next(
+            (item for item in events if item.get("phase") == "task_received"), None
+        )
+        task_detail = (
+            task_event.get("detail", {}) if isinstance(task_event, dict) else {}
+        )
+        if not isinstance(task_detail, dict):
+            task_detail = {}
+        content = task_detail.get("content")
+        latest_event = events[-1] if events else None
+        return {
+            "task_id": task_id,
+            "envelope_id": envelope_id,
+            "source": current_executor.get("source", ""),
+            "attempt": current_executor.get("attempt"),
+            "pid": current_executor.get("pid"),
+            "started_at": current_executor.get("started_at"),
+            "preview": _extract_current_message(content)
+            if isinstance(content, str)
+            else "",
+            "event_count": len(events),
+            "latest_phase": latest_event.get("phase")
+            if isinstance(latest_event, dict)
+            else None,
+            "events": events,
         }
 
     def _build_run_summary(
@@ -511,6 +556,7 @@ def _render_runs_index_html(
     include_internal: bool,
 ) -> str:
     current_executor = snapshot["current_executor"]
+    current_run = snapshot.get("current_run")
     runs = snapshot["runs"]
     assert isinstance(current_executor, dict)
     assert isinstance(runs, list)
@@ -519,6 +565,7 @@ def _render_runs_index_html(
         showing_note = f"<p class='note'>Showing the latest {html.escape(str(snapshot['history_limit']))} runs.</p>"
     runs_markup = _render_runs_index(runs, include_internal=include_internal)
     current_state_markup = _render_current_executor(current_executor)
+    current_run_markup = _render_current_run(current_run)
     toggle_href = _with_query("/runs", include_internal=not include_internal)
     toggle_label = (
         "show internal traffic" if not include_internal else "hide internal traffic"
@@ -562,6 +609,24 @@ def _render_runs_index_html(
     .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
     .detail-block dd {{ margin: 4px 0 0; }}
     .runs {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }}
+    .live-run {{ background: #173f45; color: #f8faf7; border-radius: 20px; padding: 18px; margin: 0 0 14px; box-shadow: var(--shadow); }}
+    .live-run .run-preview {{ color: #f8faf7; }}
+    .live-run .chip {{ background: rgba(255, 255, 255, 0.14); color: #f8faf7; }}
+    .live-run details {{ margin-top: 16px; }}
+    .live-run summary {{ cursor: pointer; font-family: "Iowan Old Style", Georgia, serif; font-size: 20px; }}
+    .live-run .timeline-item {{ color: var(--ink); }}
+    .timeline {{ list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; }}
+    .timeline-item {{ background: var(--panel); border-radius: 14px; padding: 14px; }}
+    .timeline-kicker {{ display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
+    .timeline-item h3 {{ margin: 8px 0; font-size: 18px; }}
+    .timeline-message {{ margin-top: 10px; padding: 10px 12px; background: rgba(31, 111, 120, 0.08); border-radius: 10px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }}
+    .timeline-collapsible summary, .stderr-exec > summary, .stderr-meta > summary {{ cursor: pointer; color: var(--muted); font-size: 13px; font-family: inherit; }}
+    .stderr-log {{ display: grid; gap: 8px; margin-top: 10px; }}
+    .stderr-codex {{ padding: 10px 12px; background: rgba(31, 111, 120, 0.08); border-radius: 10px; white-space: pre-wrap; word-break: break-word; }}
+    .stderr-exec pre, .stderr-meta pre {{ margin: 8px 0 0; max-height: 360px; overflow: auto; background: rgba(0, 0, 0, 0.04); padding: 10px; border-radius: 10px; }}
+    pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
+    .live-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: #bde7df; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
+    .live-dot::before {{ content: "●"; color: #8be0b6; margin-right: 5px; }}
     .run-card {{ display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 18px; box-shadow: var(--shadow); }}
     .run-card:hover {{ border-color: var(--accent); transform: translateY(-1px); }}
     .run-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
@@ -587,7 +652,7 @@ def _render_runs_index_html(
         <div>
           <div class="eyebrow">Chatting Worker</div>
           <h1>Recent Runs</h1>
-          <p class="muted">Stable URLs, grouped per run, and no live event list jumping around.</p>
+          <p class="muted">A live run stays at the top while it is in progress; completed runs keep stable URLs below.</p>
           <div id="current-executor">{current_state_markup}</div>
         </div>
         <div class="controls">
@@ -598,8 +663,10 @@ def _render_runs_index_html(
       </div>
       {showing_note}
     </section>
+    {current_run_markup}
     {runs_markup}
   </main>
+  {_live_refresh_script(current_run)}
 </body>
 </html>"""
 
@@ -625,6 +692,40 @@ def _render_current_executor(current_executor: dict[str, object]) -> str:
             "</dl>"
         )
     return f"<div class='detail-grid'>{''.join(blocks)}</div>"
+
+
+def _render_current_run(current_run: object) -> str:
+    if not isinstance(current_run, dict):
+        return ""
+    events = current_run.get("events", [])
+    assert isinstance(events, list)
+    preview = _truncate(str(current_run.get("preview", "")), limit=500)
+    preview_markup = (
+        f"<p class='run-preview'>{html.escape(preview)}</p>"
+        if preview
+        else "<p class='run-preview'>Waiting for task details…</p>"
+    )
+    meta = [
+        ("attempt", str(current_run.get("attempt", ""))),
+        ("started", _friendly_timestamp(current_run.get("started_at"))),
+        ("events", str(current_run.get("event_count", 0))),
+    ]
+    return (
+        "<section class='live-run'>"
+        "<div class='live-kicker'><span>Live now</span><span class='live-dot'>refreshing every 2 seconds</span></div>"
+        f"<h2>{html.escape(str(current_run.get('task_id', 'Current run')))}</h2>"
+        f"{preview_markup}"
+        f"<div class='chips'>{_render_chip_row(meta, status_value='')}</div>"
+        "<details open><summary>Activity so far</summary>"
+        f"{_render_run_timeline(events)}"
+        "</details></section>"
+    )
+
+
+def _live_refresh_script(current_run: object) -> str:
+    if not isinstance(current_run, dict):
+        return ""
+    return "<script>window.setTimeout(() => window.location.reload(), 2000);</script>"
 
 
 def _render_runs_index(runs: list[object], *, include_internal: bool) -> str:

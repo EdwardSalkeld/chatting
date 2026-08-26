@@ -55,6 +55,12 @@ class WorkerActivityTests(unittest.TestCase):
             self.assertEqual(
                 running_snapshot["current_executor"]["task_id"], task_message.task_id
             )
+            current_run = running_snapshot["current_run"]
+            self.assertIsInstance(current_run, dict)
+            assert isinstance(current_run, dict)
+            self.assertEqual(current_run["preview"], "hello")
+            self.assertEqual(current_run["latest_phase"], "executor_stdout")
+            self.assertEqual(current_run["event_count"], 3)
 
             monitor.record_egress(
                 egress_message=EgressQueueMessage(
@@ -166,6 +172,7 @@ class WorkerActivityTests(unittest.TestCase):
                 ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(payload["current_executor"]["active"], False)
+                self.assertIsNone(payload["current_run"])
                 self.assertEqual(
                     payload["recent_activity"][0]["phase"], "task_finished"
                 )
@@ -184,9 +191,9 @@ class WorkerActivityTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
                     html_body = response.read().decode("utf-8")
                 self.assertIn("Recent Runs", html_body)
-                self.assertIn("Stable URLs, grouped per run", html_body)
+                self.assertIn("completed runs keep stable URLs below", html_body)
                 self.assertIn("task:telegram:1", html_body)
-                self.assertIn("no live event list jumping around", html_body.lower())
+                self.assertNotIn("Live now", html_body)
                 self.assertIn("run%3Atask%3Atelegram%3A1%3A123", html_body)
                 self.assertIn("raw activity", html_body)
                 self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
@@ -221,6 +228,45 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertIn("warning line", detail_html)
                 self.assertIn("all runs", detail_html)
                 self.assertIn("Audit detail (raw JSON)", detail_html)
+            finally:
+                server.shutdown()
+
+    def test_runs_index_shows_and_refreshes_an_active_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            monitor = WorkerActivityMonitor(store=store, history_limit=5)
+            task_message = self._build_task_message()
+            monitor.record_task_received(task_message=task_message)
+            monitor.record_executor_started(task_message=task_message, attempt=1)
+            monitor.record_executor_output(
+                task_message=task_message,
+                stream="stdout",
+                content="looking at the worker UI",
+            )
+
+            server = start_worker_activity_server(
+                host="127.0.0.1", port=0, monitor=monitor
+            )
+            port = server.server.server_address[1]
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/runs.json"
+                ) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(payload["runs"], [])
+                self.assertEqual(
+                    payload["current_run"]["task_id"], task_message.task_id
+                )
+                self.assertEqual(payload["current_run"]["event_count"], 3)
+
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
+                    html_body = response.read().decode("utf-8")
+                self.assertIn("Live now", html_body)
+                self.assertIn("Activity so far", html_body)
+                self.assertIn("looking at the worker UI", html_body)
+                self.assertIn("refreshing every 2 seconds", html_body)
+                self.assertIn("window.location.reload(), 2000", html_body)
+                self.assertIn("No completed runs yet.", html_body)
             finally:
                 server.shutdown()
 
@@ -399,9 +445,7 @@ class WorkerActivityTests(unittest.TestCase):
             _seed("run:im:1", "im", "task:im:1")
 
             default_runs = monitor.list_runs_snapshot()["runs"]
-            self.assertEqual(
-                [run["run_id"] for run in default_runs], ["run:im:1"]
-            )
+            self.assertEqual([run["run_id"] for run in default_runs], ["run:im:1"])
 
             all_runs = monitor.list_runs_snapshot(include_internal=True)["runs"]
             self.assertEqual(

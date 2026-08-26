@@ -1385,6 +1385,46 @@ class SQLiteStateStore:
             for row in rows
         ]
 
+    def list_worker_activity_for_task(
+        self,
+        *,
+        task_id: str,
+        envelope_id: str,
+        include_internal: bool = False,
+    ) -> list[dict[str, object]]:
+        """Return all activity for an in-flight task, in event order."""
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not envelope_id:
+            raise ValueError("envelope_id is required")
+        with closing(self._connect()) as connection:
+            query = """
+                SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
+                FROM worker_activity_events
+                WHERE task_id = ? AND envelope_id = ?
+            """
+            params: tuple[object, ...] = (task_id, envelope_id)
+            if not include_internal:
+                query += " AND is_internal = 0"
+            query += " ORDER BY occurred_at ASC, activity_id ASC"
+            rows = connection.execute(query, params).fetchall()
+        return [
+            {
+                "activity_id": row["activity_id"],
+                "occurred_at": row["occurred_at"],
+                "task_id": row["task_id"],
+                "envelope_id": row["envelope_id"],
+                "run_id": row["run_id"],
+                "source": row["source"],
+                "workflow": row["workflow"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "detail": json.loads(row["detail_json"]),
+                "is_internal": bool(row["is_internal"]),
+            }
+            for row in rows
+        ]
+
 
 def _parse_rfc3339_utc(value: str) -> datetime:
     if value.endswith("Z"):
