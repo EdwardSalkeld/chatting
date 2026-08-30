@@ -183,6 +183,24 @@ class WorkerInboxTests(unittest.TestCase):
                 [item.task_message.task_id for item in claimed], [followup.task_id]
             )
 
+    def test_pending_task_with_a_delivered_reply_closes_without_execution(self) -> None:
+        """A direct reply must not leave an unclaimed task available to replay."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            task = _telegram_task(1)
+            store.stage_inbox_task(task)
+
+            self.assertTrue(store.mark_inbox_reply_delivered(parent_task_id=task.task_id))
+
+            pending = store.get_inbox_task(task_id=task.task_id)
+            assert pending is not None
+            self.assertEqual(pending.state, "closing")
+
+            recovered = store.claim_next_inbox_task()
+            assert recovered is not None
+            self.assertEqual(recovered.task_message.task_id, task.task_id)
+            self.assertEqual(recovered.state, "closing")
+
     def test_standalone_document_survives_claim_and_bundle_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
