@@ -252,6 +252,49 @@ class MainReplyCliTests(unittest.TestCase):
                 json.loads(stdout.getvalue())["telegram_message_id"], 9001
             )
 
+    def test_delivered_reply_closes_a_task_that_has_not_been_claimed(self) -> None:
+        """A direct final reply must prevent a later worker replay."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            db_path = directory / "worker.db"
+            config_path = directory / "worker.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
+            store = SQLiteStateStore(str(db_path))
+            task = _telegram_task_message(54, content="Question")
+            store.stage_inbox_task(task)
+            spec = _write_spec(
+                directory,
+                {
+                    "task_id": task.task_id,
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "Direct final answer",
+                },
+            )
+
+            with (
+                patch("app.main_reply.submit_egress", _FakeSubmit()),
+                patch("sys.stdout", io.StringIO()),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            inbox_task = store.get_inbox_task(task_id=task.task_id)
+            assert inbox_task is not None
+            self.assertEqual(inbox_task.state, "closing")
+
     def test_spec_file_preserves_shell_dangerous_text_verbatim(self) -> None:
         # The whole point of the spec file: prose that would be mangled as a
         # shell argument (backticks, $, quotes, newlines) arrives intact.

@@ -555,6 +555,12 @@ class SQLiteStateStore:
         from peeking at the conversation. With no attached turns the parent
         therefore stays active until normal executor completion; the timestamp
         still lets restart recovery avoid rerunning already-visible work.
+
+        A task that is still pending is different: no worker owns it, so a
+        successful task-scoped reply cannot be an executor progress update.
+        This can happen when a direct reply succeeds but the launching process
+        exits before it claims the staged row. Close that row immediately so a
+        later worker restart records its completion instead of replaying it.
         """
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
         with closing(self._connect()) as connection:
@@ -563,11 +569,15 @@ class SQLiteStateStore:
                 """
                 UPDATE worker_inbox
                 SET reply_delivered_at = ?, updated_at = ?
-                WHERE task_id = ? AND state IN ('active', 'attached')
+                WHERE task_id = ? AND state IN ('pending', 'active', 'attached')
                 """,
                 (now, now, parent_task_id),
             )
             if cursor.rowcount:
+                parent = connection.execute(
+                    "SELECT state FROM worker_inbox WHERE task_id = ?",
+                    (parent_task_id,),
+                ).fetchone()
                 attached = connection.execute(
                     """
                     SELECT 1 FROM worker_inbox
@@ -575,7 +585,15 @@ class SQLiteStateStore:
                     """,
                     (parent_task_id,),
                 ).fetchone()
-                if attached is not None:
+                if parent is not None and parent["state"] == "pending":
+                    connection.execute(
+                        """
+                        UPDATE worker_inbox SET state = 'closing', updated_at = ?
+                        WHERE task_id = ? AND state = 'pending'
+                        """,
+                        (now, parent_task_id),
+                    )
+                elif attached is not None:
                     connection.execute(
                         """
                         UPDATE worker_inbox SET state = 'closing', updated_at = ?
