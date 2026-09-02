@@ -28,7 +28,8 @@ from app.worker.activity import (
     WorkerActivityServer,
     start_worker_activity_server,
 )
-from app.worker.executor import CodexExecutor, Executor
+from app.worker.executor import CodexExecutor, Executor, GooseExecutor
+from app.worker.executor.goose import DEFAULT_GOOSE_COMMAND
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
 from app.worker.runtime import (
@@ -38,6 +39,9 @@ from app.worker.runtime import (
 )
 
 WORKER_CONFIG_PATH_ENV_VAR = "CHATTING_WORKER_CONFIG_PATH"
+DEFAULT_CODEX_COMMAND = ("codex", "exec", "--json")
+EXECUTOR_KINDS = ("codex", "claude", "goose")
+DEFAULT_EXECUTOR = "codex"
 LOGGER = logging.getLogger(__name__)
 ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     {
@@ -45,8 +49,10 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "bbmb_address",
         "claude_command",
         "codex_command",
+        "goose_command",
         "codex_working_dir",
         "db_path",
+        "executor",
         "activity_history_limit",
         "handler_egress_url",
         "max_attempts",
@@ -144,6 +150,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--claude-command", help="Executor command to launch for Claude runs."
+    )
+    parser.add_argument(
+        "--goose-command", help="Executor command to launch for goose runs."
+    )
+    parser.add_argument(
+        "--executor",
+        help=f"Which agent harness to run: {', '.join(EXECUTOR_KINDS)}.",
     )
     parser.add_argument(
         "--activity-history-limit",
@@ -294,30 +307,46 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         setting_name="codex_working_dir",
     )
 
-    # Prefer codex_command if set, fall back to claude_command
-    codex_raw = _resolve_optional_str(
-        args.codex_command,
-        config.get("codex_command"),
-        setting_name="codex_command",
-    )
-    claude_raw = _resolve_optional_str(
-        getattr(args, "claude_command", None),
-        config.get("claude_command"),
-        setting_name="claude_command",
-    )
-
-    if codex_raw:
-        command = tuple(shlex.split(codex_raw))
-    elif claude_raw:
-        command = tuple(shlex.split(claude_raw))
-    else:
-        command = ("codex", "exec", "--json")
-
-    if not command:
-        raise ValueError("codex_command or claude_command must be configured")
-
     executor_env = _build_executor_env(args.config, os.environ)
-    return CodexExecutor(command=command, cwd=codex_working_dir, env=executor_env)
+    kind = _resolve_executor_kind(args, config)
+    setting_name = f"{kind}_command"
+    raw_command = _resolve_optional_str(
+        getattr(args, setting_name, None),
+        config.get(setting_name),
+        setting_name=setting_name,
+    )
+    command = tuple(shlex.split(raw_command)) if raw_command else None
+
+    if kind == "goose":
+        return GooseExecutor(
+            command=command or DEFAULT_GOOSE_COMMAND,
+            cwd=codex_working_dir,
+            env=executor_env,
+        )
+
+    # Claude has no default argv of its own, so it has to be given one.
+    if kind == "claude" and command is None:
+        raise ValueError("claude_command must be configured when executor is claude")
+
+    return CodexExecutor(
+        command=command or DEFAULT_CODEX_COMMAND,
+        cwd=codex_working_dir,
+        env=executor_env,
+    )
+
+
+def _resolve_executor_kind(args: argparse.Namespace, config: dict[str, object]) -> str:
+    kind = _resolve_optional_str(
+        getattr(args, "executor", None),
+        config.get("executor"),
+        setting_name="executor",
+    )
+    if kind is None:
+        return DEFAULT_EXECUTOR
+    normalised = kind.strip().lower()
+    if normalised not in EXECUTOR_KINDS:
+        raise ValueError(f"config executor must be one of {', '.join(EXECUTOR_KINDS)}")
+    return normalised
 
 
 def _build_executor_env(

@@ -5,6 +5,7 @@
   "poll_timeout_seconds": 20,
   "sleep_seconds": 1.0,
   "activity_history_limit": 100,
+  "executor": "codex",
   "codex_command": "codex exec",
   "codex_working_dir": "/workspace",
   "handler_egress_url": "http://handler:9467/egress"
