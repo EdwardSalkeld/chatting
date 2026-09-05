@@ -549,7 +549,7 @@ class SQLiteStateStore:
         return row is not None
 
     def mark_inbox_reply_delivered(self, *, parent_task_id: str) -> bool:
-        """Record delivery, closing only when incorporated turns are resolved.
+        """Record delivery, closing the resolved conversation bundle.
 
         An early pickup reaction or progress message must not stop later calls
         from peeking at the conversation. With no attached turns the parent
@@ -574,18 +574,23 @@ class SQLiteStateStore:
                 (now, now, parent_task_id),
             )
             if cursor.rowcount:
-                parent = connection.execute(
-                    "SELECT state FROM worker_inbox WHERE task_id = ?",
+                replied_task = connection.execute(
+                    "SELECT state, parent_task_id FROM worker_inbox WHERE task_id = ?",
                     (parent_task_id,),
                 ).fetchone()
+                bundle_parent_task_id = (
+                    replied_task["parent_task_id"]
+                    if replied_task is not None and replied_task["parent_task_id"]
+                    else parent_task_id
+                )
                 attached = connection.execute(
                     """
                     SELECT 1 FROM worker_inbox
                     WHERE parent_task_id = ? AND state = 'attached' LIMIT 1
                     """,
-                    (parent_task_id,),
+                    (bundle_parent_task_id,),
                 ).fetchone()
-                if parent is not None and parent["state"] == "pending":
+                if replied_task is not None and replied_task["state"] == "pending":
                     connection.execute(
                         """
                         UPDATE worker_inbox SET state = 'closing', updated_at = ?
@@ -593,13 +598,14 @@ class SQLiteStateStore:
                         """,
                         (now, parent_task_id),
                     )
-                elif attached is not None:
+                elif attached is not None or bundle_parent_task_id != parent_task_id:
                     connection.execute(
                         """
-                        UPDATE worker_inbox SET state = 'closing', updated_at = ?
-                        WHERE task_id = ?
+                        UPDATE worker_inbox
+                        SET state = 'closing', reply_delivered_at = ?, updated_at = ?
+                        WHERE task_id = ? AND state IN ('active', 'attached')
                         """,
-                        (now, parent_task_id),
+                        (now, now, bundle_parent_task_id),
                     )
                     connection.execute(
                         """
@@ -607,7 +613,7 @@ class SQLiteStateStore:
                         SET state = 'closing', reply_delivered_at = ?, updated_at = ?
                         WHERE parent_task_id = ? AND state = 'attached'
                         """,
-                        (now, now, parent_task_id),
+                        (now, now, bundle_parent_task_id),
                     )
             connection.commit()
         return cursor.rowcount > 0

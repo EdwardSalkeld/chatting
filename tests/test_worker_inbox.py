@@ -190,7 +190,9 @@ class WorkerInboxTests(unittest.TestCase):
             task = _telegram_task(1)
             store.stage_inbox_task(task)
 
-            self.assertTrue(store.mark_inbox_reply_delivered(parent_task_id=task.task_id))
+            self.assertTrue(
+                store.mark_inbox_reply_delivered(parent_task_id=task.task_id)
+            )
 
             pending = store.get_inbox_task(task_id=task.task_id)
             assert pending is not None
@@ -236,6 +238,37 @@ class WorkerInboxTests(unittest.TestCase):
             self.assertEqual(
                 store.get_inbox_task(task_id=document.task_id).state, "completed"
             )
+
+    def test_reply_for_attached_followup_closes_entire_bundle(self) -> None:
+        """A recovery reply scoped to a follow-up must not replay that turn."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            parent = _telegram_task(1)
+            followup = _telegram_task(2, content="Known. Migrating to new host")
+            store.stage_inbox_task(parent)
+            store.stage_inbox_task(followup)
+            store.claim_next_inbox_task()
+            store.claim_conversation_followups(parent_task_id=parent.task_id)
+
+            self.assertTrue(
+                store.mark_inbox_reply_delivered(parent_task_id=followup.task_id)
+            )
+            self.assertEqual(
+                store.get_inbox_task(task_id=parent.task_id).state, "closing"
+            )
+            self.assertEqual(
+                store.get_inbox_task(task_id=followup.task_id).state, "closing"
+            )
+
+            store.finish_inbox_task(parent_task_id=parent.task_id)
+
+            self.assertEqual(
+                store.get_inbox_task(task_id=parent.task_id).state, "completed"
+            )
+            self.assertEqual(
+                store.get_inbox_task(task_id=followup.task_id).state, "completed"
+            )
+            self.assertIsNone(store.claim_next_inbox_task())
 
     def test_restart_requeues_unfinished_work_but_preserves_delivered_bundle(
         self,
