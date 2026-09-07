@@ -1291,14 +1291,44 @@ class SQLiteStateStore:
     def count_task_main_reply_egress_events(self, *, task_id: str) -> int:
         if not task_id:
             raise ValueError("task_id is required")
+        return self._count_main_reply_egress_events(task_ids=[task_id])
+
+    def count_conversation_bundle_main_reply_egress_events(
+        self, *, parent_task_id: str
+    ) -> int:
+        """Count visible replies for a task and any follow-ups it absorbed.
+
+        A current reply after ``main_reply`` claims a newer Telegram turn is
+        deliberately scoped to that follow-up task.  It nevertheless resolves
+        the original task's conversation bundle, so recovery must treat it as
+        a visible reply for the parent too.
+        """
+        if not parent_task_id:
+            raise ValueError("parent_task_id is required")
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
+                SELECT task_id
+                FROM worker_inbox
+                WHERE task_id = ? OR parent_task_id = ?
+                """,
+                (parent_task_id, parent_task_id),
+            ).fetchall()
+        task_ids = [parent_task_id, *(str(row["task_id"]) for row in rows)]
+        return self._count_main_reply_egress_events(task_ids=task_ids)
+
+    def _count_main_reply_egress_events(self, *, task_ids: list[str]) -> int:
+        if not task_ids:
+            return 0
+        placeholders = ", ".join("?" for _ in task_ids)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""
                 SELECT detail_json
                 FROM worker_activity_events
-                WHERE task_id = ? AND phase = 'egress_incremental'
+                WHERE task_id IN ({placeholders}) AND phase = 'egress_incremental'
                 """,
-                (task_id,),
+                task_ids,
             ).fetchall()
         count = 0
         for row in rows:
