@@ -36,10 +36,12 @@ class SupervisedReplyRecoveryExecutor:
         self.last_recovery_attempted = False
         self.last_launch_count = 1
         task_id = f"task:{envelope.id}"
-        before_count = self.store.count_task_main_reply_egress_events(task_id=task_id)
+        before_count = self.store.count_conversation_bundle_main_reply_egress_events(
+            parent_task_id=task_id
+        )
         first_result = self.inner.execute(envelope)
-        after_first_count = self.store.count_task_main_reply_egress_events(
-            task_id=task_id
+        after_first_count = self.store.count_conversation_bundle_main_reply_egress_events(
+            parent_task_id=task_id
         )
         unresolved_followups = self.store.has_unresolved_attached_followups(
             parent_task_id=task_id

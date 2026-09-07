@@ -202,6 +202,37 @@ class ResolveFollowupsOnSecondPassExecutor:
         return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
 
 
+class ReplyFromClaimedFollowupExecutor:
+    """Model a current reply sent after main_reply claims a newer turn."""
+
+    def __init__(self, store: SQLiteStateStore, followup_task_id: str) -> None:
+        self.store = store
+        self.followup_task_id = followup_task_id
+        self.calls: list[TaskEnvelope] = []
+
+    def execute(self, task):
+        self.calls.append(task)
+        parent_task_id = f"task:{task.id}"
+        self.store.claim_conversation_followups(parent_task_id=parent_task_id)
+        self.store.append_worker_activity(
+            occurred_at=datetime.now(timezone.utc),
+            task_id=self.followup_task_id,
+            envelope_id=self.followup_task_id.removeprefix("task:"),
+            phase="egress_incremental",
+            summary="incremental egress to telegram",
+            detail={
+                "channel": "telegram",
+                "target": task.reply_channel.target,
+                "event_id": "evt:test:claimed-followup-reply",
+                "event_kind": "incremental",
+                "publish_source": "main_reply",
+                "sequence": None,
+            },
+        )
+        self.store.mark_inbox_reply_delivered(parent_task_id=self.followup_task_id)
+        return ExecutionResult(errors=[])
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
@@ -643,6 +674,51 @@ class WorkerRuntimeTests(unittest.TestCase):
                 "claimed newer messages",
                 executor.calls[1].prompt_context.task_instructions[-1],
             )
+
+    def test_claimed_followup_reply_counts_as_parent_visible_reply(self) -> None:
+        """Do not recover/reply twice after a newer turn receives the reply."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            parent = self._build_telegram_task_message()
+            followup_envelope = TaskEnvelope(
+                id="telegram:2",
+                source="im",
+                received_at=datetime(2026, 3, 6, 13, 1, tzinfo=timezone.utc),
+                actor="8605042448:edsalkeld",
+                content="Oh, you already said.",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="8605042448",
+                    metadata={"message_id": 2472},
+                ),
+                dedupe_key="telegram:2",
+            )
+            followup = TaskQueueMessage.from_envelope(
+                followup_envelope, trace_id="trace:telegram:2"
+            )
+            store.stage_inbox_task(parent)
+            store.stage_inbox_task(followup)
+            store.claim_next_inbox_task()
+            executor = ReplyFromClaimedFollowupExecutor(store, followup.task_id)
+
+            result = process_task_message(
+                store=store,
+                task_message=parent,
+                executor_impl=executor,
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(result.reason_codes, [])
+            self.assertEqual(len(executor.calls), 1)
+            audit_event = store.list_audit_events()[0]
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_published_count"], 1
+            )
+            self.assertEqual(audit_event.detail["supervised_recovery_used"], False)
 
     def test_process_task_message_handles_internal_heartbeat_without_executor(
         self,

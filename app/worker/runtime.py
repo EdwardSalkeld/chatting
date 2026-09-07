@@ -126,7 +126,9 @@ def process_task_message(
             )
 
             published_incremental_reply_count = (
-                store.count_task_main_reply_egress_events(task_id=task_message.task_id)
+                store.count_conversation_bundle_main_reply_egress_events(
+                    parent_task_id=task_message.task_id
+                )
             )
             reason_codes = []
             if execution_result.errors:
@@ -208,8 +210,8 @@ def process_task_message(
                 "execution_result": execution_payload,
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": (
-                    store.count_task_main_reply_egress_events(
-                        task_id=task_message.task_id
+                    store.count_conversation_bundle_main_reply_egress_events(
+                        parent_task_id=task_message.task_id
                     )
                 ),
                 "egress_message_count": len(egress_messages),
