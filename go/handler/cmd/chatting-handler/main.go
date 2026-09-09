@@ -124,9 +124,13 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		}),
 		egress.WithDropHook(func(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) {
 			// The engine already logs a loud line for every error-class drop; this hook
-			// is only the operator alert. It sends SMTP directly (not via the egress
-			// engine) so it cannot recurse into another drop.
-			sendEgressDispatchErrorEmail(ctx, emailSender, errorEmailRecipient, message, reasonCode)
+			// is only the operator alert. Correctable attachment validation failures
+			// are returned synchronously to the executor and should not produce one
+			// email per bad draft. It sends SMTP directly (not via the egress engine)
+			// so it cannot recurse into another drop.
+			if shouldNotifyEgressDrop(reasonCode) {
+				sendEgressDispatchErrorEmail(ctx, emailSender, errorEmailRecipient, message, reasonCode)
+			}
 		}),
 	}
 	engine, err := egress.New(
@@ -462,6 +466,13 @@ func resolveErrorEmailRecipient(config handlerconfig.Config) string {
 		}
 	}
 	return ""
+}
+
+// shouldNotifyEgressDrop avoids turning an executor-correctable attachment
+// validation error into an operator email storm. The synchronous /egress
+// response preserves the precise reason for the executor to act on.
+func shouldNotifyEgressDrop(reasonCode string) bool {
+	return !strings.HasPrefix(strings.TrimSpace(reasonCode), "telegram_attachment_")
 }
 
 // sendEgressDispatchErrorEmail notifies the operator that a single egress message was

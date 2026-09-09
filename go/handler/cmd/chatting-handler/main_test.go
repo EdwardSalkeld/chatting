@@ -34,6 +34,22 @@ func TestRunPrintsVersion(t *testing.T) {
 	}
 }
 
+func TestShouldNotifyEgressDrop(t *testing.T) {
+	for _, test := range []struct {
+		reason string
+		want   bool
+	}{
+		{reason: "telegram_attachment_path_not_allowed", want: false},
+		{reason: " telegram_attachment_missing ", want: false},
+		{reason: "telegram_dispatch_failed", want: true},
+		{reason: "disallowed_channel", want: true},
+	} {
+		if got := shouldNotifyEgressDrop(test.reason); got != test.want {
+			t.Errorf("shouldNotifyEgressDrop(%q) = %v, want %v", test.reason, got, test.want)
+		}
+	}
+}
+
 func TestRunParsesConfigFlagBeforeBootstrapExit(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "handler.json")

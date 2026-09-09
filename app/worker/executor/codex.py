@@ -39,7 +39,13 @@ class CodexExecutor:
     )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
-        payload = json.dumps(_task_payload(envelope, current_time=self.now_provider()))
+        payload = json.dumps(
+            _task_payload(
+                envelope,
+                current_time=self.now_provider(),
+                executor_working_dir=self.cwd,
+            )
+        )
         try:
             completed = subprocess.run(
                 self.command,
@@ -210,7 +216,12 @@ def _optional_str(value: object) -> str | None:
     return None
 
 
-def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str, Any]:
+def _task_payload(
+    envelope: TaskEnvelope,
+    *,
+    current_time: datetime,
+    executor_working_dir: str | None = None,
+) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
     task_dict: dict[str, Any] = {
@@ -272,14 +283,22 @@ def _task_payload(envelope: TaskEnvelope, *, current_time: datetime) -> dict[str
             "visible_reply_exit_status": (
                 "python3 -P -m app.main_reply --spec-file sends synchronously and its exit code "
                 "tells you whether the user actually received the reply: 0 = delivered; 1 = the "
-                "handler rejected it for good (for example a missing or unreadable "
-                "attachment) so you must adjust and resend, e.g. without the attachment; "
+                "handler rejected it for good, so do not retry the same send. Read its JSON "
+                "reason, correct the payload, and resend; for telegram_attachment_path_not_allowed, "
+                "move or recreate the file under the executor working directory before resending. "
                 "3 = the handler was unreachable so you may retry; 4 = newer messages from "
                 "this conversation were claimed and returned in stdout, so the drafted "
                 "message/attachment was withheld: incorporate every follow-up and call "
                 "main_reply again before exiting. Except for a reaction included alongside "
                 "exit 4, a non-zero exit means the reply did NOT reach the user."
             ),
+            "outbound_attachment_instruction": (
+                "For a newly created outbound attachment, write it under the executor working "
+                "directory shown below, never /tmp or another scratch directory. The handler "
+                "rejects paths outside its allowlist. An inbound attachment path supplied in the "
+                "task may be reused."
+            ),
+            "executor_working_dir": executor_working_dir,
         },
         "scheduling_contract": {
             "schedule_api": "/api/schedules",

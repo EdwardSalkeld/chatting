@@ -122,6 +122,18 @@ class CodexExecutorTests(unittest.TestCase):
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -P -m app.main_reply --spec-file <path>",
         )
+        self.assertEqual(
+            payload["reply_contract"]["executor_working_dir"],
+            "/workspace/chatting",
+        )
+        self.assertIn(
+            "never /tmp",
+            payload["reply_contract"]["outbound_attachment_instruction"],
+        )
+        self.assertIn(
+            "telegram_attachment_path_not_allowed",
+            payload["reply_contract"]["visible_reply_exit_status"],
+        )
         self.assertIn(
             "no scheduling CLI",
             payload["scheduling_contract"]["instructions"],
