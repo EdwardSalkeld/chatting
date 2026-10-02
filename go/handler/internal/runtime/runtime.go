@@ -261,6 +261,11 @@ func prepareTelegramEnvelope(ctx context.Context, state TelegramConversationStat
 	if envelope.ReplyChannel.Type != "telegram" {
 		return envelope, nil
 	}
+	// Deterministic handler notices use Content as the outbound reply body.
+	// They must not acquire prompt history or become conversation turns.
+	if envelope.Source == "internal" && envelope.ReplyChannel.Metadata["internal_notice"] != nil {
+		return envelope, nil
+	}
 	turns, err := state.ListRecentConversationTurns(ctx, "telegram", envelope.ReplyChannel.Target, telegramMemoryTurnLimit)
 	if err != nil {
 		return contracts.TaskEnvelope{}, err

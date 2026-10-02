@@ -338,6 +338,40 @@ func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
 	}
 }
 
+func TestPublishIngressKeepsInternalTelegramNoticesOutOfConversation(t *testing.T) {
+	state := newFakeIngressState()
+	state.turns["-5201675435"] = []ConversationTurn{{Role: "user", Content: "earlier message"}}
+	for _, noticeType := range []string{"telegram_group_not_enabled", "telegram_channel_not_enabled"} {
+		envelope := contracts.TaskEnvelope{
+			SchemaVersion: contracts.SchemaVersion,
+			ID:            "internal:" + noticeType,
+			Source:        "internal",
+			ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-10-02T10:38:27Z")),
+			Content:       "Not enabled in -5201675435.",
+			ReplyChannel: contracts.ReplyChannel{
+				Type:     "telegram",
+				Target:   "-5201675435",
+				Metadata: map[string]any{"internal_notice": noticeType},
+			},
+			DedupeKey: "internal:" + noticeType,
+		}
+		connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
+		runner, err := NewRunner(handlerconfig.Defaults(), &fakeBroker{}, &fakeEgressHandler{}, WithIngress(state, connector))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runner.PublishIngress(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := state.tasks["task:"+envelope.ID].Envelope.Content; got != envelope.Content {
+			t.Fatalf("%s content = %q", noticeType, got)
+		}
+		if got := len(state.turns["-5201675435"]); got != 1 {
+			t.Fatalf("%s stored %d conversation turns, want 1", noticeType, got)
+		}
+	}
+}
+
 func TestPublishIngressIncludesStandaloneDocumentInLaterConversationHistory(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
