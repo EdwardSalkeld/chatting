@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -56,6 +57,7 @@ _SPEC_FIELDS = (
     "envelope_id",
     "trace_id",
 )
+REPLY_SOCKET_ENV = "CHATTING_REPLY_SOCKET"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -305,6 +307,8 @@ def _message_event_id(
 
 def main() -> int:
     args = _parse_args()
+    if os.environ.get(REPLY_SOCKET_ENV):
+        return _send_via_lane_relay(args, os.environ[REPLY_SOCKET_ENV])
     config = _load_config(args.config, os.environ)
 
     handler_egress_url = _resolve_str(
@@ -485,6 +489,33 @@ def main() -> int:
     if has_transient_failure:
         return EXIT_TRANSIENT
     return EXIT_DROPPED
+
+
+def _send_via_lane_relay(args: argparse.Namespace, socket_path: str) -> int:
+    """Let the root worker perform the DB and handler operations for this task."""
+    spec = {
+        field: getattr(args, field)
+        for field in _SPEC_FIELDS
+        if getattr(args, field, None) is not None
+    }
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(35)
+            connection.connect(socket_path)
+            connection.sendall(json.dumps(spec).encode())
+            connection.shutdown(socket.SHUT_WR)
+            chunks = []
+            while chunk := connection.recv(65536):
+                chunks.append(chunk)
+        response = json.loads(b"".join(chunks))
+        if response.get("stdout"):
+            print(response["stdout"], end="")
+        if response.get("stderr"):
+            print(response["stderr"], end="", file=sys.stderr)
+        return int(response["exit_code"])
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        print(f"reply relay failed: {error}", file=sys.stderr)
+        return EXIT_TRANSIENT
 
 
 def _resolve_optional_db_path(config: dict[str, object]) -> str | None:

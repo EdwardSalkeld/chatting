@@ -163,6 +163,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workspace-root", help="Root for persistent lane directories."
     )
+    parser.add_argument(
+        "--isolate-executors", action="store_true",
+        help="Run each lane as its own unprivileged Unix user (requires root).",
+    )
     return parser.parse_args()
 
 
@@ -326,11 +330,16 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         raise ValueError("codex_command or claude_command must be configured")
 
     executor_env = _build_executor_env(args.config, os.environ)
+    isolate_executors = _resolve_bool(
+        args.isolate_executors, config.get("isolate_executors"),
+        default_value=False, setting_name="isolate_executors",
+    )
     return CodexExecutor(
         command=command,
         cwd=codex_working_dir,
         workspace_root=workspace_root,
         env=executor_env,
+        isolate_executors=isolate_executors,
     )
 
 
