@@ -278,6 +278,8 @@ type TaskQueueMessage struct {
 	TaskID        string       `json:"task_id"`
 	EmittedAt     Timestamp    `json:"emitted_at"`
 	Envelope      TaskEnvelope `json:"envelope"`
+	WorkItemID    string       `json:"work_item_id,omitempty"`
+	WorkspaceID   string       `json:"workspace_id,omitempty"`
 }
 
 func NewTaskQueueMessage(envelope TaskEnvelope, traceID string, emittedAt time.Time) TaskQueueMessage {
@@ -303,6 +305,9 @@ func (value TaskQueueMessage) Validate() error {
 	}
 	if strings.TrimSpace(value.TaskID) == "" {
 		return errors.New("task_id is required")
+	}
+	if (value.WorkItemID == "") != (value.WorkspaceID == "") {
+		return errors.New("work_item_id and workspace_id must be provided together")
 	}
 	if value.EmittedAt.Time.IsZero() {
 		return errors.New("emitted_at is required")

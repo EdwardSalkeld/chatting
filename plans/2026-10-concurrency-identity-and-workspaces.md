@@ -1,6 +1,12 @@
 # Concurrency foundations: identity, workspaces, and ingress
 
-Status: proposed design for discussion, 2026-10-02. This settles the concepts to test before choosing a concurrent worker implementation. All work stays on `roadmap/chatting-upgrades` and uses an isolated test deployment.
+Status: exploratory design, 2026-10-02. The first-pass routing policy is now
+decided in [the persistent lane prototype](2026-10-work-item-routing-prototype.md):
+one permanent lane per Telegram chat/topic, plus one general lane for unmatched
+non-Telegram ingress. Its simpler identity and lifetime rules supersede the
+multi-item-per-conversation and archive proposals below. Workspace isolation
+and execution concurrency remain future implementation work. All work stays on
+`roadmap/chatting-upgrades` and uses an isolated test deployment.
 
 ## The four identities
 

@@ -1,65 +1,48 @@
-# Work item routing prototype
+# Persistent lane routing prototype
 
-Status: prototype on a child branch of `roadmap/chatting-upgrades`. This records
-identity and routing evidence in the worker SQLite database. It does not start
-parallel executors or move their working directories yet.
+Status: implementation branch targeting `roadmap/chatting-upgrades`. This is
+identity and record keeping only; executors still share one working directory
+and are not yet concurrent.
 
-## What happens without user-visible IDs
+## Ownership and policy
 
-Every inbound event is staged with an internal work item and workspace ID. The
-user continues to write ordinary messages. A Telegram reply to an earlier user
-or assistant message joins that message's item. An unthreaded Telegram message
-joins the sole open item in its chat/topic. If several items are open and the
-message has no clear parent, it remains unassigned with candidate items for a
-later classifier or a natural-language clarification. A new email gets a new
-item unless its `In-Reply-To` or `References` header matches a recorded email
-message ID. Scheduled firings remain separate by default.
+The **handler** owns the authoritative router and SQLite mapping. It sees all
+ingress before publishing tasks, owns the task ledger, and later handles outbound
+delivery. Its `routing.Router` chooses the route policy, while the SQLite store
+persists lane identities. The task queue message carries `work_item_id` and
+`workspace_id` to the worker. The worker mirrors assignments for its own records
+and future execution leases. Its local router remains as a compatibility fallback
+for older task messages without handler-assigned IDs.
 
-**This does not yet solve ordinary Telegram conversation routing.** In particular,
-the sole-open-item shortcut cannot tell "another thought about this task" from
-"separately, start a new task". It would silently attach the second request to
-the first item. Telegram chat/topic is a pool of possible items, not itself an
-item. The current shortcut is a prototype fixture, not an acceptable final
-assignment rule for concurrent work.
+- A direct Telegram message maps to one durable lane per chat and topic. All
+  messages in that chat/topic use its work item and workspace ID, including
+  replies and unrelated new requests. The lane never closes or expires.
+- Non-Telegram ingress maps to one durable general lane unless a trusted GitHub
+  PR URL matches an artifact registered by an earlier task. A linked notification
+  then uses that task's lane. If that lane originated in Telegram, the handler
+  changes the task's reply route to the originating chat/topic before publishing,
+  so the worker's reply returns there.
+- An unmatched or conflicting PR reference stays in the general lane. A
+  notification's sender or subject alone is never evidence for another lane.
+- All assignments are durable and idempotent by task ID. A lane's workspace ID
+  is an identity reserved for later workspace allocation, not a directory yet.
 
-The next routing step must decide among *continue an existing item*, *create a
-new item*, and *ask which one*. First use strong evidence, such as a Telegram
-reply to a recorded message or a tracked PR. For an ordinary unthreaded message,
-compare its meaning with compact summaries of active/recent items in that
-chat/topic and include "new objective" as a candidate. A classifier (Jev may
-be worth testing here) can rank those outcomes, but it needs calibrated
-confidence and an abstain path. A clear new objective creates an item even when
-one is already open; a clear follow-up joins the matching item even when several
-are open. If the evidence is weak, ask in natural language (for example, "Is
-this about the concurrency prototype or a new task?") and retain the message
-pending until answered. User corrections should update the assignment and its
-future routing evidence. No user-visible item syntax is required.
+When an agent creates a PR it must register the PR URL against the originating
+task, for example:
 
-When an agent creates a PR, it registers the PR URL against the originating
-task. For example:
+    python3 -m app.main_work_items --db /path/to/worker.db --handler-db /path/to/handler.db register-pr task:telegram:123 https://github.com/owner/repo/pull/50
 
-    python3 -m app.main_work_items --db /path/to/worker.db register-pr task:telegram:123 https://github.com/owner/repo/pull/50
+`show <task-id>` returns the lane, workspace, reason, and preferred reply route.
+The handler records the lane ID in its task ledger and related delivery records.
+The worker records the lane ID on inbox, run, audit, dead letter, activity,
+conversation turn, Telegram history, egress outbox, and dispatch rows where the
+originating task/run is known. Existing historical rows remain nullable after migration.
 
-A later notification from GitHub can be matched by that PR URL, even though the
-email has no workspace ID. The item keeps its original preferred reply route,
-which can be inspected with:
+## Next implementation steps
 
-    python3 -m app.main_work_items --db /path/to/worker.db show task:email:456
-
-The PR association is made by the agent or PR creation integration, not by the
-user. An unknown notification gets a separate triage item. The artifact table
-rejects assigning one PR to two items.
-
-## Boundaries before concurrent execution
-
-- The single-open-item rule is a provisional shortcut and may misassign a new
-  objective. Do not use it to select a writable workspace for parallel runs.
-  Implement and evaluate the three-way routing decision above first.
-- The worker still runs in its existing shared directory. Workspace IDs are
-  durable identities, not directories yet. Add private worktrees, workspace
-  lifecycle, and per-item leases before starting parallel executors.
-- The preferred reply route is recorded and shown by the prototype; outbound
-  delivery still follows the ingress envelope. Wire delivery through the item
-  once cross-channel notification handling is enabled on the test VM.
-- This prototype does not modify the live worker database. Only a deployment
-  of this branch would run its additive SQLite tables and connector metadata.
+Before starting concurrent execution, allocate private persistent directories
+and repo worktrees per workspace ID, serialize runs in each lane, and define
+locks for shared resources such as deployments. PR registration currently needs
+an explicit agent/integration call to the CLI; automatic capture at PR creation
+is still needed. The general lane's preferred reply route reflects its first
+event and is not a global outbound destination.

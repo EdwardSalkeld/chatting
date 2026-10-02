@@ -188,6 +188,7 @@ def process_task_message(
         result_status=result_status,
         created_at=datetime.now(timezone.utc),
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
 
     store.append_audit_event(
@@ -290,6 +291,7 @@ def build_coalesced_task_result(
         result_status="success",
         created_at=created_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -357,6 +359,7 @@ def build_recovered_delivered_task_result(
         result_status="success",
         created_at=created_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -415,6 +418,7 @@ def _process_internal_heartbeat(
         result_status="success",
         created_at=worker_received_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -476,6 +480,7 @@ def _process_internal_telegram_channel_not_enabled_notice(
         result_status="success",
         created_at=emitted_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -548,7 +553,9 @@ def _process_usage_command(
         result_status="success",
         created_at=emitted_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
+
     store.append_audit_event(
         AuditEvent(
             run_id=run_record.run_id,
@@ -583,6 +590,13 @@ def _process_usage_command(
         reason_codes=["usage_command"],
         error_summary=None,
     )
+
+
+def _with_work_item(
+    store: SQLiteStateStore, task_message: TaskQueueMessage, record: RunRecord
+) -> RunRecord:
+    assignment = store.get_work_assignment(task_id=task_message.task_id)
+    return replace(record, work_item_id=assignment.work_item_id if assignment else None)
 
 
 def _build_completion_egress_messages(
