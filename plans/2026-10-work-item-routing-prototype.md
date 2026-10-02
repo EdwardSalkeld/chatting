@@ -15,6 +15,26 @@ later classifier or a natural-language clarification. A new email gets a new
 item unless its `In-Reply-To` or `References` header matches a recorded email
 message ID. Scheduled firings remain separate by default.
 
+**This does not yet solve ordinary Telegram conversation routing.** In particular,
+the sole-open-item shortcut cannot tell "another thought about this task" from
+"separately, start a new task". It would silently attach the second request to
+the first item. Telegram chat/topic is a pool of possible items, not itself an
+item. The current shortcut is a prototype fixture, not an acceptable final
+assignment rule for concurrent work.
+
+The next routing step must decide among *continue an existing item*, *create a
+new item*, and *ask which one*. First use strong evidence, such as a Telegram
+reply to a recorded message or a tracked PR. For an ordinary unthreaded message,
+compare its meaning with compact summaries of active/recent items in that
+chat/topic and include "new objective" as a candidate. A classifier (Jev may
+be worth testing here) can rank those outcomes, but it needs calibrated
+confidence and an abstain path. A clear new objective creates an item even when
+one is already open; a clear follow-up joins the matching item even when several
+are open. If the evidence is weak, ask in natural language (for example, "Is
+this about the concurrency prototype or a new task?") and retain the message
+pending until answered. User corrections should update the assignment and its
+future routing evidence. No user-visible item syntax is required.
+
 When an agent creates a PR, it registers the PR URL against the originating
 task. For example:
 
@@ -32,9 +52,9 @@ rejects assigning one PR to two items.
 
 ## Boundaries before concurrent execution
 
-- The single-open-item rule is a provisional shortcut. Distinguishing a new
-  objective from a follow-up in the same unthreaded chat needs a classifier
-  with an abstain path; an internal ID must never become required user syntax.
+- The single-open-item rule is a provisional shortcut and may misassign a new
+  objective. Do not use it to select a writable workspace for parallel runs.
+  Implement and evaluate the three-way routing decision above first.
 - The worker still runs in its existing shared directory. Workspace IDs are
   durable identities, not directories yet. Add private worktrees, workspace
   lifecycle, and per-item leases before starting parallel executors.
