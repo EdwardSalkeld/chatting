@@ -308,6 +308,9 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 	eventID := "telegram:" + strconv.FormatInt(updateID, 10)
 	metadata := map[string]any{"message_id": message.MessageID}
 	metadata["original_content"] = content
+	if message.MessageThreadID != nil {
+		metadata["message_thread_id"] = *message.MessageThreadID
+	}
 	if message.ReplyToMessage != nil && message.ReplyToMessage.MessageID > 0 {
 		metadata["reply_to_message_id"] = message.ReplyToMessage.MessageID
 	}

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
+from app.state import work_items
 from app.models import (
     AttachmentRef,
     AuditEvent,
@@ -228,6 +229,7 @@ class SQLiteStateStore:
                 ON worker_telegram_history (target, message_id)
                 """
             )
+            work_items.initialize(connection)
             connection.commit()
 
     def stage_inbox_task(
@@ -273,9 +275,54 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+            if cursor.rowcount > 0:
+                work_items.assign(
+                    connection,
+                    task=task_message,
+                    conversation_id=conversation_id,
+                    created_at=now,
+                )
             self._record_telegram_inbound(connection, task_message, created_at=now)
             connection.commit()
         return cursor.rowcount > 0
+
+    def get_work_assignment(self, *, task_id: str) -> work_items.WorkAssignment | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT work_item_id, route_reason, candidate_ids_json FROM work_item_events WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return work_items._result(
+                connection,
+                row["work_item_id"],
+                row["route_reason"],
+                json.loads(row["candidate_ids_json"]),
+            )
+
+    def register_work_artifact(self, *, work_item_id: str, kind: str, key: str) -> None:
+        """Record an externally created PR or email ID against its originating item."""
+        with closing(self._connect()) as connection:
+            work_items.register_artifact(
+                connection, work_item_id=work_item_id, kind=kind, key=key
+            )
+            connection.commit()
+
+    def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(work_item_id)
+        value = json.loads(row["preferred_reply_json"])
+        return ReplyChannel(
+            type=value["type"],
+            target=value["target"],
+            metadata=value.get("metadata", {}),
+        )
 
     def _record_telegram_inbound(
         self,
