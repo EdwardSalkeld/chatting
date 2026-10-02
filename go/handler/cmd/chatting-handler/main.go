@@ -368,6 +368,10 @@ func (state handlerIngressState) RecordTask(ctx context.Context, taskMessage con
 	return state.store.RecordTask(ctx, taskMessage)
 }
 
+func (state handlerIngressState) AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
+	return state.store.AssignTask(ctx, taskMessage)
+}
+
 func (state handlerIngressState) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {
 	return state.store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRootDir)
 }
