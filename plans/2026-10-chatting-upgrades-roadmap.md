@@ -1,6 +1,13 @@
 # Chatting upgrades: exploration roadmap
 
-Status: exploratory, 2026-10-02. This is a working map for discussion, not a committed delivery schedule or implementation design.
+Status: working exploration and build branch, 2026-10-02. This is a map for discussion and experiments, not a committed delivery schedule.
+
+## Working agreement
+
+- `roadmap/chatting-upgrades` is the home for this work: designs, experiments, and incremental implementation can accumulate here.
+- Keep this work off `main` while the current Chatting deployment is in use. Do not merge the roadmap branch into `main` as part of ordinary iteration.
+- Explore a separate test VM and deployment path before running disruptive changes. The test environment should have its own configuration, secrets, state, and inbound/outbound routing so experiments cannot consume production messages or send production replies. Record the exact isolation and cutover checks before deploying it.
+- No urgency ranking or fixed implementation order is needed. Follow dependencies revealed by the work and revisit the plan as experiments teach us more.
 
 ## Aim
 
@@ -34,11 +41,21 @@ First experiment: two long tasks in separate conversations plus a follow-up to o
 
 ### 3. Model selection and cheap classifiers
 
-Separate a small, bounded routing decision from task execution. Candidate outcomes: deterministic handling, cheap model, frontier model, or escalation. Start with obvious rules and collect labeled examples before using a classifier. Log the chosen route, confidence or rule, cost, latency, and eventual correction/escalation. Keep a direct path to a frontier model for ambiguous, high-impact, or long-running tasks.
+Separate a small, bounded routing decision from task execution. Candidate outcomes: deterministic handling, cheap model, frontier model, or escalation. Use deterministic rules where they are clear, and evaluate Jev for decisions that are awkward to specify as rules but too routine to spend an LLM call on. Collect labeled examples and compare Jev with rules and a cheap model before putting it on the live path. Log the chosen route, confidence or rule, cost, latency, and eventual correction/escalation. Keep a direct path to a frontier model for uncertain or consequential decisions.
 
-Potential cheap decisions: source and intent classification, alert deduplication, whether a message is a follow-up, retrieval query selection, and deciding whether a short factual answer needs the full tool-capable executor. Explore Jev's role here after defining its interface and actual latency/cost envelope; do not assume it should own a decision that needs tools or rich context.
+Jev candidates to test:
 
-Questions: Which models/providers are eligible? What is Jev exactly in this stack? What spend and latency targets should define success? Which classes of mistake must force escalation?
+| Decision | Useful input | Output and safeguard |
+| --- | --- | --- |
+| Workspace selection | Message, channel, referenced repo/path, recent task lineage | Ranked workspace candidates; preserve explicit workspace instructions and escalate ambiguity. |
+| Model selection | Request shape, expected tool use, complexity, risk, attachments | Cheap or frontier route with reason and confidence; allow escalation when the cheap route stalls or the task grows. |
+| Follow-up or new task | Message, conversation ID, recent open work | Candidate lineage; avoid silently attaching weak matches. |
+| Alert and notification triage | Source, stable event IDs, subject, related work | Classify duplicate, informational, or investigation candidate; retain correlation evidence. |
+| Context retrieval gate | Request and available history metadata | Decide whether to fetch older context; use source-backed retrieval when needed. |
+
+These are hypotheses, not assignments to Jev. Measure classification accuracy on real examples, abstention behavior, added latency, and cost avoided. A workspace or model misroute can be expensive even if the classifier call is cheap, so evaluate the whole task outcome and provide a way to override a route.
+
+Questions: What is Jev's interface and operational footprint? Which models/providers are eligible? What spend and latency targets should define success? Which classes of mistake must force escalation?
 
 First experiment: replay a sample of past tasks through a proposed router without changing live execution, then inspect wrong cheap-route decisions and estimated savings.
 
@@ -58,18 +75,14 @@ Questions: Which stable IDs are available in GitHub notifications, CI emails, an
 
 First experiment: create a controlled task → PR → failing CI email chain and verify that the email is linked, investigated once, and reported in the originating chat.
 
-## Suggested order
+## Shared foundations to explore
 
-1. Establish a task/conversation event model and capture the baseline for queue delay, run time, cost, and failures. Use it to improve the work-in-flight view immediately.
-2. Add reliable conversation-scoped scheduling and bounded parallel execution. The view should expose both active runs and waiting reasons.
-3. Expose on-demand history retrieval and source-backed memory. This improves both human continuity and the data available to routing.
-4. Run model/classifier routing in shadow mode, evaluate mistakes, then enable narrow cheap paths with escalation.
-5. Link external signals to original work and route progress replies to the originating conversation, using the same event model and concurrency controls.
+- A task/conversation event model can serve the work-in-flight view, scheduling, routing, and cross-input links. Capture queue delay, run time, cost, failures, and reasons for waits or route changes.
+- A test VM should make it possible to try several active executors, routing changes, and new history behavior without touching the working app. Define how fixtures or replayed traffic will exercise inbound signals and replies before exposing the VM to live inputs.
+- Keep experiments measurable and reversible. Shadow routing and replay are useful for classifier evaluation; restart and duplicate-delivery scenarios are useful for concurrency and cross-input links.
 
-These tracks can be researched in parallel; implementation order should change if the experiments expose a simpler seam or a dependency.
+## Open design questions
 
-## Decisions to make with Edward
-
-- Which pain is most urgent: seeing current work, removing the queue, or preserving long-term context?
-- What does Jev refer to here, and which cheap models/providers should be considered?
-- Is this roadmap branch purely exploratory until a reviewed design, or should it become the home for small prototypes as well?
+- What VM resources and deployment wiring are available for an isolated test instance?
+- What Jev API or runtime is available, and which cheap models/providers should be compared with it?
+- Which routing errors are most costly, and what abstention or escalation thresholds are acceptable?
