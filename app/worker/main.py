@@ -47,6 +47,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "codex_command",
         "codex_working_dir",
         "workspace_root",
+        "isolate_executors",
         "db_path",
         "activity_history_limit",
         "handler_egress_url",
