@@ -356,6 +356,8 @@ type handlerIngressState struct {
 	store *sqlitestate.Store
 }
 
+var _ handlerruntime.TaskRouter = handlerIngressState{}
+
 func (state handlerIngressState) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
 	return state.store.Seen(ctx, source, dedupeKey)
 }
