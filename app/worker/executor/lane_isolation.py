@@ -39,6 +39,8 @@ def prepare_lane(
         )
         account = pwd.getpwnam(name)
     uid, gid = account.pw_uid, account.pw_gid
+    if uid == 0 or gid == 0:
+        raise RuntimeError("lane account must be unprivileged")
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("lane directory must be a real directory")
     # Adopt files left by the earlier root-run prototype without crossing a

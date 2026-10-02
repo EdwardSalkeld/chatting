@@ -20,7 +20,7 @@ from app.models import (
     UsageWindow,
     parse_context_ref,
 )
-from app.worker.executor.lane_isolation import drop_privileges, prepare_lane, reply_relay
+from app.worker.executor.lane_isolation import prepare_lane, reply_relay
 
 # Codex publishes rate-limit figures only inside the session rollouts it writes
 # while running a task, so reading them back is a file scan rather than an API
@@ -92,7 +92,7 @@ class CodexExecutor:
                     completed = subprocess.run(
                         self.command, input=payload, capture_output=True, text=True,
                         timeout=self.timeout_seconds, check=False, cwd=self.cwd,
-                        env=lane_env, preexec_fn=lambda: drop_privileges(uid, gid),
+                        env=lane_env, user=uid, group=gid, extra_groups=[],
                     )
             else:
                 completed = subprocess.run(
