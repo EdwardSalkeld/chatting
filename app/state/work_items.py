@@ -1,4 +1,4 @@
-"""Worker-owned, replaceable ingress router for persistent execution lanes."""
+"""Worker-side compatibility routing for tasks without handler lane IDs."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def assign(
 
 
 class WorkItemRouter:
-    """Select a durable lane; policy can be replaced without changing the store."""
+    """Mirror the handler policy only for older task messages without lane IDs."""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
