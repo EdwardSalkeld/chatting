@@ -33,9 +33,9 @@ First experiment: a read-only mock or page backed by captured activity for one l
 
 ### 2. Parallel conversations
 
-Define the scheduling unit as a conversation or task lineage, not an ingress channel alone. Different Telegram channels, email, and scheduled work may run concurrently; turns in one conversation must keep a coherent order and late follow-ups must still be incorporated. Add a bounded global capacity and explicit per-conversation exclusion before increasing worker count. Make crash recovery, SQLite claims, retries, and reply-time follow-up claiming safe with multiple active executors.
+Start with [the identity, workspace, and ingress proposal](2026-10-concurrency-identity-and-workspaces.md). Define ingress events, conversations, work items, workspaces, and shared resources separately before choosing a concurrent worker design. Different work items may run concurrently in isolated writable workspaces; runs for one work item serialize. Later implementation must make crash recovery, SQLite claims, retries, and reply-time follow-up claiming safe with multiple active executors.
 
-Questions: Should the first version use several worker processes or a supervisor within one process? How many concurrent frontier runs can the host and API budget sustain? What priority should alerts and short requests receive?
+Questions to resolve first: How should ordinary Telegram messages join a work item when a chat has several active items? What is the workspace archive and restore policy? Which shared resources need leases? Then: should the first version use several worker processes or a supervisor within one process, and how many concurrent runs can the host and API budget sustain?
 
 First experiment: two long tasks in separate conversations plus a follow-up to one; verify parallel progress and one correct final reply per conversation after a worker restart.
 
