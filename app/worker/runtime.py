@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
+from app.worker.executor.base import WorkspaceAwareExecutor
 from app.internal_heartbeat import (
     build_internal_completion_egress,
     build_internal_heartbeat_egress,
@@ -97,17 +98,25 @@ def process_task_message(
     used_supervised_recovery = False
     normalized_envelope = _normalize_executor_envelope(envelope)
     inbox_task = store.get_inbox_task(task_id=task_message.task_id)
-    active_executor: Executor = executor_impl
-    if _should_run_supervised_recovery(task_message):
-        active_executor = SupervisedReplyRecoveryExecutor(
-            inner=executor_impl,
-            store=store,
-        )
+    assignment = store.get_work_assignment(task_id=task_message.task_id)
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
 
         try:
+            active_executor: Executor = executor_impl
+            if assignment is not None and isinstance(
+                executor_impl, WorkspaceAwareExecutor
+            ):
+                active_executor = executor_impl.for_workspace(
+                    workspace_id=assignment.workspace_id,
+                    work_item_id=assignment.work_item_id,
+                )
+            if _should_run_supervised_recovery(task_message):
+                active_executor = SupervisedReplyRecoveryExecutor(
+                    inner=active_executor,
+                    store=store,
+                )
             active_envelope = normalized_envelope
             executor_launch_count += 1
             activity_monitor.record_executor_started(

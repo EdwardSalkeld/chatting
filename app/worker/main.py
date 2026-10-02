@@ -46,6 +46,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "claude_command",
         "codex_command",
         "codex_working_dir",
+        "workspace_root",
         "db_path",
         "activity_history_limit",
         "handler_egress_url",
@@ -158,6 +159,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codex-working-dir",
         help="Working directory used only for launching executor subprocesses.",
+    )
+    parser.add_argument(
+        "--workspace-root", help="Root for persistent lane directories."
     )
     return parser.parse_args()
 
@@ -293,6 +297,11 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         config.get("codex_working_dir"),
         setting_name="codex_working_dir",
     )
+    workspace_root = _resolve_optional_str(
+        args.workspace_root, config.get("workspace_root"), setting_name="workspace_root"
+    )
+    if workspace_root is not None and not Path(workspace_root).is_absolute():
+        raise ValueError("workspace_root must be absolute")
 
     # Prefer codex_command if set, fall back to claude_command
     codex_raw = _resolve_optional_str(
@@ -317,7 +326,12 @@ def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Exec
         raise ValueError("codex_command or claude_command must be configured")
 
     executor_env = _build_executor_env(args.config, os.environ)
-    return CodexExecutor(command=command, cwd=codex_working_dir, env=executor_env)
+    return CodexExecutor(
+        command=command,
+        cwd=codex_working_dir,
+        workspace_root=workspace_root,
+        env=executor_env,
+    )
 
 
 def _build_executor_env(

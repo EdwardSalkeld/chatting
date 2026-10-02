@@ -16,6 +16,13 @@ class Executor(Protocol):
         ...
 
 
+@runtime_checkable
+class WorkspaceAwareExecutor(Executor, Protocol):
+    """Executor that can bind a run to a persistent lane workspace."""
+
+    def for_workspace(self, *, workspace_id: str, work_item_id: str) -> Executor: ...
+
+
 # Kept separate from Executor so an executor can exist without one: reporting
 # usage is a backend-specific lookup, not part of running a task.
 @runtime_checkable
@@ -27,4 +34,4 @@ class UsageReporter(Protocol):
         ...
 
 
-__all__ = ["Executor", "UsageReporter"]
+__all__ = ["Executor", "UsageReporter", "WorkspaceAwareExecutor"]

@@ -1,14 +1,20 @@
+import json
 import tempfile
 import unittest
 import sqlite3
+import subprocess
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
 from app.models import AuditEvent, ReplyChannel, RunRecord, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.task_ledger import TaskLedgerStore
+from app.worker.activity import WorkerActivityMonitor
+from app.worker.executor import CodexExecutor
+from app.worker.runtime import process_task_message
 
 
 def task(number, source, target, content="A task", actor=None, metadata=None):
@@ -194,6 +200,59 @@ class WorkItemRoutingTests(unittest.TestCase):
         self.assertEqual(lane.work_item_id, "item_from_handler")
         self.assertEqual(lane.workspace_id, "ws_from_handler")
         self.assertEqual(lane.reason, "handler_assignment")
+
+    def test_assigned_lane_uses_persistent_workspace_directory(self):
+        workspace_root = Path(self.tmp.name) / "workspaces"
+        executor = CodexExecutor(cwd=self.tmp.name, workspace_root=str(workspace_root))
+        first = task(1, "email", "alice@example.com")
+        first_lane = self.stage(first)
+        second = replace(
+            task(2, "email", "bob@example.com"),
+            work_item_id="item_other",
+            workspace_id="ws_other",
+        )
+        second_lane = self.stage(second)
+        completed = subprocess.CompletedProcess(
+            args=["codex"], returncode=0, stdout="", stderr=""
+        )
+        with patch(
+            "app.worker.executor.codex.subprocess.run", return_value=completed
+        ) as run:
+            for message in (first, second, first):
+                process_task_message(
+                    store=self.store,
+                    task_message=message,
+                    executor_impl=executor,
+                    max_attempts=1,
+                    activity_monitor=WorkerActivityMonitor(
+                        store=self.store, history_limit=10
+                    ),
+                )
+        first_dir = workspace_root / first_lane.workspace_id
+        second_dir = workspace_root / second_lane.workspace_id
+        self.assertTrue(first_dir.is_dir())
+        self.assertTrue(second_dir.is_dir())
+        self.assertNotEqual(first_dir, second_dir)
+        self.assertEqual(
+            [call.kwargs["cwd"] for call in run.call_args_list],
+            [str(first_dir), str(second_dir), str(first_dir)],
+        )
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["task"]["work_item_id"], first_lane.work_item_id)
+        self.assertEqual(payload["task"]["workspace_id"], first_lane.workspace_id)
+        self.assertEqual(
+            payload["reply_contract"]["executor_working_dir"], str(first_dir)
+        )
+
+    def test_workspace_id_cannot_escape_root(self):
+        executor = CodexExecutor(workspace_root=str(Path(self.tmp.name) / "workspaces"))
+        with self.assertRaisesRegex(ValueError, "invalid workspace_id"):
+            executor.for_workspace(workspace_id="../shared", work_item_id="item_1")
+        root = Path(self.tmp.name) / "workspaces"
+        root.mkdir()
+        (root / "ws_link").symlink_to(Path(self.tmp.name), target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "escapes workspace root"):
+            executor.for_workspace(workspace_id="ws_link", work_item_id="item_1")
 
     def test_pr_registration_records_handler_mapping(self):
         handler_path = str(Path(self.tmp.name) / "handler.db")

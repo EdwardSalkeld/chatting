@@ -1,8 +1,8 @@
 # Persistent lane routing prototype
 
 Status: implementation branch targeting `roadmap/chatting-upgrades`. This is
-identity and record keeping only; executors still share one working directory
-and are not yet concurrent.
+identity, record keeping, and persistent workspace directories. Executors are
+still serialized.
 
 ## Ownership and policy
 
@@ -24,8 +24,8 @@ for older task messages without handler-assigned IDs.
   so the worker's reply returns there.
 - An unmatched or conflicting PR reference stays in the general lane. A
   notification's sender or subject alone is never evidence for another lane.
-- All assignments are durable and idempotent by task ID. A lane's workspace ID
-  is an identity reserved for later workspace allocation, not a directory yet.
+- All assignments are durable and idempotent by task ID. The worker creates a
+  persistent directory for the assigned workspace ID before launching Codex.
 
 When an agent creates a PR it must register the PR URL against the originating
 task, for example:
@@ -38,10 +38,17 @@ The worker records the lane ID on inbox, run, audit, dead letter, activity,
 conversation turn, Telegram history, egress outbox, and dispatch rows where the
 originating task/run is known. Existing historical rows remain nullable after migration.
 
-## Next implementation steps
+## Workspace directories and next steps
 
-Before starting concurrent execution, allocate private persistent directories
-and repo worktrees per workspace ID, serialize runs in each lane, and define
+The worker launches Codex from `<workspace_root>/<workspace_id>`, where the
+default root is `.chatting-workspaces` inside `codex_working_dir`. The optional
+`workspace_root` worker setting selects another absolute path. Directories are
+created on first use and are not automatically deleted. The executor task payload
+includes both IDs and the selected working directory.
+
+Repo references in the incoming task still point to existing checkouts; this
+change does not copy or mount them into the lane directory. Before starting
+concurrent execution, add per-lane repo worktrees, lane execution locks, and
 locks for shared resources such as deployments. PR registration currently needs
 an explicit agent/integration call to the CLI; automatic capture at PR creation
 is still needed. The general lane's preferred reply route reflects its first
