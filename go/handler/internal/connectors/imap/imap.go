@@ -178,6 +178,16 @@ func (connector *Connector) toEnvelope(uid string, raw []byte) (contracts.TaskEn
 		value := fromAddress
 		actor = &value
 	}
+	metadata := map[string]any{}
+	for _, header := range []struct{ name, key string }{
+		{"Message-ID", "message_id"},
+		{"In-Reply-To", "in_reply_to"},
+		{"References", "references"},
+	} {
+		if value := strings.TrimSpace(parsed.Header.Get(header.name)); value != "" {
+			metadata[header.key] = value
+		}
+	}
 	return contracts.TaskEnvelope{
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            eventID,
@@ -188,7 +198,7 @@ func (connector *Connector) toEnvelope(uid string, raw []byte) (contracts.TaskEn
 		Attachments:   attachments,
 		ContextRefs:   append([]string{}, connector.config.ContextRefs...),
 		PromptContext: connector.prompt,
-		ReplyChannel:  contracts.ReplyChannel{Type: "email", Target: target},
+		ReplyChannel:  contracts.ReplyChannel{Type: "email", Target: target, Metadata: metadata},
 		DedupeKey:     eventID,
 	}, nil
 }

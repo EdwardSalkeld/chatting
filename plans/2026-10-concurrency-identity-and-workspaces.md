@@ -1,6 +1,12 @@
 # Concurrency foundations: identity, workspaces, and ingress
 
-Status: proposed design for discussion, 2026-10-02. This settles the concepts to test before choosing a concurrent worker implementation. All work stays on `roadmap/chatting-upgrades` and uses an isolated test deployment.
+Status: exploratory design, 2026-10-02. The first-pass routing policy is now
+decided in [the persistent lane prototype](2026-10-work-item-routing-prototype.md):
+one permanent lane per Telegram chat/topic, plus one general lane for unmatched
+non-Telegram ingress. Its simpler identity and lifetime rules supersede the
+multi-item-per-conversation and archive proposals below. Workspace isolation
+and execution concurrency remain future implementation work. All work stays on
+`roadmap/chatting-upgrades` and uses an isolated test deployment.
 
 ## The four identities
 
@@ -37,7 +43,7 @@ Route an event in this order: (1) explicit work item reference or trusted parent
 
 | Ingress | Default conversation | Work item rule |
 | --- | --- | --- |
-| Telegram | Chat ID plus topic/thread ID when present. | Follow-up to a known item or explicit reference continues it. A new request starts a new item. In a chat with one active item, a normal follow-up may continue that item; concurrent ambiguous items need an explicit selection or clarification. |
+| Telegram | Chat ID plus topic/thread ID when present. | Replies to recorded messages continue their item. For ordinary unthreaded messages, choose between an existing item and a new item using the message and summaries of active/recent items. Ask in natural language when uncertain; never require item IDs from the user. |
 | Email | RFC message thread using `Message-ID`, `In-Reply-To`, and `References`. | Known thread or tracked artifact continues its item. Unrelated mail, including mail from the same sender, starts a new item. Subject and sender are only hints. |
 | Schedule | Stable schedule ID, independent of its reply destination. | Each firing gets its own item by default. A schedule can opt into a continuing item when it truly maintains ongoing state. Overlapping firings of that same continuing item serialize. |
 | Reminder | Its `created_from_task_id` lineage when present. | Resume the originating item if it is still valid, otherwise start a linked item. The copied reply channel only controls delivery. |
@@ -55,7 +61,7 @@ Workspace selection follows the work item, not the arrival channel. `context_ref
 ## Decisions needed before executor concurrency
 
 1. Add explicit `conversation_id`, `work_item_id`, `workspace_id`, `resource_refs`, correlation evidence, and preferred reply route to the durable task model. Define migration from existing `conversation_routes` without treating old coarse routes as proven work items.
-2. Decide the initial work item join rule for ordinary Telegram messages when a chat or topic has multiple active items. The safe default is explicit reply/reference or ask; a single clearly active item can be joined automatically.
+2. Build and evaluate a three-way routing decision for ordinary Telegram messages: continue a matching item, create a new item, or ask a natural-language clarification. The decision must consider "new objective" even when only one item is open. Compare rules, Jev, and cheap models against examples with several active items, abrupt topic changes, and vague follow-ups. Until confidence is established, keep uncertain events pending rather than selecting a writable workspace.
 3. Define workspace creation, archive, restore, branch naming, and conflict handling, including shared memory writes and deploy/resource leases. Set a retention policy for uncommitted scratch separately from work item identity.
 4. Specify a small set of routing fixtures before implementation: two Telegram topics; two independent tasks in one chat; two unrelated emails from one sender; a reply-chain email; two schedules reporting to one chat; a reminder; and a CI email linked to a Telegram-origin PR. Each fixture should assert conversation, item, workspace, and reply route.
 

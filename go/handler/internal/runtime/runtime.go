@@ -39,6 +39,10 @@ type IngressState interface {
 	RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error
 }
 
+type TaskRouter interface {
+	AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
+}
+
 type TelegramAttachmentIngressState interface {
 	RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error)
 }
@@ -229,6 +233,12 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 					return published, err
 				}
 				taskMessage.Envelope = enriched
+			}
+			if router, ok := runner.ingressState.(TaskRouter); ok {
+				taskMessage, err = router.AssignTask(ctx, taskMessage)
+				if err != nil {
+					return published, err
+				}
 			}
 			if err := runner.ingressState.RecordTask(ctx, taskMessage); err != nil {
 				return published, err

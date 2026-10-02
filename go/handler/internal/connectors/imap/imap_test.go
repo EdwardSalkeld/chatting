@@ -13,6 +13,7 @@ import (
 
 func TestPollNormalizesMessagesToEnvelopes(t *testing.T) {
 	raw := buildRawEmail("alice@example.com", "Please summarize", "Summarize this inbox thread.", "Sat, 28 Feb 2026 10:15:00 +0000")
+	raw = strings.Replace(raw, "\r\n\r\n", "\r\nMessage-ID: <current@example.com>\r\nIn-Reply-To: <prior@example.com>\r\nReferences: <older@example.com> <prior@example.com>\r\n\r\n", 1)
 	fake := &fakeClient{messages: map[string][]byte{"101": []byte(raw)}}
 	connector, err := New(Config{
 		Host:            "imap.example.com",
@@ -49,6 +50,9 @@ func TestPollNormalizesMessagesToEnvelopes(t *testing.T) {
 	}
 	if envelope.ReplyChannel.Target != "alice@example.com" {
 		t.Fatalf("ReplyChannel.Target = %q", envelope.ReplyChannel.Target)
+	}
+	if envelope.ReplyChannel.Metadata["message_id"] != "<current@example.com>" || envelope.ReplyChannel.Metadata["in_reply_to"] != "<prior@example.com>" || envelope.ReplyChannel.Metadata["references"] != "<older@example.com> <prior@example.com>" {
+		t.Fatalf("ReplyChannel.Metadata = %#v", envelope.ReplyChannel.Metadata)
 	}
 	if envelope.DedupeKey != "email:101" {
 		t.Fatalf("DedupeKey = %q", envelope.DedupeKey)

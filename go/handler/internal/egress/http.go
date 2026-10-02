@@ -90,9 +90,12 @@ type Server struct {
 // bind may be 0.0.0.0 (so Prometheus can scrape), but the ability to send
 // messages to the outside world must stay reachable only from the local host,
 // matching BBMB's loopback posture.
-func StartHTTPServer(host string, port int, engine *Engine, onResult func(Result)) (*Server, error) {
+func StartHTTPServer(host string, port int, engine *Engine, onResult func(Result), registerExtra func(*http.ServeMux)) (*Server, error) {
 	mux := http.NewServeMux()
 	RegisterHTTPRoutes(mux, engine, onResult)
+	if registerExtra != nil {
+		registerExtra(mux)
+	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return nil, err

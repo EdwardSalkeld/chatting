@@ -399,6 +399,7 @@ class RunRecord:
     result_status: str
     created_at: datetime
     schema_version: str = SCHEMA_VERSION
+    work_item_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -414,7 +415,7 @@ class RunRecord:
             raise ValueError("created_at must be timezone-aware")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "run_id": self.run_id,
             "envelope_id": self.envelope_id,
@@ -426,6 +427,9 @@ class RunRecord:
             .isoformat()
             .replace("+00:00", "Z"),
         }
+        if self.work_item_id is not None:
+            payload["work_item_id"] = self.work_item_id
+        return payload
 
 
 @dataclass(frozen=True)

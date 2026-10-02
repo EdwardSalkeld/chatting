@@ -32,6 +32,7 @@ import (
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
 
 const version = "go-handler-bootstrap"
@@ -320,6 +321,8 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	// loopback-only, like BBMB.
 	egressServer, err := egress.StartHTTPServer(config.EgressHTTPHost, config.EgressHTTPPort, engine, func(result egress.Result) {
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
+	}, func(mux *http.ServeMux) {
+		workitems.RegisterRoutes(mux, store)
 	})
 	if err != nil {
 		_ = metricsServer.Close()
@@ -353,6 +356,8 @@ type handlerIngressState struct {
 	store *sqlitestate.Store
 }
 
+var _ handlerruntime.TaskRouter = handlerIngressState{}
+
 func (state handlerIngressState) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
 	return state.store.Seen(ctx, source, dedupeKey)
 }
@@ -363,6 +368,10 @@ func (state handlerIngressState) MarkSeen(ctx context.Context, source string, de
 
 func (state handlerIngressState) RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error {
 	return state.store.RecordTask(ctx, taskMessage)
+}
+
+func (state handlerIngressState) AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
+	return state.store.AssignTask(ctx, taskMessage)
 }
 
 func (state handlerIngressState) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {

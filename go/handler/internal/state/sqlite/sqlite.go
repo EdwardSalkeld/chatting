@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/routing"
 	_ "modernc.org/sqlite"
 )
 
@@ -28,7 +29,8 @@ var (
 )
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	router routing.Router
 }
 
 type TaskLedgerRecord struct {
@@ -162,7 +164,7 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, router: routing.PersistentLaneRouter{}}
 	if err := store.initialize(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -188,6 +190,28 @@ func (store *Store) initialize(ctx context.Context) error {
 			trace_id TEXT NOT NULL,
 			task_payload_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS work_items (
+			work_item_id TEXT PRIMARY KEY,
+			preferred_reply_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS work_item_routes (
+			route_kind TEXT NOT NULL,
+			route_key TEXT NOT NULL,
+			work_item_id TEXT NOT NULL,
+			PRIMARY KEY (route_kind, route_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS work_item_artifacts (
+			kind TEXT NOT NULL,
+			artifact_key TEXT NOT NULL,
+			work_item_id TEXT NOT NULL,
+			PRIMARY KEY (kind, artifact_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS task_assignments (
+			task_id TEXT PRIMARY KEY,
+			work_item_id TEXT NOT NULL,
+			route_reason TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS completed_task_ledger (
 			task_id TEXT PRIMARY KEY,
@@ -304,6 +328,11 @@ func (store *Store) initialize(ctx context.Context) error {
 	// explicitly. Idempotent: only ALTER when the column is absent.
 	if err := store.ensureColumn(ctx, "conversation_turns", "sender", "TEXT"); err != nil {
 		return err
+	}
+	for _, table := range []string{"task_ledger", "completed_task_ledger", "dispatched_event_ids", "staged_egress_events", "conversation_turns", "telegram_attachment_ledger"} {
+		if err := store.ensureColumn(ctx, table, "work_item_id", "TEXT"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -782,9 +811,10 @@ func (store *Store) RecordTelegramTaskAttachments(ctx context.Context, taskMessa
 				eligible_after,
 				deleted_at,
 				cleanup_attempts,
-				last_cleanup_error
+				last_cleanup_error,
+				work_item_id
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			attachment.path,
 			attachment.uri,
 			taskMessage.TaskID,
@@ -794,6 +824,7 @@ func (store *Store) RecordTelegramTaskAttachments(ctx context.Context, taskMessa
 			nil,
 			0,
 			nil,
+			taskMessage.WorkItemID,
 		)
 		if err != nil {
 			return 0, err
@@ -1079,9 +1110,10 @@ func (store *Store) AppendConversationTurn(ctx context.Context, channel string, 
 			content,
 			sender,
 			run_id,
-			created_at
+			created_at,
+			work_item_id
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT work_item_id FROM task_assignments WHERE task_id = ?))`,
 		channel,
 		target,
 		role,
@@ -1089,6 +1121,7 @@ func (store *Store) AppendConversationTurn(ctx context.Context, channel string, 
 		nullIfEmpty(sender),
 		nullIfEmpty(runID),
 		formatTimestamp(time.Now()),
+		runID,
 	)
 	return err
 }
@@ -1212,14 +1245,16 @@ func (store *Store) RecordTask(ctx context.Context, taskMessage contracts.TaskQu
 			envelope_id,
 			trace_id,
 			task_payload_json,
-			created_at
+			created_at,
+			work_item_id
 		)
-		VALUES (?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?)`,
 		taskMessage.TaskID,
 		taskMessage.Envelope.ID,
 		taskMessage.TraceID,
 		string(payload),
 		formatTimestamp(time.Now()),
+		taskMessage.WorkItemID,
 	); err != nil {
 		return err
 	}
@@ -1281,13 +1316,15 @@ func (store *Store) MarkTaskCompleted(ctx context.Context, taskID string, envelo
 			task_id,
 			envelope_id,
 			trace_id,
-			completed_at
+			completed_at,
+			work_item_id
 		)
-		VALUES (?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, (SELECT work_item_id FROM task_assignments WHERE task_id = ?))`,
 		taskID,
 		envelopeID,
 		traceID,
 		formatTimestamp(time.Now()),
+		taskID,
 	); err != nil {
 		return err
 	}
@@ -1347,11 +1384,12 @@ func (store *Store) MarkDispatchedEventID(ctx context.Context, taskID string, ev
 	}
 	_, err := store.db.ExecContext(
 		ctx,
-		`INSERT OR IGNORE INTO dispatched_event_ids (task_id, event_id, dispatched_at)
-		VALUES (?, ?, ?)`,
+		`INSERT OR IGNORE INTO dispatched_event_ids (task_id, event_id, dispatched_at, work_item_id)
+		VALUES (?, ?, ?, (SELECT work_item_id FROM task_assignments WHERE task_id = ?))`,
 		taskID,
 		eventID,
 		formatTimestamp(time.Now()),
+		taskID,
 	)
 	return err
 }
@@ -1403,14 +1441,16 @@ func (store *Store) StageEgressEvent(ctx context.Context, egressMessage contract
 			event_id,
 			sequence,
 			payload_json,
-			created_at
+			created_at,
+			work_item_id
 		)
-		VALUES (?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, (SELECT work_item_id FROM task_assignments WHERE task_id = ?))`,
 		egressMessage.TaskID,
 		egressMessage.EventID,
 		*egressMessage.Sequence,
 		string(payload),
 		formatTimestamp(time.Now()),
+		egressMessage.TaskID,
 	); err != nil {
 		return err
 	}

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, Callable, Mapping
 
 from app.models import (
@@ -24,6 +25,7 @@ from app.models import (
 # call. Cap how far back we look: if the newest handful of runs carry nothing,
 # older ones are too stale to be worth reporting.
 _USAGE_ROLLOUT_SCAN_LIMIT = 25
+_WORKSPACE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 
 
 @dataclass(frozen=True)
@@ -32,11 +34,32 @@ class CodexExecutor:
 
     command: tuple[str, ...] = ("codex", "exec", "--json")
     cwd: str | None = None
+    workspace_root: str | None = None
+    work_item_id: str | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
+
+    def for_workspace(self, *, work_item_id: str) -> CodexExecutor:
+        """Create or reuse a lane directory, then return a run-specific executor."""
+        if not _WORKSPACE_ID.fullmatch(work_item_id):
+            raise ValueError("invalid work_item_id")
+        root = Path(
+            self.workspace_root or Path(self.cwd or Path.cwd()) / ".chatting-workspaces"
+        )
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = root.resolve()
+        directory = root / work_item_id
+        directory.mkdir(mode=0o700, exist_ok=True)
+        if directory.is_symlink() or directory.resolve().parent != root:
+            raise ValueError("workspace directory escapes workspace root")
+        return replace(
+            self,
+            cwd=str(directory),
+            work_item_id=work_item_id,
+        )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
         payload = json.dumps(
@@ -44,6 +67,7 @@ class CodexExecutor:
                 envelope,
                 current_time=self.now_provider(),
                 executor_working_dir=self.cwd,
+                work_item_id=self.work_item_id,
             )
         )
         try:
@@ -221,6 +245,7 @@ def _task_payload(
     *,
     current_time: datetime,
     executor_working_dir: str | None = None,
+    work_item_id: str | None = None,
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -241,6 +266,8 @@ def _task_payload(
     }
     if envelope.actor is not None:
         task_dict["actor"] = envelope.actor
+    if work_item_id is not None:
+        task_dict["work_item_id"] = work_item_id
     if envelope.attachments:
         task_dict["attachments"] = [
             {"uri": item.uri, "name": item.name} for item in envelope.attachments

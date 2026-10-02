@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
+from app.state import work_items
 from app.models import (
     AttachmentRef,
     AuditEvent,
@@ -27,6 +28,7 @@ from app.models import (
 class InboxTask:
     task_message: TaskQueueMessage
     conversation_id: str
+    work_item_id: str | None
     state: str
     parent_task_id: str | None
 
@@ -228,6 +230,27 @@ class SQLiteStateStore:
                 ON worker_telegram_history (target, message_id)
                 """
             )
+            work_items.initialize(connection)
+            # Additive migration for databases created before lane identities.
+            for table in (
+                "run_records",
+                "audit_events",
+                "dead_letters",
+                "worker_activity_events",
+                "conversation_turns",
+                "egress_outbox",
+                "worker_telegram_history",
+                "worker_inbox",
+                "dispatched_events",
+                "dispatched_event_ids",
+            ):
+                columns = {
+                    row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+                }
+                if "work_item_id" not in columns:
+                    connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN work_item_id TEXT"
+                    )
             connection.commit()
 
     def stage_inbox_task(
@@ -273,9 +296,49 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+            if cursor.rowcount > 0:
+                assignment = work_items.assign(
+                    connection,
+                    task=task_message,
+                    conversation_id=conversation_id,
+                    created_at=now,
+                )
+                connection.execute(
+                    "UPDATE worker_inbox SET work_item_id = ? WHERE task_id = ?",
+                    (assignment.work_item_id, task_message.task_id),
+                )
             self._record_telegram_inbound(connection, task_message, created_at=now)
             connection.commit()
         return cursor.rowcount > 0
+
+    def get_work_assignment(self, *, task_id: str) -> work_items.WorkAssignment | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT work_item_id, route_reason FROM work_item_events WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return work_items._result(
+                connection,
+                row["work_item_id"],
+                row["route_reason"],
+            )
+
+    def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(work_item_id)
+        value = json.loads(row["preferred_reply_json"])
+        return ReplyChannel(
+            type=value["type"],
+            target=value["target"],
+            metadata=value.get("metadata", {}),
+        )
 
     def _record_telegram_inbound(
         self,
@@ -305,8 +368,9 @@ class SQLiteStateStore:
             INSERT OR IGNORE INTO worker_telegram_history (
                 target, message_id, reply_to_message_id, role, sender,
                 content, attachments_json, task_id, event_id,
-                occurred_at, created_at
-            ) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)
+                occurred_at, created_at, work_item_id
+            ) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?,
+                (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
             """,
             (
                 envelope.reply_channel.target,
@@ -318,6 +382,7 @@ class SQLiteStateStore:
                 task_message.task_id,
                 _serialize_rfc3339_utc(envelope.received_at),
                 created_at,
+                task_message.task_id,
             ),
         )
 
@@ -353,8 +418,9 @@ class SQLiteStateStore:
                 INSERT OR IGNORE INTO worker_telegram_history (
                     target, message_id, reply_to_message_id, role, sender,
                     content, attachments_json, task_id, event_id,
-                    occurred_at, created_at
-                ) VALUES (?, ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?)
+                    occurred_at, created_at, work_item_id
+                ) VALUES (?, ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
                 (
                     target,
@@ -365,6 +431,7 @@ class SQLiteStateStore:
                     event_id,
                     _serialize_rfc3339_utc(occurred_at),
                     now,
+                    task_id,
                 ),
             )
             connection.commit()
@@ -765,9 +832,10 @@ class SQLiteStateStore:
                     latency_ms,
                     result_status,
                     created_at,
-                    schema_version
+                    schema_version,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["run_id"],
@@ -778,6 +846,7 @@ class SQLiteStateStore:
                     payload["result_status"],
                     payload["created_at"],
                     payload["schema_version"],
+                    record.work_item_id,
                 ),
             )
             connection.commit()
@@ -798,6 +867,7 @@ class SQLiteStateStore:
                 result_status=row["result_status"],
                 created_at=_parse_rfc3339_utc(row["created_at"]),
                 schema_version=row["schema_version"],
+                work_item_id=row["work_item_id"],
             )
             for row in rows
         ]
@@ -826,6 +896,7 @@ class SQLiteStateStore:
                 result_status=row["result_status"],
                 created_at=_parse_rfc3339_utc(row["created_at"]),
                 schema_version=row["schema_version"],
+                work_item_id=row["work_item_id"],
             )
             for row in rows
         ]
@@ -849,6 +920,7 @@ class SQLiteStateStore:
             result_status=row["result_status"],
             created_at=_parse_rfc3339_utc(row["created_at"]),
             schema_version=row["schema_version"],
+            work_item_id=row["work_item_id"],
         )
 
     def append_audit_event(self, event: AuditEvent) -> None:
@@ -864,9 +936,11 @@ class SQLiteStateStore:
                     result_status,
                     detail_json,
                     created_at,
-                    schema_version
+                    schema_version,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
                 (
                     payload["run_id"],
@@ -877,6 +951,7 @@ class SQLiteStateStore:
                     json.dumps(payload["detail"], sort_keys=True),
                     payload["created_at"],
                     payload["schema_version"],
+                    payload["run_id"],
                 ),
             )
             connection.commit()
@@ -957,9 +1032,11 @@ class SQLiteStateStore:
                     status,
                     created_at,
                     replayed_run_id,
-                    schema_version
+                    schema_version,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
                 (
                     run_id,
@@ -971,6 +1048,7 @@ class SQLiteStateStore:
                     created_at,
                     None,
                     payload["schema_version"],
+                    run_id,
                 ),
             )
             connection.commit()
@@ -1058,11 +1136,13 @@ class SQLiteStateStore:
                     role,
                     content,
                     run_id,
-                    created_at
+                    created_at,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
-                (channel, target, role, content, run_id, created_at),
+                (channel, target, role, content, run_id, created_at, run_id),
             )
             connection.commit()
 
@@ -1102,10 +1182,12 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO dispatched_events (run_id, event_index, dispatched_at)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO dispatched_events
+                    (run_id, event_index, dispatched_at, work_item_id)
+                VALUES (?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
-                (run_id, event_index, dispatched_at),
+                (run_id, event_index, dispatched_at, run_id),
             )
             connection.commit()
 
@@ -1133,10 +1215,12 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO dispatched_event_ids (task_id, event_id, dispatched_at)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO dispatched_event_ids
+                    (task_id, event_id, dispatched_at, work_item_id)
+                VALUES (?, ?, ?,
+                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
-                (task_id, event_id, dispatched_at),
+                (task_id, event_id, dispatched_at, task_id),
             )
             connection.commit()
 
@@ -1173,9 +1257,11 @@ class SQLiteStateStore:
                     payload_json,
                     publish_state,
                     created_at,
-                    updated_at
+                    updated_at,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
                 (
                     message.event_id,
@@ -1186,6 +1272,7 @@ class SQLiteStateStore:
                     "pending_publish",
                     now,
                     now,
+                    message.task_id,
                 ),
             )
             connection.commit()
@@ -1267,9 +1354,14 @@ class SQLiteStateStore:
                     phase,
                     summary,
                     detail_json,
-                    is_internal
+                    is_internal,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    COALESCE(
+                        (SELECT work_item_id FROM work_item_events WHERE task_id = ?),
+                        (SELECT work_item_id FROM run_records WHERE run_id = ?)
+                    ))
                 """,
                 (
                     occurred_at.astimezone(timezone.utc)
@@ -1284,6 +1376,8 @@ class SQLiteStateStore:
                     summary,
                     json.dumps(payload, sort_keys=True),
                     1 if is_internal else 0,
+                    task_id,
+                    run_id,
                 ),
             )
             connection.commit()
@@ -1561,6 +1655,7 @@ def _inbox_task_from_row(
     return InboxTask(
         task_message=TaskQueueMessage.from_dict(json.loads(row["task_payload_json"])),
         conversation_id=str(row["conversation_id"]),
+        work_item_id=str(row["work_item_id"]) if row["work_item_id"] else None,
         state=state or str(row["state"]),
         parent_task_id=(
             parent_task_id

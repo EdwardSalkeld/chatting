@@ -25,6 +25,7 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 					"update_id": 1001,
 					"message": {
 						"message_id": 55,
+						"message_thread_id": 7,
 						"date": 1779345600,
 						"chat": {"id": 12345, "type": "private", "username": "edward"},
 						"from": {"id": 7, "username": "sender"},
@@ -82,7 +83,7 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 	if envelope.ID != "telegram:1001" || envelope.Source != "im" || envelope.DedupeKey != "telegram:1001" {
 		t.Fatalf("envelope identity = %#v", envelope)
 	}
-	if envelope.Content != "hello from telegram" {
+	if envelope.Content != "[thread_id=7] hello from telegram" {
 		t.Fatalf("content = %q", envelope.Content)
 	}
 	if envelope.ReplyChannel.Type != "telegram" || envelope.ReplyChannel.Target != "12345" {
@@ -94,7 +95,10 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 	if envelope.ReplyChannel.Metadata["reply_to_message_id"] != int64(41) {
 		t.Fatalf("reply anchor metadata = %#v", envelope.ReplyChannel.Metadata)
 	}
-	if envelope.ReplyChannel.Metadata["original_content"] != "hello from telegram" {
+	if envelope.ReplyChannel.Metadata["message_thread_id"] != int64(7) {
+		t.Fatalf("topic metadata = %#v", envelope.ReplyChannel.Metadata)
+	}
+	if envelope.ReplyChannel.Metadata["original_content"] != "[thread_id=7] hello from telegram" {
 		t.Fatalf("original content metadata = %#v", envelope.ReplyChannel.Metadata)
 	}
 	if deref(envelope.Actor) != "7:sender" {
