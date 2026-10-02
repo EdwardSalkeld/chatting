@@ -325,14 +325,6 @@ class SQLiteStateStore:
                 row["route_reason"],
             )
 
-    def register_work_artifact(self, *, work_item_id: str, kind: str, key: str) -> None:
-        """Record an externally created PR or email ID against its originating item."""
-        with closing(self._connect()) as connection:
-            work_items.register_artifact(
-                connection, work_item_id=work_item_id, kind=kind, key=key
-            )
-            connection.commit()
-
     def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
         with closing(self._connect()) as connection:
             row = connection.execute(

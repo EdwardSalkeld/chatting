@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/routing"
 )
 
 // AssignTask makes the ingress handler authoritative for lane identity.
@@ -20,11 +21,11 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		return task, err
 	}
 	defer rollbackUnlessCommitted(tx)
-	var itemID, workspaceID string
+	var itemID string
 	var existingReason string
-	err = tx.QueryRowContext(ctx, `SELECT work_item_id, workspace_id, route_reason FROM task_assignments WHERE task_id = ?`, task.TaskID).Scan(&itemID, &workspaceID, &existingReason)
+	err = tx.QueryRowContext(ctx, `SELECT work_item_id, route_reason FROM task_assignments WHERE task_id = ?`, task.TaskID).Scan(&itemID, &existingReason)
 	if err == nil {
-		task.WorkItemID, task.WorkspaceID = itemID, workspaceID
+		task.WorkItemID = itemID
 		if err = tx.Commit(); err != nil {
 			return task, err
 		}
@@ -63,15 +64,11 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		if err != nil {
 			return task, err
 		}
-		workspaceID, err = newWorkID("ws_")
-		if err != nil {
-			return task, err
-		}
 		reply, err := json.Marshal(task.Envelope.ReplyChannel)
 		if err != nil {
 			return task, err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?)`, itemID, workspaceID, string(reply), formatTimestamp(time.Now()))
+		_, err = tx.ExecContext(ctx, `INSERT INTO work_items VALUES (?, ?, ?)`, itemID, string(reply), formatTimestamp(time.Now()))
 		if err != nil {
 			return task, err
 		}
@@ -79,21 +76,45 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		if err != nil {
 			return task, err
 		}
-	} else {
-		err = tx.QueryRowContext(ctx, `SELECT workspace_id FROM work_items WHERE work_item_id = ?`, itemID).Scan(&workspaceID)
-		if err != nil {
-			return task, err
-		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO task_assignments VALUES (?, ?, ?, ?)`, task.TaskID, itemID, workspaceID, reason)
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_assignments VALUES (?, ?, ?)`, task.TaskID, itemID, reason)
 	if err != nil {
 		return task, err
 	}
 	if err = tx.Commit(); err != nil {
 		return task, err
 	}
-	task.WorkItemID, task.WorkspaceID = itemID, workspaceID
+	task.WorkItemID = itemID
 	return store.applyPreferredReply(ctx, task, reason)
+}
+
+// RegisterPR links a PR to the lane assigned to the originating task.
+func (store *Store) RegisterPR(ctx context.Context, taskID, prURL string) error {
+	key, err := routing.NormalizePR(prURL)
+	if err != nil {
+		return err
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+	var itemID string
+	if err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM task_assignments WHERE task_id = ?`, taskID).Scan(&itemID); err != nil {
+		return err
+	}
+	var owner string
+	err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = 'github_pr' AND artifact_key = ?`, key).Scan(&owner)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if owner != "" && owner != itemID {
+		return fmt.Errorf("PR already belongs to another lane")
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO work_item_artifacts VALUES ('github_pr', ?, ?)`, key, itemID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (store *Store) applyPreferredReply(ctx context.Context, task contracts.TaskQueueMessage, reason string) (contracts.TaskQueueMessage, error) {

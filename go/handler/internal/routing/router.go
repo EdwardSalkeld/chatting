@@ -27,6 +27,19 @@ type PersistentLaneRouter struct{}
 
 var prURL = regexp.MustCompile(`(?i)https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)(?:\b|/)`)
 
+// NormalizePR accepts a GitHub pull request URL and returns its routing key.
+func NormalizePR(value string) (string, error) {
+	match := prURL.FindStringSubmatch(value)
+	if match == nil {
+		return "", fmt.Errorf("invalid GitHub PR URL")
+	}
+	number, err := strconv.Atoi(match[2])
+	if err != nil {
+		return "", fmt.Errorf("invalid GitHub PR URL: %w", err)
+	}
+	return fmt.Sprintf("%s#%d", strings.ToLower(match[1]), number), nil
+}
+
 func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 	envelope := task.Envelope
 	reply := envelope.ReplyChannel

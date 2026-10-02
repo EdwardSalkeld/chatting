@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import urllib.error
+import urllib.request
 
+from app.egress_client import DEFAULT_HANDLER_EGRESS_URL
 from app.state import SQLiteStateStore
-from app.task_ledger import TaskLedgerStore
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True, help="worker SQLite database")
     parser.add_argument(
-        "--handler-db", help="handler SQLite database for PR registration"
+        "--handler-url",
+        default=DEFAULT_HANDLER_EGRESS_URL.rsplit("/", 1)[0],
+        help="handler loopback API base URL",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     show = commands.add_parser("show")
@@ -27,22 +31,24 @@ def main() -> int:
     if assignment is None:
         parser.error("unknown task")
     if args.command == "register-pr":
-        if not args.handler_db:
-            parser.error("register-pr requires --handler-db")
-        TaskLedgerStore(args.handler_db).register_pr(
-            task_id=args.task_id,
-            pr_url=args.pr_url,
-            work_item_id=assignment.work_item_id,
+        request = urllib.request.Request(
+            args.handler_url.rstrip("/") + "/work-items/register-pr",
+            data=json.dumps({"task_id": args.task_id, "pr_url": args.pr_url}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
-        store.register_work_artifact(
-            work_item_id=assignment.work_item_id, kind="github_pr", key=args.pr_url
-        )
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                pass
+        except urllib.error.HTTPError as error:
+            parser.error(f"handler rejected PR registration: {error.read().decode()}")
+        except urllib.error.URLError as error:
+            parser.error(f"handler unavailable: {error.reason}")
     preferred_reply = store.preferred_work_reply(work_item_id=assignment.work_item_id)
     print(
         json.dumps(
             {
                 "work_item_id": assignment.work_item_id,
-                "workspace_id": assignment.workspace_id,
                 "reason": assignment.reason,
                 "preferred_reply": {
                     "type": preferred_reply.type,

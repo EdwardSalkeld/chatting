@@ -19,7 +19,7 @@ func TestPersistentLaneAssignments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.WorkItemID == "" || first.WorkspaceID == "" {
+	if first.WorkItemID == "" {
 		t.Fatal("missing lane identity")
 	}
 
@@ -63,9 +63,14 @@ func TestPersistentLaneAssignments(t *testing.T) {
 		t.Fatal("unmatched email should use general lane")
 	}
 
-	_, err = store.db.ExecContext(ctx, `INSERT INTO work_item_artifacts VALUES ('github_pr', 'owner/repo#50', ?)`, first.WorkItemID)
-	if err != nil {
+	if err = store.RegisterPR(ctx, base.TaskID, "https://github.com/owner/repo/pull/50"); err != nil {
 		t.Fatal(err)
+	}
+	if err = store.RegisterPR(ctx, base.TaskID, "https://github.com/owner/repo/pull/50"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RegisterPR(ctx, email.TaskID, "https://github.com/owner/repo/pull/50"); err == nil {
+		t.Fatal("conflicting PR owner accepted")
 	}
 	notification := testTaskMessage(t)
 	notification.TaskID = "task:notification"

@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.broker import TaskQueueMessage
-from app.state.work_items import normalize_pr
 
 
 @dataclass(frozen=True)
@@ -95,29 +94,6 @@ class TaskLedgerStore:
             ),
             created_at=_parse_rfc3339_utc(row["created_at"]),
         )
-
-    def register_pr(self, *, task_id: str, pr_url: str, work_item_id: str) -> None:
-        """Link a created PR in the handler's authoritative routing database."""
-        key = normalize_pr(pr_url)
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT work_item_id FROM task_assignments WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
-            if row is None or row["work_item_id"] != work_item_id:
-                raise ValueError("task and worker lane do not match handler assignment")
-            owner = connection.execute(
-                "SELECT work_item_id FROM work_item_artifacts WHERE kind = 'github_pr' AND artifact_key = ?",
-                (key,),
-            ).fetchone()
-            if owner is not None and owner["work_item_id"] != work_item_id:
-                raise ValueError("PR already belongs to another lane")
-            connection.execute(
-                "INSERT OR IGNORE INTO work_item_artifacts VALUES ('github_pr', ?, ?)",
-                (key, work_item_id),
-            )
-            connection.commit()
 
 
 def _serialize_rfc3339_utc(value: datetime) -> str:

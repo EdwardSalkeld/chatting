@@ -32,6 +32,7 @@ import (
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
 
 const version = "go-handler-bootstrap"
@@ -320,6 +321,8 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	// loopback-only, like BBMB.
 	egressServer, err := egress.StartHTTPServer(config.EgressHTTPHost, config.EgressHTTPPort, engine, func(result egress.Result) {
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
+	}, func(mux *http.ServeMux) {
+		workitems.RegisterRoutes(mux, store)
 	})
 	if err != nil {
 		_ = metricsServer.Close()

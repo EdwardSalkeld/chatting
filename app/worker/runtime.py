@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
-from app.worker.executor.base import WorkspaceAwareExecutor
 from app.internal_heartbeat import (
     build_internal_completion_egress,
     build_internal_heartbeat_egress,
@@ -105,11 +104,8 @@ def process_task_message(
 
         try:
             active_executor: Executor = executor_impl
-            if assignment is not None and isinstance(
-                executor_impl, WorkspaceAwareExecutor
-            ):
+            if assignment is not None:
                 active_executor = executor_impl.for_workspace(
-                    workspace_id=assignment.workspace_id,
                     work_item_id=assignment.work_item_id,
                 )
             if _should_run_supervised_recovery(task_message):

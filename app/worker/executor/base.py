@@ -15,12 +15,7 @@ class Executor(Protocol):
         """Run task logic and return any errors plus captured stdout/stderr."""
         ...
 
-
-@runtime_checkable
-class WorkspaceAwareExecutor(Executor, Protocol):
-    """Executor that can bind a run to a persistent lane workspace."""
-
-    def for_workspace(self, *, workspace_id: str, work_item_id: str) -> Executor: ...
+    def for_workspace(self, *, work_item_id: str) -> Executor: ...
 
 
 # Kept separate from Executor so an executor can exist without one: reporting
@@ -34,4 +29,4 @@ class UsageReporter(Protocol):
         ...
 
 
-__all__ = ["Executor", "UsageReporter", "WorkspaceAwareExecutor"]
+__all__ = ["Executor", "UsageReporter"]

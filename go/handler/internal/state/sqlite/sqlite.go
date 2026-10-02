@@ -193,7 +193,6 @@ func (store *Store) initialize(ctx context.Context) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS work_items (
 			work_item_id TEXT PRIMARY KEY,
-			workspace_id TEXT NOT NULL UNIQUE,
 			preferred_reply_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
@@ -212,7 +211,6 @@ func (store *Store) initialize(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS task_assignments (
 			task_id TEXT PRIMARY KEY,
 			work_item_id TEXT NOT NULL,
-			workspace_id TEXT NOT NULL,
 			route_reason TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS completed_task_ledger (
