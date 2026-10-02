@@ -25,6 +25,12 @@ The initial isolation boundary should include a separate working directory, writ
 
 Filesystem separation alone does not protect shared resources. An operation against a live deployment, the memory repo's main branch, a shared SQLite file, or another external service needs a named resource lease or transactional conflict check. Git worktrees isolate working files, but sharing one Git object store still allows coordinated fetches, refs, and branch names; give each work item a unique branch and define how updates are integrated. The test VM must use separate state, secrets, and transport routes from production.
 
+### How Git maps to this
+
+The workspace owns working files and worktrees; the work item records Git references and artifacts. For a new change, create a worktree and usually a branch for that item in each repo it edits. An item may touch several repos and therefore several branches. An item may also attach an existing branch when continuing pre-existing work. Do not assume that a workspace equals one repo, branch, commit, or PR.
+
+Commits belong to their Git repo and are linked to the work item that produced or adopted them. A PR is an external artifact linked to the work item, with its repo, head branch, base branch, and provider ID. It may remain open after a run exits, and a work item can have several PRs across repos. Merging a PR does not immediately delete the workspace if more work or follow-up is expected; closing the item triggers archive policy. When restoring an archived item, recreate worktrees from recorded refs and flag any uncommitted changes that were not preserved. Do not attach two simultaneously active workspaces to the same writable branch; a request to use an already occupied branch should join the existing item or wait for a deliberate split.
+
 ## Ingress assignment
 
 Route an event in this order: (1) explicit work item reference or trusted parent ID; (2) verified correlation to an existing item, such as a stored PR or CI run ID, email `Message-ID`/`References`, or a reply to a known bot message; (3) an ingress-specific conversation mapping; (4) a new work item. Record the evidence and allow an override. A classifier may rank ambiguous candidates later but must be able to abstain; it cannot silently turn a weak match into shared writable state.
