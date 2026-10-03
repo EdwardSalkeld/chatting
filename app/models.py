@@ -291,6 +291,7 @@ class ExecutionResult:
     errors: list[str]
     stdout: str | None = None
     stderr: str | None = None
+    escalation_reason: str | None = None
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -300,6 +301,10 @@ class ExecutionResult:
             raise ValueError("stdout must be a string")
         if self.stderr is not None and not isinstance(self.stderr, str):
             raise ValueError("stderr must be a string")
+        if self.escalation_reason is not None and not isinstance(
+            self.escalation_reason, str
+        ):
+            raise ValueError("escalation_reason must be a string")
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -310,6 +315,8 @@ class ExecutionResult:
             payload["stdout"] = self.stdout
         if self.stderr is not None:
             payload["stderr"] = self.stderr
+        if self.escalation_reason is not None:
+            payload["escalation_reason"] = self.escalation_reason
         return payload
 
 
