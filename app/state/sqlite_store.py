@@ -251,6 +251,26 @@ class SQLiteStateStore:
                     connection.execute(
                         f"ALTER TABLE {table} ADD COLUMN work_item_id TEXT"
                     )
+            inbox_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(worker_inbox)")
+            }
+            if "lease_owner" not in inbox_columns:
+                connection.execute(
+                    "ALTER TABLE worker_inbox ADD COLUMN lease_owner TEXT"
+                )
+            connection.execute(
+                """
+                UPDATE worker_inbox SET work_item_id = COALESCE(
+                    (SELECT work_item_id FROM work_item_events
+                     WHERE work_item_events.task_id = worker_inbox.task_id),
+                    'item_legacy_general')
+                WHERE work_item_id IS NULL
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS worker_inbox_work_item_state "
+                "ON worker_inbox (work_item_id, state, staged_at)"
+            )
             connection.commit()
 
     def stage_inbox_task(
@@ -480,17 +500,33 @@ class SQLiteStateStore:
         return [_telegram_history_turn_from_row(row) for row in rows]
 
     def claim_next_inbox_task(self) -> InboxTask | None:
-        """Atomically lease the oldest pending inbox task to this worker."""
+        """Atomically lease the oldest runnable task, one per work item."""
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        lease_owner = uuid.uuid4().hex
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT * FROM worker_inbox
-                WHERE state = 'pending'
-                   OR (state = 'closing' AND parent_task_id IS NULL)
-                ORDER BY CASE state WHEN 'closing' THEN 0 ELSE 1 END,
-                         staged_at ASC, task_id ASC
+                SELECT candidate.* FROM worker_inbox AS candidate
+                WHERE candidate.lease_owner IS NULL
+                  AND (candidate.state = 'pending'
+                       OR (candidate.state = 'closing' AND candidate.parent_task_id IS NULL))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM worker_inbox AS owned
+                      WHERE owned.work_item_id = candidate.work_item_id
+                        AND owned.lease_owner IS NOT NULL
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM worker_inbox AS earlier
+                      WHERE earlier.work_item_id = candidate.work_item_id
+                        AND earlier.parent_task_id IS NULL
+                        AND earlier.state IN ('pending', 'active', 'closing')
+                        AND (earlier.staged_at < candidate.staged_at
+                             OR (earlier.staged_at = candidate.staged_at
+                                 AND earlier.task_id < candidate.task_id))
+                  )
+                ORDER BY CASE candidate.state WHEN 'closing' THEN 0 ELSE 1 END,
+                         candidate.staged_at ASC, candidate.task_id ASC
                 LIMIT 1
                 """
             ).fetchone()
@@ -498,24 +534,48 @@ class SQLiteStateStore:
                 connection.commit()
                 return None
             claimed_state = str(row["state"])
-            if claimed_state == "pending":
-                connection.execute(
-                    """
-                    UPDATE worker_inbox SET state = 'active', updated_at = ?
-                    WHERE task_id = ? AND state = 'pending'
-                    """,
-                    (now, row["task_id"]),
-                )
+            connection.execute(
+                """
+                UPDATE worker_inbox SET state = ?, lease_owner = ?, updated_at = ?
+                WHERE task_id = ? AND lease_owner IS NULL
+                """,
+                (
+                    "active" if claimed_state == "pending" else "closing",
+                    lease_owner,
+                    now,
+                    row["task_id"],
+                ),
+            )
             connection.commit()
         return _inbox_task_from_row(
             row, state="active" if claimed_state == "pending" else claimed_state
         )
+
+    def inbox_queue_summary(self) -> dict[str, object]:
+        """Return durable queued and running counts for the activity view."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT state, lease_owner, COUNT(*) AS count FROM worker_inbox
+                WHERE state IN ('pending', 'active', 'closing')
+                  AND parent_task_id IS NULL
+                GROUP BY state, lease_owner IS NOT NULL
+                """
+            ).fetchall()
+        queued = sum(int(row["count"]) for row in rows if row["lease_owner"] is None)
+        running = sum(
+            int(row["count"]) for row in rows if row["lease_owner"] is not None
+        )
+        return {"queued": queued, "running": running}
 
     def recover_inbox_tasks(self) -> None:
         """Recover leases after restart without replaying already-delivered work."""
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE worker_inbox SET lease_owner = NULL WHERE lease_owner IS NOT NULL"
+            )
             connection.execute(
                 """
                 UPDATE worker_inbox
@@ -550,8 +610,10 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                UPDATE worker_inbox SET state = 'pending', updated_at = ?
-                WHERE task_id = ? AND state = 'active'
+                UPDATE worker_inbox
+                SET state = CASE WHEN state = 'active' THEN 'pending' ELSE state END,
+                    lease_owner = NULL, updated_at = ?
+                WHERE task_id = ? AND lease_owner IS NOT NULL
                 """,
                 (now, task_id),
             )
@@ -709,7 +771,7 @@ class SQLiteStateStore:
             if delivered:
                 connection.execute(
                     """
-                    UPDATE worker_inbox SET state = 'completed', updated_at = ?
+                    UPDATE worker_inbox SET state = 'completed', lease_owner = NULL, updated_at = ?
                     WHERE task_id = ? OR parent_task_id = ?
                     """,
                     (now, parent_task_id, parent_task_id),
@@ -717,7 +779,7 @@ class SQLiteStateStore:
             else:
                 connection.execute(
                     """
-                    UPDATE worker_inbox SET state = 'completed', updated_at = ?
+                    UPDATE worker_inbox SET state = 'completed', lease_owner = NULL, updated_at = ?
                     WHERE task_id = ?
                     """,
                     (now, parent_task_id),

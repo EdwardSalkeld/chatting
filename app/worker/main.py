@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import shlex
 import sys
 import tempfile
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Mapping
 
@@ -17,7 +19,6 @@ from app.broker import (
     BBMBQueueAdapter,
     EgressQueueMessage,
     TASK_QUEUE_NAME,
-    TaskQueueMessage,
 )
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.worker.activity import (
@@ -54,6 +55,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "max_loops",
         "poll_timeout_seconds",
         "sleep_seconds",
+        "executor_pool_size",
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10
@@ -129,6 +131,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-loops", type=_positive_int, help="Optional loop limit for smoke tests."
+    )
+    parser.add_argument(
+        "--executor-pool-size",
+        type=_positive_int,
+        help="Maximum concurrent executor tasks (default 2).",
     )
     parser.add_argument(
         "--poll-timeout-seconds",
@@ -391,6 +398,12 @@ def main() -> int:
         default_value=1.0,
         setting_name="sleep_seconds",
     )
+    executor_pool_size = _resolve_positive_int(
+        args.executor_pool_size,
+        config.get("executor_pool_size"),
+        default_value=2,
+        setting_name="executor_pool_size",
+    )
     activity_history_limit = _resolve_positive_int(
         args.activity_history_limit,
         config.get("activity_history_limit"),
@@ -403,6 +416,17 @@ def main() -> int:
         default_value=DEFAULT_ACTIVITY_PORT,
         setting_name="activity_port",
     )
+
+    # A restart may reclaim old leases only after the previous coordinator is
+    # gone. Keep this lock for the full worker lifetime.
+    lock_path = Path(f"{db_path}.worker.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(lock_fd)
+        raise RuntimeError("another worker already owns this database") from exc
 
     store = SQLiteStateStore(db_path)
     store.recover_inbox_tasks()
@@ -420,11 +444,21 @@ def main() -> int:
 
     executor = _build_executor(args, config)
 
+    collector = InboxCollector(
+        broker=broker,
+        store=store,
+        activity_monitor=activity_monitor,
+        pickup_timeout_seconds=poll_timeout_seconds,
+    )
+    collector.start()
+    pool = ThreadPoolExecutor(
+        max_workers=executor_pool_size, thread_name_prefix="executor"
+    )
+    active: dict[Future[None], str] = {}
     try:
         loop_count = 0
         while True:
             loop_count += 1
-            active_task_id: str | None = None
             # Replay any egress still pending in the outbox (a prior POST that
             # failed transiently, or a crash before ack). Cheap when empty.
             _replay_egress_outbox(
@@ -432,97 +466,91 @@ def main() -> int:
                 handler_egress_url=handler_egress_url,
                 activity_monitor=activity_monitor,
             )
-            try:
+            for future, task_id in list(active.items()):
+                if future.done():
+                    del active[future]
+                    try:
+                        future.result()
+                    except Exception:  # noqa: BLE001
+                        LOGGER.exception("worker_processing_failed task_id=%s", task_id)
+                        store.release_active_inbox_task(task_id=task_id)
+            while len(active) < executor_pool_size:
                 inbox_task = store.claim_next_inbox_task()
                 if inbox_task is None:
-                    picked = broker.pickup_json(
-                        TASK_QUEUE_NAME,
-                        timeout_seconds=poll_timeout_seconds,
-                        wait_seconds=BBMB_PICKUP_WAIT_SECONDS,
-                    )
-                    if picked is None:
-                        LOGGER.info("worker_loop_empty loop=%s", loop_count)
-                        if max_loops and loop_count >= max_loops:
-                            break
-                        time.sleep(sleep_seconds)
-                        continue
-                    task_message = TaskQueueMessage.from_dict(picked.payload)
-                    inserted = store.stage_inbox_task(
-                        task_message, broker_guid=picked.guid
-                    )
-                    broker.ack(TASK_QUEUE_NAME, picked.guid)
-                    if inserted:
-                        activity_monitor.record_task_received(task_message=task_message)
-                    inbox_task = store.claim_next_inbox_task()
-                    if inbox_task is None:
-                        raise RuntimeError("staged inbox task could not be claimed")
-
-                task_message = inbox_task.task_message
-                active_task_id = task_message.task_id
-                if inbox_task.state == "closing":
-                    result = build_recovered_delivered_task_result(
-                        store=store,
-                        task_message=task_message,
-                    )
-                else:
-                    collector = InboxCollector(
-                        broker=broker,
-                        store=store,
-                        activity_monitor=activity_monitor,
-                        pickup_timeout_seconds=poll_timeout_seconds,
-                    )
-                    collector.start()
-                    try:
-                        result = process_task_message(
-                            store=store,
-                            task_message=task_message,
-                            executor_impl=executor,
-                            max_attempts=max_attempts,
-                            activity_monitor=activity_monitor,
-                        )
-                    finally:
-                        collector.stop()
-                for egress_message in result.egress_messages:
-                    _publish_egress_with_outbox(
-                        store=store,
-                        handler_egress_url=handler_egress_url,
-                        egress_message=egress_message,
-                        activity_monitor=activity_monitor,
-                    )
-
-                closing_followups = store.list_closing_inbox_followups(
-                    parent_task_id=task_message.task_id
+                    break
+                future = pool.submit(
+                    _process_claimed_task,
+                    store=store,
+                    inbox_task=inbox_task,
+                    executor=executor,
+                    max_attempts=max_attempts,
+                    activity_monitor=activity_monitor,
+                    handler_egress_url=handler_egress_url,
                 )
-                for followup in closing_followups:
-                    coalesced_result = build_coalesced_task_result(
-                        store=store,
-                        task_message=followup.task_message,
-                        parent_task_id=task_message.task_id,
-                        parent_run_id=result.run_record.run_id,
-                    )
-                    for egress_message in coalesced_result.egress_messages:
-                        _publish_egress_with_outbox(
-                            store=store,
-                            handler_egress_url=handler_egress_url,
-                            egress_message=egress_message,
-                            activity_monitor=activity_monitor,
-                        )
-                    _log_worker_processed(
-                        task_id=followup.task_message.task_id,
-                        result=coalesced_result,
-                    )
-                store.finish_inbox_task(parent_task_id=task_message.task_id)
-                _log_worker_processed(task_id=task_message.task_id, result=result)
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("worker_processing_failed")
-                if active_task_id is not None:
-                    store.release_active_inbox_task(task_id=active_task_id)
+                active[future] = inbox_task.task_message.task_id
 
             if max_loops and loop_count >= max_loops:
                 break
+            time.sleep(sleep_seconds)
         return 0
     finally:
+        collector.stop()
+        pool.shutdown(wait=True)
         activity_server.shutdown()
+        os.close(lock_fd)
+
+
+def _process_claimed_task(
+    *,
+    store: SQLiteStateStore,
+    inbox_task,
+    executor: Executor,
+    max_attempts: int,
+    activity_monitor: WorkerActivityMonitor,
+    handler_egress_url: str,
+) -> None:
+    task_message = inbox_task.task_message
+    if inbox_task.state == "closing":
+        result = build_recovered_delivered_task_result(
+            store=store,
+            task_message=task_message,
+        )
+    else:
+        result = process_task_message(
+            store=store,
+            task_message=task_message,
+            executor_impl=executor,
+            max_attempts=max_attempts,
+            activity_monitor=activity_monitor,
+        )
+    for egress_message in result.egress_messages:
+        _publish_egress_with_outbox(
+            store=store,
+            handler_egress_url=handler_egress_url,
+            egress_message=egress_message,
+            activity_monitor=activity_monitor,
+        )
+    for followup in store.list_closing_inbox_followups(
+        parent_task_id=task_message.task_id
+    ):
+        coalesced_result = build_coalesced_task_result(
+            store=store,
+            task_message=followup.task_message,
+            parent_task_id=task_message.task_id,
+            parent_run_id=result.run_record.run_id,
+        )
+        for egress_message in coalesced_result.egress_messages:
+            _publish_egress_with_outbox(
+                store=store,
+                handler_egress_url=handler_egress_url,
+                egress_message=egress_message,
+                activity_monitor=activity_monitor,
+            )
+        _log_worker_processed(
+            task_id=followup.task_message.task_id, result=coalesced_result
+        )
+    store.finish_inbox_task(parent_task_id=task_message.task_id)
+    _log_worker_processed(task_id=task_message.task_id, result=result)
 
 
 def _publish_egress_with_outbox(
