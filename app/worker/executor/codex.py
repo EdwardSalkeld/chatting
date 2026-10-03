@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from app.models import (
     UsageWindow,
     parse_context_ref,
 )
+from app.model_command import MODELS
 
 # Codex publishes rate-limit figures only inside the session rollouts it writes
 # while running a task, so reading them back is a file scan rather than an API
@@ -36,6 +38,7 @@ class CodexExecutor:
     cwd: str | None = None
     workspace_root: str | None = None
     work_item_id: str | None = None
+    model_tier: str | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
     now_provider: Callable[[], datetime] = field(
@@ -62,17 +65,37 @@ class CodexExecutor:
         )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
+        if self.model_tier == "low":
+            with tempfile.TemporaryDirectory(prefix="chatting-escalate-") as temporary:
+                return self._run(
+                    envelope, escalation_path=Path(temporary) / "request.json"
+                )
+        return self._run(envelope)
+
+    def for_model(self, tier: str) -> CodexExecutor:
+        if tier not in MODELS:
+            raise ValueError("unknown model tier")
+        return replace(self, model_tier=tier)
+
+    def _run(
+        self, envelope: TaskEnvelope, *, escalation_path: Path | None = None
+    ) -> ExecutionResult:
         payload = json.dumps(
             _task_payload(
                 envelope,
                 current_time=self.now_provider(),
                 executor_working_dir=self.cwd,
                 work_item_id=self.work_item_id,
+                model_tier=self.model_tier,
+                escalation_path=escalation_path,
             )
         )
+        command = self.command
+        if self.model_tier is not None:
+            command = (*command, "-m", MODELS[self.model_tier])
         try:
             completed = subprocess.run(
-                self.command,
+                command,
                 input=payload,
                 capture_output=True,
                 text=True,
@@ -95,10 +118,22 @@ class CodexExecutor:
                 stderr=completed.stderr,
             )
 
+        escalation_reason = None
+        if escalation_path is not None and escalation_path.exists():
+            try:
+                request = json.loads(escalation_path.read_text(encoding="utf-8"))
+                if request.get("task_id") == f"task:{envelope.id}":
+                    reason = request.get("reason")
+                    if isinstance(reason, str) and reason.strip():
+                        escalation_reason = reason.strip()[:4000]
+            except (OSError, ValueError, AttributeError):
+                pass
+
         return ExecutionResult(
             errors=[],
             stdout=completed.stdout,
             stderr=completed.stderr,
+            escalation_reason=escalation_reason,
         )
 
     def usage_report(self) -> UsageReport:
@@ -246,6 +281,8 @@ def _task_payload(
     current_time: datetime,
     executor_working_dir: str | None = None,
     work_item_id: str | None = None,
+    model_tier: str | None = None,
+    escalation_path: Path | None = None,
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -268,6 +305,8 @@ def _task_payload(
         task_dict["actor"] = envelope.actor
     if work_item_id is not None:
         task_dict["work_item_id"] = work_item_id
+    if model_tier is not None:
+        task_dict["model_selection"] = {"tier": model_tier, "model": MODELS[model_tier]}
     if work_item_id is not None and executor_working_dir is not None:
         task_dict["workspace_guidance"] = (
             "This work item has a persistent workspace at "
@@ -349,6 +388,17 @@ def _task_payload(
             ),
         },
     }
+    if escalation_path is not None:
+        payload["escalation_contract"] = {
+            "request_path": str(escalation_path),
+            "instructions": (
+                "If this task needs sustained judgement or broad changes beyond Luna's scope, "
+                "write a JSON object to request_path with task_id and reason (brief findings "
+                "and why Sol is needed), using your file editing tool. Then stop without a final "
+                "visible reply. The worker will rerun this same task on Sol. Request this before "
+                "sending any visible answer. The work item's low setting stays unchanged."
+            ),
+        }
     reply_to_message_id = envelope.reply_channel.metadata.get("reply_to_message_id")
     if (
         envelope.reply_channel.type == "telegram"
