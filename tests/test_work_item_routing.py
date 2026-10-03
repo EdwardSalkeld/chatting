@@ -212,6 +212,8 @@ class WorkItemRoutingTests(unittest.TestCase):
         self.assertEqual(
             payload["reply_contract"]["executor_working_dir"], str(first_dir)
         )
+        self.assertIn(str(first_dir), payload["task"]["workspace_guidance"])
+        self.assertIn("repository clones", payload["task"]["workspace_guidance"])
 
     def test_work_item_id_cannot_escape_root(self):
         executor = CodexExecutor(workspace_root=str(Path(self.tmp.name) / "workspaces"))

@@ -268,6 +268,15 @@ def _task_payload(
         task_dict["actor"] = envelope.actor
     if work_item_id is not None:
         task_dict["work_item_id"] = work_item_id
+    if work_item_id is not None and executor_working_dir is not None:
+        task_dict["workspace_guidance"] = (
+            "This work item has a persistent workspace at "
+            f"{executor_working_dir}. Start work there and keep its notes, files, "
+            "and repository clones there for later runs of this work item. "
+            "Context paths outside this workspace may be read when useful; "
+            "make new work and edits inside this workspace by default. "
+            "Other work items have separate workspaces."
+        )
     if envelope.attachments:
         task_dict["attachments"] = [
             {"uri": item.uri, "name": item.name} for item in envelope.attachments
