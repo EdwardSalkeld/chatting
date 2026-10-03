@@ -85,6 +85,12 @@ If the container working directory is not where you want Codex to run, set `code
 worker config to control only the Codex subprocess cwd without changing the worker service working
 directory.
 
+Set `workspace_root` to the persistent directory for work item workspaces. The
+worker runs up to two Codex tasks at once by default; `executor_pool_size` sets
+that limit. Tasks assigned to the same work item run in arrival order, one at
+a time. Run only one worker process against a worker database. The worker
+recovers interrupted task claims when it starts again.
+
 The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
 with JSON at `/activity.json`. The bind stays fixed at `9465`; use
 `activity_history_limit` to change the retention window.

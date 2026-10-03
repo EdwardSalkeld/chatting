@@ -48,7 +48,7 @@ class WorkerActivityMonitor:
         self._history_limit = history_limit
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self._lock = Lock()
-        self._active_executor: dict[str, object] | None = None
+        self._active_executors: dict[str, dict[str, object]] = {}
 
     @property
     def history_limit(self) -> int:
@@ -91,7 +91,7 @@ class WorkerActivityMonitor:
             "phase": "executor_running",
         }
         with self._lock:
-            self._active_executor = state
+            self._active_executors[task_message.task_id] = state
         self._append(
             phase="executor_started",
             summary=f"executor started (attempt {attempt})",
@@ -103,13 +103,18 @@ class WorkerActivityMonitor:
             detail={"attempt": attempt},
         )
 
-    def record_executor_pid(self, *, pid: int | None) -> None:
+    def record_executor_pid(
+        self, *, pid: int | None, task_id: str | None = None
+    ) -> None:
         if pid is None:
             return
         with self._lock:
-            if self._active_executor is None:
+            active = self._active_executors.get(task_id) if task_id else None
+            if active is None and len(self._active_executors) == 1:
+                active = next(iter(self._active_executors.values()))
+            if active is None:
                 return
-            self._active_executor["pid"] = pid
+            active["pid"] = pid
 
     def record_executor_finished(
         self,
@@ -124,7 +129,7 @@ class WorkerActivityMonitor:
         envelope = task_message.envelope
         occurred_at = self._now_fn()
         with self._lock:
-            self._active_executor = None
+            self._active_executors.pop(task_message.task_id, None)
         self._append(
             phase="task_finished",
             summary=f"task finished with {result_status}",
@@ -217,6 +222,8 @@ class WorkerActivityMonitor:
         )
         return {
             "current_executor": current_executor,
+            "active_executors": self._current_executors(),
+            "queue": self._store.inbox_queue_summary(),
             "current_run": self._build_current_run_summary(
                 current_executor=current_executor,
                 include_internal=include_internal,
@@ -244,6 +251,8 @@ class WorkerActivityMonitor:
                 runs.append(run_summary)
         return {
             "current_executor": current_executor,
+            "active_executors": self._current_executors(),
+            "queue": self._store.inbox_queue_summary(),
             "current_run": self._build_current_run_summary(
                 current_executor=current_executor,
                 include_internal=include_internal,
@@ -277,9 +286,13 @@ class WorkerActivityMonitor:
         with self._lock:
             return (
                 {"active": False, "phase": "idle"}
-                if self._active_executor is None
-                else dict(self._active_executor)
+                if not self._active_executors
+                else dict(next(iter(self._active_executors.values())))
             )
+
+    def _current_executors(self) -> list[dict[str, object]]:
+        with self._lock:
+            return [dict(item) for item in self._active_executors.values()]
 
     def _build_current_run_summary(
         self,
@@ -557,6 +570,8 @@ def _render_runs_index_html(
 ) -> str:
     current_executor = snapshot["current_executor"]
     current_run = snapshot.get("current_run")
+    queue = snapshot.get("queue", {})
+    active_executors = snapshot.get("active_executors", [])
     runs = snapshot["runs"]
     assert isinstance(current_executor, dict)
     assert isinstance(runs, list)
@@ -566,6 +581,21 @@ def _render_runs_index_html(
     runs_markup = _render_runs_index(runs, include_internal=include_internal)
     current_state_markup = _render_current_executor(current_executor)
     current_run_markup = _render_current_run(current_run)
+    if not isinstance(queue, dict):
+        queue = {}
+    if not isinstance(active_executors, list):
+        active_executors = []
+    queue_markup = (
+        "<p class='muted'>"
+        f"Running: {html.escape(str(queue.get('running', 0)))} · "
+        f"Queued: {html.escape(str(queue.get('queued', 0)))}"
+        "</p>"
+    )
+    active_markup = "".join(
+        f"<div class='chip'>Running {html.escape(str(item.get('task_id', '')))}</div>"
+        for item in active_executors
+        if isinstance(item, dict)
+    )
     toggle_href = _with_query("/runs", include_internal=not include_internal)
     toggle_label = (
         "show internal traffic" if not include_internal else "hide internal traffic"
@@ -654,6 +684,8 @@ def _render_runs_index_html(
           <h1>Recent Runs</h1>
           <p class="muted">A live run stays at the top while it is in progress; completed runs keep stable URLs below.</p>
           <div id="current-executor">{current_state_markup}</div>
+          {queue_markup}
+          {active_markup}
         </div>
         <div class="controls">
           <a class="button-link" href="{json_href}">JSON</a>

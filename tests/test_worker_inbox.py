@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -39,10 +41,68 @@ def _telegram_task(
         reply_channel=ReplyChannel(type="telegram", target=target, metadata=metadata),
         dedupe_key=f"telegram:{number}",
     )
-    return TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:telegram:{number}")
+    return replace(
+        TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:telegram:{number}"),
+        work_item_id="item_"
+        + target.replace("-", "_")
+        + (f"_topic_{thread_id}" if thread_id is not None else ""),
+    )
 
 
 class WorkerInboxTests(unittest.TestCase):
+    def test_parallel_claims_skip_busy_item_and_keep_its_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            first = _telegram_task(1, target="chat-a")
+            followup = _telegram_task(2, target="chat-a")
+            other = _telegram_task(3, target="chat-b")
+            for task in (first, followup, other):
+                store.stage_inbox_task(task)
+
+            claimed_first = store.claim_next_inbox_task()
+            claimed_other = store.claim_next_inbox_task()
+            assert claimed_first is not None and claimed_other is not None
+            self.assertEqual(claimed_first.task_message.task_id, first.task_id)
+            self.assertEqual(claimed_other.task_message.task_id, other.task_id)
+            self.assertIsNone(store.claim_next_inbox_task())
+            self.assertEqual(store.inbox_queue_summary(), {"queued": 1, "running": 2})
+
+            store.finish_inbox_task(parent_task_id=first.task_id)
+            claimed_followup = store.claim_next_inbox_task()
+            assert claimed_followup is not None
+            self.assertEqual(claimed_followup.task_message.task_id, followup.task_id)
+
+    def test_delivered_active_task_keeps_lease_until_finished(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            first = _telegram_task(1)
+            followup = _telegram_task(2)
+            store.stage_inbox_task(first)
+            store.stage_inbox_task(followup)
+            store.claim_next_inbox_task()
+            store.mark_inbox_reply_delivered(parent_task_id=first.task_id)
+            self.assertIsNone(store.claim_next_inbox_task())
+            store.finish_inbox_task(parent_task_id=first.task_id)
+            claimed = store.claim_next_inbox_task()
+            assert claimed is not None
+            self.assertEqual(claimed.task_message.task_id, followup.task_id)
+
+    def test_simultaneous_claims_do_not_take_same_work_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            first = _telegram_task(1)
+            second = _telegram_task(2)
+            store.stage_inbox_task(first)
+            store.stage_inbox_task(second)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                claims = list(
+                    pool.map(lambda _: store.claim_next_inbox_task(), range(2))
+                )
+            self.assertEqual(
+                [claim.task_message.task_id for claim in claims if claim is not None],
+                [first.task_id],
+            )
+
     def test_staging_records_clean_inbound_turn_and_reply_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
