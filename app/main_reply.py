@@ -340,7 +340,6 @@ def main() -> int:
     results: list[dict[str, object]] = []
     all_delivered = True
     has_transient_failure = False
-    any_delivered = False
     delivered_content = False
 
     for outbound_message in outbound_messages:
@@ -370,7 +369,6 @@ def main() -> int:
         )
         reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
         delivered = status_code in (200, 202)
-        any_delivered = any_delivered or delivered
         delivered_content = delivered_content or (
             delivered and outbound_message.channel != "telegram_reaction"
         )
@@ -468,8 +466,9 @@ def main() -> int:
         return EXIT_FOLLOWUPS
 
     if db_path is not None:
-        resolution_delivered = delivered_content if intended_content else any_delivered
-        if resolution_delivered:
+        # A pickup reaction is progress, not a completed answer. Restart
+        # recovery must rerun a task that only acknowledged the message.
+        if delivered_content:
             SQLiteStateStore(db_path).mark_inbox_reply_delivered(
                 parent_task_id=args.task_id
             )

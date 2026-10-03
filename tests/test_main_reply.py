@@ -70,6 +70,50 @@ def _telegram_task_message(
 
 
 class MainReplyCliTests(unittest.TestCase):
+    def test_reaction_only_does_not_hide_task_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            db_path = directory / "worker.db"
+            config_path = directory / "worker.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
+            store = SQLiteStateStore(str(db_path))
+            task = _telegram_task_message(53, content="Question")
+            store.stage_inbox_task(task)
+            store.claim_next_inbox_task()
+            spec = _write_spec(
+                directory,
+                {
+                    "task_id": task.task_id,
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "telegram_reaction": "👍",
+                    "telegram_message_id": 53,
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", _FakeSubmit()),
+                patch("sys.stdout", io.StringIO()),
+                patch(
+                    "sys.argv",
+                    [
+                        "main_reply.py",
+                        "--spec-file",
+                        spec,
+                        "--config",
+                        str(config_path),
+                    ],
+                ),
+            ):
+                self.assertEqual(main(), 0)
+
+            store.recover_inbox_tasks()
+            claimed = store.claim_next_inbox_task()
+            assert claimed is not None
+            self.assertEqual(claimed.task_message.task_id, task.task_id)
+            self.assertEqual(claimed.state, "active")
+
     def test_telegram_reply_claims_followups_and_withholds_stale_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
@@ -196,7 +240,9 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(printed["status"], "dispatched")
         self.assertEqual(printed["http_status"], 200)
 
-    def test_delivered_telegram_reply_is_recorded_with_returned_message_id(self) -> None:
+    def test_delivered_telegram_reply_is_recorded_with_returned_message_id(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
             db_path = directory / "worker.db"
@@ -248,9 +294,7 @@ class MainReplyCliTests(unittest.TestCase):
             self.assertEqual(turns[-1].role, "assistant")
             self.assertEqual(turns[-1].content, "Recorded answer")
             self.assertEqual(turns[-1].event_id, "evt:answer:1")
-            self.assertEqual(
-                json.loads(stdout.getvalue())["telegram_message_id"], 9001
-            )
+            self.assertEqual(json.loads(stdout.getvalue())["telegram_message_id"], 9001)
 
     def test_delivered_reply_closes_a_task_that_has_not_been_claimed(self) -> None:
         """A direct final reply must prevent a later worker replay."""
