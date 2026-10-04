@@ -29,7 +29,7 @@ The deployment model is private, single-user, split mode.
 - `go/handler/cmd/chatting-handler`: ingress + egress dispatch in split mode
 - `app.main_worker`: task execution in split mode
 - `app.main_reply`: submit visible worker-side incremental egress (POST to the handler egress endpoint) for acknowledgements and final replies
-- `app.main_history`: retrieve a worker-owned history window around a Telegram chat/message id
+- `app.main_history`: search worker-owned Telegram turns and retrieve a window around a message id
 
 ## Persistence tables (SQLite)
 

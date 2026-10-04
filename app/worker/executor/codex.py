@@ -21,6 +21,7 @@ from app.models import (
     parse_context_ref,
 )
 from app.model_command import MODELS
+from app.state import SQLiteStateStore, TelegramHistoryTurn
 
 # Codex publishes rate-limit figures only inside the session rollouts it writes
 # while running a task, so reading them back is a file scan rather than an API
@@ -39,6 +40,7 @@ class CodexExecutor:
     workspace_root: str | None = None
     work_item_id: str | None = None
     model_tier: str | None = None
+    history_store: SQLiteStateStore | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
     now_provider: Callable[[], datetime] = field(
@@ -80,6 +82,23 @@ class CodexExecutor:
     def _run(
         self, envelope: TaskEnvelope, *, escalation_path: Path | None = None
     ) -> ExecutionResult:
+        recent_history: list[TelegramHistoryTurn] = []
+        message_id = envelope.reply_channel.metadata.get("message_id")
+        topic_id = envelope.reply_channel.metadata.get("message_thread_id")
+        if (
+            self.history_store is not None
+            and envelope.reply_channel.type == "telegram"
+            and isinstance(message_id, int)
+            and not isinstance(message_id, bool)
+            and message_id > 0
+        ):
+            recent_history = self.history_store.list_recent_telegram_history(
+                target=envelope.reply_channel.target,
+                topic_id=topic_id
+                if isinstance(topic_id, int) and topic_id > 0
+                else None,
+                before_message_id=message_id,
+            )
         payload = json.dumps(
             _task_payload(
                 envelope,
@@ -88,6 +107,7 @@ class CodexExecutor:
                 work_item_id=self.work_item_id,
                 model_tier=self.model_tier,
                 escalation_path=escalation_path,
+                recent_history=recent_history,
             )
         )
         command = self.command
@@ -283,6 +303,7 @@ def _task_payload(
     work_item_id: str | None = None,
     model_tier: str | None = None,
     escalation_path: Path | None = None,
+    recent_history: list[TelegramHistoryTurn] | None = None,
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -388,6 +409,51 @@ def _task_payload(
             ),
         },
     }
+    if envelope.reply_channel.type == "telegram":
+        topic_id = envelope.reply_channel.metadata.get("message_thread_id")
+        scope_option = (
+            f" --topic-id {topic_id}"
+            if isinstance(topic_id, int)
+            and not isinstance(topic_id, bool)
+            and topic_id > 0
+            else ""
+        )
+        payload["recent_history"] = [
+            {
+                "message_id": turn.message_id,
+                "role": turn.role,
+                "sender": turn.sender,
+                "occurred_at": turn.occurred_at.isoformat().replace("+00:00", "Z"),
+                "content": (
+                    turn.content[:2000] + "… [truncated; fetch by message ID]"
+                    if turn.content is not None and len(turn.content) > 2000
+                    else turn.content
+                ),
+                "attachments": [
+                    {"uri": item.uri, "name": item.name} for item in turn.attachments
+                ],
+            }
+            for turn in (recent_history or [])
+        ]
+        payload["history_contract"] = {
+            "scope": {
+                "channel": "telegram",
+                "target": envelope.reply_channel.target,
+                "topic_id": topic_id if scope_option else None,
+            },
+            "search_command": (
+                "python3 -P -m app.main_history --channel telegram "
+                f"--target {envelope.reply_channel.target}{scope_option} "
+                "--query 'search words'"
+            ),
+            "instructions": (
+                "Recent worker-owned turns are included above. Search older exchanges "
+                "when the user refers to an earlier plan or decision outside that slice. "
+                "Use the supported history command with words, optional --sender, "
+                "--since or --until; then fetch surrounding turns using "
+                "--around-message-id. History starts when worker recording began."
+            ),
+        }
     if escalation_path is not None:
         payload["escalation_contract"] = {
             "request_path": str(escalation_path),
@@ -406,24 +472,20 @@ def _task_payload(
         and not isinstance(reply_to_message_id, bool)
         and reply_to_message_id > 0
     ):
-        payload["history_contract"] = {
-            "anchor": {
-                "channel": "telegram",
-                "target": envelope.reply_channel.target,
-                "message_id": reply_to_message_id,
-            },
-            "retrieve_command": (
-                "python3 -P -m app.main_history --channel telegram "
-                f"--target {envelope.reply_channel.target} "
-                f"--around-message-id {reply_to_message_id}"
-            ),
-            "instructions": (
-                "This message reply-quotes an earlier Telegram message. Use the supported "
-                "history command if the quoted exchange or nearby turns would help; do not "
-                "query SQLite directly. Worker-owned history starts at deployment, so an old "
-                "anchor may not yet be present."
-            ),
-        }
+        payload["history_contract"].update(
+            {
+                "anchor": {
+                    "channel": "telegram",
+                    "target": envelope.reply_channel.target,
+                    "message_id": reply_to_message_id,
+                },
+                "retrieve_command": (
+                    "python3 -P -m app.main_history --channel telegram "
+                    f"--target {envelope.reply_channel.target}{scope_option} "
+                    f"--around-message-id {reply_to_message_id}"
+                ),
+            }
+        )
     return payload
 
 

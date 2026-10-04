@@ -30,7 +30,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - `reply_channel`: `telegram:<chat_id>`
 - `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
 - `reply_channel.metadata.reply_to_message_id`: quoted Telegram message id when the inbound message uses Telegram's native Reply gesture
-- `reply_channel.metadata.original_content`: the clean connector-normalized live turn, before the handler adds recent conversation context
+- `reply_channel.metadata.original_content`: the clean connector-normalized live turn
 - `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
 - `reply_channel.metadata.sender`: human-readable sender label — `@username`, else first/last name, else the numeric id; suffixed with ` (bot)` when the sender is a bot. Falls back to the sending chat (title/username) for channel posts.
 - `actor`: `<user_id>:<username>` when available
@@ -41,8 +41,9 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 
 - Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
   global `prompt_context`, then `telegram_prompt_context`, then the task content itself.
-- Conversation memory attributes each turn to its sender. Recent-context lines render as `<sender>: <content>` (falling back to the `user`/`assistant` role when no sender was stored, e.g. rows predating this feature), and the live turn is headed `Current message from <sender>:`. The per-turn sender is persisted in `conversation_turns.sender`; this is not applied retrospectively to turns recorded before the column existed.
-- The worker also starts its own append-only Telegram history at deployment time. It records inbound and successfully delivered outbound turns by `(chat_id, message_id)`, including reply anchors and attachments, while handler conversation memory remains unchanged during the transition.
+- The handler still records conversation turns but passes the original message to the worker without adding its stored history.
+- The worker supplies up to 30 earlier turns from its own Telegram history to each executor run. It records inbound and successfully delivered outbound turns by chat, topic, and message ID, including reply anchors and attachments. This history starts when worker recording began; handler-only older turns are not copied into it.
+- The executor can search older worker turns by words, sender, and date using `app.main_history --query`, then retrieve turns around a returned message ID using `--around-message-id`. Both commands are scoped to the task's chat and topic.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
 - Document messages are accepted and preserve Telegram's original filename. Their content includes `[document attached: <filename>]`, including when the document has no caption, so subsequent conversation history identifies the file that was sent.
