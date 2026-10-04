@@ -40,14 +40,18 @@ class SupervisedReplyRecoveryExecutor:
             parent_task_id=task_id
         )
         first_result = self.inner.execute(envelope)
-        after_first_count = self.store.count_conversation_bundle_main_reply_egress_events(
-            parent_task_id=task_id
+        after_first_count = (
+            self.store.count_conversation_bundle_main_reply_egress_events(
+                parent_task_id=task_id
+            )
         )
         unresolved_followups = self.store.has_unresolved_attached_followups(
             parent_task_id=task_id
         )
-        if first_result.errors or (
-            after_first_count > before_count and not unresolved_followups
+        if (
+            first_result.errors
+            or first_result.escalation_reason
+            or (after_first_count > before_count and not unresolved_followups)
         ):
             return first_result
 

@@ -345,6 +345,28 @@ class SQLiteStateStore:
                 row["route_reason"],
             )
 
+    def get_work_model_tier(self, *, work_item_id: str) -> str:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT model_tier FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(work_item_id)
+        return str(row["model_tier"])
+
+    def set_work_model_tier(self, *, work_item_id: str, tier: str) -> None:
+        if tier not in ("high", "low"):
+            raise ValueError("model tier must be high or low")
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                "UPDATE work_items SET model_tier = ? WHERE work_item_id = ?",
+                (tier, work_item_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(work_item_id)
+            connection.commit()
+
     def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
         with closing(self._connect()) as connection:
             row = connection.execute(

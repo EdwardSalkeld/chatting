@@ -215,6 +215,96 @@ class WorkItemRoutingTests(unittest.TestCase):
         self.assertIn(str(first_dir), payload["task"]["workspace_guidance"])
         self.assertIn("repository clones", payload["task"]["workspace_guidance"])
 
+    def test_model_command_persists_per_work_item_and_selects_codex_model(self):
+        first = replace(
+            task(30, "email", "alice@example.com", "/set low"), work_item_id="item_a"
+        )
+        self.stage(first)
+        result = process_task_message(
+            store=self.store,
+            task_message=first,
+            executor_impl=CodexExecutor(),
+            max_attempts=1,
+            activity_monitor=WorkerActivityMonitor(store=self.store),
+        )
+        self.assertIn("gpt-6-luna", result.egress_messages[0].message.body)
+        self.assertEqual(
+            SQLiteStateStore(self.store._db_path).get_work_model_tier(
+                work_item_id="item_a"
+            ),
+            "low",
+        )
+        second = replace(task(31, "email", "alice@example.com"), work_item_id="item_a")
+        self.stage(second)
+        completed = subprocess.CompletedProcess(
+            args=["codex"], returncode=0, stdout="", stderr=""
+        )
+        with patch(
+            "app.worker.executor.codex.subprocess.run", return_value=completed
+        ) as run:
+            process_task_message(
+                store=self.store,
+                task_message=second,
+                executor_impl=CodexExecutor(
+                    workspace_root=str(Path(self.tmp.name) / "workspaces")
+                ),
+                max_attempts=1,
+                activity_monitor=WorkerActivityMonitor(store=self.store),
+            )
+        self.assertEqual(run.call_args.args[0][-2:], ("-m", "gpt-6-luna"))
+        other = replace(
+            task(32, "email", "bob@example.com", "/model"), work_item_id="item_b"
+        )
+        self.stage(other)
+        shown = process_task_message(
+            store=self.store,
+            task_message=other,
+            executor_impl=CodexExecutor(),
+            max_attempts=1,
+            activity_monitor=WorkerActivityMonitor(store=self.store),
+        )
+        self.assertIn("gpt-6.1-sol", shown.egress_messages[0].message.body)
+
+    def test_low_task_handoff_runs_sol_once_without_changing_setting(self):
+        message = replace(task(40, "email", "alice@example.com"), work_item_id="item_a")
+        self.stage(message)
+        self.store.set_work_model_tier(work_item_id="item_a", tier="low")
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append((command, json.loads(kwargs["input"])))
+            contract = calls[-1][1].get("escalation_contract")
+            if contract:
+                Path(contract["request_path"]).write_text(
+                    json.dumps(
+                        {
+                            "task_id": message.task_id,
+                            "reason": "Needs a broad migration",
+                        }
+                    )
+                )
+            return subprocess.CompletedProcess(
+                args=command, returncode=0, stdout="", stderr=""
+            )
+
+        with patch("app.worker.executor.codex.subprocess.run", side_effect=run):
+            result = process_task_message(
+                store=self.store,
+                task_message=message,
+                executor_impl=CodexExecutor(
+                    workspace_root=str(Path(self.tmp.name) / "workspaces")
+                ),
+                max_attempts=1,
+                activity_monitor=WorkerActivityMonitor(store=self.store),
+            )
+        self.assertEqual([call[0][-1] for call in calls], ["gpt-6-luna", "gpt-6.1-sol"])
+        self.assertIn(
+            "Needs a broad migration",
+            calls[1][1]["task"]["prompt_context"]["task_instructions"][-1],
+        )
+        self.assertEqual(self.store.get_work_model_tier(work_item_id="item_a"), "low")
+        self.assertEqual(result.run_record.result_status, "success")
+
     def test_work_item_id_cannot_escape_root(self):
         executor = CodexExecutor(workspace_root=str(Path(self.tmp.name) / "workspaces"))
         with self.assertRaisesRegex(ValueError, "invalid work_item_id"):
