@@ -125,7 +125,12 @@
         const readable=[];
         for(const line of lines){try{const entry=JSON.parse(line);const item=entry.item||{};
           if(item.type==='agent_message'&&item.text)readable.push(item.text);
-          else if(item.type==='command_execution')readable.push(item.command||item.aggregated_output||entry.type);
+          else if(item.type==='command_execution'){
+            const command=item.command?`$ ${item.command}`:'';
+            const result=entry.type==='item.completed'?(item.aggregated_output||''):'';
+            readable.push([command,result].filter(Boolean).join('\n')||entry.type);
+          }
+          else if(item.type==='file_change')readable.push(item.changes?.map(change=>change.path).join(', ')||'Files changed');
           else if(entry.type==='turn.completed')readable.push('Turn completed');
           else if(entry.type==='error')readable.push(entry.message||line);
         }catch{readable.push(line);}}
