@@ -1,4 +1,4 @@
-"""Bounded Jev decision for work items explicitly set to auto."""
+"""Bounded Jev decision for work items set to auto."""
 
 from __future__ import annotations
 

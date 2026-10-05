@@ -173,6 +173,30 @@ class WorkItemRoutingTests(unittest.TestCase):
         self.assertEqual(lane.work_item_id, "item_from_handler")
         self.assertEqual(lane.reason, "handler_assignment")
 
+    def test_new_items_default_to_auto_on_existing_database(self):
+        legacy_path = Path(self.tmp.name) / "legacy-worker.db"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.execute(
+                """CREATE TABLE work_items (
+                    work_item_id TEXT PRIMARY KEY,
+                    origin_conversation_id TEXT NOT NULL,
+                    preferred_reply_json TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'open',
+                    model_tier TEXT NOT NULL DEFAULT 'high',
+                    created_at TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                """INSERT INTO work_items
+                   (work_item_id, origin_conversation_id, preferred_reply_json, model_tier, created_at)
+                   VALUES ('item_existing', 'chat', '{}', 'low', '2026-10-02')"""
+            )
+        store = SQLiteStateStore(str(legacy_path))
+        new = replace(task(7, "im", "another_chat"), work_item_id="item_new")
+        self.assertTrue(store.stage_inbox_task(new))
+        self.assertEqual(store.get_work_model_tier(work_item_id="item_new"), "auto")
+        self.assertEqual(store.get_work_model_tier(work_item_id="item_existing"), "low")
+
     def test_assigned_lane_uses_persistent_workspace_directory(self):
         workspace_root = Path(self.tmp.name) / "workspaces"
         executor = CodexExecutor(cwd=self.tmp.name, workspace_root=str(workspace_root))
@@ -264,7 +288,7 @@ class WorkItemRoutingTests(unittest.TestCase):
             max_attempts=1,
             activity_monitor=WorkerActivityMonitor(store=self.store),
         )
-        self.assertIn("gpt-6.1-sol", shown.egress_messages[0].message.body)
+        self.assertIn("Jev selects per task", shown.egress_messages[0].message.body)
 
     def test_low_task_handoff_runs_sol_once_without_changing_setting(self):
         message = replace(task(40, "email", "alice@example.com"), work_item_id="item_a")
