@@ -383,8 +383,8 @@ class SQLiteStateStore:
         return str(row["model_tier"])
 
     def set_work_model_tier(self, *, work_item_id: str, tier: str) -> None:
-        if tier not in ("high", "low"):
-            raise ValueError("model tier must be high or low")
+        if tier not in ("high", "low", "auto"):
+            raise ValueError("model tier must be high, low, or auto")
         with closing(self._connect()) as connection:
             cursor = connection.execute(
                 "UPDATE work_items SET model_tier = ? WHERE work_item_id = ?",

@@ -35,6 +35,7 @@ from app.models import (
     TaskEnvelope,
 )
 from app.model_command import MODELS, parse_model_command
+from app.worker.model_router import choose_model
 from app.state import SQLiteStateStore
 
 if TYPE_CHECKING:
@@ -110,6 +111,10 @@ def process_task_message(
         if assignment is not None
         else "high"
     )
+    model_decision = None
+    if model_tier == "auto":
+        model_decision = choose_model(store=store, envelope=envelope)
+        model_tier = model_decision.tier
     escalation_reason: str | None = None
 
     for attempt in range(1, max_attempts + 1):
@@ -283,6 +288,9 @@ def process_task_message(
                 if assignment is not None
                 else "high",
                 "executed_model_tier": model_tier,
+                "auto_model_decision": model_decision.to_dict()
+                if model_decision is not None
+                else None,
                 "escalation_reason": escalation_reason,
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": (
@@ -608,7 +616,11 @@ def _process_model_command(
     if action == "set" and tier is not None:
         store.set_work_model_tier(work_item_id=assignment.work_item_id, tier=tier)
     current = store.get_work_model_tier(work_item_id=assignment.work_item_id)
-    body = f"This work item uses {current} ({MODELS[current]}). Use /set high or /set low to change it."
+    description = MODELS[current] if current in MODELS else "Jev selects per task"
+    body = (
+        f"This work item uses {current} ({description}). "
+        "Use /set high, /set low, or /set auto to change it."
+    )
     emitted_at = datetime.now(timezone.utc)
     visible = build_usage_egress(
         task_message=task_message, body=body, emitted_at=emitted_at
