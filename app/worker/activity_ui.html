@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chatting activity</title>
+  <style>
+    :root { color-scheme: light; --paper:#f3f0e9; --card:#fffefa; --ink:#1f2828; --muted:#5d6a68; --line:#d6ded9; --accent:#176c73; --accent-bg:#e5f2ef; --good:#20633d; --bad:#a43d34; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.5 system-ui,-apple-system,sans-serif; }
+    a { color:var(--accent); }
+    button { font:inherit; cursor:pointer; }
+    .shell { width:min(100%,1280px); min-height:100vh; margin:auto; padding:clamp(12px,2.5vw,30px); display:flex; flex-direction:column; gap:16px; }
+    .top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; min-width:0; }
+    .brand { color:var(--muted); font-size:12px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; }
+    h1 { font-size:clamp(25px,4vw,38px); letter-spacing:-.035em; line-height:1.15; margin:4px 0; overflow-wrap:anywhere; }
+    h2 { font-size:17px; margin:0; overflow-wrap:anywhere; }
+    p { margin:4px 0; }
+    .muted { color:var(--muted); }
+    .crumbs { display:flex; align-items:center; flex-wrap:wrap; gap:7px; color:var(--muted); font-size:13px; min-width:0; }
+    .crumbs a { text-decoration:none; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .actions button, .actions a { border:1px solid var(--line); border-radius:8px; padding:7px 11px; color:var(--ink); text-decoration:none; background:var(--card); }
+    .actions button:hover, .actions a:hover { border-color:var(--accent); }
+    .summary { display:flex; gap:8px; flex-wrap:wrap; min-width:0; }
+    .tag { border:1px solid var(--line); border-radius:999px; padding:3px 9px; background:var(--card); font-size:12px; overflow-wrap:anywhere; }
+    .tag.live { border-color:#a7d7bd; background:#e4f4e9; color:var(--good); }
+    .tag.error { border-color:#efc1bb; background:#fff0ed; color:var(--bad); }
+    .panel { background:var(--card); border:1px solid var(--line); border-radius:15px; min-width:0; overflow:hidden; }
+    .list { display:grid; align-content:start; gap:0; max-height:calc(100vh - 210px); min-height:180px; overflow:auto; overscroll-behavior:contain; }
+    .row { display:block; color:inherit; text-decoration:none; padding:15px 18px; border-bottom:1px solid var(--line); min-width:0; }
+    .row:last-child { border-bottom:0; }
+    .row:hover, .row:focus { background:var(--accent-bg); outline:none; }
+    .row-top { display:flex; justify-content:space-between; align-items:baseline; gap:9px; flex-wrap:wrap; }
+    .row-title, .row-subtitle { overflow-wrap:anywhere; word-break:break-word; }
+    .row-subtitle { color:var(--muted); font-size:12px; margin-top:4px; }
+    .row-meta { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:8px; color:var(--muted); font-size:12px; }
+    .empty, .error-box { padding:24px; color:var(--muted); }
+    .error-box { color:var(--bad); }
+    .session-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; flex:1; min-height:0; }
+    .transcript { height:calc(100vh - 235px); min-height:320px; overflow:auto; overscroll-behavior:contain; padding:4px 18px; }
+    .event { padding:11px 0; border-bottom:1px solid var(--line); min-width:0; }
+    .event:last-child { border-bottom:0; }
+    .event-head { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:6px 12px; }
+    .event-head strong { font-size:13px; }
+    .event-head time { color:var(--muted); font-size:11px; }
+    .event-content { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; max-height:360px; overflow:auto; background:#f7f8f4; border:1px solid #e7eae5; border-radius:8px; padding:10px; margin:8px 0 0; }
+    .event details { margin-top:8px; }
+    .event details summary { cursor:pointer; color:var(--accent); font-size:12px; }
+    .status-line { min-height:24px; color:var(--muted); font-size:13px; }
+    @media(max-width:650px) { .shell { gap:12px; } .list { max-height:calc(100vh - 190px); } .transcript { height:calc(100dvh - 245px); padding:2px 12px; } .row { padding:12px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="crumbs" id="crumbs"></div>
+    <header class="top">
+      <div><div class="brand">Chatting worker</div><h1 id="title">Activity</h1><p class="muted" id="subtitle"></p></div>
+      <div class="actions" id="actions"></div>
+    </header>
+    <div class="summary" id="summary"></div>
+    <div class="status-line" id="status" role="status"></div>
+    <div class="panel" id="content"></div>
+  </main>
+  <script>
+    const title = document.getElementById('title');
+    const subtitle = document.getElementById('subtitle');
+    const crumbs = document.getElementById('crumbs');
+    const actions = document.getElementById('actions');
+    const summary = document.getElementById('summary');
+    const status = document.getElementById('status');
+    const content = document.getElementById('content');
+    const parts = location.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    const route = parts[0] || 'items';
+    const id = parts[1];
+    const node = (name, className, value) => { const el=document.createElement(name); if(className)el.className=className; if(value!==undefined)el.textContent=String(value); return el; };
+    const link = (href, label, className='') => { const el=node('a',className,label); el.href=href; return el; };
+    const tag = (label, tone='') => summary.append(node('span','tag '+tone,label));
+    const path = value => encodeURIComponent(value);
+    const when = value => value ? new Date(value).toLocaleString() : 'No runs yet';
+    const request = async url => { const result=await fetch(url,{cache:'no-store'}); if(!result.ok)throw Error(`Request failed (${result.status})`); return result.json(); };
+    const fail = error => { status.textContent=''; content.replaceChildren(node('div','error-box',error.message+' — refresh to retry.')); };
+    function setCrumbs(entries) { crumbs.replaceChildren(); entries.forEach(([label,href],i)=>{ if(i)crumbs.append(node('span','','›')); crumbs.append(href?link(href,label):node('span','',label)); }); }
+    function itemName(item) { const reply=item.reply||{}; return reply.type&&reply.target ? `${reply.type}: ${reply.target}` : (item.origin_conversation_id||item.work_item_id); }
+    function row(href,name,subtitleText,metadata,tone='') {
+      const a=link(href,'','row'); const top=node('div','row-top'); top.append(node('h2','row-title',name));
+      if(tone)top.append(node('span','tag '+tone,tone==='live'?'Live':tone));
+      a.append(top,node('div','row-subtitle',subtitleText)); const meta=node('div','row-meta');
+      metadata.forEach(value=>meta.append(node('span','',value))); a.append(meta); return a;
+    }
+    async function showItems() {
+      setCrumbs([['Work items']]); title.textContent='Work items'; subtitle.textContent='Select an item to see its runs.';
+      const previousScroll=content.firstElementChild?.scrollTop||0;
+      const data=await request('/api/items'); const list=node('div','list');
+      for(const item of data.items){
+        const active=data.active_executors.filter(run=>run.work_item_id===item.work_item_id).length;
+        list.append(row('/items/'+path(item.work_item_id),itemName(item),item.work_item_id,
+          [`${item.run_count} runs`,`${item.queued} queued`,`Model: ${item.model_tier}`,`Last: ${when(item.last_run_at)}`],active?'live':''));
+      }
+      if(!data.items.length)list.append(node('div','empty','No work items yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
+    }
+    async function showItem() {
+      const previousScroll=content.firstElementChild?.scrollTop||0;
+      const data=await request('/api/items/'+path(id)+'/runs'); const item=data.item;
+      setCrumbs([['Work items','/items'],[itemName(item)]]); title.textContent=itemName(item);
+      subtitle.textContent=item.work_item_id;summary.replaceChildren();tag(`${item.run_count} runs`); tag(`${item.queued} queued`); tag(`Model: ${item.model_tier}`);
+      const list=node('div','list');
+      for(const run of data.active_executors){
+        list.append(row('/tasks/'+path(run.task_id),run.task_id,'Running now',[
+          `Started: ${when(run.started_at)}`,`Attempt: ${run.attempt}`],'live'));
+      }
+      for(const run of data.runs){
+        list.append(row('/runs/'+path(run.run_id),run.task_id||run.run_id,run.run_id,
+          [when(run.created_at),run.source,`${(run.latency_ms/1000).toFixed(1)}s`],run.result_status==='success'?'':run.result_status));
+      }
+      if(!list.children.length)list.append(node('div','empty','No runs yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
+    }
+    let paused=false,follow=true,after=0,stdoutBuffer='';
+    function addEvent(event, transcript) {
+      const box=node('article','event'); const head=node('div','event-head');
+      head.append(node('strong','',event.summary),node('time','',when(event.occurred_at))); box.append(head);
+      let body=event.detail?.content??event.detail?.body??event.detail?.error;
+      if(event.phase==='executor_stdout'&&typeof body==='string'){
+        stdoutBuffer+=body; const lines=stdoutBuffer.split('\n'); stdoutBuffer=lines.pop();
+        const readable=[];
+        for(const line of lines){try{const entry=JSON.parse(line);const item=entry.item||{};
+          if(item.type==='agent_message'&&item.text)readable.push(item.text);
+          else if(item.type==='command_execution')readable.push(item.command||item.aggregated_output||entry.type);
+          else if(entry.type==='turn.completed')readable.push('Turn completed');
+          else if(entry.type==='error')readable.push(entry.message||line);
+        }catch{readable.push(line);}}
+        body=readable.join('\n\n');
+      }
+      if(event.phase==='executor_stdout'&&!(typeof body==='string'&&body.trim()))return;
+      if(typeof body==='string'&&body.trim()){
+        const pre=node('pre','event-content',body); box.append(pre);
+      }
+      transcript.append(box);
+      if(event.run_id){ const runLink=document.getElementById('run-link'); if(runLink){runLink.href='/runs/'+path(event.run_id);runLink.hidden=false;} }
+    }
+    async function showSession() {
+      const completed=route==='runs'; let taskId=id,runId=completed?id:null,workItemId=null;
+      if(completed){const run=await request('/api/runs/'+path(id));taskId=run.task_id;workItemId=run.work_item_id;
+        title.textContent=taskId||runId; subtitle.textContent=runId;
+        tag(run.status,run.status==='success'?'':'error');tag(run.source);tag(`${(run.duration_ms/1000).toFixed(1)}s`);
+        if(run.attempt_count)tag(`${run.attempt_count} attempts`);
+      }else{title.textContent=taskId;subtitle.textContent='Live session';tag('Live','live');}
+      if(!taskId)throw Error('Run has no task ID');
+      setCrumbs([['Work items','/items'],...(workItemId?[[workItemId,'/items/'+path(workItemId)]]:[]),[taskId]]);
+      const pause=node('button','','Pause');pause.onclick=()=>{paused=!paused;pause.textContent=paused?'Resume':'Pause';if(!paused)poll();};actions.append(pause);
+      const followButton=node('button','','Follow output');followButton.onclick=()=>{follow=true;transcript.scrollTop=transcript.scrollHeight;};actions.append(followButton);
+      const runLink=link('#','Completed run');runLink.id='run-link';runLink.hidden=true;actions.append(runLink);
+      if(runId){runLink.href='/runs/'+path(runId);runLink.hidden=false;}
+      const transcript=node('div','transcript');transcript.setAttribute('role','log');transcript.setAttribute('aria-live','off');
+      transcript.addEventListener('scroll',()=>{follow=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<80;});
+      content.replaceChildren(transcript);content.classList.add('session-layout');
+      async function poll(){if(paused)return;try{
+        const data=await request('/api/tasks/'+path(taskId)+'/events?after='+after);
+        for(const event of data.events){after=event.activity_id;addEvent(event,transcript);}
+        if(follow)transcript.scrollTop=transcript.scrollHeight;
+        status.textContent=data.active?'Live output · updating every second':(completed?'Completed run':'Session finished');
+        if(data.events.length===100){setTimeout(poll,0);return;}
+      }catch(error){status.textContent=error.message+' · retrying';}
+      if(!paused)setTimeout(poll,completed?3000:1000);}
+      poll();
+    }
+    (async()=>{try{if((route==='items'||route==='runs')&&!id)await showItems();else if(route==='items'&&id)await showItem();
+      else if((route==='runs'||route==='tasks')&&id)await showSession();else throw Error('Page not found');
+      if(route==='items'||(route==='runs'&&!id))setInterval(()=>{(id?showItem():showItems()).catch(fail);},4000);
+    }catch(error){fail(error);}})();
+  </script>
+</body>
+</html>

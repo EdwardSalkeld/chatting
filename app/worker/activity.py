@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import html
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer, ThreadingHTTPServer
 from threading import Lock, Thread
 from typing import Callable
-from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.state import SQLiteStateStore
@@ -89,6 +86,15 @@ class WorkerActivityMonitor:
             "started_at": _isoformat(occurred_at),
             "pid": None,
             "phase": "executor_running",
+            "work_item_id": (
+                assignment.work_item_id
+                if (
+                    assignment := self._store.get_work_assignment(
+                        task_id=task_message.task_id
+                    )
+                )
+                else None
+            ),
         }
         with self._lock:
             self._active_executors[task_message.task_id] = state
@@ -282,6 +288,64 @@ class WorkerActivityMonitor:
             "include_internal": include_internal,
         }
 
+    def list_items_snapshot(self) -> dict[str, object]:
+        return {
+            "items": self._store.list_work_item_overview(),
+            "active_executors": self._current_executors(),
+        }
+
+    def get_item_snapshot(self, work_item_id: str) -> dict[str, object] | None:
+        item = next(
+            (
+                item
+                for item in self._store.list_work_item_overview()
+                if item["work_item_id"] == work_item_id
+            ),
+            None,
+        )
+        if item is None:
+            return None
+        return {
+            "item": item,
+            "runs": self._store.list_work_item_run_cards(
+                work_item_id=work_item_id, limit=self._history_limit
+            ),
+            "active_executors": [
+                executor
+                for executor in self._current_executors()
+                if executor.get("work_item_id") == work_item_id
+            ],
+        }
+
+    def live_events(self, *, task_id: str, after_id: int) -> dict[str, object]:
+        events = self._store.list_worker_activity_since(
+            task_id=task_id, after_id=after_id
+        )
+        return {
+            "events": events,
+            "active": any(
+                item.get("task_id") == task_id for item in self._current_executors()
+            ),
+        }
+
+    def get_run_header(self, run_id: str) -> dict[str, object] | None:
+        run = self._store.get_run(run_id=run_id)
+        audit = self._store.get_audit_event_for_run(run_id=run_id)
+        if run is None or audit is None:
+            return None
+        detail = audit.detail if isinstance(audit.detail, dict) else {}
+        return {
+            "run_id": run.run_id,
+            "task_id": detail.get("task_id"),
+            "work_item_id": run.work_item_id,
+            "status": run.result_status,
+            "source": run.source,
+            "started_at": _isoformat(run.created_at),
+            "duration_ms": run.latency_ms,
+            "attempt_count": detail.get("attempt_count"),
+            "reason_codes": detail.get("reason_codes", []),
+        }
+
     def _current_executor(self) -> dict[str, object]:
         with self._lock:
             return (
@@ -397,6 +461,7 @@ class WorkerActivityMonitor:
         last_event = activity[-1] if activity else None
         return {
             "run_id": run.run_id,
+            "work_item_id": run.work_item_id,
             "task_id": task_id,
             "envelope_id": run.envelope_id,
             "source": run.source,
@@ -452,7 +517,9 @@ def start_worker_activity_server(
     port: int,
     monitor: WorkerActivityMonitor,
 ) -> WorkerActivityServer:
-    server = HTTPServer((host, port), _build_handler(monitor))
+    from app.worker.activity_web import build_handler
+
+    server = ThreadingHTTPServer((host, port), build_handler(monitor))
     thread = Thread(
         target=server.serve_forever, name="worker-activity-server", daemon=True
     )
@@ -461,722 +528,8 @@ def start_worker_activity_server(
     return WorkerActivityServer(server=server, thread=thread)
 
 
-def _build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler]:
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            include_internal = _bool_query_flag(parsed.query, "include_internal")
-            if parsed.path == "/activity.json":
-                payload = monitor.snapshot(include_internal=include_internal)
-                body = json.dumps(payload, sort_keys=True).encode("utf-8")
-                self._write_response(
-                    status_code=200,
-                    content_type="application/json; charset=utf-8",
-                    body=body,
-                )
-                return
-            if parsed.path in {"/", "/runs"}:
-                snapshot = monitor.list_runs_snapshot(include_internal=include_internal)
-                body = _render_runs_index_html(
-                    snapshot=snapshot,
-                    include_internal=include_internal,
-                ).encode("utf-8")
-                self._write_response(
-                    status_code=200,
-                    content_type="text/html; charset=utf-8",
-                    body=body,
-                )
-                return
-            if parsed.path == "/runs.json":
-                payload = monitor.list_runs_snapshot(include_internal=include_internal)
-                body = json.dumps(payload, sort_keys=True).encode("utf-8")
-                self._write_response(
-                    status_code=200,
-                    content_type="application/json; charset=utf-8",
-                    body=body,
-                )
-                return
-            if parsed.path.startswith("/runs/"):
-                encoded_run_id = parsed.path[len("/runs/") :]
-                if not encoded_run_id:
-                    self._write_response(
-                        status_code=404,
-                        content_type="text/plain; charset=utf-8",
-                        body=b"not found",
-                    )
-                    return
-                json_mode = encoded_run_id.endswith(".json")
-                if json_mode:
-                    encoded_run_id = encoded_run_id[: -len(".json")]
-                run_id = unquote(encoded_run_id)
-                snapshot = monitor.get_run_snapshot(
-                    run_id=run_id,
-                    include_internal=include_internal,
-                )
-                if snapshot is None:
-                    self._write_response(
-                        status_code=404,
-                        content_type="text/plain; charset=utf-8",
-                        body=b"run not found",
-                    )
-                    return
-                if json_mode:
-                    body = json.dumps(snapshot, sort_keys=True).encode("utf-8")
-                    self._write_response(
-                        status_code=200,
-                        content_type="application/json; charset=utf-8",
-                        body=body,
-                    )
-                    return
-                body = _render_run_detail_html(
-                    snapshot=snapshot,
-                    include_internal=include_internal,
-                ).encode("utf-8")
-                self._write_response(
-                    status_code=200,
-                    content_type="text/html; charset=utf-8",
-                    body=body,
-                )
-                return
-            self._write_response(
-                status_code=404,
-                content_type="text/plain; charset=utf-8",
-                body=b"not found",
-            )
-
-        def log_message(self, format: str, *args: object) -> None:
-            LOGGER.info("worker_activity_http " + format, *args)
-
-        def _write_response(
-            self,
-            *,
-            status_code: int,
-            content_type: str,
-            body: bytes,
-        ) -> None:
-            self.send_response(status_code)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    return Handler
-
-
-def _render_runs_index_html(
-    *,
-    snapshot: dict[str, object],
-    include_internal: bool,
-) -> str:
-    current_executor = snapshot["current_executor"]
-    current_run = snapshot.get("current_run")
-    queue = snapshot.get("queue", {})
-    active_executors = snapshot.get("active_executors", [])
-    runs = snapshot["runs"]
-    assert isinstance(current_executor, dict)
-    assert isinstance(runs, list)
-    showing_note = ""
-    if snapshot.get("history_truncated"):
-        showing_note = f"<p class='note'>Showing the latest {html.escape(str(snapshot['history_limit']))} runs.</p>"
-    runs_markup = _render_runs_index(runs, include_internal=include_internal)
-    current_state_markup = _render_current_executor(current_executor)
-    current_run_markup = _render_current_run(current_run)
-    if not isinstance(queue, dict):
-        queue = {}
-    if not isinstance(active_executors, list):
-        active_executors = []
-    queue_markup = (
-        "<p class='muted'>"
-        f"Running: {html.escape(str(queue.get('running', 0)))} · "
-        f"Queued: {html.escape(str(queue.get('queued', 0)))}"
-        "</p>"
-    )
-    active_markup = "".join(
-        f"<div class='chip'>Running {html.escape(str(item.get('task_id', '')))}</div>"
-        for item in active_executors
-        if isinstance(item, dict)
-    )
-    toggle_href = _with_query("/runs", include_internal=not include_internal)
-    toggle_label = (
-        "show internal traffic" if not include_internal else "hide internal traffic"
-    )
-    json_href = _with_query("/runs.json", include_internal=include_internal)
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Chatting Worker Runs</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f6f1e8;
-      --panel: #fffdf8;
-      --border: #d6ccbc;
-      --ink: #1c1915;
-      --muted: #655d53;
-      --accent: #1f6f78;
-      --accent-soft: #d8eff2;
-      --success: #2f6b3b;
-      --warning: #8b5a1c;
-      --danger: #8c2f39;
-      --shadow: 0 20px 60px rgba(39, 30, 18, 0.08);
-    }}
-    body {{ background:
-      radial-gradient(circle at top left, #e5f2ef 0, transparent 30%),
-      linear-gradient(180deg, #efe7d9 0%, var(--bg) 100%);
-      color: var(--ink); font: 16px/1.45 Georgia, serif; margin: 0; min-height: 100vh; }}
-    main {{ max-width: 1040px; margin: 0 auto; padding: 20px 14px 40px; }}
-    h1, h2, h3 {{ font-family: "Iowan Old Style", Georgia, serif; }}
-    .hero {{ background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 22px; margin-bottom: 18px; }}
-    .hero-top {{ display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }}
-    .eyebrow {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; margin-bottom: 8px; }}
-    .hero h1 {{ margin: 0 0 8px; font-size: clamp(28px, 5vw, 42px); }}
-    .controls {{ display: flex; gap: 10px; flex-wrap: wrap; }}
-    .button-link {{ border: 1px solid var(--border); background: white; color: var(--accent); border-radius: 999px; padding: 9px 14px; text-decoration: none; }}
-    .button-link:hover {{ background: var(--accent-soft); }}
-    .note, .muted {{ color: var(--muted); }}
-    .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-top: 16px; }}
-    .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .detail-block dd {{ margin: 4px 0 0; }}
-    .runs {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }}
-    .live-run {{ background: #173f45; color: #f8faf7; border-radius: 20px; padding: 18px; margin: 0 0 14px; box-shadow: var(--shadow); }}
-    .live-run .run-preview {{ color: #f8faf7; }}
-    .live-run .chip {{ background: rgba(255, 255, 255, 0.14); color: #f8faf7; }}
-    .live-run details {{ margin-top: 16px; }}
-    .live-run summary {{ cursor: pointer; font-family: "Iowan Old Style", Georgia, serif; font-size: 20px; }}
-    .live-run .timeline-item {{ color: var(--ink); }}
-    .timeline {{ list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; }}
-    .timeline-item {{ background: var(--panel); border-radius: 14px; padding: 14px; }}
-    .timeline-kicker {{ display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .timeline-item h3 {{ margin: 8px 0; font-size: 18px; }}
-    .timeline-message {{ margin-top: 10px; padding: 10px 12px; background: rgba(31, 111, 120, 0.08); border-radius: 10px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }}
-    .timeline-collapsible summary, .stderr-exec > summary, .stderr-meta > summary {{ cursor: pointer; color: var(--muted); font-size: 13px; font-family: inherit; }}
-    .stderr-log {{ display: grid; gap: 8px; margin-top: 10px; }}
-    .stderr-codex {{ padding: 10px 12px; background: rgba(31, 111, 120, 0.08); border-radius: 10px; white-space: pre-wrap; word-break: break-word; }}
-    .stderr-exec pre, .stderr-meta pre {{ margin: 8px 0 0; max-height: 360px; overflow: auto; background: rgba(0, 0, 0, 0.04); padding: 10px; border-radius: 10px; }}
-    pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
-    .live-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: #bde7df; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
-    .live-dot::before {{ content: "●"; color: #8be0b6; margin-right: 5px; }}
-    .run-card {{ display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 18px; box-shadow: var(--shadow); }}
-    .run-card:hover {{ border-color: var(--accent); transform: translateY(-1px); }}
-    .run-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
-    .run-title {{ margin: 10px 0 8px; font-size: 23px; line-height: 1.2; }}
-    .run-preview {{ margin: 0 0 12px; font-size: 16px; color: #2d2823; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }}
-    .chips {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-    .chip {{ display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 4px 9px; background: rgba(31, 111, 120, 0.08); font-size: 13px; color: var(--muted); }}
-    .chip.status-success {{ background: rgba(47, 107, 59, 0.12); color: var(--success); }}
-    .chip.status-execution_error, .chip.status-dead_letter {{ background: rgba(140, 47, 57, 0.12); color: var(--danger); }}
-    .empty-state {{ background: var(--panel); border: 1px dashed var(--border); border-radius: 20px; padding: 28px; color: var(--muted); }}
-    @media (max-width: 720px) {{
-      main {{ padding: 12px 12px 28px; }}
-      .hero {{ padding: 18px; border-radius: 18px; }}
-      .detail-grid {{ grid-template-columns: 1fr; }}
-      .run-title {{ font-size: 20px; }}
-    }}
-  </style>
-</head>
-<body>
-  <main>
-    <section class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="eyebrow">Chatting Worker</div>
-          <h1>Recent Runs</h1>
-          <p class="muted">A live run stays at the top while it is in progress; completed runs keep stable URLs below.</p>
-          <div id="current-executor">{current_state_markup}</div>
-          {queue_markup}
-          {active_markup}
-        </div>
-        <div class="controls">
-          <a class="button-link" href="{json_href}">JSON</a>
-          <a class="button-link" href="{toggle_href}">{toggle_label}</a>
-          <a class="button-link" href="/activity.json">raw activity</a>
-        </div>
-      </div>
-      {showing_note}
-    </section>
-    {current_run_markup}
-    {runs_markup}
-  </main>
-  {_live_refresh_script(current_run)}
-</body>
-</html>"""
-
-
-def _render_current_executor(current_executor: dict[str, object]) -> str:
-    active = bool(current_executor.get("active"))
-    entries = [
-        ("state", "running" if active else "idle"),
-        ("phase", str(current_executor.get("phase", "idle"))),
-    ]
-    for key in ("task_id", "envelope_id", "attempt", "pid", "started_at"):
-        value = current_executor.get(key)
-        if value is not None:
-            if key.endswith("_at"):
-                value = _friendly_timestamp(value)
-            entries.append((key, str(value)))
-    blocks = []
-    for label, value in entries:
-        blocks.append(
-            "<dl class='detail-block'>"
-            f"<dt>{html.escape(label)}</dt>"
-            f"<dd>{html.escape(value)}</dd>"
-            "</dl>"
-        )
-    return f"<div class='detail-grid'>{''.join(blocks)}</div>"
-
-
-def _render_current_run(current_run: object) -> str:
-    if not isinstance(current_run, dict):
-        return ""
-    events = current_run.get("events", [])
-    assert isinstance(events, list)
-    preview = _truncate(str(current_run.get("preview", "")), limit=500)
-    preview_markup = (
-        f"<p class='run-preview'>{html.escape(preview)}</p>"
-        if preview
-        else "<p class='run-preview'>Waiting for task details…</p>"
-    )
-    meta = [
-        ("attempt", str(current_run.get("attempt", ""))),
-        ("started", _friendly_timestamp(current_run.get("started_at"))),
-        ("events", str(current_run.get("event_count", 0))),
-    ]
-    return (
-        "<section class='live-run'>"
-        "<div class='live-kicker'><span>Live now</span><span class='live-dot'>refreshing every 2 seconds</span></div>"
-        f"<h2>{html.escape(str(current_run.get('task_id', 'Current run')))}</h2>"
-        f"{preview_markup}"
-        f"<div class='chips'>{_render_chip_row(meta, status_value='')}</div>"
-        "<details open><summary>Activity so far</summary>"
-        f"{_render_run_timeline(events)}"
-        "</details></section>"
-    )
-
-
-def _live_refresh_script(current_run: object) -> str:
-    if not isinstance(current_run, dict):
-        return ""
-    return "<script>window.setTimeout(() => window.location.reload(), 2000);</script>"
-
-
-def _render_runs_index(runs: list[object], *, include_internal: bool) -> str:
-    if not runs:
-        return "<div class='empty-state'>No completed runs yet.</div>"
-    items = []
-    for item in runs:
-        assert isinstance(item, dict)
-        run_id = str(item.get("run_id", ""))
-        href = _with_query(
-            f"/runs/{_quote_path_segment(run_id)}",
-            include_internal=include_internal,
-        )
-        preview = _truncate(str(item.get("preview", ""))) or "No message captured."
-        title = str(item.get("task_id", "")) or run_id
-        # Keep the row scannable: status/source/latency only; the rest is on the
-        # detail page.
-        chips = [
-            ("status", str(item.get("result_status", ""))),
-            ("source", str(item.get("source", ""))),
-            ("latency", f"{item.get('latency_ms', 0)} ms"),
-        ]
-        items.append(
-            "<li>"
-            f"<a class='run-card' href='{html.escape(href)}'>"
-            "<div class='run-kicker'>"
-            f"<span>{html.escape(_friendly_timestamp(item.get('created_at')))}</span>"
-            "</div>"
-            f"<h2 class='run-title'>{html.escape(title)}</h2>"
-            f"<p class='run-preview'>{html.escape(preview)}</p>"
-            f"{_render_chip_row(chips, status_value=str(item.get('result_status', '')))}"
-            "</a>"
-            "</li>"
-        )
-    return f"<ul class='runs'>{''.join(items)}</ul>"
-
-
-def _render_run_detail_html(
-    *,
-    snapshot: dict[str, object],
-    include_internal: bool,
-) -> str:
-    current_executor = snapshot["current_executor"]
-    run = snapshot["run"]
-    assert isinstance(current_executor, dict)
-    assert isinstance(run, dict)
-    current_state_markup = _render_current_executor(current_executor)
-    events = run.get("events", [])
-    assert isinstance(events, list)
-    back_href = _with_query("/runs", include_internal=include_internal)
-    json_href = _with_query(
-        f"/runs/{_quote_path_segment(str(run.get('run_id', '')))}.json",
-        include_internal=include_internal,
-    )
-    toggle_href = _with_query(
-        f"/runs/{_quote_path_segment(str(run.get('run_id', '')))}",
-        include_internal=not include_internal,
-    )
-    toggle_label = (
-        "show internal traffic" if not include_internal else "hide internal traffic"
-    )
-    summary_entries = [
-        ("Run", str(run.get("run_id", ""))),
-        ("Task", str(run.get("task_id", ""))),
-        ("Envelope", str(run.get("envelope_id", ""))),
-        ("Status", str(run.get("result_status", ""))),
-        ("Source", str(run.get("source", ""))),
-        ("Workflow", str(run.get("workflow", ""))),
-        ("Started", _friendly_timestamp(run.get("created_at"))),
-        ("Latency", f"{run.get('latency_ms', 0)} ms"),
-    ]
-    timeline_markup = _render_run_timeline(events)
-    audit_detail = run.get("audit_detail", {})
-    audit_json = html.escape(json.dumps(audit_detail, indent=2, sort_keys=True))
-    preview = str(run.get("preview", "")).strip()
-    preview_markup = (
-        f"<div class='preview-box'>{html.escape(preview)}</div>"
-        if preview
-        else "<div class='preview-box muted'>No message captured for this run.</div>"
-    )
-    reply = str(run.get("reply", "")).strip()
-    reply_markup = (
-        f"<div class='preview-box'>{html.escape(reply)}</div>"
-        if reply
-        else "<div class='preview-box muted'>No reply sent for this run.</div>"
-    )
-    coalesced_markup = ""
-    parent_run_id = audit_detail.get("coalesced_into_run_id")
-    parent_task_id = audit_detail.get("coalesced_into_task_id")
-    if isinstance(parent_run_id, str) and parent_run_id:
-        parent_href = _with_query(
-            f"/runs/{_quote_path_segment(parent_run_id)}",
-            include_internal=include_internal,
-        )
-        parent_label = (
-            parent_task_id
-            if isinstance(parent_task_id, str) and parent_task_id
-            else parent_run_id
-        )
-        coalesced_markup = (
-            "<section class='panel'><h2>Coalesced conversation turn</h2>"
-            "<p>This message was incorporated into "
-            f"<a href='{html.escape(parent_href)}'>{html.escape(parent_label)}</a> "
-            "and did not launch a separate executor.</p></section>"
-        )
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>{html.escape(str(run.get("task_id", run.get("run_id", "Run"))))}</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f4efe7;
-      --panel: #fffdf9;
-      --border: #d7cbbc;
-      --ink: #1f1a16;
-      --muted: #685f56;
-      --accent: #9a3412;
-      --accent-soft: #f5dfd3;
-      --shadow: 0 18px 60px rgba(42, 30, 17, 0.08);
-    }}
-    body {{ margin: 0; background:
-      radial-gradient(circle at top right, #f3dcc8 0, transparent 28%),
-      linear-gradient(180deg, #ede5d8 0%, var(--bg) 100%);
-      color: var(--ink); font: 16px/1.5 Georgia, serif; }}
-    main {{ max-width: 980px; margin: 0 auto; padding: 18px 14px 42px; }}
-    .hero, .panel, .timeline-item {{ background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); }}
-    .hero {{ border-radius: 24px; padding: 22px; margin-bottom: 18px; }}
-    .hero-top {{ display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }}
-    .eyebrow {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; margin-bottom: 8px; }}
-    h1, h2, h3 {{ font-family: "Iowan Old Style", Georgia, serif; margin: 0 0 10px; }}
-    h1 {{ font-size: clamp(28px, 5vw, 40px); }}
-    .controls {{ display: flex; gap: 10px; flex-wrap: wrap; }}
-    .button-link {{ border: 1px solid var(--border); border-radius: 999px; padding: 9px 14px; text-decoration: none; color: var(--accent); background: white; }}
-    .button-link:hover {{ background: var(--accent-soft); }}
-    .detail-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }}
-    .detail-block dt {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .detail-block dd {{ margin: 4px 0 0; }}
-    .panel {{ border-radius: 20px; padding: 18px; margin-bottom: 18px; }}
-    .preview-box {{ font-size: 18px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }}
-    .muted {{ color: var(--muted); }}
-    .timeline {{ list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }}
-    .timeline-item {{ border-radius: 18px; padding: 16px; }}
-    .timeline-kicker {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .timeline-item h3 {{ margin-top: 8px; font-size: 21px; }}
-    .timeline-message {{ margin-top: 10px; padding: 12px 14px; background: rgba(154, 52, 18, 0.06); border-radius: 14px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }}
-    details summary {{ cursor: pointer; font-family: "Iowan Old Style", Georgia, serif; font-size: 21px; margin-bottom: 10px; }}
-    .timeline-collapsible summary {{ cursor: pointer; color: var(--muted); font-size: 13px; font-family: inherit; margin: 8px 0 0; }}
-    .stderr-log {{ display: grid; gap: 8px; margin-top: 10px; }}
-    .stderr-codex {{ padding: 10px 12px; background: rgba(154, 52, 18, 0.06); border-radius: 12px; white-space: pre-wrap; word-break: break-word; }}
-    .stderr-exec > summary, .stderr-meta > summary {{ cursor: pointer; color: var(--muted); font-size: 13px; }}
-    .stderr-exec > summary code {{ color: var(--ink); font-size: 13px; }}
-    .stderr-exec pre, .stderr-meta pre {{ margin: 8px 0 0; max-height: 360px; overflow: auto; background: rgba(0, 0, 0, 0.04); padding: 10px; border-radius: 10px; }}
-    pre, code {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; }}
-    @media (max-width: 720px) {{
-      main {{ padding: 12px 12px 28px; }}
-      .hero, .panel, .timeline-item {{ border-radius: 18px; }}
-      .detail-grid {{ grid-template-columns: 1fr; }}
-    }}
-  </style>
-</head>
-<body>
-  <main>
-    <section class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="eyebrow">Run Detail</div>
-          <h1>{html.escape(str(run.get("task_id", "")) or str(run.get("run_id", "")))}</h1>
-          <div>{current_state_markup}</div>
-        </div>
-        <div class="controls">
-          <a class="button-link" href="{back_href}">all runs</a>
-          <a class="button-link" href="{json_href}">JSON</a>
-          <a class="button-link" href="{toggle_href}">{toggle_label}</a>
-        </div>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>Current message</h2>
-      {preview_markup}
-    </section>
-    {coalesced_markup}
-    <section class="panel">
-      <h2>Billy's reply</h2>
-      {reply_markup}
-    </section>
-    <section class="panel">
-      <h2>Run Summary</h2>
-      <div class="detail-grid">{_render_detail_blocks(summary_entries)}</div>
-    </section>
-    <section class="panel">
-      <h2>Events In Order</h2>
-      {timeline_markup}
-    </section>
-    <section class="panel">
-      <details>
-        <summary>Audit detail (raw JSON)</summary>
-        <pre><code>{audit_json}</code></pre>
-      </details>
-    </section>
-  </main>
-</body>
-</html>"""
-
-
-_STDERR_MARKERS = ("user", "codex", "exec")
-_EXEC_RESULT_PREFIXES = ("succeeded in", "failed in", "exited", "error", "timed out")
-
-
-def _split_stderr_blocks(content: str) -> list[tuple[str, str]]:
-    # Codex `exec` writes a log delimited by bare marker lines (user/codex/exec).
-    # Split on those so exec output can be collapsed while codex messages stay
-    # inline. Anything before the first marker is the session header.
-    blocks: list[tuple[str, list[str]]] = []
-    kind = "header"
-    buf: list[str] = []
-    for line in content.split("\n"):
-        if line.strip() in _STDERR_MARKERS:
-            blocks.append((kind, buf))
-            kind = line.strip()
-            buf = []
-        else:
-            buf.append(line)
-    blocks.append((kind, buf))
-    return [
-        (k, "\n".join(b).strip("\n"))
-        for k, b in blocks
-        if "\n".join(b).strip() or k != "header"
-    ]
-
-
-def _exec_command(block_text: str) -> str:
-    command_lines: list[str] = []
-    for line in block_text.split("\n"):
-        stripped = line.strip()
-        if any(stripped.startswith(prefix) for prefix in _EXEC_RESULT_PREFIXES):
-            break
-        if stripped:
-            command_lines.append(stripped)
-    command = " ".join(command_lines)
-    # Drop the "<store path>/bash -lc " wrapper so the summary is the real
-    # command. What remains is `<quote><command><quote> in <workdir>`; take the
-    # text between the first and last matching quote (handles the trailing
-    # " in <dir>" annotation and escaped inner quotes).
-    marker = " -lc "
-    if marker in command:
-        rest = command.split(marker, 1)[1].strip()
-        if rest[:1] in ('"', "'"):
-            quote = rest[0]
-            end = rest.rfind(quote)
-            command = rest[1:end] if end > 0 else rest[1:]
-        else:
-            command = rest
-    return command.strip()
-
-
-def _render_executor_stderr(content: str) -> str:
-    parts = []
-    for kind, text in _split_stderr_blocks(content):
-        if kind == "codex":
-            parts.append(f"<div class='stderr-codex'>{html.escape(text)}</div>")
-        elif kind == "exec":
-            summary = _truncate(_exec_command(text) or "command", limit=140)
-            parts.append(
-                "<details class='stderr-exec'>"
-                f"<summary><code>{html.escape(summary)}</code></summary>"
-                f"<pre>{html.escape(text)}</pre>"
-                "</details>"
-            )
-        else:  # header / user (session config + task JSON) — bulky, collapse
-            label = "task input" if kind == "user" else "session header"
-            parts.append(
-                "<details class='stderr-meta'>"
-                f"<summary>{label}</summary>"
-                f"<pre>{html.escape(text)}</pre>"
-                "</details>"
-            )
-    return f"<div class='stderr-log'>{''.join(parts)}</div>"
-
-
-def _render_run_timeline(events: list[object]) -> str:
-    if not events:
-        return "<div class='muted'>No worker activity captured for this run.</div>"
-    items = []
-    for item in events:
-        assert isinstance(item, dict)
-        message = _message_text(item)
-        detail_json = html.escape(
-            json.dumps(
-                _detail_without_message(item.get("detail")), indent=2, sort_keys=True
-            )
-        )
-        meta = [
-            ("When", _friendly_timestamp(item.get("occurred_at"))),
-            ("Phase", str(item.get("phase", ""))),
-            ("Task", str(item.get("task_id", ""))),
-            ("Envelope", str(item.get("envelope_id", ""))),
-            ("Run", str(item.get("run_id", ""))),
-            ("Source", str(item.get("source", ""))),
-        ]
-        phase = str(item.get("phase", ""))
-        if message is None:
-            message_markup = ""
-        elif phase == "executor_stderr":
-            # The codex exec log: codex messages inline, each exec collapsed.
-            message_markup = _render_executor_stderr(message)
-        elif len(message) > 2000 or phase == "executor_stdout":
-            # Other bulky output (stdout, context-stuffed prompts): collapse whole.
-            message_markup = (
-                "<details class='timeline-collapsible'>"
-                f"<summary>show message ({len(message):,} chars)</summary>"
-                f"<div class='timeline-message'>{html.escape(message)}</div>"
-                "</details>"
-            )
-        else:
-            message_markup = (
-                f"<div class='timeline-message'>{html.escape(message)}</div>"
-            )
-        items.append(
-            "<li class='timeline-item'>"
-            "<div class='timeline-kicker'>"
-            f"<span>{html.escape(_event_id(item))}</span>"
-            f"<span>{html.escape(_friendly_timestamp(item.get('occurred_at')))}</span>"
-            "</div>"
-            f"<h3>{html.escape(str(item.get('summary', '')))}</h3>"
-            f"<div class='detail-grid'>{_render_detail_blocks(meta)}</div>"
-            f"{message_markup}"
-            "<h3>Detail JSON</h3>"
-            f"<pre><code>{detail_json}</code></pre>"
-            "</li>"
-        )
-    return f"<ol class='timeline'>{''.join(items)}</ol>"
-
-
-def _render_detail_blocks(entries: list[tuple[str, str]]) -> str:
-    blocks = []
-    for label, value in entries:
-        if not value:
-            continue
-        blocks.append(
-            "<dl class='detail-block'>"
-            f"<dt>{html.escape(label)}</dt>"
-            f"<dd>{html.escape(value)}</dd>"
-            "</dl>"
-        )
-    return "".join(blocks)
-
-
-def _render_chip_row(
-    entries: list[tuple[str, str]],
-    *,
-    status_value: str,
-) -> str:
-    chips = []
-    for label, value in entries:
-        if not value:
-            continue
-        classes = ["chip"]
-        if label == "status":
-            classes.append(f"status-{status_value}")
-        chips.append(
-            f"<span class='{' '.join(classes)}'><strong>{html.escape(label)}:</strong> {html.escape(value)}</span>"
-        )
-    return f"<div class='chips'>{''.join(chips)}</div>"
-
-
-def _list_meta_entries(item: dict[str, object]) -> list[tuple[str, str]]:
-    entries = [
-        ("task", str(item.get("task_id", ""))),
-        ("source", str(item.get("source", ""))),
-    ]
-    return [(label, value) for label, value in entries if value]
-
-
-def _event_id(item: dict[str, object]) -> str:
-    activity_id = item.get("activity_id")
-    if isinstance(activity_id, int):
-        return str(activity_id)
-    parts = [
-        str(item.get("occurred_at", "")),
-        str(item.get("phase", "")),
-        str(item.get("task_id", "")),
-        str(item.get("envelope_id", "")),
-        str(item.get("run_id", "")),
-        str(item.get("summary", "")),
-    ]
-    return "|".join(parts)
-
-
-def _json_script_value(value: object) -> str:
-    return json.dumps(value, sort_keys=True).replace("</", "<\\/")
-
-
-def _bool_query_flag(query: str, name: str) -> bool:
-    values = parse_qs(query).get(name, [])
-    if not values:
-        return False
-    return values[-1].strip().lower() not in {"0", "false", "no", ""}
-
-
 def _isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _friendly_timestamp(value: object) -> str:
-    if not isinstance(value, str) or not value:
-        return str(value)
-    try:
-        parsed = _parse_timestamp(value)
-    except ValueError:
-        return value
-    return parsed.strftime("%a %d %b %Y %H:%M:%S UTC")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value).astimezone(timezone.utc)
 
 
 _CURRENT_MESSAGE_MARKER = "Current user message:"
@@ -1202,13 +555,6 @@ def _extract_current_message(content: str | None) -> str:
     return content.strip()
 
 
-def _truncate(text: str, *, limit: int = 200) -> str:
-    text = text.strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "…"
-
-
 def _message_text(item: dict[str, object]) -> str | None:
     detail = item.get("detail")
     if not isinstance(detail, dict):
@@ -1218,21 +564,3 @@ def _message_text(item: dict[str, object]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-
-
-def _detail_without_message(detail: object) -> object:
-    if not isinstance(detail, dict):
-        return detail
-    return {
-        key: value for key, value in detail.items() if key not in {"body", "content"}
-    }
-
-
-def _with_query(path: str, *, include_internal: bool) -> str:
-    if include_internal:
-        return f"{path}?include_internal=1"
-    return path
-
-
-def _quote_path_segment(value: str) -> str:
-    return quote(value, safe="")

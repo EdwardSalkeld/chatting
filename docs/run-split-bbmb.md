@@ -91,9 +91,8 @@ that limit. Tasks assigned to the same work item run in arrival order, one at
 a time. Run only one worker process against a worker database. The worker
 recovers interrupted task claims when it starts again.
 
-The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
-with JSON at `/activity.json`. The bind stays fixed at `9465`; use
-`activity_history_limit` to change the retention window.
+The worker also serves a read-only work item and run UI by default at `http://127.0.0.1:9465/`.
+Active sessions stream output through `/api/tasks/<task_id>/events`; completed runs use the same paged feed. Raw activity JSON remains at `/activity.json`. The bind stays fixed at `9465`; use `activity_history_limit` to set the recent run list size per work item.
 
 The default compose stack also runs a simple static preview service on `http://127.0.0.1:9466/`.
 It serves a Docker-managed `html-output` volume that is mounted read-write into the worker at

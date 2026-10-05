@@ -78,8 +78,7 @@ The compose stack starts:
 - `site` on port `9466`, serving files from the shared `html-output` Docker volume
 
 The Go message handler exposes Prometheus-style metrics at `http://127.0.0.1:9464/metrics`.
-The worker exposes a read-only activity page at `http://127.0.0.1:9465/`, with matching JSON at
-`http://127.0.0.1:9465/activity.json`.
+The worker exposes a read-only activity UI at `http://127.0.0.1:9465/`. Open a work item to see its recent runs, then open a run to read its output. Active tasks appear at the top of their work item and stream output while the executor runs. The UI uses small JSON endpoints under `/api/`; the full raw activity feed remains available at `/activity.json`.
 
 The worker keeps your normal host workspace mounted at `/workspace` and also gets a writable
 Docker volume mounted at `/workspace/html`, so the agent can drop

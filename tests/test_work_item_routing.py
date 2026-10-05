@@ -211,7 +211,7 @@ class WorkItemRoutingTests(unittest.TestCase):
             args=["codex"], returncode=0, stdout="", stderr=""
         )
         with patch(
-            "app.worker.executor.codex.subprocess.run", return_value=completed
+            "app.worker.executor.codex._run_streaming", return_value=completed
         ) as run:
             for message in (first, second, first):
                 process_task_message(
@@ -232,7 +232,7 @@ class WorkItemRoutingTests(unittest.TestCase):
             [call.kwargs["cwd"] for call in run.call_args_list],
             [str(first_dir), str(second_dir), str(first_dir)],
         )
-        payload = json.loads(run.call_args.kwargs["input"])
+        payload = json.loads(run.call_args.kwargs["payload"])
         self.assertEqual(payload["task"]["work_item_id"], first_lane.work_item_id)
         self.assertEqual(
             payload["reply_contract"]["executor_working_dir"], str(first_dir)
@@ -265,7 +265,7 @@ class WorkItemRoutingTests(unittest.TestCase):
             args=["codex"], returncode=0, stdout="", stderr=""
         )
         with patch(
-            "app.worker.executor.codex.subprocess.run", return_value=completed
+            "app.worker.executor.codex._run_streaming", return_value=completed
         ) as run:
             process_task_message(
                 store=self.store,
@@ -276,7 +276,7 @@ class WorkItemRoutingTests(unittest.TestCase):
                 max_attempts=1,
                 activity_monitor=WorkerActivityMonitor(store=self.store),
             )
-        self.assertEqual(run.call_args.args[0][-2:], ("-m", "gpt-6-luna"))
+        self.assertEqual(run.call_args.kwargs["command"][-2:], ("-m", "gpt-6-luna"))
         other = replace(
             task(32, "email", "bob@example.com", "/model"), work_item_id="item_b"
         )
@@ -296,8 +296,8 @@ class WorkItemRoutingTests(unittest.TestCase):
         self.store.set_work_model_tier(work_item_id="item_a", tier="low")
         calls = []
 
-        def run(command, **kwargs):
-            calls.append((command, json.loads(kwargs["input"])))
+        def run(*, command, **kwargs):
+            calls.append((command, json.loads(kwargs["payload"])))
             contract = calls[-1][1].get("escalation_contract")
             if contract:
                 Path(contract["request_path"]).write_text(
@@ -312,7 +312,7 @@ class WorkItemRoutingTests(unittest.TestCase):
                 args=command, returncode=0, stdout="", stderr=""
             )
 
-        with patch("app.worker.executor.codex.subprocess.run", side_effect=run):
+        with patch("app.worker.executor.codex._run_streaming", side_effect=run):
             result = process_task_message(
                 store=self.store,
                 task_message=message,
@@ -354,7 +354,7 @@ class WorkItemRoutingTests(unittest.TestCase):
                 return_value=ModelDecision("low", "jev_confident_low", 0.95),
             ) as route,
             patch(
-                "app.worker.executor.codex.subprocess.run", return_value=completed
+                "app.worker.executor.codex._run_streaming", return_value=completed
             ) as run,
         ):
             process_task_message(
@@ -367,7 +367,7 @@ class WorkItemRoutingTests(unittest.TestCase):
                 activity_monitor=WorkerActivityMonitor(store=self.store),
             )
         route.assert_called_once()
-        self.assertEqual(run.call_args.args[0][-1], "gpt-6-luna")
+        self.assertEqual(run.call_args.kwargs["command"][-1], "gpt-6-luna")
         self.assertEqual(self.store.get_work_model_tier(work_item_id="item_a"), "auto")
 
     def test_work_item_id_cannot_escape_root(self):
