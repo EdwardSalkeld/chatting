@@ -1,10 +1,20 @@
 # Work item model selection
 
-Each work item starts on **high** (Sol). Send `/set low` to use Luna for later
-tasks in that work item, `/set high` to switch back, or `/model` to check the
+Each new work item starts on **auto**. Jev selects Luna or Sol for each task.
+Send `/set low` to use Luna, `/set high` to use Sol, or `/model` to check the
 current setting. The setting is stored in the worker database and survives
-worker restarts. Commands sent in a Telegram topic are accepted with the
+worker restarts. Existing work items keep their current setting when this
+default changes. Commands sent in a Telegram topic are accepted with the
 connector's thread prefix, and Telegram bot command mentions are accepted.
+
+Send `/set auto` to have Jev select Luna or Sol for each new task. The worker
+sends the current request and up to 30 recent turns from the same Telegram chat
+and topic to TypeSafe's Jev API. Set `TYPESAFE_API_KEY` in the worker service
+environment; the key is withheld from Codex subprocesses. A missing key, API
+error, invalid response, or uncertain low choice selects Sol. Luna requires at
+least 0.80 confidence and 0.80 low probability. The audit event records the
+selected tier, probabilities, model, and fallback reason. Manual high/low modes
+do not call Jev.
 
 A Luna executor can request a handoff by writing the task ID and its findings
 to the request path in `escalation_contract`. The worker accepts a request only

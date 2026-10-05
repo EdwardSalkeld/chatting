@@ -23,7 +23,7 @@ def initialize(connection: sqlite3.Connection) -> None:
             origin_conversation_id TEXT NOT NULL,
             preferred_reply_json TEXT NOT NULL,
             state TEXT NOT NULL DEFAULT 'open',
-            model_tier TEXT NOT NULL DEFAULT 'high',
+            model_tier TEXT NOT NULL DEFAULT 'auto',
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS work_item_events (
@@ -38,7 +38,7 @@ def initialize(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(work_items)")}
     if "model_tier" not in columns:
         connection.execute(
-            "ALTER TABLE work_items ADD COLUMN model_tier TEXT NOT NULL DEFAULT 'high'"
+            "ALTER TABLE work_items ADD COLUMN model_tier TEXT NOT NULL DEFAULT 'auto'"
         )
 
 
@@ -62,8 +62,8 @@ def assign(
     reply = task.envelope.reply_channel
     connection.execute(
         """INSERT OR IGNORE INTO work_items
-           (work_item_id, origin_conversation_id, preferred_reply_json, state, created_at)
-           VALUES (?, ?, ?, 'open', ?)""",
+           (work_item_id, origin_conversation_id, preferred_reply_json, state, model_tier, created_at)
+           VALUES (?, ?, ?, 'open', 'auto', ?)""",
         (
             item_id,
             conversation_id,

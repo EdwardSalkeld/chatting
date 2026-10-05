@@ -31,6 +31,12 @@ _USAGE_ROLLOUT_SCAN_LIMIT = 25
 _WORKSPACE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 
 
+def _executor_env(configured: Mapping[str, str] | None) -> dict[str, str]:
+    environment = dict(configured) if configured is not None else dict(os.environ)
+    environment.pop("TYPESAFE_API_KEY", None)
+    return environment
+
+
 @dataclass(frozen=True)
 class CodexExecutor:
     """Run Codex as a subprocess and capture stdout/stderr as transcript."""
@@ -122,7 +128,7 @@ class CodexExecutor:
                 timeout=self.timeout_seconds,
                 check=False,
                 cwd=self.cwd,
-                env=dict(self.env) if self.env is not None else None,
+                env=_executor_env(self.env),
             )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")
