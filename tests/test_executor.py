@@ -1,10 +1,14 @@
 import json
 import subprocess
+import tempfile
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
+from app.broker import TaskQueueMessage
+from app.state import SQLiteStateStore
 from app.worker.executor import CodexExecutor
 
 
@@ -29,6 +33,60 @@ def _envelope() -> TaskEnvelope:
 
 
 class CodexExecutorTests(unittest.TestCase):
+    def test_telegram_prompt_uses_worker_history_and_exposes_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            earlier = TaskEnvelope(
+                id="telegram:1",
+                source="im",
+                received_at=datetime(2026, 8, 16, 10, 0, tzinfo=timezone.utc),
+                actor="alice",
+                content="the earlier plan",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="-123",
+                    metadata={"message_id": 10, "message_thread_id": 7},
+                ),
+                dedupe_key="telegram:1",
+            )
+            current = TaskEnvelope(
+                id="telegram:2",
+                source="im",
+                received_at=earlier.received_at,
+                actor="alice",
+                content="do that",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="-123",
+                    metadata={"message_id": 11, "message_thread_id": 7},
+                ),
+                dedupe_key="telegram:2",
+            )
+            for envelope in (earlier, current):
+                store.stage_inbox_task(
+                    TaskQueueMessage.from_envelope(
+                        envelope, trace_id=f"trace:{envelope.id}"
+                    )
+                )
+            completed = subprocess.CompletedProcess(
+                args=["codex"], returncode=0, stdout="{}", stderr=""
+            )
+            with patch(
+                "app.worker.executor.codex.subprocess.run", return_value=completed
+            ) as run_mock:
+                CodexExecutor(command=("codex",), history_store=store).execute(current)
+            payload = json.loads(run_mock.call_args.kwargs["input"])
+            self.assertEqual(payload["task"]["content"], "do that")
+            self.assertEqual(
+                [turn["content"] for turn in payload["recent_history"]],
+                ["the earlier plan"],
+            )
+            self.assertIn("--topic-id 7", payload["history_contract"]["search_command"])
+
     def test_reply_quoted_telegram_task_exposes_supported_history_lookup(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["codex"], returncode=0, stdout="{}", stderr=""
@@ -55,7 +113,9 @@ class CodexExecutorTests(unittest.TestCase):
 
         payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(payload["history_contract"]["anchor"]["message_id"], 2400)
-        self.assertIn("app.main_history", payload["history_contract"]["retrieve_command"])
+        self.assertIn(
+            "app.main_history", payload["history_contract"]["retrieve_command"]
+        )
 
     def test_execute_returns_stdout_and_stderr_on_success(self) -> None:
         completed = subprocess.CompletedProcess(

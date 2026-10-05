@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
 
@@ -443,6 +444,8 @@ def main() -> int:
     broker.ensure_queue(TASK_QUEUE_NAME)
 
     executor = _build_executor(args, config)
+    if isinstance(executor, CodexExecutor):
+        executor = replace(executor, history_store=store)
 
     collector = InboxCollector(
         broker=broker,

@@ -36,6 +36,7 @@ class InboxTask:
 @dataclass(frozen=True)
 class TelegramHistoryTurn:
     target: str
+    topic_id: int | None
     message_id: int
     reply_to_message_id: int | None
     role: Literal["user", "assistant"]
@@ -114,6 +115,7 @@ class SQLiteStateStore:
                     turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel TEXT NOT NULL,
                     target TEXT NOT NULL,
+                    topic_id INTEGER,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     run_id TEXT,
@@ -229,6 +231,31 @@ class SQLiteStateStore:
                 CREATE INDEX IF NOT EXISTS worker_telegram_history_target_message
                 ON worker_telegram_history (target, message_id)
                 """
+            )
+            history_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(worker_telegram_history)"
+                )
+            }
+            if "topic_id" not in history_columns:
+                connection.execute(
+                    "ALTER TABLE worker_telegram_history ADD COLUMN topic_id INTEGER"
+                )
+                # Preserve topic boundaries for turns already in the worker ledger.
+                # This reads worker inbox metadata only; handler history is untouched.
+                connection.execute(
+                    """UPDATE worker_telegram_history
+                    SET topic_id = (
+                        SELECT json_extract(task_payload_json,
+                            '$.envelope.reply_channel.metadata.message_thread_id')
+                        FROM worker_inbox
+                        WHERE worker_inbox.task_id = worker_telegram_history.task_id
+                    )"""
+                )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS worker_telegram_history_scope
+                ON worker_telegram_history (target, topic_id, message_id)"""
             )
             work_items.initialize(connection)
             # Additive migration for databases created before lane identities.
@@ -408,14 +435,15 @@ class SQLiteStateStore:
         connection.execute(
             """
             INSERT OR IGNORE INTO worker_telegram_history (
-                target, message_id, reply_to_message_id, role, sender,
+                target, topic_id, message_id, reply_to_message_id, role, sender,
                 content, attachments_json, task_id, event_id,
                 occurred_at, created_at, work_item_id
-            ) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?,
+            ) VALUES (?, ?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?,
                 (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
             """,
             (
                 envelope.reply_channel.target,
+                _positive_metadata_int(metadata, "message_thread_id"),
                 message_id,
                 _positive_metadata_int(metadata, "reply_to_message_id"),
                 sender.strip() if isinstance(sender, str) and sender.strip() else None,
@@ -458,14 +486,17 @@ class SQLiteStateStore:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO worker_telegram_history (
-                    target, message_id, reply_to_message_id, role, sender,
+                    target, topic_id, message_id, reply_to_message_id, role, sender,
                     content, attachments_json, task_id, event_id,
                     occurred_at, created_at, work_item_id
-                ) VALUES (?, ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?,
+                ) VALUES (?, (SELECT topic_id FROM worker_telegram_history
+                              WHERE task_id = ? AND role = 'user' LIMIT 1),
+                    ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?,
                     (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
                 (
                     target,
+                    task_id,
                     message_id,
                     normalized_content or None,
                     _serialize_attachments(attachments),
@@ -482,6 +513,7 @@ class SQLiteStateStore:
         self,
         *,
         target: str,
+        topic_id: int | None = None,
         message_id: int,
         before: int = 12,
         after: int = 12,
@@ -496,29 +528,94 @@ class SQLiteStateStore:
             anchor = connection.execute(
                 """
                 SELECT message_id FROM worker_telegram_history
-                WHERE target = ? AND message_id = ?
+                WHERE target = ? AND topic_id IS ? AND message_id = ?
                 """,
-                (target, message_id),
+                (target, topic_id, message_id),
             ).fetchone()
             if anchor is None:
                 return []
             earlier = connection.execute(
                 """
                 SELECT * FROM worker_telegram_history
-                WHERE target = ? AND message_id <= ?
+                WHERE target = ? AND topic_id IS ? AND message_id <= ?
                 ORDER BY message_id DESC LIMIT ?
                 """,
-                (target, message_id, before + 1),
+                (target, topic_id, message_id, before + 1),
             ).fetchall()
             later = connection.execute(
                 """
                 SELECT * FROM worker_telegram_history
-                WHERE target = ? AND message_id > ?
+                WHERE target = ? AND topic_id IS ? AND message_id > ?
                 ORDER BY message_id ASC LIMIT ?
                 """,
-                (target, message_id, after),
+                (target, topic_id, message_id, after),
             ).fetchall()
         rows = list(reversed(earlier)) + list(later)
+        return [_telegram_history_turn_from_row(row) for row in rows]
+
+    def list_recent_telegram_history(
+        self,
+        *,
+        target: str,
+        topic_id: int | None = None,
+        before_message_id: int,
+        limit: int = 30,
+    ) -> list[TelegramHistoryTurn]:
+        if not target.strip() or before_message_id <= 0 or not 1 <= limit <= 100:
+            raise ValueError("invalid recent history request")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT * FROM worker_telegram_history
+                WHERE target = ? AND topic_id IS ? AND message_id < ?
+                ORDER BY message_id DESC LIMIT ?""",
+                (target, topic_id, before_message_id, limit),
+            ).fetchall()
+        return [_telegram_history_turn_from_row(row) for row in reversed(rows)]
+
+    def search_telegram_history(
+        self,
+        *,
+        target: str,
+        topic_id: int | None = None,
+        query: str,
+        sender: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TelegramHistoryTurn]:
+        words = query.split()
+        if not target.strip() or not words or not 1 <= limit <= 50:
+            raise ValueError("target, query, and limit (1-50) are required")
+        clauses = ["target = ?", "topic_id IS ?"]
+        params: list[object] = [target, topic_id]
+        for word in words:
+            clauses.append("content LIKE ? ESCAPE '\\'")
+            params.append(
+                "%"
+                + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                + "%"
+            )
+        if sender:
+            clauses.append("sender LIKE ? ESCAPE '\\'")
+            params.append(
+                "%"
+                + sender.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                + "%"
+            )
+        for boundary, operator in ((since, ">="), (until, "<=")):
+            if boundary is not None:
+                if boundary.tzinfo is None:
+                    raise ValueError("date filters must include a timezone")
+                clauses.append(f"occurred_at {operator} ?")
+                params.append(_serialize_rfc3339_utc(boundary))
+        params.append(limit)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM worker_telegram_history WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY message_id DESC LIMIT ?",
+                params,
+            ).fetchall()
         return [_telegram_history_turn_from_row(row) for row in rows]
 
     def claim_next_inbox_task(self) -> InboxTask | None:
@@ -1695,6 +1792,7 @@ def _telegram_history_turn_from_row(row: sqlite3.Row) -> TelegramHistoryTurn:
     ]
     return TelegramHistoryTurn(
         target=str(row["target"]),
+        topic_id=int(row["topic_id"]) if row["topic_id"] is not None else None,
         message_id=int(row["message_id"]),
         reply_to_message_id=(
             int(row["reply_to_message_id"])
