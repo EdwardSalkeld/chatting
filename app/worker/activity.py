@@ -95,6 +95,7 @@ class WorkerActivityMonitor:
                 )
                 else None
             ),
+            "preview": _extract_current_message(envelope.content)[:240],
         }
         with self._lock:
             self._active_executors[task_message.task_id] = state
@@ -305,11 +306,16 @@ class WorkerActivityMonitor:
         )
         if item is None:
             return None
+        runs = self._store.list_work_item_run_cards(
+            work_item_id=work_item_id, limit=self._history_limit
+        )
+        for run in runs:
+            run["preview"] = _extract_current_message(run.pop("request_content", None))[
+                :240
+            ]
         return {
             "item": item,
-            "runs": self._store.list_work_item_run_cards(
-                work_item_id=work_item_id, limit=self._history_limit
-            ),
+            "runs": runs,
             "active_executors": [
                 executor
                 for executor in self._current_executors()
@@ -334,9 +340,20 @@ class WorkerActivityMonitor:
         if run is None or audit is None:
             return None
         detail = audit.detail if isinstance(audit.detail, dict) else {}
+        task_id = detail.get("task_id")
+        first_event = (
+            self._store.list_worker_activity_since(task_id=task_id, after_id=0, limit=1)
+            if isinstance(task_id, str) and task_id
+            else []
+        )
+        first_detail = first_event[0].get("detail", {}) if first_event else {}
+        request_content = (
+            first_detail.get("content") if isinstance(first_detail, dict) else None
+        )
         return {
             "run_id": run.run_id,
-            "task_id": detail.get("task_id"),
+            "task_id": task_id,
+            "preview": _extract_current_message(request_content)[:240],
             "work_item_id": run.work_item_id,
             "status": run.result_status,
             "source": run.source,

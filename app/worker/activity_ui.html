@@ -33,7 +33,9 @@
     .row:hover, .row:focus { background:var(--accent-bg); outline:none; }
     .row-top { display:flex; justify-content:space-between; align-items:baseline; gap:9px; flex-wrap:wrap; }
     .row-title, .row-subtitle { overflow-wrap:anywhere; word-break:break-word; }
+    .row-title { overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
     .row-subtitle { color:var(--muted); font-size:12px; margin-top:4px; }
+    .row-preview { margin-top:5px; font-size:14px; line-height:1.4; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
     .row-meta { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:8px; color:var(--muted); font-size:12px; }
     .empty, .error-box { padding:24px; color:var(--muted); }
     .error-box { color:var(--bad); }
@@ -81,11 +83,14 @@
     const request = async url => { const result=await fetch(url,{cache:'no-store'}); if(!result.ok)throw Error(`Request failed (${result.status})`); return result.json(); };
     const fail = error => { status.textContent=''; content.replaceChildren(node('div','error-box',error.message+' — refresh to retry.')); };
     function setCrumbs(entries) { crumbs.replaceChildren(); entries.forEach(([label,href],i)=>{ if(i)crumbs.append(node('span','','›')); crumbs.append(href?link(href,label):node('span','',label)); }); }
-    function itemName(item) { const reply=item.reply||{}; return reply.type&&reply.target ? `${reply.type}: ${reply.target}` : (item.origin_conversation_id||item.work_item_id); }
-    function row(href,name,subtitleText,metadata,tone='') {
+    function itemName(item) { const reply=item.reply||{}, meta=reply.metadata||{};
+      if(reply.type==='telegram')return meta.chat_title || (meta.chat_type==='private' ? (meta.sender||'Direct chat') : item.work_item_id==='item_legacy_general'?'General':`Telegram ${reply.target}`);
+      return reply.type&&reply.target ? `${reply.type}: ${reply.target}` : (item.origin_conversation_id||item.work_item_id); }
+    function row(href,name,subtitleText,metadata,tone='',preview='') {
       const a=link(href,'','row'); const top=node('div','row-top'); top.append(node('h2','row-title',name));
       if(tone)top.append(node('span','tag '+tone,tone==='live'?'Live':tone));
-      a.append(top,node('div','row-subtitle',subtitleText)); const meta=node('div','row-meta');
+      a.append(top); if(preview)a.append(node('div','row-preview',preview));
+      a.append(node('div','row-subtitle',subtitleText)); const meta=node('div','row-meta');
       metadata.forEach(value=>meta.append(node('span','',value))); a.append(meta); return a;
     }
     async function showItems() {
@@ -94,7 +99,7 @@
       const data=await request('/api/items'); const list=node('div','list');
       for(const item of data.items){
         const active=data.active_executors.filter(run=>run.work_item_id===item.work_item_id).length;
-        list.append(row('/items/'+path(item.work_item_id),itemName(item),item.work_item_id,
+        list.append(row('/items/'+path(item.work_item_id),itemName(item),item.reply?.type==='telegram'?'Telegram · '+item.reply.target:item.work_item_id,
           [`${item.run_count} runs`,`${item.queued} queued`,`Model: ${item.model_tier}`,`Last: ${when(item.last_run_at)}`],active?'live':''));
       }
       if(!data.items.length)list.append(node('div','empty','No work items yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
@@ -106,17 +111,18 @@
       subtitle.textContent=item.work_item_id;summary.replaceChildren();tag(`${item.run_count} runs`); tag(`${item.queued} queued`); tag(`Model: ${item.model_tier}`);
       const list=node('div','list');
       for(const run of data.active_executors){
-        list.append(row('/tasks/'+path(run.task_id),run.task_id,'Running now',[
+        list.append(row('/tasks/'+path(run.task_id),run.preview||'Task running',run.task_id,[
           `Started: ${when(run.started_at)}`,`Attempt: ${run.attempt}`],'live'));
       }
       for(const run of data.runs){
-        list.append(row('/runs/'+path(run.run_id),run.task_id||run.run_id,run.run_id,
+        list.append(row('/runs/'+path(run.run_id),run.preview||run.task_id||run.run_id,run.task_id||run.run_id,
           [when(run.created_at),run.source,`${(run.latency_ms/1000).toFixed(1)}s`],run.result_status==='success'?'':run.result_status));
       }
       if(!list.children.length)list.append(node('div','empty','No runs yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
     }
-    let paused=false,follow=true,after=0,stdoutBuffer='';
+    let paused=false,follow=true,after=0,stdoutBuffer='',showStdout=false,allEvents=[];
     function addEvent(event, transcript) {
+      if(event.phase==='executor_stdout'&&!showStdout)return;
       const box=node('article','event'); const head=node('div','event-head');
       head.append(node('strong','',event.summary),node('time','',when(event.occurred_at))); box.append(head);
       let body=event.detail?.content??event.detail?.body??event.detail?.error;
@@ -146,7 +152,7 @@
     async function showSession() {
       const completed=route==='runs'; let taskId=id,runId=completed?id:null,workItemId=null;
       if(completed){const run=await request('/api/runs/'+path(id));taskId=run.task_id;workItemId=run.work_item_id;
-        title.textContent=taskId||runId; subtitle.textContent=runId;
+        title.textContent=run.preview||taskId||runId; subtitle.textContent=taskId||runId;
         tag(run.status,run.status==='success'?'':'error');tag(run.source);tag(`${(run.duration_ms/1000).toFixed(1)}s`);
         if(run.attempt_count)tag(`${run.attempt_count} attempts`);
       }else{title.textContent=taskId;subtitle.textContent='Live session';tag('Live','live');}
@@ -154,6 +160,7 @@
       setCrumbs([['Work items','/items'],...(workItemId?[[workItemId,'/items/'+path(workItemId)]]:[]),[taskId]]);
       const pause=node('button','','Pause');pause.onclick=()=>{paused=!paused;pause.textContent=paused?'Resume':'Pause';if(!paused)poll();};actions.append(pause);
       const followButton=node('button','','Follow output');followButton.onclick=()=>{follow=true;transcript.scrollTop=transcript.scrollHeight;};actions.append(followButton);
+      const stdoutButton=node('button','','Show stdout');stdoutButton.onclick=()=>{showStdout=!showStdout;stdoutButton.textContent=showStdout?'Hide stdout':'Show stdout';stdoutBuffer='';transcript.replaceChildren();for(const event of allEvents)addEvent(event,transcript);if(follow)transcript.scrollTop=transcript.scrollHeight;};actions.append(stdoutButton);
       const runLink=link('#','Completed run');runLink.id='run-link';runLink.hidden=true;actions.append(runLink);
       if(runId){runLink.href='/runs/'+path(runId);runLink.hidden=false;}
       const transcript=node('div','transcript');transcript.setAttribute('role','log');transcript.setAttribute('aria-live','off');
@@ -161,7 +168,7 @@
       content.replaceChildren(transcript);content.classList.add('session-layout');
       async function poll(){if(paused)return;try{
         const data=await request('/api/tasks/'+path(taskId)+'/events?after='+after);
-        for(const event of data.events){after=event.activity_id;addEvent(event,transcript);}
+        for(const event of data.events){after=event.activity_id;allEvents.push(event);addEvent(event,transcript);}
         if(follow)transcript.scrollTop=transcript.scrollHeight;
         status.textContent=data.active?'Live output · updating every second':(completed?'Completed run':'Session finished');
         if(data.events.length===100){setTimeout(poll,0);return;}

@@ -210,6 +210,8 @@ class WorkerActivityTests(unittest.TestCase):
                 ) as response:
                     item_runs = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(item_runs["runs"][0]["run_id"], run_record.run_id)
+                self.assertEqual(item_runs["runs"][0]["preview"], "hello")
+                self.assertNotIn("request_content", item_runs["runs"][0])
 
                 run_id = runs_payload["runs"][0]["run_id"]
                 encoded_run_id = quote(run_id, safe="")
@@ -234,11 +236,13 @@ class WorkerActivityTests(unittest.TestCase):
                     detail_html = response.read().decode("utf-8")
                 self.assertIn("/api/runs/", detail_html)
                 self.assertIn("Follow output", detail_html)
+                self.assertIn("Show stdout", detail_html)
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/api/runs/{encoded_run_id}"
                 ) as response:
                     header = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(header["task_id"], task_message.task_id)
+                self.assertEqual(header["preview"], "hello")
             finally:
                 server.shutdown()
 

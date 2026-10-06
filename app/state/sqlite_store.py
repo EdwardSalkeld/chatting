@@ -1143,10 +1143,16 @@ class SQLiteStateStore:
             rows = connection.execute(
                 """SELECT run.run_id, run.created_at, run.result_status,
                           run.latency_ms, run.source,
-                          json_extract(audit.detail_json, '$.task_id') AS task_id
+                          json_extract(audit.detail_json, '$.task_id') AS task_id,
+                          json_extract(activity.detail_json, '$.content') AS request_content
                    FROM run_records AS run
                    LEFT JOIN audit_events AS audit ON audit.event_id = (
                        SELECT MAX(event_id) FROM audit_events WHERE run_id = run.run_id
+                   )
+                   LEFT JOIN worker_activity_events AS activity ON activity.activity_id = (
+                       SELECT MIN(activity_id) FROM worker_activity_events
+                       WHERE task_id = json_extract(audit.detail_json, '$.task_id')
+                         AND phase = 'task_received'
                    )
                    WHERE run.work_item_id = ? AND run.source != 'internal'
                    ORDER BY run.created_at DESC LIMIT ?""",
