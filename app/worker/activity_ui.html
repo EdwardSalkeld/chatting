@@ -50,6 +50,7 @@
     .event details { margin-top:8px; }
     .event details summary { cursor:pointer; color:var(--accent); font-size:12px; }
     .status-line { min-height:24px; color:var(--muted); font-size:13px; }
+    .summary:empty, .status-line:empty { display:none; }
     @media(max-width:650px) { .shell { gap:12px; } .list { max-height:calc(100vh - 190px); } .transcript { height:calc(100dvh - 245px); padding:2px 12px; } .row { padding:12px; } }
   </style>
 </head>
@@ -84,7 +85,8 @@
     const fail = error => { status.textContent=''; content.replaceChildren(node('div','error-box',error.message+' — refresh to retry.')); };
     function setCrumbs(entries) { crumbs.replaceChildren(); entries.forEach(([label,href],i)=>{ if(i)crumbs.append(node('span','','›')); crumbs.append(href?link(href,label):node('span','',label)); }); }
     function itemName(item) { const reply=item.reply||{}, meta=reply.metadata||{};
-      if(reply.type==='telegram')return meta.chat_title || (meta.chat_type==='private' ? (meta.sender||'Direct chat') : item.work_item_id==='item_legacy_general'?'General':`Telegram ${reply.target}`);
+      if(item.work_item_id==='item_legacy_general')return 'General · legacy';
+      if(reply.type==='telegram')return meta.chat_title || (String(reply.target).startsWith('-') ? 'General' : (meta.sender||'Direct chat'));
       return reply.type&&reply.target ? `${reply.type}: ${reply.target}` : (item.origin_conversation_id||item.work_item_id); }
     function row(href,name,subtitleText,metadata,tone='',preview='') {
       const a=link(href,'','row'); const top=node('div','row-top'); top.append(node('h2','row-title',name));
@@ -97,12 +99,13 @@
       setCrumbs([['Work items']]); title.textContent='Work items'; subtitle.textContent='Select an item to see its runs.';
       const previousScroll=content.firstElementChild?.scrollTop||0;
       const data=await request('/api/items'); const list=node('div','list');
-      for(const item of data.items){
+      const visibleItems=data.items.filter(item=>!['internal','log'].includes(item.reply?.type)||item.work_item_id==='item_legacy_general'||item.run_count>0);
+      for(const item of visibleItems){
         const active=data.active_executors.filter(run=>run.work_item_id===item.work_item_id).length;
         list.append(row('/items/'+path(item.work_item_id),itemName(item),item.reply?.type==='telegram'?'Telegram · '+item.reply.target:item.work_item_id,
           [`${item.run_count} runs`,`${item.queued} queued`,`Model: ${item.model_tier}`,`Last: ${when(item.last_run_at)}`],active?'live':''));
       }
-      if(!data.items.length)list.append(node('div','empty','No work items yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
+      if(!visibleItems.length)list.append(node('div','empty','No work items yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
     }
     async function showItem() {
       const previousScroll=content.firstElementChild?.scrollTop||0;
