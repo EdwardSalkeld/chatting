@@ -11,6 +11,8 @@
     a { color:var(--accent); }
     button { font:inherit; cursor:pointer; }
     .shell { width:min(100%,1280px); min-height:100vh; margin:auto; padding:clamp(12px,2.5vw,30px); display:flex; flex-direction:column; gap:16px; }
+    .shell.session { height:100dvh; min-height:0; overflow:hidden; }
+    .shell.session #content { flex:1; min-height:0; }
     .top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; min-width:0; }
     .brand { color:var(--muted); font-size:12px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; }
     h1 { font-size:clamp(25px,4vw,38px); letter-spacing:-.035em; line-height:1.15; margin:4px 0; overflow-wrap:anywhere; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
@@ -23,6 +25,10 @@
     .actions button, .actions a { border:1px solid var(--line); border-radius:8px; padding:7px 11px; color:var(--ink); text-decoration:none; background:var(--card); }
     .actions button:hover, .actions a:hover { border-color:var(--accent); }
     .summary { display:flex; gap:8px; flex-wrap:wrap; min-width:0; }
+    .request-box { padding:12px 16px; }
+    .request-box[hidden] { display:none; }
+    .request-label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+    .request-text { margin:5px 0 0; max-height:35vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; font:inherit; }
     .tag { border:1px solid var(--line); border-radius:999px; padding:3px 9px; background:var(--card); font-size:12px; overflow-wrap:anywhere; }
     .tag.live { border-color:#a7d7bd; background:#e4f4e9; color:var(--good); }
     .tag.error { border-color:#efc1bb; background:#fff0ed; color:var(--bad); }
@@ -41,6 +47,7 @@
     .error-box { color:var(--bad); }
     .session-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; flex:1; min-height:0; }
     .transcript { height:calc(100vh - 235px); min-height:320px; overflow:auto; overscroll-behavior:contain; padding:4px 18px; }
+    .shell.session .transcript { height:100%; min-height:0; }
     .event { padding:11px 0; border-bottom:1px solid var(--line); min-width:0; }
     .event:last-child { border-bottom:0; }
     .event-head { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:6px 12px; }
@@ -62,6 +69,7 @@
       <div class="actions" id="actions"></div>
     </header>
     <div class="summary" id="summary"></div>
+    <section class="panel request-box" id="request-box" aria-label="Request" hidden><div class="request-label">Request</div><pre class="request-text" id="request-text"></pre></section>
     <div class="status-line" id="status" role="status"></div>
     <div class="panel" id="content"></div>
   </main>
@@ -71,6 +79,8 @@
     const crumbs = document.getElementById('crumbs');
     const actions = document.getElementById('actions');
     const summary = document.getElementById('summary');
+    const requestBox = document.getElementById('request-box');
+    const requestText = document.getElementById('request-text');
     const status = document.getElementById('status');
     const content = document.getElementById('content');
     const parts = location.pathname.split('/').filter(Boolean).map(decodeURIComponent);
@@ -156,12 +166,14 @@
       if(event.run_id){ const runLink=document.getElementById('run-link'); if(runLink){runLink.href='/runs/'+path(event.run_id);runLink.hidden=false;} }
     }
     async function showSession() {
+      document.querySelector('.shell').classList.add('session');
       const completed=route==='runs'; let taskId=id,runId=completed?id:null,workItemId=null;
       if(completed){const run=await request('/api/runs/'+path(id));taskId=run.task_id;workItemId=run.work_item_id;
-        title.textContent=run.preview||taskId||runId; subtitle.textContent=taskId||runId;
+        title.textContent='Session'; subtitle.textContent=taskId||runId;
+        if(run.request){requestText.textContent=run.request;requestBox.hidden=false;}
         tag(run.status,run.status==='success'?'':'error');tag(run.source);tag(`${(run.duration_ms/1000).toFixed(1)}s`);
         if(run.attempt_count)tag(`${run.attempt_count} attempts`);
-      }else{title.textContent=taskId;subtitle.textContent='Live session';tag('Live','live');}
+      }else{title.textContent='Live session';subtitle.textContent=taskId;tag('Live','live');}
       if(!taskId)throw Error('Run has no task ID');
       follow=!completed;
       setCrumbs([['Work items','/items'],...(workItemId?[[workItemId,'/items/'+path(workItemId)]]:[]),[taskId]]);
@@ -175,7 +187,14 @@
       content.replaceChildren(transcript);content.classList.add('session-layout');
       async function poll(){if(paused)return;try{
         const data=await request('/api/tasks/'+path(taskId)+'/events?after='+after);
-        for(const event of data.events){after=event.activity_id;allEvents.push(event);addEvent(event,transcript);}
+        for(const event of data.events){
+          after=event.activity_id;allEvents.push(event);
+          if(event.phase==='task_received'&&requestBox.hidden){
+            const fullRequest=event.detail?.request;
+            if(typeof fullRequest==='string'&&fullRequest){requestText.textContent=fullRequest;requestBox.hidden=false;}
+          }
+          addEvent(event,transcript);
+        }
         if(follow)transcript.scrollTop=transcript.scrollHeight;
         status.textContent=data.active?'Live output · updating every second':(completed?'Completed run':'Session finished');
         if(data.events.length===100){setTimeout(poll,0);return;}

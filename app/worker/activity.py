@@ -64,6 +64,7 @@ class WorkerActivityMonitor:
             detail={
                 "actor": envelope.actor,
                 "content": envelope.content,
+                "request": _extract_current_message(envelope.content),
                 "reply_channel": envelope.reply_channel.type,
                 "reply_target": envelope.reply_channel.target,
             },
@@ -354,6 +355,7 @@ class WorkerActivityMonitor:
             "run_id": run.run_id,
             "task_id": task_id,
             "preview": _extract_current_message(request_content)[:240],
+            "request": _extract_current_message(request_content),
             "work_item_id": run.work_item_id,
             "status": run.result_status,
             "source": run.source,

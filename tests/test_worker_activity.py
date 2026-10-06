@@ -19,13 +19,13 @@ from app.worker.activity import WorkerActivityMonitor, start_worker_activity_ser
 
 
 class WorkerActivityTests(unittest.TestCase):
-    def _build_task_message(self) -> TaskQueueMessage:
+    def _build_task_message(self, content: str = "hello") -> TaskQueueMessage:
         envelope = TaskEnvelope(
             id="telegram:1",
             source="im",
             received_at=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
             actor="8605042448:edsalkeld",
-            content="hello",
+            content=content,
             attachments=[],
             context_refs=[],
             reply_channel=ReplyChannel(type="telegram", target="8605042448"),
@@ -117,7 +117,8 @@ class WorkerActivityTests(unittest.TestCase):
                 history_limit=5,
                 now_fn=lambda: datetime(2026, 3, 31, 12, 5, tzinfo=timezone.utc),
             )
-            task_message = self._build_task_message()
+            full_request = "First line\n" + "A long request. " * 25 + "\nLast line"
+            task_message = self._build_task_message(full_request)
             store.stage_inbox_task(task_message)
             monitor.record_task_received(task_message=task_message)
             monitor.record_executor_started(
@@ -188,7 +189,7 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertEqual(
                     runs_payload["runs"][0]["latest_phase"], "task_finished"
                 )
-                self.assertEqual(runs_payload["runs"][0]["preview"], "hello")
+                self.assertEqual(runs_payload["runs"][0]["preview"], full_request)
 
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
                     html_body = response.read().decode("utf-8")
@@ -210,7 +211,7 @@ class WorkerActivityTests(unittest.TestCase):
                 ) as response:
                     item_runs = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(item_runs["runs"][0]["run_id"], run_record.run_id)
-                self.assertEqual(item_runs["runs"][0]["preview"], "hello")
+                self.assertEqual(item_runs["runs"][0]["preview"], full_request[:240])
                 self.assertNotIn("request_content", item_runs["runs"][0])
 
                 run_id = runs_payload["runs"][0]["run_id"]
@@ -242,7 +243,15 @@ class WorkerActivityTests(unittest.TestCase):
                 ) as response:
                     header = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(header["task_id"], task_message.task_id)
-                self.assertEqual(header["preview"], "hello")
+                self.assertEqual(header["preview"], full_request[:240])
+                self.assertEqual(header["request"], full_request)
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/tasks/{quote(task_message.task_id, safe='')}/events?after=0"
+                ) as response:
+                    live_events = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(
+                    live_events["events"][0]["detail"]["request"], full_request
+                )
             finally:
                 server.shutdown()
 
