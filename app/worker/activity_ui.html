@@ -123,33 +123,35 @@
       }
       if(!list.children.length)list.append(node('div','empty','No runs yet.')); content.replaceChildren(list);list.scrollTop=previousScroll;status.textContent='';
     }
-    let paused=false,follow=true,after=0,stdoutBuffer='',showStdout=false,allEvents=[];
-    function addEvent(event, transcript) {
-      if(event.phase==='executor_stdout'&&!showStdout)return;
+    let paused=false,follow=true,after=0,stdoutBuffer='';
+    function timelineEntry(transcript, label, body, occurredAt, collapsed=false) {
       const box=node('article','event'); const head=node('div','event-head');
-      head.append(node('strong','',event.summary),node('time','',when(event.occurred_at))); box.append(head);
+      head.append(node('strong','',label),node('time','',when(occurredAt))); box.append(head);
+      if(typeof body==='string'&&body.trim()){
+        const pre=node('pre','event-content',body);
+        if(collapsed){const details=node('details');details.append(node('summary','','Show message'),pre);box.append(details);}
+        else box.append(pre);
+      }
+      transcript.append(box);
+    }
+    function addEvent(event, transcript) {
       let body=event.detail?.content??event.detail?.body??event.detail?.error;
       if(event.phase==='executor_stdout'&&typeof body==='string'){
         stdoutBuffer+=body; const lines=stdoutBuffer.split('\n'); stdoutBuffer=lines.pop();
-        const readable=[];
         for(const line of lines){try{const entry=JSON.parse(line);const item=entry.item||{};
-          if(item.type==='agent_message'&&item.text)readable.push(item.text);
-          else if(item.type==='command_execution'){
-            const command=item.command?`$ ${item.command}`:'';
-            const result=entry.type==='item.completed'?(item.aggregated_output||''):'';
-            readable.push([command,result].filter(Boolean).join('\n')||entry.type);
+          if(item.type==='agent_message'&&item.text&&entry.type==='item.completed')timelineEntry(transcript,'Assistant',item.text,event.occurred_at);
+          else if(item.type==='command_execution'&&entry.type==='item.started')timelineEntry(transcript,'Command started',item.command?`$ ${item.command}`:'',event.occurred_at);
+          else if(item.type==='command_execution'&&entry.type==='item.completed'){
+            const result=[item.command?`$ ${item.command}`:'',item.aggregated_output||''].filter(Boolean).join('\n');
+            timelineEntry(transcript,`Command finished${item.exit_code==null?'':` · exit ${item.exit_code}`}`,result,event.occurred_at);
           }
-          else if(item.type==='file_change')readable.push(item.changes?.map(change=>change.path).join(', ')||'Files changed');
-          else if(entry.type==='turn.completed')readable.push('Turn completed');
-          else if(entry.type==='error')readable.push(entry.message||line);
-        }catch{readable.push(line);}}
-        body=readable.join('\n\n');
+          else if(item.type==='file_change'&&entry.type==='item.completed')timelineEntry(transcript,'Files changed',item.changes?.map(change=>change.path).join('\n')||'',event.occurred_at);
+          else if(entry.type==='turn.completed')timelineEntry(transcript,'Turn completed','',event.occurred_at);
+          else if(entry.type==='error')timelineEntry(transcript,'Codex error',entry.message||line,event.occurred_at);
+        }catch{timelineEntry(transcript,'Codex output',line,event.occurred_at);}}
+        return;
       }
-      if(event.phase==='executor_stdout'&&!(typeof body==='string'&&body.trim()))return;
-      if(typeof body==='string'&&body.trim()){
-        const pre=node('pre','event-content',body); box.append(pre);
-      }
-      transcript.append(box);
+      timelineEntry(transcript,event.summary,body,event.occurred_at,event.phase.startsWith('egress_'));
       if(event.run_id){ const runLink=document.getElementById('run-link'); if(runLink){runLink.href='/runs/'+path(event.run_id);runLink.hidden=false;} }
     }
     async function showSession() {
@@ -160,10 +162,10 @@
         if(run.attempt_count)tag(`${run.attempt_count} attempts`);
       }else{title.textContent=taskId;subtitle.textContent='Live session';tag('Live','live');}
       if(!taskId)throw Error('Run has no task ID');
+      follow=!completed;
       setCrumbs([['Work items','/items'],...(workItemId?[[workItemId,'/items/'+path(workItemId)]]:[]),[taskId]]);
       const pause=node('button','','Pause');pause.onclick=()=>{paused=!paused;pause.textContent=paused?'Resume':'Pause';if(!paused)poll();};actions.append(pause);
       const followButton=node('button','','Follow output');followButton.onclick=()=>{follow=true;transcript.scrollTop=transcript.scrollHeight;};actions.append(followButton);
-      const stdoutButton=node('button','','Show stdout');stdoutButton.onclick=()=>{showStdout=!showStdout;stdoutButton.textContent=showStdout?'Hide stdout':'Show stdout';stdoutBuffer='';transcript.replaceChildren();for(const event of allEvents)addEvent(event,transcript);if(follow)transcript.scrollTop=transcript.scrollHeight;};actions.append(stdoutButton);
       const runLink=link('#','Completed run');runLink.id='run-link';runLink.hidden=true;actions.append(runLink);
       if(runId){runLink.href='/runs/'+path(runId);runLink.hidden=false;}
       const transcript=node('div','transcript');transcript.setAttribute('role','log');transcript.setAttribute('aria-live','off');
@@ -171,10 +173,11 @@
       content.replaceChildren(transcript);content.classList.add('session-layout');
       async function poll(){if(paused)return;try{
         const data=await request('/api/tasks/'+path(taskId)+'/events?after='+after);
-        for(const event of data.events){after=event.activity_id;allEvents.push(event);addEvent(event,transcript);}
+        for(const event of data.events){after=event.activity_id;addEvent(event,transcript);}
         if(follow)transcript.scrollTop=transcript.scrollHeight;
         status.textContent=data.active?'Live output · updating every second':(completed?'Completed run':'Session finished');
         if(data.events.length===100){setTimeout(poll,0);return;}
+        if(!data.active)return;
       }catch(error){status.textContent=error.message+' · retrying';}
       if(!paused)setTimeout(poll,completed?3000:1000);}
       poll();

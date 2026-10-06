@@ -236,7 +236,7 @@ class WorkerActivityTests(unittest.TestCase):
                     detail_html = response.read().decode("utf-8")
                 self.assertIn("/api/runs/", detail_html)
                 self.assertIn("Follow output", detail_html)
-                self.assertIn("Show stdout", detail_html)
+                self.assertIn("Command started", detail_html)
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/api/runs/{encoded_run_id}"
                 ) as response:
