@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Any, Callable, Mapping
+from typing import IO, Any, Callable, Mapping, cast
 
 from app.models import (
     ExecutionResult,
@@ -36,6 +36,13 @@ _WORKSPACE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 def _executor_env(configured: Mapping[str, str] | None) -> dict[str, str]:
     environment = dict(configured) if configured is not None else dict(os.environ)
     environment.pop("TYPESAFE_API_KEY", None)
+    # Work item subprocesses start in their own directory. Keep the installed
+    # Chatting package importable for the reply and history CLIs they invoke.
+    source_root = str(Path(__file__).resolve().parents[3])
+    python_path = environment.get("PYTHONPATH", "")
+    entries = [entry for entry in python_path.split(os.pathsep) if entry]
+    if source_root not in entries:
+        environment["PYTHONPATH"] = os.pathsep.join([source_root, *entries])
     return environment
 
 
@@ -253,7 +260,7 @@ def _run_streaming(
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout_seconds)
                 for key, _ in selector.select(timeout=min(remaining, 0.5)):
-                    stream = key.fileobj
+                    stream = cast(IO[bytes], key.fileobj)
                     if stream is process.stdin:
                         try:
                             input_offset += os.write(
@@ -519,6 +526,7 @@ def _task_payload(
             ),
         },
     }
+    scope_option = ""
     if envelope.reply_channel.type == "telegram":
         topic_id = envelope.reply_channel.metadata.get("message_thread_id")
         scope_option = (

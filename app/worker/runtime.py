@@ -8,7 +8,7 @@ import time
 from dataclasses import replace
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
@@ -126,15 +126,24 @@ def process_task_message(
                 active_executor = executor_impl.for_workspace(
                     work_item_id=assignment.work_item_id,
                 )
-            if hasattr(active_executor, "for_model"):
-                active_executor = active_executor.for_model(model_tier)
-            streaming_output = hasattr(active_executor, "with_output_callback")
-            if streaming_output:
-                active_executor = active_executor.with_output_callback(
-                    lambda stream, content: activity_monitor.record_executor_output(
-                        task_message=task_message, stream=stream, content=content
-                    )
+            model_selector = getattr(active_executor, "for_model", None)
+            if callable(model_selector):
+                active_executor = cast(Executor, model_selector(model_tier))
+            output_callback_setter = getattr(
+                active_executor, "with_output_callback", None
+            )
+            if callable(output_callback_setter):
+                streaming_output = True
+                active_executor = cast(
+                    Executor,
+                    output_callback_setter(
+                        lambda stream, content: activity_monitor.record_executor_output(
+                            task_message=task_message, stream=stream, content=content
+                        )
+                    ),
                 )
+            else:
+                streaming_output = False
             if _should_run_supervised_recovery(task_message):
                 active_executor = SupervisedReplyRecoveryExecutor(
                     inner=active_executor,
@@ -165,13 +174,24 @@ def process_task_message(
                     sol_executor = sol_executor.for_workspace(
                         work_item_id=assignment.work_item_id
                     )
-                if hasattr(sol_executor, "for_model"):
-                    sol_executor = sol_executor.for_model("high")
-                if hasattr(sol_executor, "with_output_callback"):
-                    sol_executor = sol_executor.with_output_callback(
-                        lambda stream, content: activity_monitor.record_executor_output(
-                            task_message=task_message, stream=stream, content=content
-                        )
+                model_selector = getattr(sol_executor, "for_model", None)
+                if callable(model_selector):
+                    sol_executor = cast(Executor, model_selector("high"))
+                output_callback_setter = getattr(
+                    sol_executor, "with_output_callback", None
+                )
+                if callable(output_callback_setter):
+                    sol_executor = cast(
+                        Executor,
+                        output_callback_setter(
+                            lambda stream, content: (
+                                activity_monitor.record_executor_output(
+                                    task_message=task_message,
+                                    stream=stream,
+                                    content=content,
+                                )
+                            )
+                        ),
                     )
                 if _should_run_supervised_recovery(task_message):
                     sol_executor = SupervisedReplyRecoveryExecutor(

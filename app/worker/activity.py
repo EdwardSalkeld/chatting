@@ -311,9 +311,10 @@ class WorkerActivityMonitor:
             work_item_id=work_item_id, limit=self._history_limit
         )
         for run in runs:
-            run["preview"] = _extract_current_message(run.pop("request_content", None))[
-                :240
-            ]
+            request_content = run.pop("request_content", None)
+            run["preview"] = _extract_current_message(
+                request_content if isinstance(request_content, str) else None
+            )[:240]
         return {
             "item": item,
             "runs": runs,

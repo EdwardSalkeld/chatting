@@ -238,7 +238,11 @@ class CodexExecutorTests(unittest.TestCase):
         )
         self.assertNotIn("handler_api_url", payload["scheduling_contract"])
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
-        self.assertEqual(run_mock.call_args.kwargs["env"], {"TOKEN": "secret"})
+        executor_env = run_mock.call_args.kwargs["env"]
+        self.assertEqual(executor_env["TOKEN"], "secret")
+        self.assertIn(
+            str(Path(__file__).resolve().parents[1]), executor_env["PYTHONPATH"]
+        )
         self.assertEqual(run_mock.call_args.kwargs["timeout"], 123)
 
 
