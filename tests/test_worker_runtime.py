@@ -61,6 +61,15 @@ class ExecutionErrorExecutor(TestExecutor):
 
 
 @dataclass(frozen=True)
+class AuthErrorExecutor(TestExecutor):
+    def execute(self, task):
+        del task
+        return ExecutionResult(
+            errors=["executor_exit_nonzero:1:invalidated oauth token: secret-value"],
+        )
+
+
+@dataclass(frozen=True)
 class LongExecutionErrorExecutor(TestExecutor):
     def execute(self, task):
         del task
@@ -407,6 +416,35 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 store.list_dead_letters()[0].reason_codes, ["retry_exhausted"]
             )
+            self.assertEqual(len(result.egress_messages), 2)
+            self.assertEqual(result.egress_messages[0].event_kind, "message")
+            self.assertEqual(
+                result.egress_messages[0].message.body,
+                "I failed to process this task. Please try again later.",
+            )
+
+    def test_process_task_message_reports_auth_failure_without_exposing_details(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            result = process_task_message(
+                store=store,
+                task_message=self._build_telegram_task_message(),
+                executor_impl=AuthErrorExecutor(),
+                max_attempts=1,
+                activity_monitor=self._build_monitor(store),
+            )
+
+            self.assertEqual(result.run_record.result_status, "execution_error")
+            self.assertEqual(len(result.egress_messages), 2)
+            visible, completion = result.egress_messages
+            self.assertEqual(visible.message.channel, "telegram")
+            self.assertEqual(
+                visible.message.body,
+                "I failed to process this task. Please try again later.",
+            )
+            self.assertEqual(completion.event_kind, "completion")
 
     def test_process_task_message_emits_visible_credit_error_before_dead_letter_completion(
         self,
