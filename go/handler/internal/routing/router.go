@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -26,9 +25,6 @@ type Router interface {
 
 type PersistentLaneRouter struct{}
 
-var prPath = regexp.MustCompile(`^/([\w.-]+/[\w.-]+)/pull/(\d+)/?$`)
-var prPathInText = regexp.MustCompile(`^/([\w.-]+/[\w.-]+)/pull/(\d+)(?:/|$)`)
-
 // NormalizePR accepts a GitHub pull request URL and returns its routing key.
 func NormalizePR(value string) (string, error) {
 	return prKey(value, false)
@@ -39,19 +35,41 @@ func prKey(value string, allowPathSuffix bool) (string, error) {
 	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
 		return "", fmt.Errorf("invalid GitHub PR URL")
 	}
-	pathPattern := prPath
-	if allowPathSuffix {
-		pathPattern = prPathInText
-	}
-	match := pathPattern.FindStringSubmatch(parsed.Path)
-	if match == nil {
+	parts := strings.Split(parsed.Path, "/")
+	if len(parts) < 5 || parts[0] != "" || !validPRName(parts[1]) || !validPRName(parts[2]) || parts[3] != "pull" || !validPRNumber(parts[4]) ||
+		(!allowPathSuffix && len(parts) != 5 && !(len(parts) == 6 && parts[5] == "")) {
 		return "", fmt.Errorf("invalid GitHub PR URL")
 	}
-	number, err := strconv.Atoi(match[2])
+	number, err := strconv.Atoi(parts[4])
 	if err != nil {
 		return "", fmt.Errorf("invalid GitHub PR URL: %w", err)
 	}
-	return fmt.Sprintf("%s#%d", strings.ToLower(match[1]), number), nil
+	return fmt.Sprintf("%s/%s#%d", strings.ToLower(parts[1]), strings.ToLower(parts[2]), number), nil
+}
+
+func validPRName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func validPRNumber(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
