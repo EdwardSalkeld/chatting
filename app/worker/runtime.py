@@ -644,7 +644,7 @@ def _build_visible_error_egress(
             task_id=task_message.task_id,
             sequence=sequence,
             event_kind="message",
-            dedupe_key="credits-exhausted",
+            dedupe_key="worker-failed",
         ),
         sequence=sequence,
         event_kind="message",
@@ -745,10 +745,15 @@ def _build_visible_error_body(
 ) -> str | None:
     if "missing_visible_reply" in reason_codes:
         return _build_missing_visible_reply_error(task_message=task_message)
-    return _build_credit_exhausted_visible_error(
+    if not reason_codes:
+        return None
+    credit_error = _build_credit_exhausted_visible_error(
         execution_errors=execution_errors,
         last_error=last_error,
     )
+    if credit_error is not None:
+        return credit_error
+    return "I failed to process this task. Please try again later."
 
 
 def _build_missing_visible_reply_error(*, task_message: TaskQueueMessage) -> str | None:
