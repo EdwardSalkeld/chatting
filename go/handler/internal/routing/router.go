@@ -3,6 +3,7 @@ package routing
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,10 +27,15 @@ type Router interface {
 type PersistentLaneRouter struct{}
 
 var prURL = regexp.MustCompile(`(?i)https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)(?:\b|/)`)
+var prPath = regexp.MustCompile(`^/([\w.-]+/[\w.-]+)/pull/(\d+)/?$`)
 
 // NormalizePR accepts a GitHub pull request URL and returns its routing key.
 func NormalizePR(value string) (string, error) {
-	match := prURL.FindStringSubmatch(value)
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
+		return "", fmt.Errorf("invalid GitHub PR URL")
+	}
+	match := prPath.FindStringSubmatch(parsed.Path)
 	if match == nil {
 		return "", fmt.Errorf("invalid GitHub PR URL")
 	}
