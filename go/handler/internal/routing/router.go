@@ -26,16 +26,24 @@ type Router interface {
 
 type PersistentLaneRouter struct{}
 
-var prURL = regexp.MustCompile(`(?i)https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)(?:\b|/)`)
 var prPath = regexp.MustCompile(`^/([\w.-]+/[\w.-]+)/pull/(\d+)/?$`)
+var prPathInText = regexp.MustCompile(`^/([\w.-]+/[\w.-]+)/pull/(\d+)(?:/|$)`)
 
 // NormalizePR accepts a GitHub pull request URL and returns its routing key.
 func NormalizePR(value string) (string, error) {
+	return prKey(value, false)
+}
+
+func prKey(value string, allowPathSuffix bool) (string, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
 		return "", fmt.Errorf("invalid GitHub PR URL")
 	}
-	match := prPath.FindStringSubmatch(parsed.Path)
+	pathPattern := prPath
+	if allowPathSuffix {
+		pathPattern = prPathInText
+	}
+	match := pathPattern.FindStringSubmatch(parsed.Path)
 	if match == nil {
 		return "", fmt.Errorf("invalid GitHub PR URL")
 	}
@@ -71,12 +79,16 @@ func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 	if reply.Type == "github" {
 		content += " " + reply.Target
 	}
-	for _, match := range prURL.FindAllStringSubmatch(content, -1) {
-		number, err := strconv.Atoi(match[2])
+	for _, token := range strings.Fields(content) {
+		index := strings.Index(token, "https://")
+		if index < 0 || (index > 0 && !strings.ContainsRune("(<[\"'", rune(token[index-1]))) {
+			continue
+		}
+		candidate := strings.TrimRight(token[index:], "),.>;!?\"'")
+		key, err := prKey(candidate, true)
 		if err != nil {
 			continue
 		}
-		key := fmt.Sprintf("%s#%d", strings.ToLower(match[1]), number)
 		if !seen[key] {
 			seen[key] = true
 			decision.PRKeys = append(decision.PRKeys, key)
