@@ -164,6 +164,10 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite has one writer. Keep handler ingress and synchronous egress on one
+	// connection so a read-then-write transaction cannot race another pooled
+	// connection and fail while upgrading its snapshot to a write lock.
+	db.SetMaxOpenConns(1)
 	store := &Store{db: db, router: routing.PersistentLaneRouter{}}
 	if err := store.initialize(ctx); err != nil {
 		_ = db.Close()
