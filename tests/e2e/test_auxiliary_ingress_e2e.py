@@ -103,10 +103,6 @@ def _post_json(host: str, port: int, path: str, payload: object) -> dict[str, ob
 
 class AuxiliaryIngressE2ETests(unittest.TestCase):
     def test_auxiliary_ingress_post_reaches_worker_and_completes(self) -> None:
-        # Keep the loop budget tight so this harness proves the auxiliary
-        # ingress roundtrip without spending most of the timeout on internal
-        # heartbeat traffic after the expected webhook task has completed.
-        max_loops = 20
         repo_root = Path(__file__).resolve().parent.parent.parent
         server_bin = _resolve_bbmb_server_bin()
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
@@ -172,7 +168,6 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                         "max_attempts": 2,
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
-                        "max_loops": max_loops,
                         "activity_port": worker_activity_port,
                         "codex_command": f"{sys.executable} {fake_codex}",
                         "handler_egress_url": f"http://127.0.0.1:{egress_http_port}/egress",
