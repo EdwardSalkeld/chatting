@@ -128,6 +128,13 @@ def process_task_message(
                 )
             if hasattr(active_executor, "for_model"):
                 active_executor = active_executor.for_model(model_tier)
+            streaming_output = hasattr(active_executor, "with_output_callback")
+            if streaming_output:
+                active_executor = active_executor.with_output_callback(
+                    lambda stream, content: activity_monitor.record_executor_output(
+                        task_message=task_message, stream=stream, content=content
+                    )
+                )
             if _should_run_supervised_recovery(task_message):
                 active_executor = SupervisedReplyRecoveryExecutor(
                     inner=active_executor,
@@ -160,6 +167,12 @@ def process_task_message(
                     )
                 if hasattr(sol_executor, "for_model"):
                     sol_executor = sol_executor.for_model("high")
+                if hasattr(sol_executor, "with_output_callback"):
+                    sol_executor = sol_executor.with_output_callback(
+                        lambda stream, content: activity_monitor.record_executor_output(
+                            task_message=task_message, stream=stream, content=content
+                        )
+                    )
                 if _should_run_supervised_recovery(task_message):
                     sol_executor = SupervisedReplyRecoveryExecutor(
                         inner=sol_executor, store=store
@@ -192,11 +205,12 @@ def process_task_message(
                 executor_launch_count = active_executor.last_launch_count
                 used_supervised_recovery = active_executor.last_recovery_attempted
             execution_payload = execution_result.to_dict()
-            _record_execution_output(
-                activity_monitor=activity_monitor,
-                task_message=task_message,
-                execution_result=execution_result,
-            )
+            if not streaming_output:
+                _record_execution_output(
+                    activity_monitor=activity_monitor,
+                    task_message=task_message,
+                    execution_result=execution_result,
+                )
 
             published_incremental_reply_count = (
                 store.count_conversation_bundle_main_reply_egress_events(

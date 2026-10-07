@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import codecs
+import selectors
 import subprocess
 import tempfile
 from dataclasses import dataclass, field, replace
@@ -52,6 +54,12 @@ class CodexExecutor:
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
+    output_callback: Callable[[str, str], None] | None = None
+
+    def with_output_callback(
+        self, callback: Callable[[str, str], None]
+    ) -> CodexExecutor:
+        return replace(self, output_callback=callback)
 
     def for_workspace(self, *, work_item_id: str) -> CodexExecutor:
         """Create or reuse a lane directory, then return a run-specific executor."""
@@ -120,16 +128,26 @@ class CodexExecutor:
         if self.model_tier is not None:
             command = (*command, "-m", MODELS[self.model_tier])
         try:
-            completed = subprocess.run(
-                command,
-                input=payload,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                cwd=self.cwd,
-                env=_executor_env(self.env),
-            )
+            if self.output_callback is None:
+                completed = subprocess.run(
+                    command,
+                    input=payload,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    cwd=self.cwd,
+                    env=_executor_env(self.env),
+                )
+            else:
+                completed = _run_streaming(
+                    command=command,
+                    payload=payload,
+                    cwd=self.cwd,
+                    env=_executor_env(self.env),
+                    timeout_seconds=self.timeout_seconds,
+                    callback=self.output_callback,
+                )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")
 
@@ -191,6 +209,92 @@ class CodexExecutor:
         if home:
             return Path(home) / ".codex"
         return None
+
+
+def _run_streaming(
+    *,
+    command: tuple[str, ...],
+    payload: str,
+    cwd: str | None,
+    env: Mapping[str, str],
+    timeout_seconds: int,
+    callback: Callable[[str, str], None],
+) -> subprocess.CompletedProcess[str]:
+    """Capture both pipes while publishing chunks as the child writes them."""
+    import time
+
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        env=env,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    streams = {process.stdout: "stdout", process.stderr: "stderr"}
+    decoders = {
+        stream: codecs.getincrementaldecoder("utf-8")("replace") for stream in streams
+    }
+    captured: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        input_bytes = payload.encode("utf-8")
+        input_offset = 0
+        os.set_blocking(process.stdin.fileno(), False)
+        with selectors.DefaultSelector() as selector:
+            for stream in streams:
+                selector.register(stream, selectors.EVENT_READ)
+            selector.register(process.stdin, selectors.EVENT_WRITE)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
+                for key, _ in selector.select(timeout=min(remaining, 0.5)):
+                    stream = key.fileobj
+                    if stream is process.stdin:
+                        try:
+                            input_offset += os.write(
+                                process.stdin.fileno(),
+                                input_bytes[input_offset : input_offset + 8192],
+                            )
+                        except BrokenPipeError:
+                            input_offset = len(input_bytes)
+                        if input_offset >= len(input_bytes):
+                            selector.unregister(process.stdin)
+                            process.stdin.close()
+                        continue
+                    chunk = os.read(stream.fileno(), 8192)
+                    if not chunk:
+                        selector.unregister(stream)
+                        tail = decoders[stream].decode(b"", final=True)
+                        if tail:
+                            captured[streams[stream]].append(tail)
+                            callback(streams[stream], tail)
+                        continue
+                    content = decoders[stream].decode(chunk)
+                    if content:
+                        captured[streams[stream]].append(content)
+                        callback(streams[stream], content)
+        remaining = deadline - time.monotonic()
+        process.wait(timeout=max(remaining, 0.001))
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        if not process.stdin.closed:
+            process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        "".join(captured["stdout"]),
+        "".join(captured["stderr"]),
+    )
 
 
 def _usage_report_from_rollout(rollout: Path) -> UsageReport | None:

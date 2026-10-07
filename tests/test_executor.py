@@ -1,6 +1,8 @@
 import json
 import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +12,7 @@ from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
 from app.broker import TaskQueueMessage
 from app.state import SQLiteStateStore
 from app.worker.executor import CodexExecutor
+from app.worker.executor.codex import _run_streaming
 
 
 def _envelope() -> TaskEnvelope:
@@ -33,6 +36,41 @@ def _envelope() -> TaskEnvelope:
 
 
 class CodexExecutorTests(unittest.TestCase):
+    def test_streaming_output_arrives_before_process_exits(self) -> None:
+        first_chunk = threading.Event()
+        output: list[tuple[str, str]] = []
+        result: dict[str, subprocess.CompletedProcess[str]] = {}
+
+        def callback(stream: str, content: str) -> None:
+            output.append((stream, content))
+            if "first" in "".join(part for _, part in output):
+                first_chunk.set()
+
+        def run() -> None:
+            result["completed"] = _run_streaming(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    "import sys,time; sys.stdin.read(); print('first',flush=True); "
+                    "time.sleep(.5); print('second',flush=True)",
+                ),
+                payload="task",
+                cwd=None,
+                env={},
+                timeout_seconds=5,
+                callback=callback,
+            )
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.assertTrue(first_chunk.wait(timeout=2))
+        self.assertTrue(thread.is_alive())
+        thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result["completed"].stdout, "first\nsecond\n")
+        self.assertEqual("".join(part for _, part in output), "first\nsecond\n")
+
     def test_telegram_prompt_uses_worker_history_and_exposes_search(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))

@@ -182,6 +182,9 @@ func TestPollNormalizesAllowedChannelPostAndMyChatMemberObservation(t *testing.T
 	if envelopes[0].ReplyChannel.Target != "-100999" || envelopes[0].Content != "release shipped" {
 		t.Fatalf("channel envelope = %#v", envelopes[0])
 	}
+	if envelopes[0].ReplyChannel.Metadata["chat_title"] != "Deploys" || envelopes[0].ReplyChannel.Metadata["chat_type"] != "channel" {
+		t.Fatalf("channel metadata = %#v", envelopes[0].ReplyChannel.Metadata)
+	}
 	if len(observed) != 2 {
 		t.Fatalf("observed = %#v", observed)
 	}

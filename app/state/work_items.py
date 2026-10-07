@@ -73,6 +73,22 @@ def assign(
             created_at,
         ),
     )
+    # Telegram titles can change, and older items predate the title metadata.
+    # Refresh the saved label on each new message without changing its model.
+    if reply.metadata.get("chat_title"):
+        connection.execute(
+            "UPDATE work_items SET preferred_reply_json = ? WHERE work_item_id = ?",
+            (
+                json.dumps(
+                    {
+                        "type": reply.type,
+                        "target": reply.target,
+                        "metadata": reply.metadata,
+                    }
+                ),
+                item_id,
+            ),
+        )
     connection.execute(
         """INSERT INTO work_item_events
            (task_id, work_item_id, conversation_id, route_reason, created_at)

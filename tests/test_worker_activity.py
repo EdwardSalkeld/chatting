@@ -19,13 +19,13 @@ from app.worker.activity import WorkerActivityMonitor, start_worker_activity_ser
 
 
 class WorkerActivityTests(unittest.TestCase):
-    def _build_task_message(self) -> TaskQueueMessage:
+    def _build_task_message(self, content: str = "hello") -> TaskQueueMessage:
         envelope = TaskEnvelope(
             id="telegram:1",
             source="im",
             received_at=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
             actor="8605042448:edsalkeld",
-            content="hello",
+            content=content,
             attachments=[],
             context_refs=[],
             reply_channel=ReplyChannel(type="telegram", target="8605042448"),
@@ -117,7 +117,9 @@ class WorkerActivityTests(unittest.TestCase):
                 history_limit=5,
                 now_fn=lambda: datetime(2026, 3, 31, 12, 5, tzinfo=timezone.utc),
             )
-            task_message = self._build_task_message()
+            full_request = "First line\n" + "A long request. " * 25 + "\nLast line"
+            task_message = self._build_task_message(full_request)
+            store.stage_inbox_task(task_message)
             monitor.record_task_received(task_message=task_message)
             monitor.record_executor_started(
                 task_message=task_message,
@@ -136,6 +138,7 @@ class WorkerActivityTests(unittest.TestCase):
                 latency_ms=42,
                 result_status="success",
                 created_at=datetime(2026, 3, 31, 12, 5, tzinfo=timezone.utc),
+                work_item_id="item_legacy_general",
             )
             store.append_run(run_record)
             store.append_audit_event(
@@ -186,19 +189,30 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertEqual(
                     runs_payload["runs"][0]["latest_phase"], "task_finished"
                 )
-                self.assertEqual(runs_payload["runs"][0]["preview"], "hello")
+                self.assertEqual(runs_payload["runs"][0]["preview"], full_request)
 
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
                     html_body = response.read().decode("utf-8")
-                self.assertIn("Recent Runs", html_body)
-                self.assertIn("completed runs keep stable URLs below", html_body)
-                self.assertIn("task:telegram:1", html_body)
-                self.assertNotIn("Live now", html_body)
-                self.assertIn("run%3Atask%3Atelegram%3A1%3A123", html_body)
-                self.assertIn("raw activity", html_body)
-                self.assertIn("Tue 31 Mar 2026 12:05:00 UTC", html_body)
-                self.assertNotIn("pause refresh", html_body)
-                self.assertNotIn("fetch(`/activity.json", html_body)
+                self.assertIn("Work items", html_body)
+                self.assertIn("/api/items", html_body)
+                self.assertIn("viewport", html_body)
+
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/items"
+                ) as response:
+                    items = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(items["items"][0]["run_count"], 1)
+                self.assertEqual(
+                    items["items"][0]["work_item_id"], "item_legacy_general"
+                )
+
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/items/item_legacy_general/runs"
+                ) as response:
+                    item_runs = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(item_runs["runs"][0]["run_id"], run_record.run_id)
+                self.assertEqual(item_runs["runs"][0]["preview"], full_request[:240])
+                self.assertNotIn("request_content", item_runs["runs"][0])
 
                 run_id = runs_payload["runs"][0]["run_id"]
                 encoded_run_id = quote(run_id, safe="")
@@ -221,13 +235,23 @@ class WorkerActivityTests(unittest.TestCase):
                     f"http://127.0.0.1:{port}/runs/{encoded_run_id}"
                 ) as response:
                     detail_html = response.read().decode("utf-8")
-                self.assertIn("Run Detail", detail_html)
-                self.assertIn("Events In Order", detail_html)
-                self.assertIn("task received", detail_html)
-                self.assertIn("executor started (attempt 1)", detail_html)
-                self.assertIn("warning line", detail_html)
-                self.assertIn("all runs", detail_html)
-                self.assertIn("Audit detail (raw JSON)", detail_html)
+                self.assertIn("/api/runs/", detail_html)
+                self.assertIn("Follow output", detail_html)
+                self.assertIn("Command started", detail_html)
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/runs/{encoded_run_id}"
+                ) as response:
+                    header = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(header["task_id"], task_message.task_id)
+                self.assertEqual(header["preview"], full_request[:240])
+                self.assertEqual(header["request"], full_request)
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/tasks/{quote(task_message.task_id, safe='')}/events?after=0"
+                ) as response:
+                    live_events = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(
+                    live_events["events"][0]["detail"]["request"], full_request
+                )
             finally:
                 server.shutdown()
 
@@ -236,6 +260,7 @@ class WorkerActivityTests(unittest.TestCase):
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             monitor = WorkerActivityMonitor(store=store, history_limit=5)
             task_message = self._build_task_message()
+            store.stage_inbox_task(task_message)
             monitor.record_task_received(task_message=task_message)
             monitor.record_executor_started(task_message=task_message, attempt=1)
             monitor.record_executor_output(
@@ -259,14 +284,27 @@ class WorkerActivityTests(unittest.TestCase):
                 )
                 self.assertEqual(payload["current_run"]["event_count"], 3)
 
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/tasks/task%3Atelegram%3A1"
+                ) as response:
                     html_body = response.read().decode("utf-8")
-                self.assertIn("Live now", html_body)
-                self.assertIn("Activity so far", html_body)
-                self.assertIn("looking at the worker UI", html_body)
-                self.assertIn("refreshing every 2 seconds", html_body)
-                self.assertIn("window.location.reload(), 2000", html_body)
-                self.assertIn("No completed runs yet.", html_body)
+                self.assertIn("Live session", html_body)
+                self.assertIn("Follow output", html_body)
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/tasks/task%3Atelegram%3A1/events?after=2"
+                ) as response:
+                    events = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(
+                    [event["phase"] for event in events["events"]], ["executor_stdout"]
+                )
+                self.assertTrue(events["active"])
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/items/item_legacy_general/runs"
+                ) as response:
+                    item = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(
+                    item["active_executors"][0]["task_id"], task_message.task_id
+                )
             finally:
                 server.shutdown()
 
@@ -347,8 +385,8 @@ class WorkerActivityTests(unittest.TestCase):
             finally:
                 server.shutdown()
 
-    def test_extract_current_message_and_truncate(self) -> None:
-        from app.worker.activity import _extract_current_message, _truncate
+    def test_extract_current_message(self) -> None:
+        from app.worker.activity import _extract_current_message
 
         wrapped = (
             "Recent conversation context (oldest first):\n"
@@ -373,43 +411,6 @@ class WorkerActivityTests(unittest.TestCase):
         )
         self.assertEqual(_extract_current_message(""), "")
         self.assertEqual(_extract_current_message(None), "")
-
-        self.assertEqual(_truncate("short"), "short")
-        self.assertEqual(_truncate("x" * 250), "x" * 200 + "…")
-
-    def test_render_executor_stderr_inlines_codex_collapses_exec(self) -> None:
-        from app.worker.activity import _render_executor_stderr, _split_stderr_blocks
-
-        sample = "\n".join(
-            [
-                "OpenAI Codex v0.145.0",
-                "workdir: /srv/chatting/workspace",
-                "user",
-                '{"task": 1}',
-                "codex",
-                "Checking the repo first.",
-                "exec",
-                "bash -lc 'ls'",
-                " succeeded in 0ms:",
-                "file1",
-                "file2",
-                "codex",
-                "Done.",
-            ]
-        )
-        kinds = [k for k, _ in _split_stderr_blocks(sample)]
-        self.assertEqual(kinds, ["header", "user", "codex", "exec", "codex"])
-
-        out = _render_executor_stderr(sample)
-        # codex messages inline (not behind a toggle)
-        self.assertIn("<div class='stderr-codex'>Checking the repo first.</div>", out)
-        self.assertIn("<div class='stderr-codex'>Done.</div>", out)
-        # exec block collapsed, with the bash -lc wrapper stripped to the command
-        self.assertIn("<details class='stderr-exec'>", out)
-        self.assertIn("<summary><code>ls</code></summary>", out)
-        # session header + task JSON collapsed away
-        self.assertIn("session header", out)
-        self.assertIn("task input", out)
 
     def test_list_runs_hides_internal_runs_unless_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

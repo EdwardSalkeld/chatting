@@ -298,6 +298,18 @@ class SQLiteStateStore:
                 "CREATE INDEX IF NOT EXISTS worker_inbox_work_item_state "
                 "ON worker_inbox (work_item_id, state, staged_at)"
             )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS run_records_work_item_created "
+                "ON run_records (work_item_id, created_at DESC)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS audit_events_run_id "
+                "ON audit_events (run_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS worker_activity_task_id "
+                "ON worker_activity_events (task_id, activity_id)"
+            )
             connection.commit()
 
     def stage_inbox_task(
@@ -1079,6 +1091,98 @@ class SQLiteStateStore:
                 schema_version=row["schema_version"],
                 work_item_id=row["work_item_id"],
             )
+            for row in rows
+        ]
+
+    def list_work_item_overview(self) -> list[dict[str, object]]:
+        """Small rows for the landing page, without loading run transcripts."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT item.work_item_id, item.origin_conversation_id,
+                          item.preferred_reply_json, item.model_tier,
+                          item.created_at, COALESCE(runs.run_count, 0) AS run_count,
+                          runs.last_run_at,
+                          COALESCE(queue.queued, 0) AS queued,
+                          COALESCE(queue.running, 0) AS running
+                   FROM work_items AS item
+                   LEFT JOIN (
+                       SELECT work_item_id, COUNT(*) AS run_count,
+                              MAX(created_at) AS last_run_at
+                       FROM run_records WHERE source != 'internal'
+                       GROUP BY work_item_id
+                   ) AS runs ON runs.work_item_id = item.work_item_id
+                   LEFT JOIN (
+                       SELECT work_item_id,
+                              SUM(CASE WHEN state IN ('pending', 'attached') THEN 1 ELSE 0 END) AS queued,
+                              SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running
+                       FROM worker_inbox GROUP BY work_item_id
+                   ) AS queue ON queue.work_item_id = item.work_item_id
+                   ORDER BY COALESCE(runs.last_run_at, item.created_at) DESC"""
+            ).fetchall()
+        return [
+            {
+                "work_item_id": row["work_item_id"],
+                "origin_conversation_id": row["origin_conversation_id"],
+                "reply": json.loads(row["preferred_reply_json"]),
+                "model_tier": row["model_tier"],
+                "created_at": row["created_at"],
+                "run_count": row["run_count"],
+                "last_run_at": row["last_run_at"],
+                "queued": row["queued"],
+                "running": row["running"],
+            }
+            for row in rows
+        ]
+
+    def list_work_item_run_cards(
+        self, *, work_item_id: str, limit: int
+    ) -> list[dict[str, object]]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT run.run_id, run.created_at, run.result_status,
+                          run.latency_ms, run.source,
+                          json_extract(audit.detail_json, '$.task_id') AS task_id,
+                          json_extract(activity.detail_json, '$.content') AS request_content
+                   FROM run_records AS run
+                   LEFT JOIN audit_events AS audit ON audit.event_id = (
+                       SELECT MAX(event_id) FROM audit_events WHERE run_id = run.run_id
+                   )
+                   LEFT JOIN worker_activity_events AS activity ON activity.activity_id = (
+                       SELECT MIN(activity_id) FROM worker_activity_events
+                       WHERE task_id = json_extract(audit.detail_json, '$.task_id')
+                         AND phase = 'task_received'
+                   )
+                   WHERE run.work_item_id = ? AND run.source != 'internal'
+                   ORDER BY run.created_at DESC LIMIT ?""",
+                (work_item_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_worker_activity_since(
+        self, *, task_id: str, after_id: int, limit: int = 100
+    ) -> list[dict[str, object]]:
+        if not task_id or after_id < 0 or limit <= 0:
+            raise ValueError("invalid activity query")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT activity_id, occurred_at, phase, summary, detail_json,
+                          run_id
+                   FROM worker_activity_events
+                   WHERE task_id = ? AND activity_id > ? AND is_internal = 0
+                   ORDER BY activity_id LIMIT ?""",
+                (task_id, after_id, limit),
+            ).fetchall()
+        return [
+            {
+                "activity_id": row["activity_id"],
+                "occurred_at": row["occurred_at"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "detail": json.loads(row["detail_json"]),
+                "run_id": row["run_id"],
+            }
             for row in rows
         ]
 
