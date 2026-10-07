@@ -22,8 +22,14 @@ from app.worker.activity import WorkerActivityMonitor
 from app.worker.runtime import _build_error_summary, process_task_message
 
 
+class TestExecutor:
+    def for_workspace(self, *, work_item_id):
+        del work_item_id
+        return self
+
+
 @dataclass(frozen=True)
-class MultiMessageExecutor:
+class MultiMessageExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(
@@ -32,21 +38,21 @@ class MultiMessageExecutor:
 
 
 @dataclass(frozen=True)
-class AlwaysFailExecutor:
+class AlwaysFailExecutor(TestExecutor):
     def execute(self, task):
         del task
         raise RuntimeError("executor down")
 
 
 @dataclass(frozen=True)
-class CreditsFailExecutor:
+class CreditsFailExecutor(TestExecutor):
     def execute(self, task):
         del task
         raise RuntimeError("out of credits")
 
 
 @dataclass(frozen=True)
-class ExecutionErrorExecutor:
+class ExecutionErrorExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(
@@ -55,7 +61,7 @@ class ExecutionErrorExecutor:
 
 
 @dataclass(frozen=True)
-class AuthErrorExecutor:
+class AuthErrorExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(
@@ -64,7 +70,7 @@ class AuthErrorExecutor:
 
 
 @dataclass(frozen=True)
-class LongExecutionErrorExecutor:
+class LongExecutionErrorExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(
@@ -75,7 +81,7 @@ class LongExecutionErrorExecutor:
 
 
 @dataclass(frozen=True)
-class IncrementalReplyExecutor:
+class IncrementalReplyExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(
@@ -84,21 +90,21 @@ class IncrementalReplyExecutor:
 
 
 @dataclass(frozen=True)
-class NoMessageExecutor:
+class NoMessageExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(errors=[])
 
 
 @dataclass(frozen=True)
-class FinalAliasExecutor:
+class FinalAliasExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(errors=[])
 
 
 @dataclass(frozen=True)
-class MainReplyExecutor:
+class MainReplyExecutor(TestExecutor):
     store: SQLiteStateStore
 
     def execute(self, task):
@@ -120,7 +126,7 @@ class MainReplyExecutor:
         return ExecutionResult(errors=[])
 
 
-class RecordingExecutor:
+class RecordingExecutor(TestExecutor):
     def __init__(self, results: list[ExecutionResult]) -> None:
         self._results = list(results)
         self.calls: list[TaskEnvelope] = []
@@ -132,7 +138,7 @@ class RecordingExecutor:
         return self._results.pop(0)
 
 
-class ReplyOnSecondPassExecutor:
+class ReplyOnSecondPassExecutor(TestExecutor):
     def __init__(self, store: SQLiteStateStore) -> None:
         self.store = store
         self.calls: list[TaskEnvelope] = []
@@ -158,7 +164,7 @@ class ReplyOnSecondPassExecutor:
         return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
 
 
-class MainReplyRecordingExecutor:
+class MainReplyRecordingExecutor(TestExecutor):
     def __init__(self, store: SQLiteStateStore) -> None:
         self.store = store
         self.calls: list[TaskEnvelope] = []
@@ -183,7 +189,7 @@ class MainReplyRecordingExecutor:
         return ExecutionResult(errors=[])
 
 
-class ResolveFollowupsOnSecondPassExecutor:
+class ResolveFollowupsOnSecondPassExecutor(TestExecutor):
     def __init__(self, store: SQLiteStateStore) -> None:
         self.store = store
         self.calls: list[TaskEnvelope] = []
@@ -211,7 +217,7 @@ class ResolveFollowupsOnSecondPassExecutor:
         return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
 
 
-class ReplyFromClaimedFollowupExecutor:
+class ReplyFromClaimedFollowupExecutor(TestExecutor):
     """Model a current reply sent after main_reply claims a newer turn."""
 
     def __init__(self, store: SQLiteStateStore, followup_task_id: str) -> None:

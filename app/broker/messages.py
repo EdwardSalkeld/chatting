@@ -127,6 +127,7 @@ class TaskQueueMessage:
     emitted_at: datetime
     schema_version: str = SCHEMA_VERSION
     message_type: str = _TASK_MESSAGE_TYPE
+    work_item_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION:
@@ -139,7 +140,7 @@ class TaskQueueMessage:
             raise ValueError("emitted_at must be timezone-aware")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "message_type": self.message_type,
             "trace_id": self.trace_id,
@@ -147,6 +148,9 @@ class TaskQueueMessage:
             "emitted_at": _serialize_utc_datetime(self.emitted_at),
             "envelope": self.envelope.to_dict(),
         }
+        if self.work_item_id is not None:
+            payload["work_item_id"] = self.work_item_id
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "TaskQueueMessage":
@@ -250,6 +254,9 @@ class TaskQueueMessage:
             schema_version=_require_non_empty_string(
                 payload.get("schema_version", SCHEMA_VERSION),
                 field_name="schema_version",
+            ),
+            work_item_id=_optional_non_empty_string(
+                payload.get("work_item_id"), field_name="work_item_id"
             ),
         )
 

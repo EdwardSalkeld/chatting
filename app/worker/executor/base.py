@@ -15,6 +15,8 @@ class Executor(Protocol):
         """Run task logic and return any errors plus captured stdout/stderr."""
         ...
 
+    def for_workspace(self, *, work_item_id: str) -> Executor: ...
+
 
 # Kept separate from Executor so an executor can exist without one: reporting
 # usage is a backend-specific lookup, not part of running a task.

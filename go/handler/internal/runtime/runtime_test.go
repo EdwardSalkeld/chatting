@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -271,16 +270,7 @@ func TestPublishIngressEnrichesTelegramEnvelopeWithRecentConversation(t *testing
 		t.Fatalf("published = %d", published)
 	}
 	recorded := state.tasks["task:telegram:100"]
-	if !strings.Contains(recorded.Envelope.Content, "Recent conversation context (oldest first):") {
-		t.Fatalf("content = %q", recorded.Envelope.Content)
-	}
-	if !strings.Contains(recorded.Envelope.Content, "[2026-03-09 11:05Z] user: turn-5") || !strings.Contains(recorded.Envelope.Content, "[2026-03-09 11:34Z] user: turn-34") {
-		t.Fatalf("content = %q", recorded.Envelope.Content)
-	}
-	if strings.Contains(recorded.Envelope.Content, "turn-4") {
-		t.Fatalf("content = %q", recorded.Envelope.Content)
-	}
-	if !strings.Contains(recorded.Envelope.Content, "Current user message:\nlatest-turn") {
+	if recorded.Envelope.Content != "latest-turn" {
 		t.Fatalf("content = %q", recorded.Envelope.Content)
 	}
 	lastTurn := state.turns["12345"][len(state.turns["12345"])-1]
@@ -323,14 +313,8 @@ func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := state.tasks["task:telegram:101"].Envelope.Content
-	if !strings.Contains(content, "[2026-03-09 11:58Z] @alice: earlier") {
-		t.Fatalf("history not attributed by sender: %q", content)
-	}
-	if !strings.Contains(content, "[2026-03-09 11:59Z] assistant: billy replied") {
-		t.Fatalf("assistant turn should fall back to role: %q", content)
-	}
-	if !strings.Contains(content, "Current message from @bob (bot):\nlatest-turn") {
-		t.Fatalf("current message not attributed: %q", content)
+	if content != "latest-turn" {
+		t.Fatalf("content = %q", content)
 	}
 	lastTurn := state.turns["12345"][len(state.turns["12345"])-1]
 	if lastTurn.Sender != "@bob (bot)" {
@@ -418,11 +402,11 @@ func TestPublishIngressIncludesStandaloneDocumentInLaterConversationHistory(t *t
 	}
 
 	content := state.tasks["task:telegram:message"].Envelope.Content
-	if !strings.Contains(content, "@alice: [document attached: rota.pdf]") {
-		t.Fatalf("document missing from conversation history: %q", content)
+	if content != "What does it say?" {
+		t.Fatalf("content = %q", content)
 	}
-	if !strings.Contains(content, "Current message from @alice:\nWhat does it say?") {
-		t.Fatalf("current message missing from enriched content: %q", content)
+	if got := state.turns["12345"][0].Content; got != "[document attached: rota.pdf]" {
+		t.Fatalf("stored document turn = %q", got)
 	}
 }
 

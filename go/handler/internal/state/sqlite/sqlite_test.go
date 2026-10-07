@@ -726,6 +726,7 @@ func assertTaskLedgerSchemaAndPayload(t *testing.T, dbPath string, taskMessage c
 		"trace_id:TEXT",
 		"task_payload_json:TEXT",
 		"created_at:TEXT",
+		"work_item_id:TEXT",
 	}, "|")
 	if gotColumns := strings.Join(columns, "|"); gotColumns != wantColumns {
 		t.Fatalf("task_ledger columns = %s", gotColumns)

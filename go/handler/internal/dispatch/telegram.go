@@ -369,7 +369,7 @@ func normalizeTelegramTextForParseMode(text string, parseMode *string) string {
 	case "MarkdownV2":
 		return escapeWithBackslashPrefix(text, "\\_*[]()~`>#+-=|{}.!")
 	case "Markdown":
-		return escapeWithBackslashPrefix(text, "\\_*`[]()")
+		return escapeWithBackslashPrefix(text, "\\_*`[")
 	default:
 		return text
 	}

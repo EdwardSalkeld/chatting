@@ -278,6 +278,7 @@ type TaskQueueMessage struct {
 	TaskID        string       `json:"task_id"`
 	EmittedAt     Timestamp    `json:"emitted_at"`
 	Envelope      TaskEnvelope `json:"envelope"`
+	WorkItemID    string       `json:"work_item_id,omitempty"`
 }
 
 func NewTaskQueueMessage(envelope TaskEnvelope, traceID string, emittedAt time.Time) TaskQueueMessage {

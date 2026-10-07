@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
+from app.state import work_items
 from app.models import (
     AttachmentRef,
     AuditEvent,
@@ -27,6 +28,7 @@ from app.models import (
 class InboxTask:
     task_message: TaskQueueMessage
     conversation_id: str
+    work_item_id: str | None
     state: str
     parent_task_id: str | None
 
@@ -34,6 +36,7 @@ class InboxTask:
 @dataclass(frozen=True)
 class TelegramHistoryTurn:
     target: str
+    topic_id: int | None
     message_id: int
     reply_to_message_id: int | None
     role: Literal["user", "assistant"]
@@ -112,6 +115,7 @@ class SQLiteStateStore:
                     turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel TEXT NOT NULL,
                     target TEXT NOT NULL,
+                    topic_id INTEGER,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     run_id TEXT,
@@ -228,6 +232,84 @@ class SQLiteStateStore:
                 ON worker_telegram_history (target, message_id)
                 """
             )
+            history_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(worker_telegram_history)"
+                )
+            }
+            if "topic_id" not in history_columns:
+                connection.execute(
+                    "ALTER TABLE worker_telegram_history ADD COLUMN topic_id INTEGER"
+                )
+                # Preserve topic boundaries for turns already in the worker ledger.
+                # This reads worker inbox metadata only; handler history is untouched.
+                connection.execute(
+                    """UPDATE worker_telegram_history
+                    SET topic_id = (
+                        SELECT json_extract(task_payload_json,
+                            '$.envelope.reply_channel.metadata.message_thread_id')
+                        FROM worker_inbox
+                        WHERE worker_inbox.task_id = worker_telegram_history.task_id
+                    )"""
+                )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS worker_telegram_history_scope
+                ON worker_telegram_history (target, topic_id, message_id)"""
+            )
+            work_items.initialize(connection)
+            # Additive migration for databases created before lane identities.
+            for table in (
+                "run_records",
+                "audit_events",
+                "dead_letters",
+                "worker_activity_events",
+                "conversation_turns",
+                "egress_outbox",
+                "worker_telegram_history",
+                "worker_inbox",
+                "dispatched_events",
+                "dispatched_event_ids",
+            ):
+                columns = {
+                    row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+                }
+                if "work_item_id" not in columns:
+                    connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN work_item_id TEXT"
+                    )
+            inbox_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(worker_inbox)")
+            }
+            if "lease_owner" not in inbox_columns:
+                connection.execute(
+                    "ALTER TABLE worker_inbox ADD COLUMN lease_owner TEXT"
+                )
+            connection.execute(
+                """
+                UPDATE worker_inbox SET work_item_id = COALESCE(
+                    (SELECT work_item_id FROM work_item_events
+                     WHERE work_item_events.task_id = worker_inbox.task_id),
+                    'item_legacy_general')
+                WHERE work_item_id IS NULL
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS worker_inbox_work_item_state "
+                "ON worker_inbox (work_item_id, state, staged_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS run_records_work_item_created "
+                "ON run_records (work_item_id, created_at DESC)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS audit_events_run_id "
+                "ON audit_events (run_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS worker_activity_task_id "
+                "ON worker_activity_events (task_id, activity_id)"
+            )
             connection.commit()
 
     def stage_inbox_task(
@@ -273,9 +355,71 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+            if cursor.rowcount > 0:
+                assignment = work_items.assign(
+                    connection,
+                    task=task_message,
+                    conversation_id=conversation_id,
+                    created_at=now,
+                )
+                connection.execute(
+                    "UPDATE worker_inbox SET work_item_id = ? WHERE task_id = ?",
+                    (assignment.work_item_id, task_message.task_id),
+                )
             self._record_telegram_inbound(connection, task_message, created_at=now)
             connection.commit()
         return cursor.rowcount > 0
+
+    def get_work_assignment(self, *, task_id: str) -> work_items.WorkAssignment | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT work_item_id, route_reason FROM work_item_events WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return work_items._result(
+                connection,
+                row["work_item_id"],
+                row["route_reason"],
+            )
+
+    def get_work_model_tier(self, *, work_item_id: str) -> str:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT model_tier FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(work_item_id)
+        return str(row["model_tier"])
+
+    def set_work_model_tier(self, *, work_item_id: str, tier: str) -> None:
+        if tier not in ("high", "low", "auto"):
+            raise ValueError("model tier must be high, low, or auto")
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                "UPDATE work_items SET model_tier = ? WHERE work_item_id = ?",
+                (tier, work_item_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(work_item_id)
+            connection.commit()
+
+    def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(work_item_id)
+        value = json.loads(row["preferred_reply_json"])
+        return ReplyChannel(
+            type=value["type"],
+            target=value["target"],
+            metadata=value.get("metadata", {}),
+        )
 
     def _record_telegram_inbound(
         self,
@@ -303,13 +447,15 @@ class SQLiteStateStore:
         connection.execute(
             """
             INSERT OR IGNORE INTO worker_telegram_history (
-                target, message_id, reply_to_message_id, role, sender,
+                target, topic_id, message_id, reply_to_message_id, role, sender,
                 content, attachments_json, task_id, event_id,
-                occurred_at, created_at
-            ) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)
+                occurred_at, created_at, work_item_id
+            ) VALUES (?, ?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?,
+                (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
             """,
             (
                 envelope.reply_channel.target,
+                _positive_metadata_int(metadata, "message_thread_id"),
                 message_id,
                 _positive_metadata_int(metadata, "reply_to_message_id"),
                 sender.strip() if isinstance(sender, str) and sender.strip() else None,
@@ -318,6 +464,7 @@ class SQLiteStateStore:
                 task_message.task_id,
                 _serialize_rfc3339_utc(envelope.received_at),
                 created_at,
+                task_message.task_id,
             ),
         )
 
@@ -351,13 +498,17 @@ class SQLiteStateStore:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO worker_telegram_history (
-                    target, message_id, reply_to_message_id, role, sender,
+                    target, topic_id, message_id, reply_to_message_id, role, sender,
                     content, attachments_json, task_id, event_id,
-                    occurred_at, created_at
-                ) VALUES (?, ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?)
+                    occurred_at, created_at, work_item_id
+                ) VALUES (?, (SELECT topic_id FROM worker_telegram_history
+                              WHERE task_id = ? AND role = 'user' LIMIT 1),
+                    ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
                 (
                     target,
+                    task_id,
                     message_id,
                     normalized_content or None,
                     _serialize_attachments(attachments),
@@ -365,6 +516,7 @@ class SQLiteStateStore:
                     event_id,
                     _serialize_rfc3339_utc(occurred_at),
                     now,
+                    task_id,
                 ),
             )
             connection.commit()
@@ -373,6 +525,7 @@ class SQLiteStateStore:
         self,
         *,
         target: str,
+        topic_id: int | None = None,
         message_id: int,
         before: int = 12,
         after: int = 12,
@@ -387,43 +540,124 @@ class SQLiteStateStore:
             anchor = connection.execute(
                 """
                 SELECT message_id FROM worker_telegram_history
-                WHERE target = ? AND message_id = ?
+                WHERE target = ? AND topic_id IS ? AND message_id = ?
                 """,
-                (target, message_id),
+                (target, topic_id, message_id),
             ).fetchone()
             if anchor is None:
                 return []
             earlier = connection.execute(
                 """
                 SELECT * FROM worker_telegram_history
-                WHERE target = ? AND message_id <= ?
+                WHERE target = ? AND topic_id IS ? AND message_id <= ?
                 ORDER BY message_id DESC LIMIT ?
                 """,
-                (target, message_id, before + 1),
+                (target, topic_id, message_id, before + 1),
             ).fetchall()
             later = connection.execute(
                 """
                 SELECT * FROM worker_telegram_history
-                WHERE target = ? AND message_id > ?
+                WHERE target = ? AND topic_id IS ? AND message_id > ?
                 ORDER BY message_id ASC LIMIT ?
                 """,
-                (target, message_id, after),
+                (target, topic_id, message_id, after),
             ).fetchall()
         rows = list(reversed(earlier)) + list(later)
         return [_telegram_history_turn_from_row(row) for row in rows]
 
+    def list_recent_telegram_history(
+        self,
+        *,
+        target: str,
+        topic_id: int | None = None,
+        before_message_id: int,
+        limit: int = 30,
+    ) -> list[TelegramHistoryTurn]:
+        if not target.strip() or before_message_id <= 0 or not 1 <= limit <= 100:
+            raise ValueError("invalid recent history request")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT * FROM worker_telegram_history
+                WHERE target = ? AND topic_id IS ? AND message_id < ?
+                ORDER BY message_id DESC LIMIT ?""",
+                (target, topic_id, before_message_id, limit),
+            ).fetchall()
+        return [_telegram_history_turn_from_row(row) for row in reversed(rows)]
+
+    def search_telegram_history(
+        self,
+        *,
+        target: str,
+        topic_id: int | None = None,
+        query: str,
+        sender: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TelegramHistoryTurn]:
+        words = query.split()
+        if not target.strip() or not words or not 1 <= limit <= 50:
+            raise ValueError("target, query, and limit (1-50) are required")
+        clauses = ["target = ?", "topic_id IS ?"]
+        params: list[object] = [target, topic_id]
+        for word in words:
+            clauses.append("content LIKE ? ESCAPE '\\'")
+            params.append(
+                "%"
+                + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                + "%"
+            )
+        if sender:
+            clauses.append("sender LIKE ? ESCAPE '\\'")
+            params.append(
+                "%"
+                + sender.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                + "%"
+            )
+        for boundary, operator in ((since, ">="), (until, "<=")):
+            if boundary is not None:
+                if boundary.tzinfo is None:
+                    raise ValueError("date filters must include a timezone")
+                clauses.append(f"occurred_at {operator} ?")
+                params.append(_serialize_rfc3339_utc(boundary))
+        params.append(limit)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM worker_telegram_history WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY message_id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [_telegram_history_turn_from_row(row) for row in rows]
+
     def claim_next_inbox_task(self) -> InboxTask | None:
-        """Atomically lease the oldest pending inbox task to this worker."""
+        """Atomically lease the oldest runnable task, one per work item."""
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        lease_owner = uuid.uuid4().hex
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT * FROM worker_inbox
-                WHERE state = 'pending'
-                   OR (state = 'closing' AND parent_task_id IS NULL)
-                ORDER BY CASE state WHEN 'closing' THEN 0 ELSE 1 END,
-                         staged_at ASC, task_id ASC
+                SELECT candidate.* FROM worker_inbox AS candidate
+                WHERE candidate.lease_owner IS NULL
+                  AND (candidate.state = 'pending'
+                       OR (candidate.state = 'closing' AND candidate.parent_task_id IS NULL))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM worker_inbox AS owned
+                      WHERE owned.work_item_id = candidate.work_item_id
+                        AND owned.lease_owner IS NOT NULL
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM worker_inbox AS earlier
+                      WHERE earlier.work_item_id = candidate.work_item_id
+                        AND earlier.parent_task_id IS NULL
+                        AND earlier.state IN ('pending', 'active', 'closing')
+                        AND (earlier.staged_at < candidate.staged_at
+                             OR (earlier.staged_at = candidate.staged_at
+                                 AND earlier.task_id < candidate.task_id))
+                  )
+                ORDER BY CASE candidate.state WHEN 'closing' THEN 0 ELSE 1 END,
+                         candidate.staged_at ASC, candidate.task_id ASC
                 LIMIT 1
                 """
             ).fetchone()
@@ -431,24 +665,48 @@ class SQLiteStateStore:
                 connection.commit()
                 return None
             claimed_state = str(row["state"])
-            if claimed_state == "pending":
-                connection.execute(
-                    """
-                    UPDATE worker_inbox SET state = 'active', updated_at = ?
-                    WHERE task_id = ? AND state = 'pending'
-                    """,
-                    (now, row["task_id"]),
-                )
+            connection.execute(
+                """
+                UPDATE worker_inbox SET state = ?, lease_owner = ?, updated_at = ?
+                WHERE task_id = ? AND lease_owner IS NULL
+                """,
+                (
+                    "active" if claimed_state == "pending" else "closing",
+                    lease_owner,
+                    now,
+                    row["task_id"],
+                ),
+            )
             connection.commit()
         return _inbox_task_from_row(
             row, state="active" if claimed_state == "pending" else claimed_state
         )
+
+    def inbox_queue_summary(self) -> dict[str, object]:
+        """Return durable queued and running counts for the activity view."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT state, lease_owner, COUNT(*) AS count FROM worker_inbox
+                WHERE state IN ('pending', 'active', 'closing')
+                  AND parent_task_id IS NULL
+                GROUP BY state, lease_owner IS NOT NULL
+                """
+            ).fetchall()
+        queued = sum(int(row["count"]) for row in rows if row["lease_owner"] is None)
+        running = sum(
+            int(row["count"]) for row in rows if row["lease_owner"] is not None
+        )
+        return {"queued": queued, "running": running}
 
     def recover_inbox_tasks(self) -> None:
         """Recover leases after restart without replaying already-delivered work."""
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE worker_inbox SET lease_owner = NULL WHERE lease_owner IS NOT NULL"
+            )
             connection.execute(
                 """
                 UPDATE worker_inbox
@@ -483,8 +741,10 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                UPDATE worker_inbox SET state = 'pending', updated_at = ?
-                WHERE task_id = ? AND state = 'active'
+                UPDATE worker_inbox
+                SET state = CASE WHEN state = 'active' THEN 'pending' ELSE state END,
+                    lease_owner = NULL, updated_at = ?
+                WHERE task_id = ? AND lease_owner IS NOT NULL
                 """,
                 (now, task_id),
             )
@@ -642,7 +902,7 @@ class SQLiteStateStore:
             if delivered:
                 connection.execute(
                     """
-                    UPDATE worker_inbox SET state = 'completed', updated_at = ?
+                    UPDATE worker_inbox SET state = 'completed', lease_owner = NULL, updated_at = ?
                     WHERE task_id = ? OR parent_task_id = ?
                     """,
                     (now, parent_task_id, parent_task_id),
@@ -650,7 +910,7 @@ class SQLiteStateStore:
             else:
                 connection.execute(
                     """
-                    UPDATE worker_inbox SET state = 'completed', updated_at = ?
+                    UPDATE worker_inbox SET state = 'completed', lease_owner = NULL, updated_at = ?
                     WHERE task_id = ?
                     """,
                     (now, parent_task_id),
@@ -765,9 +1025,10 @@ class SQLiteStateStore:
                     latency_ms,
                     result_status,
                     created_at,
-                    schema_version
+                    schema_version,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["run_id"],
@@ -778,6 +1039,7 @@ class SQLiteStateStore:
                     payload["result_status"],
                     payload["created_at"],
                     payload["schema_version"],
+                    record.work_item_id,
                 ),
             )
             connection.commit()
@@ -798,6 +1060,7 @@ class SQLiteStateStore:
                 result_status=row["result_status"],
                 created_at=_parse_rfc3339_utc(row["created_at"]),
                 schema_version=row["schema_version"],
+                work_item_id=row["work_item_id"],
             )
             for row in rows
         ]
@@ -826,7 +1089,100 @@ class SQLiteStateStore:
                 result_status=row["result_status"],
                 created_at=_parse_rfc3339_utc(row["created_at"]),
                 schema_version=row["schema_version"],
+                work_item_id=row["work_item_id"],
             )
+            for row in rows
+        ]
+
+    def list_work_item_overview(self) -> list[dict[str, object]]:
+        """Small rows for the landing page, without loading run transcripts."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT item.work_item_id, item.origin_conversation_id,
+                          item.preferred_reply_json, item.model_tier,
+                          item.created_at, COALESCE(runs.run_count, 0) AS run_count,
+                          runs.last_run_at,
+                          COALESCE(queue.queued, 0) AS queued,
+                          COALESCE(queue.running, 0) AS running
+                   FROM work_items AS item
+                   LEFT JOIN (
+                       SELECT work_item_id, COUNT(*) AS run_count,
+                              MAX(created_at) AS last_run_at
+                       FROM run_records WHERE source != 'internal'
+                       GROUP BY work_item_id
+                   ) AS runs ON runs.work_item_id = item.work_item_id
+                   LEFT JOIN (
+                       SELECT work_item_id,
+                              SUM(CASE WHEN state IN ('pending', 'attached') THEN 1 ELSE 0 END) AS queued,
+                              SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running
+                       FROM worker_inbox GROUP BY work_item_id
+                   ) AS queue ON queue.work_item_id = item.work_item_id
+                   ORDER BY COALESCE(runs.last_run_at, item.created_at) DESC"""
+            ).fetchall()
+        return [
+            {
+                "work_item_id": row["work_item_id"],
+                "origin_conversation_id": row["origin_conversation_id"],
+                "reply": json.loads(row["preferred_reply_json"]),
+                "model_tier": row["model_tier"],
+                "created_at": row["created_at"],
+                "run_count": row["run_count"],
+                "last_run_at": row["last_run_at"],
+                "queued": row["queued"],
+                "running": row["running"],
+            }
+            for row in rows
+        ]
+
+    def list_work_item_run_cards(
+        self, *, work_item_id: str, limit: int
+    ) -> list[dict[str, object]]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT run.run_id, run.created_at, run.result_status,
+                          run.latency_ms, run.source,
+                          json_extract(audit.detail_json, '$.task_id') AS task_id,
+                          json_extract(activity.detail_json, '$.content') AS request_content
+                   FROM run_records AS run
+                   LEFT JOIN audit_events AS audit ON audit.event_id = (
+                       SELECT MAX(event_id) FROM audit_events WHERE run_id = run.run_id
+                   )
+                   LEFT JOIN worker_activity_events AS activity ON activity.activity_id = (
+                       SELECT MIN(activity_id) FROM worker_activity_events
+                       WHERE task_id = json_extract(audit.detail_json, '$.task_id')
+                         AND phase = 'task_received'
+                   )
+                   WHERE run.work_item_id = ? AND run.source != 'internal'
+                   ORDER BY run.created_at DESC LIMIT ?""",
+                (work_item_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_worker_activity_since(
+        self, *, task_id: str, after_id: int, limit: int = 100
+    ) -> list[dict[str, object]]:
+        if not task_id or after_id < 0 or limit <= 0:
+            raise ValueError("invalid activity query")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT activity_id, occurred_at, phase, summary, detail_json,
+                          run_id
+                   FROM worker_activity_events
+                   WHERE task_id = ? AND activity_id > ? AND is_internal = 0
+                   ORDER BY activity_id LIMIT ?""",
+                (task_id, after_id, limit),
+            ).fetchall()
+        return [
+            {
+                "activity_id": row["activity_id"],
+                "occurred_at": row["occurred_at"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "detail": json.loads(row["detail_json"]),
+                "run_id": row["run_id"],
+            }
             for row in rows
         ]
 
@@ -849,6 +1205,7 @@ class SQLiteStateStore:
             result_status=row["result_status"],
             created_at=_parse_rfc3339_utc(row["created_at"]),
             schema_version=row["schema_version"],
+            work_item_id=row["work_item_id"],
         )
 
     def append_audit_event(self, event: AuditEvent) -> None:
@@ -864,9 +1221,11 @@ class SQLiteStateStore:
                     result_status,
                     detail_json,
                     created_at,
-                    schema_version
+                    schema_version,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
                 (
                     payload["run_id"],
@@ -877,6 +1236,7 @@ class SQLiteStateStore:
                     json.dumps(payload["detail"], sort_keys=True),
                     payload["created_at"],
                     payload["schema_version"],
+                    payload["run_id"],
                 ),
             )
             connection.commit()
@@ -957,9 +1317,11 @@ class SQLiteStateStore:
                     status,
                     created_at,
                     replayed_run_id,
-                    schema_version
+                    schema_version,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
                 (
                     run_id,
@@ -971,6 +1333,7 @@ class SQLiteStateStore:
                     created_at,
                     None,
                     payload["schema_version"],
+                    run_id,
                 ),
             )
             connection.commit()
@@ -1058,11 +1421,13 @@ class SQLiteStateStore:
                     role,
                     content,
                     run_id,
-                    created_at
+                    created_at,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
-                (channel, target, role, content, run_id, created_at),
+                (channel, target, role, content, run_id, created_at, run_id),
             )
             connection.commit()
 
@@ -1102,10 +1467,12 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO dispatched_events (run_id, event_index, dispatched_at)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO dispatched_events
+                    (run_id, event_index, dispatched_at, work_item_id)
+                VALUES (?, ?, ?,
+                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
                 """,
-                (run_id, event_index, dispatched_at),
+                (run_id, event_index, dispatched_at, run_id),
             )
             connection.commit()
 
@@ -1133,10 +1500,12 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO dispatched_event_ids (task_id, event_id, dispatched_at)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO dispatched_event_ids
+                    (task_id, event_id, dispatched_at, work_item_id)
+                VALUES (?, ?, ?,
+                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
-                (task_id, event_id, dispatched_at),
+                (task_id, event_id, dispatched_at, task_id),
             )
             connection.commit()
 
@@ -1173,9 +1542,11 @@ class SQLiteStateStore:
                     payload_json,
                     publish_state,
                     created_at,
-                    updated_at
+                    updated_at,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
                 (
                     message.event_id,
@@ -1186,6 +1557,7 @@ class SQLiteStateStore:
                     "pending_publish",
                     now,
                     now,
+                    message.task_id,
                 ),
             )
             connection.commit()
@@ -1267,9 +1639,14 @@ class SQLiteStateStore:
                     phase,
                     summary,
                     detail_json,
-                    is_internal
+                    is_internal,
+                    work_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    COALESCE(
+                        (SELECT work_item_id FROM work_item_events WHERE task_id = ?),
+                        (SELECT work_item_id FROM run_records WHERE run_id = ?)
+                    ))
                 """,
                 (
                     occurred_at.astimezone(timezone.utc)
@@ -1284,6 +1661,8 @@ class SQLiteStateStore:
                     summary,
                     json.dumps(payload, sort_keys=True),
                     1 if is_internal else 0,
+                    task_id,
+                    run_id,
                 ),
             )
             connection.commit()
@@ -1517,6 +1896,7 @@ def _telegram_history_turn_from_row(row: sqlite3.Row) -> TelegramHistoryTurn:
     ]
     return TelegramHistoryTurn(
         target=str(row["target"]),
+        topic_id=int(row["topic_id"]) if row["topic_id"] is not None else None,
         message_id=int(row["message_id"]),
         reply_to_message_id=(
             int(row["reply_to_message_id"])
@@ -1561,6 +1941,7 @@ def _inbox_task_from_row(
     return InboxTask(
         task_message=TaskQueueMessage.from_dict(json.loads(row["task_payload_json"])),
         conversation_id=str(row["conversation_id"]),
+        work_item_id=str(row["work_item_id"]) if row["work_item_id"] else None,
         state=state or str(row["state"]),
         parent_task_id=(
             parent_task_id

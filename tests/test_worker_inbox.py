@@ -1,5 +1,9 @@
 import tempfile
+import json
+import sqlite3
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -39,10 +43,109 @@ def _telegram_task(
         reply_channel=ReplyChannel(type="telegram", target=target, metadata=metadata),
         dedupe_key=f"telegram:{number}",
     )
-    return TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:telegram:{number}")
+    return replace(
+        TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:telegram:{number}"),
+        work_item_id="item_"
+        + target.replace("-", "_")
+        + (f"_topic_{thread_id}" if thread_id is not None else ""),
+    )
 
 
 class WorkerInboxTests(unittest.TestCase):
+    def test_existing_worker_history_keeps_topic_on_schema_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "worker.db"
+            task = _telegram_task(1, thread_id=7)
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """CREATE TABLE worker_telegram_history (
+                    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target TEXT NOT NULL, message_id INTEGER NOT NULL,
+                    reply_to_message_id INTEGER, role TEXT NOT NULL, sender TEXT,
+                    content TEXT, attachments_json TEXT NOT NULL, task_id TEXT,
+                    event_id TEXT, occurred_at TEXT NOT NULL, created_at TEXT NOT NULL,
+                    UNIQUE(target, message_id))"""
+                )
+                connection.execute(
+                    """CREATE TABLE worker_inbox (
+                    task_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+                    task_payload_json TEXT NOT NULL, broker_guid TEXT,
+                    state TEXT NOT NULL, parent_task_id TEXT, staged_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, reply_delivered_at TEXT)"""
+                )
+                connection.execute(
+                    """INSERT INTO worker_inbox VALUES (?, 'conv', ?, NULL,
+                    'pending', NULL, '2026-08-16T10:00:00Z',
+                    '2026-08-16T10:00:00Z', NULL)""",
+                    (task.task_id, json.dumps(task.to_dict())),
+                )
+                connection.execute(
+                    """INSERT INTO worker_telegram_history (
+                    target, message_id, role, content, attachments_json, task_id,
+                    occurred_at, created_at) VALUES
+                    ('chat-a', 101, 'user', 'old plan', '[]', ?,
+                    '2026-08-16T10:00:00Z', '2026-08-16T10:00:00Z')""",
+                    (task.task_id,),
+                )
+            store = SQLiteStateStore(str(db_path))
+            hits = store.search_telegram_history(
+                target="chat-a", topic_id=7, query="old plan"
+            )
+            self.assertEqual([turn.message_id for turn in hits], [101])
+
+    def test_parallel_claims_skip_busy_item_and_keep_its_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            first = _telegram_task(1, target="chat-a")
+            followup = _telegram_task(2, target="chat-a")
+            other = _telegram_task(3, target="chat-b")
+            for task in (first, followup, other):
+                store.stage_inbox_task(task)
+
+            claimed_first = store.claim_next_inbox_task()
+            claimed_other = store.claim_next_inbox_task()
+            assert claimed_first is not None and claimed_other is not None
+            self.assertEqual(claimed_first.task_message.task_id, first.task_id)
+            self.assertEqual(claimed_other.task_message.task_id, other.task_id)
+            self.assertIsNone(store.claim_next_inbox_task())
+            self.assertEqual(store.inbox_queue_summary(), {"queued": 1, "running": 2})
+
+            store.finish_inbox_task(parent_task_id=first.task_id)
+            claimed_followup = store.claim_next_inbox_task()
+            assert claimed_followup is not None
+            self.assertEqual(claimed_followup.task_message.task_id, followup.task_id)
+
+    def test_delivered_active_task_keeps_lease_until_finished(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            first = _telegram_task(1)
+            followup = _telegram_task(2)
+            store.stage_inbox_task(first)
+            store.stage_inbox_task(followup)
+            store.claim_next_inbox_task()
+            store.mark_inbox_reply_delivered(parent_task_id=first.task_id)
+            self.assertIsNone(store.claim_next_inbox_task())
+            store.finish_inbox_task(parent_task_id=first.task_id)
+            claimed = store.claim_next_inbox_task()
+            assert claimed is not None
+            self.assertEqual(claimed.task_message.task_id, followup.task_id)
+
+    def test_simultaneous_claims_do_not_take_same_work_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            first = _telegram_task(1)
+            second = _telegram_task(2)
+            store.stage_inbox_task(first)
+            store.stage_inbox_task(second)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                claims = list(
+                    pool.map(lambda _: store.claim_next_inbox_task(), range(2))
+                )
+            self.assertEqual(
+                [claim.task_message.task_id for claim in claims if claim is not None],
+                [first.task_id],
+            )
+
     def test_staging_records_clean_inbound_turn_and_reply_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
@@ -88,6 +191,33 @@ class WorkerInboxTests(unittest.TestCase):
             self.assertEqual([turn.role for turn in turns], ["user", "assistant"])
             self.assertEqual(turns[-1].content, "A reply")
             self.assertEqual(turns[-1].event_id, "evt:reply:1")
+
+    def test_history_stays_within_chat_topic_and_excludes_current_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            for task in (
+                _telegram_task(1, content="original plan", thread_id=7),
+                _telegram_task(2, content="other topic plan", thread_id=8),
+                _telegram_task(
+                    3, content="another chat plan", target="chat-b", thread_id=7
+                ),
+                _telegram_task(4, content="do the original plan", thread_id=7),
+            ):
+                store.stage_inbox_task(task)
+            recent = store.list_recent_telegram_history(
+                target="chat-a", topic_id=7, before_message_id=104
+            )
+            self.assertEqual([turn.message_id for turn in recent], [101])
+            hits = store.search_telegram_history(
+                target="chat-a", topic_id=7, query="original plan"
+            )
+            self.assertEqual([turn.message_id for turn in hits], [104, 101])
+            self.assertEqual(
+                store.list_telegram_history_around(
+                    target="chat-a", topic_id=8, message_id=101
+                ),
+                [],
+            )
 
     def test_collector_persists_before_acknowledging_broker(self) -> None:
         class RecordingBroker:

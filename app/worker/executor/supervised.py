@@ -32,6 +32,12 @@ class SupervisedReplyRecoveryExecutor:
     last_recovery_attempted: bool = field(init=False, default=False)
     last_launch_count: int = field(init=False, default=0)
 
+    def for_workspace(self, *, work_item_id: str) -> SupervisedReplyRecoveryExecutor:
+        return SupervisedReplyRecoveryExecutor(
+            inner=self.inner.for_workspace(work_item_id=work_item_id),
+            store=self.store,
+        )
+
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
         self.last_recovery_attempted = False
         self.last_launch_count = 1
@@ -40,14 +46,18 @@ class SupervisedReplyRecoveryExecutor:
             parent_task_id=task_id
         )
         first_result = self.inner.execute(envelope)
-        after_first_count = self.store.count_conversation_bundle_main_reply_egress_events(
-            parent_task_id=task_id
+        after_first_count = (
+            self.store.count_conversation_bundle_main_reply_egress_events(
+                parent_task_id=task_id
+            )
         )
         unresolved_followups = self.store.has_unresolved_attached_followups(
             parent_task_id=task_id
         )
-        if first_result.errors or (
-            after_first_count > before_count and not unresolved_followups
+        if (
+            first_result.errors
+            or first_result.escalation_reason
+            or (after_first_count > before_count and not unresolved_followups)
         ):
             return first_result
 

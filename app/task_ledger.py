@@ -89,7 +89,9 @@ class TaskLedgerStore:
             task_id=row["task_id"],
             envelope_id=row["envelope_id"],
             trace_id=row["trace_id"],
-            task_message=TaskQueueMessage.from_dict(json.loads(row["task_payload_json"])),
+            task_message=TaskQueueMessage.from_dict(
+                json.loads(row["task_payload_json"])
+            ),
             created_at=_parse_rfc3339_utc(row["created_at"]),
         )
 

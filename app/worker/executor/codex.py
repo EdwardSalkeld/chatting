@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import codecs
+import selectors
 import subprocess
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+import re
+from typing import IO, Any, Callable, Mapping, cast
 
 from app.models import (
     ExecutionResult,
@@ -18,12 +22,28 @@ from app.models import (
     UsageWindow,
     parse_context_ref,
 )
+from app.model_command import MODELS
+from app.state import SQLiteStateStore, TelegramHistoryTurn
 
 # Codex publishes rate-limit figures only inside the session rollouts it writes
 # while running a task, so reading them back is a file scan rather than an API
 # call. Cap how far back we look: if the newest handful of runs carry nothing,
 # older ones are too stale to be worth reporting.
 _USAGE_ROLLOUT_SCAN_LIMIT = 25
+_WORKSPACE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
+
+
+def _executor_env(configured: Mapping[str, str] | None) -> dict[str, str]:
+    environment = dict(configured) if configured is not None else dict(os.environ)
+    environment.pop("TYPESAFE_API_KEY", None)
+    # Work item subprocesses start in their own directory. Keep the installed
+    # Chatting package importable for the reply and history CLIs they invoke.
+    source_root = str(Path(__file__).resolve().parents[3])
+    python_path = environment.get("PYTHONPATH", "")
+    entries = [entry for entry in python_path.split(os.pathsep) if entry]
+    if source_root not in entries:
+        environment["PYTHONPATH"] = os.pathsep.join([source_root, *entries])
+    return environment
 
 
 @dataclass(frozen=True)
@@ -32,31 +52,109 @@ class CodexExecutor:
 
     command: tuple[str, ...] = ("codex", "exec", "--json")
     cwd: str | None = None
+    workspace_root: str | None = None
+    work_item_id: str | None = None
+    model_tier: str | None = None
+    history_store: SQLiteStateStore | None = None
     env: Mapping[str, str] | None = None
     timeout_seconds: int = 1800
     now_provider: Callable[[], datetime] = field(
         default=lambda: datetime.now(timezone.utc)
     )
+    output_callback: Callable[[str, str], None] | None = None
+
+    def with_output_callback(
+        self, callback: Callable[[str, str], None]
+    ) -> CodexExecutor:
+        return replace(self, output_callback=callback)
+
+    def for_workspace(self, *, work_item_id: str) -> CodexExecutor:
+        """Create or reuse a lane directory, then return a run-specific executor."""
+        if not _WORKSPACE_ID.fullmatch(work_item_id):
+            raise ValueError("invalid work_item_id")
+        root = Path(
+            self.workspace_root or Path(self.cwd or Path.cwd()) / ".chatting-workspaces"
+        )
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = root.resolve()
+        directory = root / work_item_id
+        directory.mkdir(mode=0o700, exist_ok=True)
+        if directory.is_symlink() or directory.resolve().parent != root:
+            raise ValueError("workspace directory escapes workspace root")
+        return replace(
+            self,
+            cwd=str(directory),
+            work_item_id=work_item_id,
+        )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
+        if self.model_tier == "low":
+            with tempfile.TemporaryDirectory(prefix="chatting-escalate-") as temporary:
+                return self._run(
+                    envelope, escalation_path=Path(temporary) / "request.json"
+                )
+        return self._run(envelope)
+
+    def for_model(self, tier: str) -> CodexExecutor:
+        if tier not in MODELS:
+            raise ValueError("unknown model tier")
+        return replace(self, model_tier=tier)
+
+    def _run(
+        self, envelope: TaskEnvelope, *, escalation_path: Path | None = None
+    ) -> ExecutionResult:
+        recent_history: list[TelegramHistoryTurn] = []
+        message_id = envelope.reply_channel.metadata.get("message_id")
+        topic_id = envelope.reply_channel.metadata.get("message_thread_id")
+        if (
+            self.history_store is not None
+            and envelope.reply_channel.type == "telegram"
+            and isinstance(message_id, int)
+            and not isinstance(message_id, bool)
+            and message_id > 0
+        ):
+            recent_history = self.history_store.list_recent_telegram_history(
+                target=envelope.reply_channel.target,
+                topic_id=topic_id
+                if isinstance(topic_id, int) and topic_id > 0
+                else None,
+                before_message_id=message_id,
+            )
         payload = json.dumps(
             _task_payload(
                 envelope,
                 current_time=self.now_provider(),
                 executor_working_dir=self.cwd,
+                work_item_id=self.work_item_id,
+                model_tier=self.model_tier,
+                escalation_path=escalation_path,
+                recent_history=recent_history,
             )
         )
+        command = self.command
+        if self.model_tier is not None:
+            command = (*command, "-m", MODELS[self.model_tier])
         try:
-            completed = subprocess.run(
-                self.command,
-                input=payload,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                cwd=self.cwd,
-                env=dict(self.env) if self.env is not None else None,
-            )
+            if self.output_callback is None:
+                completed = subprocess.run(
+                    command,
+                    input=payload,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    cwd=self.cwd,
+                    env=_executor_env(self.env),
+                )
+            else:
+                completed = _run_streaming(
+                    command=command,
+                    payload=payload,
+                    cwd=self.cwd,
+                    env=_executor_env(self.env),
+                    timeout_seconds=self.timeout_seconds,
+                    callback=self.output_callback,
+                )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")
 
@@ -71,10 +169,22 @@ class CodexExecutor:
                 stderr=completed.stderr,
             )
 
+        escalation_reason = None
+        if escalation_path is not None and escalation_path.exists():
+            try:
+                request = json.loads(escalation_path.read_text(encoding="utf-8"))
+                if request.get("task_id") == f"task:{envelope.id}":
+                    reason = request.get("reason")
+                    if isinstance(reason, str) and reason.strip():
+                        escalation_reason = reason.strip()[:4000]
+            except (OSError, ValueError, AttributeError):
+                pass
+
         return ExecutionResult(
             errors=[],
             stdout=completed.stdout,
             stderr=completed.stderr,
+            escalation_reason=escalation_reason,
         )
 
     def usage_report(self) -> UsageReport:
@@ -106,6 +216,92 @@ class CodexExecutor:
         if home:
             return Path(home) / ".codex"
         return None
+
+
+def _run_streaming(
+    *,
+    command: tuple[str, ...],
+    payload: str,
+    cwd: str | None,
+    env: Mapping[str, str],
+    timeout_seconds: int,
+    callback: Callable[[str, str], None],
+) -> subprocess.CompletedProcess[str]:
+    """Capture both pipes while publishing chunks as the child writes them."""
+    import time
+
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        env=env,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    streams = {process.stdout: "stdout", process.stderr: "stderr"}
+    decoders = {
+        stream: codecs.getincrementaldecoder("utf-8")("replace") for stream in streams
+    }
+    captured: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        input_bytes = payload.encode("utf-8")
+        input_offset = 0
+        os.set_blocking(process.stdin.fileno(), False)
+        with selectors.DefaultSelector() as selector:
+            for stream in streams:
+                selector.register(stream, selectors.EVENT_READ)
+            selector.register(process.stdin, selectors.EVENT_WRITE)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
+                for key, _ in selector.select(timeout=min(remaining, 0.5)):
+                    stream = cast(IO[bytes], key.fileobj)
+                    if stream is process.stdin:
+                        try:
+                            input_offset += os.write(
+                                process.stdin.fileno(),
+                                input_bytes[input_offset : input_offset + 8192],
+                            )
+                        except BrokenPipeError:
+                            input_offset = len(input_bytes)
+                        if input_offset >= len(input_bytes):
+                            selector.unregister(process.stdin)
+                            process.stdin.close()
+                        continue
+                    chunk = os.read(stream.fileno(), 8192)
+                    if not chunk:
+                        selector.unregister(stream)
+                        tail = decoders[stream].decode(b"", final=True)
+                        if tail:
+                            captured[streams[stream]].append(tail)
+                            callback(streams[stream], tail)
+                        continue
+                    content = decoders[stream].decode(chunk)
+                    if content:
+                        captured[streams[stream]].append(content)
+                        callback(streams[stream], content)
+        remaining = deadline - time.monotonic()
+        process.wait(timeout=max(remaining, 0.001))
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        if not process.stdin.closed:
+            process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        "".join(captured["stdout"]),
+        "".join(captured["stderr"]),
+    )
 
 
 def _usage_report_from_rollout(rollout: Path) -> UsageReport | None:
@@ -221,6 +417,10 @@ def _task_payload(
     *,
     current_time: datetime,
     executor_working_dir: str | None = None,
+    work_item_id: str | None = None,
+    model_tier: str | None = None,
+    escalation_path: Path | None = None,
+    recent_history: list[TelegramHistoryTurn] | None = None,
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -241,6 +441,19 @@ def _task_payload(
     }
     if envelope.actor is not None:
         task_dict["actor"] = envelope.actor
+    if work_item_id is not None:
+        task_dict["work_item_id"] = work_item_id
+    if model_tier is not None:
+        task_dict["model_selection"] = {"tier": model_tier, "model": MODELS[model_tier]}
+    if work_item_id is not None and executor_working_dir is not None:
+        task_dict["workspace_guidance"] = (
+            "This work item has a persistent workspace at "
+            f"{executor_working_dir}. Start work there and keep its notes, files, "
+            "and repository clones there for later runs of this work item. "
+            "Context paths outside this workspace may be read when useful; "
+            "make new work and edits inside this workspace by default. "
+            "Other work items have separate workspaces."
+        )
     if envelope.attachments:
         task_dict["attachments"] = [
             {"uri": item.uri, "name": item.name} for item in envelope.attachments
@@ -313,6 +526,63 @@ def _task_payload(
             ),
         },
     }
+    scope_option = ""
+    if envelope.reply_channel.type == "telegram":
+        topic_id = envelope.reply_channel.metadata.get("message_thread_id")
+        scope_option = (
+            f" --topic-id {topic_id}"
+            if isinstance(topic_id, int)
+            and not isinstance(topic_id, bool)
+            and topic_id > 0
+            else ""
+        )
+        payload["recent_history"] = [
+            {
+                "message_id": turn.message_id,
+                "role": turn.role,
+                "sender": turn.sender,
+                "occurred_at": turn.occurred_at.isoformat().replace("+00:00", "Z"),
+                "content": (
+                    turn.content[:2000] + "… [truncated; fetch by message ID]"
+                    if turn.content is not None and len(turn.content) > 2000
+                    else turn.content
+                ),
+                "attachments": [
+                    {"uri": item.uri, "name": item.name} for item in turn.attachments
+                ],
+            }
+            for turn in (recent_history or [])
+        ]
+        payload["history_contract"] = {
+            "scope": {
+                "channel": "telegram",
+                "target": envelope.reply_channel.target,
+                "topic_id": topic_id if scope_option else None,
+            },
+            "search_command": (
+                "python3 -P -m app.main_history --channel telegram "
+                f"--target {envelope.reply_channel.target}{scope_option} "
+                "--query 'search words'"
+            ),
+            "instructions": (
+                "Recent worker-owned turns are included above. Search older exchanges "
+                "when the user refers to an earlier plan or decision outside that slice. "
+                "Use the supported history command with words, optional --sender, "
+                "--since or --until; then fetch surrounding turns using "
+                "--around-message-id. History starts when worker recording began."
+            ),
+        }
+    if escalation_path is not None:
+        payload["escalation_contract"] = {
+            "request_path": str(escalation_path),
+            "instructions": (
+                "If this task needs sustained judgement or broad changes beyond Luna's scope, "
+                "write a JSON object to request_path with task_id and reason (brief findings "
+                "and why Sol is needed), using your file editing tool. Then stop without a final "
+                "visible reply. The worker will rerun this same task on Sol. Request this before "
+                "sending any visible answer. The work item's low setting stays unchanged."
+            ),
+        }
     reply_to_message_id = envelope.reply_channel.metadata.get("reply_to_message_id")
     if (
         envelope.reply_channel.type == "telegram"
@@ -320,24 +590,20 @@ def _task_payload(
         and not isinstance(reply_to_message_id, bool)
         and reply_to_message_id > 0
     ):
-        payload["history_contract"] = {
-            "anchor": {
-                "channel": "telegram",
-                "target": envelope.reply_channel.target,
-                "message_id": reply_to_message_id,
-            },
-            "retrieve_command": (
-                "python3 -P -m app.main_history --channel telegram "
-                f"--target {envelope.reply_channel.target} "
-                f"--around-message-id {reply_to_message_id}"
-            ),
-            "instructions": (
-                "This message reply-quotes an earlier Telegram message. Use the supported "
-                "history command if the quoted exchange or nearby turns would help; do not "
-                "query SQLite directly. Worker-owned history starts at deployment, so an old "
-                "anchor may not yet be present."
-            ),
-        }
+        payload["history_contract"].update(
+            {
+                "anchor": {
+                    "channel": "telegram",
+                    "target": envelope.reply_channel.target,
+                    "message_id": reply_to_message_id,
+                },
+                "retrieve_command": (
+                    "python3 -P -m app.main_history --channel telegram "
+                    f"--target {envelope.reply_channel.target}{scope_option} "
+                    f"--around-message-id {reply_to_message_id}"
+                ),
+            }
+        )
     return payload
 
 

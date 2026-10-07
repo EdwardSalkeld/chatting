@@ -1,11 +1,18 @@
 import json
 import subprocess
+import sys
+import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
+from app.broker import TaskQueueMessage
+from app.state import SQLiteStateStore
 from app.worker.executor import CodexExecutor
+from app.worker.executor.codex import _run_streaming
 
 
 def _envelope() -> TaskEnvelope:
@@ -29,6 +36,95 @@ def _envelope() -> TaskEnvelope:
 
 
 class CodexExecutorTests(unittest.TestCase):
+    def test_streaming_output_arrives_before_process_exits(self) -> None:
+        first_chunk = threading.Event()
+        output: list[tuple[str, str]] = []
+        result: dict[str, subprocess.CompletedProcess[str]] = {}
+
+        def callback(stream: str, content: str) -> None:
+            output.append((stream, content))
+            if "first" in "".join(part for _, part in output):
+                first_chunk.set()
+
+        def run() -> None:
+            result["completed"] = _run_streaming(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    "import sys,time; sys.stdin.read(); print('first',flush=True); "
+                    "time.sleep(.5); print('second',flush=True)",
+                ),
+                payload="task",
+                cwd=None,
+                env={},
+                timeout_seconds=5,
+                callback=callback,
+            )
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.assertTrue(first_chunk.wait(timeout=2))
+        self.assertTrue(thread.is_alive())
+        thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result["completed"].stdout, "first\nsecond\n")
+        self.assertEqual("".join(part for _, part in output), "first\nsecond\n")
+
+    def test_telegram_prompt_uses_worker_history_and_exposes_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            earlier = TaskEnvelope(
+                id="telegram:1",
+                source="im",
+                received_at=datetime(2026, 8, 16, 10, 0, tzinfo=timezone.utc),
+                actor="alice",
+                content="the earlier plan",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="-123",
+                    metadata={"message_id": 10, "message_thread_id": 7},
+                ),
+                dedupe_key="telegram:1",
+            )
+            current = TaskEnvelope(
+                id="telegram:2",
+                source="im",
+                received_at=earlier.received_at,
+                actor="alice",
+                content="do that",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(
+                    type="telegram",
+                    target="-123",
+                    metadata={"message_id": 11, "message_thread_id": 7},
+                ),
+                dedupe_key="telegram:2",
+            )
+            for envelope in (earlier, current):
+                store.stage_inbox_task(
+                    TaskQueueMessage.from_envelope(
+                        envelope, trace_id=f"trace:{envelope.id}"
+                    )
+                )
+            completed = subprocess.CompletedProcess(
+                args=["codex"], returncode=0, stdout="{}", stderr=""
+            )
+            with patch(
+                "app.worker.executor.codex.subprocess.run", return_value=completed
+            ) as run_mock:
+                CodexExecutor(command=("codex",), history_store=store).execute(current)
+            payload = json.loads(run_mock.call_args.kwargs["input"])
+            self.assertEqual(payload["task"]["content"], "do that")
+            self.assertEqual(
+                [turn["content"] for turn in payload["recent_history"]],
+                ["the earlier plan"],
+            )
+            self.assertIn("--topic-id 7", payload["history_contract"]["search_command"])
+
     def test_reply_quoted_telegram_task_exposes_supported_history_lookup(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["codex"], returncode=0, stdout="{}", stderr=""
@@ -55,7 +151,9 @@ class CodexExecutorTests(unittest.TestCase):
 
         payload = json.loads(run_mock.call_args.kwargs["input"])
         self.assertEqual(payload["history_contract"]["anchor"]["message_id"], 2400)
-        self.assertIn("app.main_history", payload["history_contract"]["retrieve_command"])
+        self.assertIn(
+            "app.main_history", payload["history_contract"]["retrieve_command"]
+        )
 
     def test_execute_returns_stdout_and_stderr_on_success(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -140,7 +238,11 @@ class CodexExecutorTests(unittest.TestCase):
         )
         self.assertNotIn("handler_api_url", payload["scheduling_contract"])
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
-        self.assertEqual(run_mock.call_args.kwargs["env"], {"TOKEN": "secret"})
+        executor_env = run_mock.call_args.kwargs["env"]
+        self.assertEqual(executor_env["TOKEN"], "secret")
+        self.assertIn(
+            str(Path(__file__).resolve().parents[1]), executor_env["PYTHONPATH"]
+        )
         self.assertEqual(run_mock.call_args.kwargs["timeout"], 123)
 
 

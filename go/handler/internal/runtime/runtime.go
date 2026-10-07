@@ -19,7 +19,6 @@ const (
 	EgressQueueName         = "chatting.egress.v1"
 	egressPickupWaitSeconds = 5
 	egressDrainWaitSeconds  = 0
-	telegramMemoryTurnLimit = 30
 )
 
 type Broker interface {
@@ -37,6 +36,10 @@ type IngressState interface {
 	Seen(ctx context.Context, source string, dedupeKey string) (bool, error)
 	MarkSeen(ctx context.Context, source string, dedupeKey string) error
 	RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error
+}
+
+type TaskRouter interface {
+	AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
 }
 
 type TelegramAttachmentIngressState interface {
@@ -230,6 +233,12 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 				}
 				taskMessage.Envelope = enriched
 			}
+			if router, ok := runner.ingressState.(TaskRouter); ok {
+				taskMessage, err = router.AssignTask(ctx, taskMessage)
+				if err != nil {
+					return published, err
+				}
+			}
 			if err := runner.ingressState.RecordTask(ctx, taskMessage); err != nil {
 				return published, err
 			}
@@ -266,46 +275,11 @@ func prepareTelegramEnvelope(ctx context.Context, state TelegramConversationStat
 	if envelope.Source == "internal" && envelope.ReplyChannel.Metadata["internal_notice"] != nil {
 		return envelope, nil
 	}
-	turns, err := state.ListRecentConversationTurns(ctx, "telegram", envelope.ReplyChannel.Target, telegramMemoryTurnLimit)
-	if err != nil {
-		return contracts.TaskEnvelope{}, err
-	}
 	currentSender := telegramSenderLabel(envelope)
-	enriched := envelope
-	if len(turns) > 0 {
-		lines := make([]string, 0, len(turns)+3)
-		lines = append(lines, "Recent conversation context (oldest first):")
-		for _, turn := range turns {
-			lines = append(lines, formatConversationTurn(turn))
-		}
-		header := "Current user message:"
-		if currentSender != "" {
-			header = "Current message from " + currentSender + ":"
-		}
-		lines = append(lines, "", header, envelope.Content)
-		enriched.Content = strings.Join(lines, "\n")
-	}
 	if err := state.AppendConversationTurn(ctx, "telegram", envelope.ReplyChannel.Target, "user", envelope.Content, currentSender, runID); err != nil {
 		return contracts.TaskEnvelope{}, err
 	}
-	return enriched, nil
-}
-
-// conversationTurnLabel prefers a stored sender label, falling back to the role
-// for turns recorded before sender attribution existed (or without a sender).
-func conversationTurnLabel(turn ConversationTurn) string {
-	if strings.TrimSpace(turn.Sender) != "" {
-		return turn.Sender
-	}
-	return turn.Role
-}
-
-func formatConversationTurn(turn ConversationTurn) string {
-	label := conversationTurnLabel(turn) + ": " + turn.Content
-	if turn.CreatedAt.IsZero() {
-		return label
-	}
-	return "[" + turn.CreatedAt.UTC().Format("2006-01-02 15:04Z") + "] " + label
+	return envelope, nil
 }
 
 // telegramSenderLabel derives a human-readable sender for the current inbound

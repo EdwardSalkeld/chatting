@@ -291,6 +291,7 @@ class ExecutionResult:
     errors: list[str]
     stdout: str | None = None
     stderr: str | None = None
+    escalation_reason: str | None = None
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -300,6 +301,10 @@ class ExecutionResult:
             raise ValueError("stdout must be a string")
         if self.stderr is not None and not isinstance(self.stderr, str):
             raise ValueError("stderr must be a string")
+        if self.escalation_reason is not None and not isinstance(
+            self.escalation_reason, str
+        ):
+            raise ValueError("escalation_reason must be a string")
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -310,6 +315,8 @@ class ExecutionResult:
             payload["stdout"] = self.stdout
         if self.stderr is not None:
             payload["stderr"] = self.stderr
+        if self.escalation_reason is not None:
+            payload["escalation_reason"] = self.escalation_reason
         return payload
 
 
@@ -399,6 +406,7 @@ class RunRecord:
     result_status: str
     created_at: datetime
     schema_version: str = SCHEMA_VERSION
+    work_item_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
@@ -414,7 +422,7 @@ class RunRecord:
             raise ValueError("created_at must be timezone-aware")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "run_id": self.run_id,
             "envelope_id": self.envelope_id,
@@ -426,6 +434,9 @@ class RunRecord:
             .isoformat()
             .replace("+00:00", "Z"),
         }
+        if self.work_item_id is not None:
+            payload["work_item_id"] = self.work_item_id
+        return payload
 
 
 @dataclass(frozen=True)

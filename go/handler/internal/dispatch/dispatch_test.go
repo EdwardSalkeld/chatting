@@ -287,6 +287,17 @@ func TestTelegramMessageSenderSendsTextAndFallsBackWithoutParseMode(t *testing.T
 	}
 }
 
+func TestTelegramLegacyMarkdownLeavesParenthesesVisibleWithoutBackslashes(t *testing.T) {
+	mode := "Markdown"
+	text := "This work item uses auto (Jev selects per task). Use /set high."
+	if got := normalizeTelegramTextForParseMode(text, &mode); got != text {
+		t.Fatalf("formatted text = %q", got)
+	}
+	if got := normalizeTelegramTextForParseMode("A *choice* [here]", &mode); got != "A \\*choice\\* \\[here]" {
+		t.Fatalf("escaped Markdown = %q", got)
+	}
+}
+
 func TestTelegramMessageSenderSendsReaction(t *testing.T) {
 	var call telegramHTTPCall
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

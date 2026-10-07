@@ -85,9 +85,14 @@ If the container working directory is not where you want Codex to run, set `code
 worker config to control only the Codex subprocess cwd without changing the worker service working
 directory.
 
-The worker also serves a local read-only activity page by default at `http://127.0.0.1:9465/`
-with JSON at `/activity.json`. The bind stays fixed at `9465`; use
-`activity_history_limit` to change the retention window.
+Set `workspace_root` to the persistent directory for work item workspaces. The
+worker runs up to two Codex tasks at once by default; `executor_pool_size` sets
+that limit. Tasks assigned to the same work item run in arrival order, one at
+a time. Run only one worker process against a worker database. The worker
+recovers interrupted task claims when it starts again.
+
+The worker also serves a read-only work item and run UI by default at `http://127.0.0.1:9465/`.
+Active sessions stream output through `/api/tasks/<task_id>/events`; completed runs use the same paged feed. Raw activity JSON remains at `/activity.json`. The bind stays fixed at `9465`; use `activity_history_limit` to set the recent run list size per work item.
 
 The default compose stack also runs a simple static preview service on `http://127.0.0.1:9466/`.
 It serves a Docker-managed `html-output` volume that is mounted read-write into the worker at
@@ -174,10 +179,11 @@ Notes:
   sent as acknowledgement. Other chats are never claimed.
 - Incorporated tasks receive their own completion and run record without launching another
   executor. Their run page links to the parent run that answered the bundle.
-- Telegram's native reply metadata is preserved. For a reply-quoted task, the executor receives a
-  `history_contract` with the supported `app.main_history` command for retrieving nearby turns
-  around the quoted `(chat_id, message_id)` anchor. The worker ledger starts at deployment time,
-  so older anchors may initially be absent; no handler-history migration or cutover is required.
+- Telegram's native reply metadata is preserved. Every Telegram executor run receives recent
+  worker-owned turns and a `history_contract` with commands to search older turns by words,
+  sender, or date and retrieve nearby turns around a message ID. Search and retrieval stay within
+  the chat and topic. The worker ledger starts at deployment time, so older handler-only turns
+  and quoted anchors may be absent. Handler history remains stored but is no longer injected.
 
 - If `--telegram-message-id` is omitted, `app.main_reply` looks up the inbound Telegram `message_id` from the task ledger in `db_path`.
 

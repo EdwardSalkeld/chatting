@@ -8,7 +8,7 @@ import time
 from dataclasses import replace
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
@@ -30,9 +30,12 @@ from app.models import (
     AuditEvent,
     ExecutionResult,
     OutboundMessage,
+    PromptContext,
     RunRecord,
     TaskEnvelope,
 )
+from app.model_command import MODELS, parse_model_command
+from app.worker.model_router import choose_model
 from app.state import SQLiteStateStore
 
 if TYPE_CHECKING:
@@ -82,6 +85,11 @@ def process_task_message(
             task_message=task_message,
             executor_impl=executor_impl,
         )
+    model_command = parse_model_command(envelope)
+    if model_command is not None:
+        return _process_model_command(
+            store=store, task_message=task_message, command=model_command
+        )
 
     run_id = f"run:{task_message.task_id}:{time.time_ns()}"
     started = time.perf_counter()
@@ -97,17 +105,50 @@ def process_task_message(
     used_supervised_recovery = False
     normalized_envelope = _normalize_executor_envelope(envelope)
     inbox_task = store.get_inbox_task(task_id=task_message.task_id)
-    active_executor: Executor = executor_impl
-    if _should_run_supervised_recovery(task_message):
-        active_executor = SupervisedReplyRecoveryExecutor(
-            inner=executor_impl,
-            store=store,
-        )
+    assignment = store.get_work_assignment(task_id=task_message.task_id)
+    model_tier = (
+        store.get_work_model_tier(work_item_id=assignment.work_item_id)
+        if assignment is not None
+        else "high"
+    )
+    model_decision = None
+    if model_tier == "auto":
+        model_decision = choose_model(store=store, envelope=envelope)
+        model_tier = model_decision.tier
+    escalation_reason: str | None = None
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
 
         try:
+            active_executor: Executor = executor_impl
+            if assignment is not None:
+                active_executor = executor_impl.for_workspace(
+                    work_item_id=assignment.work_item_id,
+                )
+            model_selector = getattr(active_executor, "for_model", None)
+            if callable(model_selector):
+                active_executor = cast(Executor, model_selector(model_tier))
+            output_callback_setter = getattr(
+                active_executor, "with_output_callback", None
+            )
+            if callable(output_callback_setter):
+                streaming_output = True
+                active_executor = cast(
+                    Executor,
+                    output_callback_setter(
+                        lambda stream, content: activity_monitor.record_executor_output(
+                            task_message=task_message, stream=stream, content=content
+                        )
+                    ),
+                )
+            else:
+                streaming_output = False
+            if _should_run_supervised_recovery(task_message):
+                active_executor = SupervisedReplyRecoveryExecutor(
+                    inner=active_executor,
+                    store=store,
+                )
             active_envelope = normalized_envelope
             executor_launch_count += 1
             activity_monitor.record_executor_started(
@@ -115,15 +156,81 @@ def process_task_message(
                 attempt=executor_launch_count,
             )
             execution_result = active_executor.execute(active_envelope)
-            if isinstance(active_executor, SupervisedReplyRecoveryExecutor):
+            if (
+                model_tier == "low"
+                and execution_result.escalation_reason
+                and not execution_result.errors
+                and store.count_conversation_bundle_main_reply_egress_events(
+                    parent_task_id=task_message.task_id
+                )
+                == 0
+            ):
+                escalation_reason = execution_result.escalation_reason
+                model_tier = "high"
+                if isinstance(active_executor, SupervisedReplyRecoveryExecutor):
+                    executor_launch_count = active_executor.last_launch_count
+                sol_executor = executor_impl
+                if assignment is not None:
+                    sol_executor = sol_executor.for_workspace(
+                        work_item_id=assignment.work_item_id
+                    )
+                model_selector = getattr(sol_executor, "for_model", None)
+                if callable(model_selector):
+                    sol_executor = cast(Executor, model_selector("high"))
+                output_callback_setter = getattr(
+                    sol_executor, "with_output_callback", None
+                )
+                if callable(output_callback_setter):
+                    sol_executor = cast(
+                        Executor,
+                        output_callback_setter(
+                            lambda stream, content: (
+                                activity_monitor.record_executor_output(
+                                    task_message=task_message,
+                                    stream=stream,
+                                    content=content,
+                                )
+                            )
+                        ),
+                    )
+                if _should_run_supervised_recovery(task_message):
+                    sol_executor = SupervisedReplyRecoveryExecutor(
+                        inner=sol_executor, store=store
+                    )
+                context = normalized_envelope.prompt_context
+                sol_envelope = replace(
+                    normalized_envelope,
+                    prompt_context=PromptContext(
+                        global_instructions=list(context.global_instructions),
+                        source_instructions=list(context.source_instructions),
+                        reply_channel_instructions=list(
+                            context.reply_channel_instructions
+                        ),
+                        task_instructions=list(context.task_instructions)
+                        + [
+                            "Luna requested a task-only handoff to Sol. Its findings: "
+                            + escalation_reason
+                        ],
+                    ),
+                )
+                executor_launch_count += 1
+                activity_monitor.record_executor_started(
+                    task_message=task_message, attempt=executor_launch_count
+                )
+                execution_result = sol_executor.execute(sol_envelope)
+                if isinstance(sol_executor, SupervisedReplyRecoveryExecutor):
+                    executor_launch_count += sol_executor.last_launch_count - 1
+                    used_supervised_recovery = sol_executor.last_recovery_attempted
+            elif isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                 executor_launch_count = active_executor.last_launch_count
                 used_supervised_recovery = active_executor.last_recovery_attempted
             execution_payload = execution_result.to_dict()
-            _record_execution_output(
-                activity_monitor=activity_monitor,
-                task_message=task_message,
-                execution_result=execution_result,
-            )
+            if not streaming_output:
+                _record_execution_output(
+                    activity_monitor=activity_monitor,
+                    task_message=task_message,
+                    execution_result=execution_result,
+                )
 
             published_incremental_reply_count = (
                 store.count_conversation_bundle_main_reply_egress_events(
@@ -188,6 +295,7 @@ def process_task_message(
         result_status=result_status,
         created_at=datetime.now(timezone.utc),
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
 
     store.append_audit_event(
@@ -208,6 +316,16 @@ def process_task_message(
                 "last_error_stage": last_error_stage,
                 "supervised_recovery_used": used_supervised_recovery,
                 "execution_result": execution_payload,
+                "model_tier": store.get_work_model_tier(
+                    work_item_id=assignment.work_item_id
+                )
+                if assignment is not None
+                else "high",
+                "executed_model_tier": model_tier,
+                "auto_model_decision": model_decision.to_dict()
+                if model_decision is not None
+                else None,
+                "escalation_reason": escalation_reason,
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": (
                     store.count_conversation_bundle_main_reply_egress_events(
@@ -290,6 +408,7 @@ def build_coalesced_task_result(
         result_status="success",
         created_at=created_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -357,6 +476,7 @@ def build_recovered_delivered_task_result(
         result_status="success",
         created_at=created_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -415,6 +535,7 @@ def _process_internal_heartbeat(
         result_status="success",
         created_at=worker_received_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -476,6 +597,7 @@ def _process_internal_telegram_channel_not_enabled_notice(
         result_status="success",
         created_at=emitted_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
@@ -515,6 +637,74 @@ def _process_internal_telegram_channel_not_enabled_notice(
     )
 
 
+def _process_model_command(
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+    command: tuple[str, str | None],
+) -> WorkerProcessResult:
+    assignment = store.get_work_assignment(task_id=task_message.task_id)
+    if assignment is None:
+        raise ValueError("model command has no work item")
+    action, tier = command
+    if action == "set" and tier is not None:
+        store.set_work_model_tier(work_item_id=assignment.work_item_id, tier=tier)
+    current = store.get_work_model_tier(work_item_id=assignment.work_item_id)
+    description = MODELS[current] if current in MODELS else "Jev selects per task"
+    body = (
+        f"This work item uses {current} ({description}). "
+        "Use /set high, /set low, or /set auto to change it."
+    )
+    emitted_at = datetime.now(timezone.utc)
+    visible = build_usage_egress(
+        task_message=task_message, body=body, emitted_at=emitted_at
+    )
+    visible = replace(
+        visible, event_id=f"evt:{task_message.task_id}:0:message:model-command"
+    )
+    completion = build_internal_completion_egress(
+        task_message=task_message, sequence=1, emitted_at=emitted_at
+    )
+    record = _with_work_item(
+        store,
+        task_message,
+        RunRecord(
+            run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+            envelope_id=task_message.envelope.id,
+            source=task_message.envelope.source,
+            workflow="default",
+            latency_ms=0,
+            result_status="success",
+            created_at=emitted_at,
+        ),
+    )
+    store.append_run(record)
+    store.append_audit_event(
+        AuditEvent(
+            run_id=record.run_id,
+            envelope_id=record.envelope_id,
+            source=record.source,
+            workflow=record.workflow,
+            result_status=record.result_status,
+            detail={
+                "task_id": task_message.task_id,
+                "reason_codes": ["model_command"],
+                "model_tier": current,
+                "command": action,
+            },
+            created_at=emitted_at,
+        )
+    )
+    return WorkerProcessResult(
+        run_record=record,
+        egress_messages=[visible, completion],
+        dead_lettered=False,
+        attempt_count=1,
+        reason_codes=["model_command"],
+        error_summary=None,
+    )
+
+
 def _process_usage_command(
     *,
     store: SQLiteStateStore,
@@ -548,7 +738,9 @@ def _process_usage_command(
         result_status="success",
         created_at=emitted_at,
     )
+    run_record = _with_work_item(store, task_message, run_record)
     store.append_run(run_record)
+
     store.append_audit_event(
         AuditEvent(
             run_id=run_record.run_id,
@@ -583,6 +775,13 @@ def _process_usage_command(
         reason_codes=["usage_command"],
         error_summary=None,
     )
+
+
+def _with_work_item(
+    store: SQLiteStateStore, task_message: TaskQueueMessage, record: RunRecord
+) -> RunRecord:
+    assignment = store.get_work_assignment(task_id=task_message.task_id)
+    return replace(record, work_item_id=assignment.work_item_id if assignment else None)
 
 
 def _build_completion_egress_messages(
