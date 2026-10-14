@@ -276,6 +276,9 @@ class EmailE2ETests(unittest.TestCase):
                         proc.stdout.close()
                     if proc.stderr is not None:
                         proc.stderr.close()
+                from tests.e2e.worker_cleanup import stop_test_supervisors
+
+                stop_test_supervisors(worker_db)
                 if not handler_log_fh.closed:
                     handler_log_fh.close()
                 if not worker_log_fh.closed:

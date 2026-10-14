@@ -699,19 +699,28 @@ class SQLiteStateStore:
         )
         return {"queued": queued, "running": running}
 
-    def recover_inbox_tasks(self) -> None:
-        """Recover leases after restart without replaying already-delivered work."""
+    def recover_inbox_tasks(self, *, supervised_task_ids: tuple[str, ...] = ()) -> None:
+        """Recover abandoned leases, leaving live supervisors and their bundles alone."""
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                "UPDATE worker_inbox SET lease_owner = NULL WHERE lease_owner IS NOT NULL"
+                "CREATE TEMP TABLE supervised_tasks (task_id TEXT PRIMARY KEY)"
+            )
+            connection.executemany(
+                "INSERT INTO supervised_tasks (task_id) VALUES (?)",
+                [(task_id,) for task_id in supervised_task_ids],
+            )
+            connection.execute(
+                "UPDATE worker_inbox SET lease_owner = NULL WHERE lease_owner IS NOT NULL "
+                "AND task_id NOT IN (SELECT task_id FROM supervised_tasks)"
             )
             connection.execute(
                 """
                 UPDATE worker_inbox
                 SET state = 'pending', updated_at = ?
                 WHERE state = 'active' AND reply_delivered_at IS NULL
+                  AND task_id NOT IN (SELECT task_id FROM supervised_tasks)
                 """,
                 (now,),
             )
@@ -720,6 +729,7 @@ class SQLiteStateStore:
                 UPDATE worker_inbox
                 SET state = 'closing', updated_at = ?
                 WHERE state = 'active' AND reply_delivered_at IS NOT NULL
+                  AND task_id NOT IN (SELECT task_id FROM supervised_tasks)
                 """,
                 (now,),
             )
@@ -728,6 +738,7 @@ class SQLiteStateStore:
                 UPDATE worker_inbox
                 SET state = 'pending', parent_task_id = NULL, updated_at = ?
                 WHERE state = 'attached'
+                  AND parent_task_id NOT IN (SELECT task_id FROM supervised_tasks)
                   AND parent_task_id NOT IN (
                       SELECT task_id FROM worker_inbox WHERE state = 'closing'
                   )

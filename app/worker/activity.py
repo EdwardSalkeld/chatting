@@ -46,6 +46,11 @@ class WorkerActivityMonitor:
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self._lock = Lock()
         self._active_executors: dict[str, dict[str, object]] = {}
+        self._supervisor_executors: list[dict[str, object]] = []
+
+    def set_supervisor_executors(self, executors: list[dict[str, object]]) -> None:
+        with self._lock:
+            self._supervisor_executors = executors
 
     @property
     def history_limit(self) -> int:
@@ -367,16 +372,14 @@ class WorkerActivityMonitor:
         }
 
     def _current_executor(self) -> dict[str, object]:
-        with self._lock:
-            return (
-                {"active": False, "phase": "idle"}
-                if not self._active_executors
-                else dict(next(iter(self._active_executors.values())))
-            )
+        executors = self._current_executors()
+        return executors[0] if executors else {"active": False, "phase": "idle"}
 
     def _current_executors(self) -> list[dict[str, object]]:
         with self._lock:
-            return [dict(item) for item in self._active_executors.values()]
+            return [dict(item) for item in self._active_executors.values()] + [
+                dict(item) for item in self._supervisor_executors
+            ]
 
     def _build_current_run_summary(
         self,

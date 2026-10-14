@@ -51,3 +51,27 @@ The scripts accept overrides through environment variables such as:
 - `CHATTING_BBMB_BIN`
 - `CHATTING_HANDLER_BIN`
 - `CHATTING_WORKER_PYTHON`
+
+## Manager restarts and supervisors
+
+The worker entrypoint now manages detached supervisor processes. Under systemd,
+the worker unit must use `KillMode=process`, so stopping or restarting the manager
+does not kill supervisors and executors in its cgroup. Unix sockets and slot locks
+live in the configured `supervisor_dir`, by default beside the worker database;
+keep that directory persistent and writable by the worker user. Do not place it
+in a service-private temporary directory that changes across restarts.
+
+On first rollout, drain the old worker before upgrading: its executors do not yet
+have separate supervisors. After rollout, a manager restart preserves existing
+work. Busy supervisors continue with the runtime and environment they started
+with, then are replaced when idle if the manager's settings or runtime changed.
+
+For a full application shutdown, stop the manager and then run:
+
+```sh
+python -m app.worker.supervisor --directory /path/to/worker.db.supervisors --shutdown
+```
+
+This waits for running tasks, acknowledges retained completions, and stops the
+slots. Stopping the manager alone intentionally leaves them alive. Supervisor,
+container, and host crashes are failures; automatic recovery is not implemented.
