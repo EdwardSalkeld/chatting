@@ -306,6 +306,10 @@ class SplitModeE2ETests(unittest.TestCase):
                     if proc.stderr is not None:
                         proc.stderr.close()
 
+                from tests.e2e.worker_cleanup import stop_test_supervisors
+
+                stop_test_supervisors(worker_db_path)
+
             # The handler runs until we terminate it, so a clean self-exit (0)
             # or the SIGTERM we send are both fine; anything else is a crash.
             self.assertIn(

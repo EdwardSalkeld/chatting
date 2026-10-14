@@ -44,6 +44,19 @@ def _completion_egress(event_id: str = "evt:task:1:0:completion") -> EgressQueue
 
 
 class PublishEgressWithOutboxTests(unittest.TestCase):
+    def test_supervisor_only_queues_egress_for_manager_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteStateStore(str(Path(tmp) / "worker.db"))
+            with patch("app.worker.main.submit_egress") as submit:
+                _publish_egress_with_outbox(
+                    store=store,
+                    handler_egress_url=None,
+                    egress_message=_completion_egress(),
+                    activity_monitor=_RecordingMonitor(),
+                )
+            submit.assert_not_called()
+            self.assertEqual(len(store.list_replayable_egress_outbox_events()), 1)
+
     def _run(self, submit_return):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

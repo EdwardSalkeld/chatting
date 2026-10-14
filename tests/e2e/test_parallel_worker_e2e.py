@@ -228,12 +228,9 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                             process.wait(timeout=5)
                 if server.stderr is not None:
                     server.stderr.close()
-                for path in Path(f"{db}.supervisors").glob("*.sock"):
-                    try:
-                        status = request(path, "status")
-                        os.killpg(status["pid"], signal.SIGKILL)
-                    except (OSError, RuntimeError):
-                        pass
+                from tests.e2e.worker_cleanup import stop_test_supervisors
+
+                stop_test_supervisors(db)
 
 
 if __name__ == "__main__":

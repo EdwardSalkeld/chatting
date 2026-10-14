@@ -516,7 +516,7 @@ def _process_claimed_task(
     executor: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
-    handler_egress_url: str,
+    handler_egress_url: str | None,
 ) -> None:
     task_message = inbox_task.task_message
     if inbox_task.state == "closing":
@@ -565,7 +565,7 @@ def _process_claimed_task(
 def _publish_egress_with_outbox(
     *,
     store: SQLiteStateStore,
-    handler_egress_url: str,
+    handler_egress_url: str | None,
     egress_message: EgressQueueMessage,
     activity_monitor: WorkerActivityMonitor,
 ) -> None:
@@ -574,6 +574,10 @@ def _publish_egress_with_outbox(
     # later loop; the task is still acked, so we never re-run the executor just
     # because a reply could not be delivered yet.
     store.queue_egress_outbox_event(egress_message)
+    if handler_egress_url is None:
+        # Supervisors persist results even while the manager is absent. Only
+        # the manager drains these events, avoiding concurrent outbox sends.
+        return
     _deliver_egress_event(
         store=store,
         handler_egress_url=handler_egress_url,
