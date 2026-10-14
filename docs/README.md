@@ -6,7 +6,7 @@
 - [Run Split Mode (BBMB)](run-split-bbmb.md)
 - [BBMB Message Flow](bbmb-message-flow.md)
 - [Debug And Test Guide](debug-and-test.md)
-- [Explicit Executor Termination (Opt-in)](explicit-finish.md)
+- [Explicit Executor Termination](explicit-finish.md)
 
 ## CI
 

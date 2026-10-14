@@ -700,6 +700,12 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
             store.stage_inbox_task(parent)
             store.stage_inbox_task(followup)
+            # Exercise the exit-based recovery fallback retained by /finish off.
+            assignment = store.get_work_assignment(task_id=parent.task_id)
+            assert assignment is not None
+            store.set_work_explicit_finish(
+                work_item_id=assignment.work_item_id, enabled=False
+            )
             store.claim_next_inbox_task()
             store.claim_conversation_followups(parent_task_id=parent.task_id)
             executor = ResolveFollowupsOnSecondPassExecutor(store)
