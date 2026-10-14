@@ -15,6 +15,7 @@ from pathlib import Path
 from app.broker import BBMBQueueAdapter, TASK_QUEUE_NAME, TaskQueueMessage
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
+from app.worker.supervisor import request
 
 
 def _free_port() -> int:
@@ -153,9 +154,8 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                     store.inbox_queue_summary(), {"queued": 0, "running": 0}
                 )
 
-                # Interrupt a live executor and restart the coordinator. The
-                # orphaned subprocess is killed with its process group, as
-                # systemd does for the Sparrow service.
+                # Kill the manager while work is live. Detached supervisors
+                # and their executors must continue, then be adopted unchanged.
                 interrupted = _task(4, "item_parallel_restart", 2.0)
                 broker.publish_json(TASK_QUEUE_NAME, interrupted.to_dict())
                 deadline = time.monotonic() + 8
@@ -171,7 +171,12 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                     time.sleep(0.05)
                 else:
                     self.fail("interrupted executor did not start")
-                os.killpg(worker.pid, signal.SIGKILL)
+                directory = Path(f"{db}.supervisors")
+                before = [
+                    request(directory / f"supervisor-{n}.sock", "status")
+                    for n in (1, 2)
+                ]
+                os.kill(worker.pid, signal.SIGKILL)
                 worker.wait(timeout=5)
                 worker = subprocess.Popen(
                     [sys.executable, "-m", "app.main_worker", "--config", str(config)],
@@ -199,6 +204,19 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                     store.get_inbox_task(task_id=interrupted.task_id).state,
                     "completed",
                 )
+                after = [
+                    request(directory / f"supervisor-{n}.sock", "status")
+                    for n in (1, 2)
+                ]
+                self.assertEqual([s["pid"] for s in before], [s["pid"] for s in after])
+                restarts = [
+                    json.loads(line)
+                    for line in events.read_text().splitlines()
+                    if json.loads(line)["task_id"] == interrupted.task_id
+                ]
+                self.assertEqual(
+                    [event["phase"] for event in restarts], ["start", "end"]
+                )
             finally:
                 for process in (worker, server):
                     if process is not None and process.poll() is None:
@@ -210,6 +228,12 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                             process.wait(timeout=5)
                 if server.stderr is not None:
                     server.stderr.close()
+                for path in Path(f"{db}.supervisors").glob("*.sock"):
+                    try:
+                        status = request(path, "status")
+                        os.killpg(status["pid"], signal.SIGKILL)
+                    except (OSError, RuntimeError):
+                        pass
 
 
 if __name__ == "__main__":

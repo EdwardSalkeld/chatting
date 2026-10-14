@@ -11,8 +11,6 @@ import shlex
 import sys
 import tempfile
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
 
@@ -33,6 +31,7 @@ from app.worker.activity import (
 from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
+from app.worker.supervisor import SupervisorPool
 from app.worker.runtime import (
     build_coalesced_task_result,
     build_recovered_delivered_task_result,
@@ -57,6 +56,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "poll_timeout_seconds",
         "sleep_seconds",
         "executor_pool_size",
+        "supervisor_dir",
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10
@@ -121,6 +121,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to JSON config file.")
     parser.add_argument("--db-path", help="Path to worker SQLite state DB.")
     parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
+    parser.add_argument(
+        "--supervisor-dir",
+        help="Private directory for supervisor sockets and slot locks.",
+    )
     parser.add_argument(
         "--handler-egress-url",
         help="Handler synchronous egress endpoint URL (default the worker config's handler_egress_url).",
@@ -430,7 +434,30 @@ def main() -> int:
         raise RuntimeError("another worker already owns this database") from exc
 
     store = SQLiteStateStore(db_path)
-    store.recover_inbox_tasks()
+    supervisor_dir = _resolve_str(
+        args.supervisor_dir,
+        config.get("supervisor_dir"),
+        default_value=f"{Path(db_path).resolve()}.supervisors",
+        setting_name="supervisor_dir",
+    )
+    supervisors = SupervisorPool(
+        directory=Path(supervisor_dir),
+        size=executor_pool_size,
+        settings={
+            "db_path": str(Path(db_path).resolve()),
+            "args": vars(args),
+            "config": config,
+            "max_attempts": max_attempts,
+            "handler_egress_url": handler_egress_url,
+        },
+    )
+    store.recover_inbox_tasks(
+        supervised_task_ids=tuple(
+            status["task_id"]
+            for status in supervisors.statuses()
+            if status["task_id"] is not None
+        )
+    )
     activity_monitor = WorkerActivityMonitor(
         store=store,
         history_limit=activity_history_limit,
@@ -443,10 +470,6 @@ def main() -> int:
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)
 
-    executor = _build_executor(args, config)
-    if isinstance(executor, CodexExecutor):
-        executor = replace(executor, history_store=store)
-
     collector = InboxCollector(
         broker=broker,
         store=store,
@@ -454,10 +477,6 @@ def main() -> int:
         pickup_timeout_seconds=poll_timeout_seconds,
     )
     collector.start()
-    pool = ThreadPoolExecutor(
-        max_workers=executor_pool_size, thread_name_prefix="executor"
-    )
-    active: dict[Future[None], str] = {}
     try:
         loop_count = 0
         while True:
@@ -469,28 +488,14 @@ def main() -> int:
                 handler_egress_url=handler_egress_url,
                 activity_monitor=activity_monitor,
             )
-            for future, task_id in list(active.items()):
-                if future.done():
-                    del active[future]
-                    try:
-                        future.result()
-                    except Exception:  # noqa: BLE001
-                        LOGGER.exception("worker_processing_failed task_id=%s", task_id)
-                        store.release_active_inbox_task(task_id=task_id)
-            while len(active) < executor_pool_size:
-                inbox_task = store.claim_next_inbox_task()
-                if inbox_task is None:
-                    break
-                future = pool.submit(
-                    _process_claimed_task,
-                    store=store,
-                    inbox_task=inbox_task,
-                    executor=executor,
-                    max_attempts=max_attempts,
-                    activity_monitor=activity_monitor,
-                    handler_egress_url=handler_egress_url,
-                )
-                active[future] = inbox_task.task_message.task_id
+            supervisors.tick()
+            activity_monitor.set_supervisor_executors(
+                [
+                    executor
+                    for status in supervisors.statuses()
+                    for executor in status["active_executors"]
+                ]
+            )
 
             if max_loops and loop_count >= max_loops:
                 break
@@ -498,7 +503,8 @@ def main() -> int:
         return 0
     finally:
         collector.stop()
-        pool.shutdown(wait=True)
+        if max_loops:
+            supervisors.drain()
         activity_server.shutdown()
         os.close(lock_fd)
 

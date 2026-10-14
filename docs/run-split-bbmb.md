@@ -88,8 +88,38 @@ directory.
 Set `workspace_root` to the persistent directory for work item workspaces. The
 worker runs up to two Codex tasks at once by default; `executor_pool_size` sets
 that limit. Tasks assigned to the same work item run in arrival order, one at
-a time. Run only one worker process against a worker database. The worker
-recovers interrupted task claims when it starts again.
+a time. Run only one worker process against a worker database.
+
+The worker is now the manager for separate supervisor processes, one per slot.
+Each supervisor owns its executor and task bookkeeping. The manager reconnects
+to their Unix sockets on startup, preserving running tasks and their follow-ups.
+Supervisors retain completion status until the manager acknowledges it. Executor
+exit and reply checks still determine completion; there is no new executor finish
+command in this change.
+
+`supervisor_dir` (also `--supervisor-dir`) defaults to `<absolute db_path>.supervisors`.
+It must be a private directory owned by the worker user, writable by the service,
+and short enough for Unix sockets. Slot N uses `supervisor-N.sock`, a slot lock,
+a config snapshot, and a log in that directory. Use the same database and directory
+on every manager restart. The manager discovers existing slots before recovering
+abandoned inbox claims, and never reclaims work owned by a live supervisor.
+
+Changing the pool size drains surplus slots. Changes to configuration, environment,
+or the installed runtime take effect by replacing idle supervisors; busy supervisors
+finish their current task first. A dead or unresponsive supervisor is a failure:
+the manager stops rather than replacing it or repeating uncertain work. Its slot
+lock remains as evidence. Inspect its log, task state, and any surviving executor
+before manually resolving the failed slot. Supervisor crash recovery is deferred.
+
+For a full shutdown, stop the manager first, then drain and stop supervisors:
+
+```sh
+python -m app.worker.supervisor --directory /path/to/worker.db.supervisors --shutdown
+```
+
+See [host service configuration](../deploy/host_runtime/README.md) for the service
+settings required to preserve supervisors across manager restarts. Restarting a
+whole container or host also stops supervisors and remains a failure in this phase.
 
 The worker also serves a read-only work item and run UI by default at `http://127.0.0.1:9465/`.
 Active sessions stream output through `/api/tasks/<task_id>/events`; completed runs use the same paged feed. Raw activity JSON remains at `/activity.json`. The bind stays fixed at `9465`; use `activity_history_limit` to set the recent run list size per work item.
