@@ -52,6 +52,32 @@ def _telegram_task(
 
 
 class WorkerInboxTests(unittest.TestCase):
+    def test_reader_does_not_block_supervisor_claim_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "worker.db")
+            store = SQLiteStateStore(db_path)
+            task = _telegram_task(1)
+            store.stage_inbox_task(task)
+            with sqlite3.connect(db_path) as reader:
+                reader.execute("BEGIN")
+                self.assertEqual(
+                    reader.execute(
+                        "SELECT state FROM worker_inbox WHERE task_id = ?",
+                        (task.task_id,),
+                    ).fetchone()[0],
+                    "pending",
+                )
+                claimed = store.claim_next_inbox_task()
+                self.assertIsNotNone(claimed)
+                self.assertEqual(
+                    reader.execute(
+                        "SELECT state FROM worker_inbox WHERE task_id = ?",
+                        (task.task_id,),
+                    ).fetchone()[0],
+                    "pending",
+                )
+            self.assertEqual(store.get_inbox_task(task_id=task.task_id).state, "active")
+
     def test_existing_worker_history_keeps_topic_on_schema_upgrade(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "worker.db"

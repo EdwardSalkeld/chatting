@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 from threading import Lock, Thread
@@ -50,7 +51,9 @@ class SupervisorError(RuntimeError):
 
 def request(path: Path, command: str, **fields: object) -> dict:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(3)
+        # SQLite's busy timeout is five seconds. Wait long enough to receive
+        # the result of a contended claim rather than abandoning the manager.
+        client.settimeout(10)
         client.connect(str(path))
         client.sendall(
             json.dumps(
@@ -92,7 +95,18 @@ class Supervisor:
             if command == "start":
                 if self.state != "idle":
                     raise ValueError("slot is not idle")
-                inbox_task = self.store.claim_next_inbox_task()
+                try:
+                    inbox_task = self.store.claim_next_inbox_task()
+                except sqlite3.OperationalError as exc:
+                    if getattr(exc, "sqlite_errorcode", 0) & 0xFF not in (
+                        sqlite3.SQLITE_BUSY,
+                        sqlite3.SQLITE_LOCKED,
+                    ):
+                        raise
+                    # The connection closes and rolls back the failed claim.
+                    # Leave the slot idle so the next manager tick retries.
+                    LOGGER.warning("supervisor_claim_busy slot=%s", self.slot)
+                    inbox_task = None
                 if inbox_task is not None:
                     self.task_id = inbox_task.task_message.task_id
                     self.state = "running"
