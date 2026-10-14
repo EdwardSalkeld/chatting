@@ -3,11 +3,13 @@
 import json
 import os
 import sys
+import subprocess
 import time
 
 
 def main() -> None:
-    task = json.load(sys.stdin)["task"]
+    payload = json.load(sys.stdin)
+    task = payload["task"]
     task_id = task["task_id"]
     duration = float(task["content"].removeprefix("sleep:"))
     log_path = sys.argv[1]
@@ -21,6 +23,8 @@ def main() -> None:
             os.fsync(log.fileno())
         if phase == "start":
             time.sleep(duration)
+    if "termination_contract" in payload:
+        subprocess.run([sys.executable, "-P", "-m", "app.main_finish"], check=True)
 
 
 if __name__ == "__main__":

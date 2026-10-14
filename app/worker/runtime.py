@@ -87,7 +87,7 @@ def process_task_message(
         )
     model_command = parse_model_command(envelope)
     if model_command is not None:
-        return _process_model_command(
+        return _process_work_item_command(
             store=store, task_message=task_message, command=model_command
         )
 
@@ -106,6 +106,10 @@ def process_task_message(
     normalized_envelope = _normalize_executor_envelope(envelope)
     inbox_task = store.get_inbox_task(task_id=task_message.task_id)
     assignment = store.get_work_assignment(task_id=task_message.task_id)
+    explicit_finish = bool(
+        assignment
+        and store.get_work_explicit_finish(work_item_id=assignment.work_item_id)
+    )
     model_tier = (
         store.get_work_model_tier(work_item_id=assignment.work_item_id)
         if assignment is not None
@@ -144,7 +148,7 @@ def process_task_message(
                 )
             else:
                 streaming_output = False
-            if _should_run_supervised_recovery(task_message):
+            if not explicit_finish and _should_run_supervised_recovery(task_message):
                 active_executor = SupervisedReplyRecoveryExecutor(
                     inner=active_executor,
                     store=store,
@@ -193,7 +197,9 @@ def process_task_message(
                             )
                         ),
                     )
-                if _should_run_supervised_recovery(task_message):
+                if not explicit_finish and _should_run_supervised_recovery(
+                    task_message
+                ):
                     sol_executor = SupervisedReplyRecoveryExecutor(
                         inner=sol_executor, store=store
                     )
@@ -242,6 +248,7 @@ def process_task_message(
                 reason_codes.append("executor_reported_errors")
             if (
                 _requires_visible_telegram_reply(task_message)
+                and not explicit_finish
                 and not execution_result.errors
                 and published_incremental_reply_count == 0
             ):
@@ -637,7 +644,7 @@ def _process_internal_telegram_channel_not_enabled_notice(
     )
 
 
-def _process_model_command(
+def _process_work_item_command(
     *,
     store: SQLiteStateStore,
     task_message: TaskQueueMessage,
@@ -647,6 +654,7 @@ def _process_model_command(
     if assignment is None:
         raise ValueError("model command has no work item")
     action, tier = command
+    command_kind = "explicit_finish_command" if action == "finish" else "model_command"
     if action == "set" and tier is not None:
         store.set_work_model_tier(work_item_id=assignment.work_item_id, tier=tier)
     current = store.get_work_model_tier(work_item_id=assignment.work_item_id)
@@ -655,12 +663,22 @@ def _process_model_command(
         f"This work item uses {current} ({description}). "
         "Use /set high, /set low, or /set auto to change it."
     )
+    if action == "finish":
+        if tier is not None:
+            store.set_work_explicit_finish(
+                work_item_id=assignment.work_item_id, enabled=tier == "on"
+            )
+        enabled = store.get_work_explicit_finish(work_item_id=assignment.work_item_id)
+        body = (
+            f"Explicit executor termination is {'on' if enabled else 'off'} for this work item. "
+            "Use /finish on or /finish off to change it. Changes apply to the next task."
+        )
     emitted_at = datetime.now(timezone.utc)
     visible = build_usage_egress(
         task_message=task_message, body=body, emitted_at=emitted_at
     )
     visible = replace(
-        visible, event_id=f"evt:{task_message.task_id}:0:message:model-command"
+        visible, event_id=f"evt:{task_message.task_id}:0:message:{command_kind}"
     )
     completion = build_internal_completion_egress(
         task_message=task_message, sequence=1, emitted_at=emitted_at
@@ -688,8 +706,11 @@ def _process_model_command(
             result_status=record.result_status,
             detail={
                 "task_id": task_message.task_id,
-                "reason_codes": ["model_command"],
+                "reason_codes": [command_kind],
                 "model_tier": current,
+                "explicit_finish": store.get_work_explicit_finish(
+                    work_item_id=assignment.work_item_id
+                ),
                 "command": action,
             },
             created_at=emitted_at,
@@ -700,7 +721,7 @@ def _process_model_command(
         egress_messages=[visible, completion],
         dead_lettered=False,
         attempt_count=1,
-        reason_codes=["model_command"],
+        reason_codes=[command_kind],
         error_summary=None,
     )
 

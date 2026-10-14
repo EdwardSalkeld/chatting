@@ -115,6 +115,28 @@ class SupervisorTests(unittest.TestCase):
         replacement.tick()
         self.assertEqual(len(self.log()), 2)
 
+    def test_explicit_finish_survives_manager_reconnection(self) -> None:
+        task = _task(1, "item_explicit", 0.8)
+        self.store.stage_inbox_task(task)
+        self.store.set_work_explicit_finish(work_item_id="item_explicit", enabled=True)
+        self.store.set_work_model_tier(work_item_id="item_explicit", tier="high")
+        self.pool.tick()
+        self.wait_for(lambda: len(self.log()) == 1)
+        replacement = self.connect()
+        self.assertEqual([s["pid"] for s in replacement.statuses()], self.pids)
+        self.wait_for(lambda: replacement.status(1)["state"] == "finished")
+        records = list(
+            (self.root / "workspaces/item_explicit/.chatting-finish").glob("*.json")
+        )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(json.loads(records[0].read_text())["task_id"], task.task_id)
+        self.assertEqual([entry["phase"] for entry in self.log()], ["start", "end"])
+        self.assertEqual(
+            self.store.list_recent_runs(limit=1)[0].result_status, "success"
+        )
+        replacement.tick()
+        self.assertEqual(replacement.status(1)["state"], "idle")
+
     def test_slots_run_in_parallel_and_serialize_same_work_item(self) -> None:
         for task in (
             _task(1, "item_a", 0.3),
