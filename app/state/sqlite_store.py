@@ -406,6 +406,28 @@ class SQLiteStateStore:
                 raise KeyError(work_item_id)
             connection.commit()
 
+    def get_work_explicit_finish(self, *, work_item_id: str) -> bool:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT explicit_finish FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(work_item_id)
+        return bool(row["explicit_finish"])
+
+    def set_work_explicit_finish(self, *, work_item_id: str, enabled: bool) -> None:
+        if not isinstance(enabled, bool):
+            raise ValueError("explicit_finish must be a boolean")
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                "UPDATE work_items SET explicit_finish = ? WHERE work_item_id = ?",
+                (int(enabled), work_item_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(work_item_id)
+            connection.commit()
+
     def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
         with closing(self._connect()) as connection:
             row = connection.execute(
@@ -1110,7 +1132,7 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """SELECT item.work_item_id, item.origin_conversation_id,
-                          item.preferred_reply_json, item.model_tier,
+                          item.preferred_reply_json, item.model_tier, item.explicit_finish,
                           item.created_at, COALESCE(runs.run_count, 0) AS run_count,
                           runs.last_run_at,
                           COALESCE(queue.queued, 0) AS queued,
@@ -1136,6 +1158,7 @@ class SQLiteStateStore:
                 "origin_conversation_id": row["origin_conversation_id"],
                 "reply": json.loads(row["preferred_reply_json"]),
                 "model_tier": row["model_tier"],
+                "explicit_finish": bool(row["explicit_finish"]),
                 "created_at": row["created_at"],
                 "run_count": row["run_count"],
                 "last_run_at": row["last_run_at"],

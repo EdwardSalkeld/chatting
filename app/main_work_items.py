@@ -22,6 +22,11 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     show = commands.add_parser("show")
     show.add_argument("task_id")
+    finish = commands.add_parser("explicit-finish")
+    finish.add_argument("task_id")
+    finish.add_argument(
+        "mode", choices=("on", "off", "show"), default="show", nargs="?"
+    )
     register = commands.add_parser("register-pr")
     register.add_argument("task_id")
     register.add_argument("pr_url")
@@ -30,6 +35,10 @@ def main() -> int:
     assignment = store.get_work_assignment(task_id=args.task_id)
     if assignment is None:
         parser.error("unknown task")
+    if args.command == "explicit-finish" and args.mode != "show":
+        store.set_work_explicit_finish(
+            work_item_id=assignment.work_item_id, enabled=args.mode == "on"
+        )
     if args.command == "register-pr":
         request = urllib.request.Request(
             args.handler_url.rstrip("/") + "/work-items/register-pr",
@@ -50,6 +59,9 @@ def main() -> int:
             {
                 "work_item_id": assignment.work_item_id,
                 "reason": assignment.reason,
+                "explicit_finish": store.get_work_explicit_finish(
+                    work_item_id=assignment.work_item_id
+                ),
                 "preferred_reply": {
                     "type": preferred_reply.type,
                     "target": preferred_reply.target,

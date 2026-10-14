@@ -12,10 +12,13 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import signal
+import time
 from typing import IO, Any, Callable, Mapping, cast
 
 from app.models import (
     ExecutionResult,
+    PromptContext,
     SCHEMA_VERSION,
     TaskEnvelope,
     UsageReport,
@@ -24,6 +27,7 @@ from app.models import (
 )
 from app.model_command import MODELS
 from app.state import SQLiteStateStore, TelegramHistoryTurn
+from app.worker.executor.finish import FinishSession
 
 # Codex publishes rate-limit figures only inside the session rollouts it writes
 # while running a task, so reading them back is a file scan rather than an API
@@ -88,6 +92,14 @@ class CodexExecutor:
         )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
+        if (
+            self.history_store is not None
+            and self.work_item_id is not None
+            and self.history_store.get_work_explicit_finish(
+                work_item_id=self.work_item_id
+            )
+        ):
+            return self._execute_explicit(envelope)
         if self.model_tier == "low":
             with tempfile.TemporaryDirectory(prefix="chatting-escalate-") as temporary:
                 return self._run(
@@ -95,13 +107,68 @@ class CodexExecutor:
                 )
         return self._run(envelope)
 
+    def _execute_explicit(self, envelope: TaskEnvelope) -> ExecutionResult:
+        original = envelope
+        transcripts: list[str] = []
+        for attempt in range(3):
+            session = FinishSession(f"task:{envelope.id}", self.cwd)
+            try:
+                with tempfile.TemporaryDirectory(
+                    prefix="chatting-escalate-"
+                ) as temporary:
+                    result = self._run(
+                        envelope,
+                        escalation_path=Path(temporary) / "request.json"
+                        if self.model_tier == "low"
+                        else None,
+                        finish_session=session,
+                    )
+                transcripts.append(
+                    f"Pass {attempt + 1}:\n{result.stdout or ''}\n{result.stderr or ''}"
+                )
+                if session.requested:
+                    return replace(result, stdout="\n\n".join(transcripts))
+                if "executor_timeout" in result.errors:
+                    return result
+            finally:
+                session.close()
+            if attempt < 2:
+                time.sleep(attempt + 1)
+                context = original.prompt_context
+                envelope = replace(
+                    original,
+                    prompt_context=PromptContext(
+                        global_instructions=list(context.global_instructions),
+                        source_instructions=list(context.source_instructions),
+                        reply_channel_instructions=list(
+                            context.reply_channel_instructions
+                        ),
+                        task_instructions=list(context.task_instructions)
+                        + [
+                            "The previous executor exited without requesting termination. "
+                            "The task is unfinished. Review what already happened before continuing; "
+                            "do not repeat completed side effects or replies. Finish the remaining work "
+                            "and call main_finish, then wait. Previous captured transcript:\n"
+                            + "\n\n".join(transcripts)[-100000:]
+                        ],
+                    ),
+                )
+        return ExecutionResult(
+            errors=["executor_finish_missing:restart_limit"],
+            stdout="\n\n".join(transcripts),
+        )
+
     def for_model(self, tier: str) -> CodexExecutor:
         if tier not in MODELS:
             raise ValueError("unknown model tier")
         return replace(self, model_tier=tier)
 
     def _run(
-        self, envelope: TaskEnvelope, *, escalation_path: Path | None = None
+        self,
+        envelope: TaskEnvelope,
+        *,
+        escalation_path: Path | None = None,
+        finish_session: FinishSession | None = None,
     ) -> ExecutionResult:
         recent_history: list[TelegramHistoryTurn] = []
         message_id = envelope.reply_channel.metadata.get("message_id")
@@ -129,13 +196,14 @@ class CodexExecutor:
                 model_tier=self.model_tier,
                 escalation_path=escalation_path,
                 recent_history=recent_history,
+                finish_session=finish_session,
             )
         )
         command = self.command
         if self.model_tier is not None:
             command = (*command, "-m", MODELS[self.model_tier])
         try:
-            if self.output_callback is None:
+            if self.output_callback is None and finish_session is None:
                 completed = subprocess.run(
                     command,
                     input=payload,
@@ -151,14 +219,20 @@ class CodexExecutor:
                     command=command,
                     payload=payload,
                     cwd=self.cwd,
-                    env=_executor_env(self.env),
+                    env={
+                        **_executor_env(self.env),
+                        **(finish_session.environment() if finish_session else {}),
+                    },
                     timeout_seconds=self.timeout_seconds,
-                    callback=self.output_callback,
+                    callback=self.output_callback or (lambda stream, content: None),
+                    finish_session=finish_session,
                 )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")
 
-        if completed.returncode != 0:
+        if completed.returncode != 0 and not (
+            finish_session and finish_session.requested
+        ):
             error = f"executor_exit_nonzero:{completed.returncode}"
             stderr = completed.stderr.strip()
             if stderr:
@@ -226,6 +300,7 @@ def _run_streaming(
     env: Mapping[str, str],
     timeout_seconds: int,
     callback: Callable[[str, str], None],
+    finish_session: FinishSession | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Capture both pipes while publishing chunks as the child writes them."""
     import time
@@ -237,6 +312,7 @@ def _run_streaming(
         stderr=subprocess.PIPE,
         cwd=cwd,
         env=env,
+        start_new_session=finish_session is not None,
     )
     assert process.stdin is not None
     assert process.stdout is not None
@@ -255,7 +331,17 @@ def _run_streaming(
             for stream in streams:
                 selector.register(stream, selectors.EVENT_READ)
             selector.register(process.stdin, selectors.EVENT_WRITE)
-            while selector.get_map():
+            while selector.get_map() or (
+                finish_session is not None and process.poll() is None
+            ):
+                if finish_session is not None:
+                    if process.poll() is not None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    elif not finish_session.requested and finish_session.poll():
+                        os.killpg(process.pid, signal.SIGKILL)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout_seconds)
@@ -288,7 +374,13 @@ def _run_streaming(
         remaining = deadline - time.monotonic()
         process.wait(timeout=max(remaining, 0.001))
     except BaseException:
-        process.kill()
+        if finish_session is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
         process.wait()
         raise
     finally:
@@ -296,6 +388,11 @@ def _run_streaming(
             process.stdin.close()
         process.stdout.close()
         process.stderr.close()
+        if finish_session is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
     return subprocess.CompletedProcess(
         command,
         process.returncode,
@@ -421,6 +518,7 @@ def _task_payload(
     model_tier: str | None = None,
     escalation_path: Path | None = None,
     recent_history: list[TelegramHistoryTurn] | None = None,
+    finish_session: FinishSession | None = None,
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -526,6 +624,9 @@ def _task_payload(
             ),
         },
     }
+    if finish_session is not None:
+        payload["termination_contract"] = finish_session.contract()
+        payload["reply_contract"]["executor_exit_status_drives_completion"] = False
     scope_option = ""
     if envelope.reply_channel.type == "telegram":
         topic_id = envelope.reply_channel.metadata.get("message_thread_id")
@@ -583,6 +684,11 @@ def _task_payload(
                 "sending any visible answer. The work item's low setting stays unchanged."
             ),
         }
+        if finish_session is not None:
+            payload["escalation_contract"]["instructions"] += (
+                " In this execution, after writing the escalation request, call main_finish "
+                "and wait for termination rather than exiting yourself."
+            )
     reply_to_message_id = envelope.reply_channel.metadata.get("reply_to_message_id")
     if (
         envelope.reply_channel.type == "telegram"

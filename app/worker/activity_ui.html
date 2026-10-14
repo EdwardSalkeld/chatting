@@ -121,7 +121,7 @@
       const previousScroll=content.firstElementChild?.scrollTop||0;
       const data=await request('/api/items/'+path(id)+'/runs'); const item=data.item;
       setCrumbs([['Work items','/items'],[itemName(item)]]); title.textContent=itemName(item);
-      subtitle.textContent=item.work_item_id;summary.replaceChildren();tag(`${item.run_count} runs`); tag(`${item.queued} queued`); tag(`Model: ${item.model_tier}`);
+      subtitle.textContent=item.work_item_id;summary.replaceChildren();tag(`${item.run_count} runs`); tag(`${item.queued} queued`); tag(`Model: ${item.model_tier}`); tag(`Explicit finish: ${item.explicit_finish ? 'on' : 'off'}`);
       const list=node('div','list');
       for(const run of data.active_executors){
         list.append(row('/tasks/'+path(run.task_id),run.preview||'Task running',run.task_id,[

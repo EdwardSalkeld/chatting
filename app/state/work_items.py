@@ -40,6 +40,10 @@ def initialize(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE work_items ADD COLUMN model_tier TEXT NOT NULL DEFAULT 'auto'"
         )
+    if "explicit_finish" not in columns:
+        connection.execute(
+            "ALTER TABLE work_items ADD COLUMN explicit_finish INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def assign(

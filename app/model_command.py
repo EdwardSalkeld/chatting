@@ -12,6 +12,11 @@ MODELS = {"high": "gpt-6.1-sol", "low": "gpt-6-luna"}
 
 def parse_model_command(envelope: TaskEnvelope) -> tuple[str, str | None] | None:
     content = _THREAD_PREFIX_RE.sub("", envelope.content.strip(), count=1).strip()
+    finish = re.fullmatch(
+        r"/finish(?:@\w+)?(?:\s+(on|off))?", content, flags=re.IGNORECASE
+    )
+    if finish:
+        return ("finish", finish.group(1).lower() if finish.group(1) else None)
     if re.fullmatch(r"/model(?:@\w+)?", content, flags=re.IGNORECASE):
         return ("show", None)
     match = re.fullmatch(
