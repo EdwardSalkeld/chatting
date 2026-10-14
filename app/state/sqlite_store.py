@@ -63,6 +63,9 @@ class SQLiteStateStore:
     def _initialize(self) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection:
+            # Managers, supervisors and the activity API use separate
+            # connections. Readers must not block a supervisor's lease commit.
+            connection.execute("PRAGMA journal_mode=WAL")
             self._initialize_idempotency_table(connection)
             connection.execute(
                 """

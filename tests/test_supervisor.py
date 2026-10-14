@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -59,7 +60,9 @@ class SupervisorTests(unittest.TestCase):
                 if child.poll() is None:
                     try:
                         os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
+                    except (ProcessLookupError, PermissionError):
+                        # macOS can report EPERM when a clean shutdown races
+                        # killpg. wait() below still fails if it remains alive.
                         pass
                 child.wait(timeout=5)
 
@@ -165,6 +168,22 @@ class SupervisorTests(unittest.TestCase):
         with self.assertRaises(SupervisorError):
             self.connect()
         self.assertEqual(self.pool.status(2)["pid"], self.pids[1])
+
+    def test_busy_claim_keeps_supervisor_alive_and_retries(self) -> None:
+        task = _task(1, "item_busy", 0.1)
+        self.store.stage_inbox_task(task)
+        with sqlite3.connect(self.settings["db_path"]) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            status = request(self.pool.path(1), "start")
+            self.assertEqual(status["state"], "idle")
+            self.assertEqual(status["pid"], self.pids[0])
+            self.assertEqual(
+                self.store.get_inbox_task(task_id=task.task_id).state, "pending"
+            )
+        request(self.pool.path(1), "start")
+        self.wait_for(lambda: self.pool.status(1)["state"] == "finished")
+        self.assertEqual(self.pool.status(1)["pid"], self.pids[0])
+        self.assertEqual([event["phase"] for event in self.log()], ["start", "end"])
 
     def test_shutdown_rejects_running_slot_and_ack_checks_task(self) -> None:
         self.store.stage_inbox_task(_task(1, "item_a", 0.3))
