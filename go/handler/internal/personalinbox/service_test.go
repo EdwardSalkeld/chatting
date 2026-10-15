@@ -490,3 +490,28 @@ func TestMessageStatusTracksAllRequiredEffects(t *testing.T) {
 		t.Fatal("pagination failed", response.Body.String())
 	}
 }
+
+func TestEnablingMarkReadDoesNotStrandPlannedMoves(t *testing.T) {
+	service, _, broker, performer := fixture(t)
+	service.Config.MoveNews = true
+	service.Config.NewsFolder = "News"
+	_ = service.ingest(context.Background())
+	message := oneMessage(t, service)
+	broker.result(message.ID, Classification{Category: "news", Summary: "A newsletter", Confidence: .99})
+	if err := service.results(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The operator pauses before the move runs, then turns on mark_news_read.
+	service.Config.DryRun = true
+	if err := service.perform(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service.Config.DryRun = false
+	service.Config.MarkNewsRead = true
+	if err := service.perform(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(performer.calls) != 1 || performer.calls[0].Kind != "move" {
+		t.Fatalf("move stranded by a read that was never planned: %+v", performer.calls)
+	}
+}

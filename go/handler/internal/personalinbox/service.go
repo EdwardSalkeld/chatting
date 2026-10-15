@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -346,11 +347,16 @@ func (service *Service) perform(ctx context.Context) error {
 		if service.Config.DryRun {
 			continue
 		} // Pausing live effects is immediate.
-		// Read must precede move. Never change a UID in the wrong mailbox.
+		// Read must precede move. Never change a UID in the wrong mailbox. A move
+		// planned while mark_news_read was off has no read to wait for; ordering
+		// it against a sibling that will never exist blocks it forever.
 		if effect.Kind == "move" && service.Config.MarkNewsRead {
 			var status string
 			err := service.Store.db.QueryRowContext(ctx, "SELECT json_extract(data,'$.status') FROM inbox_effects WHERE id=?", effect.MessageID+":read").Scan(&status)
-			if err != nil || status != "done" {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil && status != "done" {
 				continue
 			}
 		}
