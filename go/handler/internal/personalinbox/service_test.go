@@ -61,10 +61,16 @@ type fakeIMAP struct {
 	fetched  []uint32
 	read     []uint32
 	moved    []uint32
+	dials    int
+	logouts  int
 }
 
 func (client *fakeIMAP) Login(string, string) error { return nil }
-func (client *fakeIMAP) Logout() error              { return nil }
+func (client *fakeIMAP) Logout() error              { client.logouts++; return nil }
+func (client *fakeIMAP) ExistsUID(uid uint32) (bool, error) {
+	_, ok := client.mail[uid]
+	return ok, nil
+}
 func (client *fakeIMAP) SelectUID(string) (uint32, uint32, error) {
 	return client.validity, client.next, nil
 }
@@ -116,7 +122,7 @@ func fixture(t *testing.T) (*Service, *fakeIMAP, *fakeBroker, *fakePerformer) {
 	client := &fakeIMAP{validity: 42, next: 11, mail: map[uint32][]byte{10: []byte("From: shop@example.com\r\nSubject: Your order\r\n\r\nThanks for your order.")}}
 	broker := &fakeBroker{queues: map[string][]*bbmb.PickedMessage{}, publications: map[string]int{}}
 	performer := &fakePerformer{}
-	service := &Service{Config: Config{Account: "main", Host: "imap.example.com", Port: 993, Username: "ed", Mailbox: "INBOX", Backfill: true, OrdersTarget: "orders", ActionTarget: "actions", DigestTarget: "digest", DigestSeconds: 1, LinearTeam: "team"}, Store: store, Broker: broker, Dial: func(context.Context) (imap.UIDClient, error) { return client, nil }, Performer: performer, Now: func() time.Time { return time.Unix(2000000000, 0) }}
+	service := &Service{Config: Config{Account: "main", Host: "imap.example.com", Port: 993, Username: "ed", Mailbox: "INBOX", Backfill: true, OrdersTarget: "orders", ActionTarget: "actions", DigestTarget: "digest", DigestSeconds: 1, LinearTeam: "team"}, Store: store, Broker: broker, Dial: func(context.Context) (imap.UIDClient, error) { client.dials++; return client, nil }, Performer: performer, Now: func() time.Time { return time.Unix(2000000000, 0) }}
 	return service, client, broker, performer
 }
 func oneMessage(t *testing.T, service *Service) Message {
@@ -513,5 +519,33 @@ func TestEnablingMarkReadDoesNotStrandPlannedMoves(t *testing.T) {
 	}
 	if len(performer.calls) != 1 || performer.calls[0].Kind != "move" {
 		t.Fatalf("move stranded by a read that was never planned: %+v", performer.calls)
+	}
+}
+
+func TestMailboxEffectsShareOneLoginPerPass(t *testing.T) {
+	service, client, broker, _ := fixture(t)
+	service.Config.MoveNews = true
+	service.Config.MarkNewsRead = true
+	service.Config.NewsFolder = "News"
+	service.Performer = &HandlerPerformer{Config: service.Config, Store: service.Store, Dial: service.Dial}
+	_ = service.ingest(context.Background())
+	message := oneMessage(t, service)
+	broker.result(message.ID, Classification{Category: "news", Summary: "A newsletter", Confidence: .99})
+	if err := service.results(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	client.dials, client.logouts = 0, 0
+	for range 2 {
+		if err := service.perform(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(client.read) != 1 || len(client.moved) != 1 {
+		t.Fatalf("read %v moved %v", client.read, client.moved)
+	}
+	// One pass performs the read, the next the move: two passes, two logins,
+	// not one login for every effect.
+	if client.dials != 2 || client.logouts != 2 {
+		t.Fatalf("dials %d logouts %d", client.dials, client.logouts)
 	}
 }

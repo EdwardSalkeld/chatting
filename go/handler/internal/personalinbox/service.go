@@ -52,6 +52,10 @@ func (value Classification) Validate() error {
 type Performer interface {
 	Perform(context.Context, Effect) (string, error)
 }
+
+// A performer holding a mailbox connection between effects gives it back when
+// the pass ends.
+type Releaser interface{ Release() }
 type Dial func(context.Context) (imap.UIDClient, error)
 
 type Service struct {
@@ -342,6 +346,9 @@ func (service *Service) perform(ctx context.Context) error {
 	effects, err := service.Store.effects(ctx, "json_extract(data,'$.status')='pending'")
 	if err != nil {
 		return err
+	}
+	if releaser, ok := service.Performer.(Releaser); ok {
+		defer releaser.Release()
 	}
 	for _, effect := range effects {
 		if service.Config.DryRun {

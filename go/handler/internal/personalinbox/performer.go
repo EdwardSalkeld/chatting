@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 )
 
 type HandlerPerformer struct {
@@ -21,6 +23,31 @@ type HandlerPerformer struct {
 	TelegramBase  string
 	LinearKey     string
 	LinearURL     string
+
+	session imap.UIDClient
+}
+
+// One login per perform pass rather than one per effect: a backfill can plan
+// dozens of mailbox effects at a time, and personal mail providers throttle or
+// lock accounts that reconnect that often. Any failure drops the session so the
+// next effect reconnects rather than reusing a half-broken one.
+func (performer *HandlerPerformer) mailbox(ctx context.Context) (imap.UIDClient, error) {
+	if performer.session != nil {
+		return performer.session, nil
+	}
+	client, err := performer.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	performer.session = client
+	return client, nil
+}
+
+func (performer *HandlerPerformer) Release() {
+	if performer.session != nil {
+		_ = performer.session.Logout()
+		performer.session = nil
+	}
 }
 
 func (performer *HandlerPerformer) post(ctx context.Context, endpoint string, value any, authorization string, result any) error {
@@ -78,13 +105,13 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 			(effect.Kind == "read" && (!performer.Config.MarkNewsRead || effect.Target != performer.Config.Mailbox)) {
 			return "", errors.New("mailbox operation no longer approved")
 		}
-		client, err := performer.Dial(ctx)
+		client, err := performer.mailbox(ctx)
 		if err != nil {
 			return "", errors.New("IMAP unavailable")
 		}
-		defer func() { _ = client.Logout() }()
 		validity, _, err := client.SelectUID(performer.Config.Mailbox)
 		if err != nil {
+			performer.Release()
 			return "", errors.New("IMAP selection failed")
 		}
 		identityBytes, _ := json.Marshal([]any{performer.Config.Account, performer.Config.Host, performer.Config.Port, performer.Config.Username, performer.Config.Mailbox, validity})
@@ -95,15 +122,10 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 		if identity != string(identityBytes) {
 			return "", errors.New("mailbox identity changed; operation blocked")
 		}
-		uids, err := client.SearchUID(effect.UID)
+		exists, err := client.ExistsUID(effect.UID)
 		if err != nil {
+			performer.Release()
 			return "", errors.New("UID existence check failed")
-		}
-		exists := false
-		for _, uid := range uids {
-			if uid == effect.UID {
-				exists = true
-			}
 		}
 		if !exists {
 			return "", errors.New("source message vanished; reconcile move/read outcome")
@@ -114,6 +136,7 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 			err = client.MoveUID(effect.UID, effect.Target)
 		}
 		if err != nil {
+			performer.Release()
 			return "", errors.New("mailbox operation outcome unknown")
 		}
 		return "IMAP OK", nil
