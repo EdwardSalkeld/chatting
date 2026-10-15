@@ -43,9 +43,14 @@ func (service *Service) RegisterRoutes(mux *http.ServeMux) {
 			counts[status] = count
 		}
 		_ = rows.Close()
+		steps, err := service.Store.stepHealth(request.Context())
+		if err != nil {
+			http.Error(writer, "storage unavailable", 503)
+			return
+		}
 		lastSuccess, _ := service.Store.getMeta(request.Context(), "last_success")
 		lastError, _ := service.Store.getMeta(request.Context(), "last_error")
-		_ = json.NewEncoder(writer).Encode(map[string]any{"work_item_id": "personal-inbox:" + service.Config.Account, "dry_run": service.Config.DryRun, "messages": messages, "effects_requiring_attention": effects, "effect_counts": counts, "last_success": lastSuccess, "last_error": lastError})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"work_item_id": "personal-inbox:" + service.Config.Account, "dry_run": service.Config.DryRun, "messages": messages, "effects_requiring_attention": effects, "effect_counts": counts, "last_success": lastSuccess, "last_error": lastError, "steps": steps})
 	})
 	mux.HandleFunc("/api/personal-inbox/effects", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {

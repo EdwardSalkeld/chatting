@@ -102,3 +102,29 @@ func TestMailboxUIDResetPreventsMutation(t *testing.T) {
 		t.Fatal("mailbox mutated after reset")
 	}
 }
+
+func TestLinearCreatesWhenLookupIsUnavailable(t *testing.T) {
+	effect := Effect{ID: "mail:linear", Kind: "linear", Target: "team", Body: "action: Invoice\nPay Friday"}
+	expected := issueID(effect.ID)
+	mutations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		if strings.HasPrefix(payload.Query, "query") {
+			// Linear can answer an unknown UUID with a status rather than a
+			// null issue; that says nothing about whether creation is needed.
+			http.Error(writer, `{"errors":[{"message":"Entity not found"}]}`, http.StatusBadRequest)
+			return
+		}
+		mutations++
+		fmt.Fprintf(writer, `{"data":{"issueCreate":{"success":true,"issue":{"id":%q,"url":"https://linear.app/team/issue/ABC-2"}}}}`, expected)
+	}))
+	defer server.Close()
+	performer := &HandlerPerformer{Config: Config{LinearTeam: "team"}, HTTP: server.Client(), LinearURL: server.URL, LinearKey: "test-key"}
+	receipt, err := performer.Perform(context.Background(), effect)
+	if err != nil || receipt != "https://linear.app/team/issue/ABC-2" || mutations != 1 {
+		t.Fatalf("receipt %q err %v mutations %d", receipt, err, mutations)
+	}
+}

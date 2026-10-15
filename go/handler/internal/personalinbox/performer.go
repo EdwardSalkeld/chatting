@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 )
 
 type HandlerPerformer struct {
@@ -21,6 +23,31 @@ type HandlerPerformer struct {
 	TelegramBase  string
 	LinearKey     string
 	LinearURL     string
+
+	session imap.UIDClient
+}
+
+// One login per perform pass rather than one per effect: a backfill can plan
+// dozens of mailbox effects at a time, and personal mail providers throttle or
+// lock accounts that reconnect that often. Any failure drops the session so the
+// next effect reconnects rather than reusing a half-broken one.
+func (performer *HandlerPerformer) mailbox(ctx context.Context) (imap.UIDClient, error) {
+	if performer.session != nil {
+		return performer.session, nil
+	}
+	client, err := performer.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	performer.session = client
+	return client, nil
+}
+
+func (performer *HandlerPerformer) Release() {
+	if performer.session != nil {
+		_ = performer.session.Logout()
+		performer.session = nil
+	}
 }
 
 func (performer *HandlerPerformer) post(ctx context.Context, endpoint string, value any, authorization string, result any) error {
@@ -78,13 +105,13 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 			(effect.Kind == "read" && (!performer.Config.MarkNewsRead || effect.Target != performer.Config.Mailbox)) {
 			return "", errors.New("mailbox operation no longer approved")
 		}
-		client, err := performer.Dial(ctx)
+		client, err := performer.mailbox(ctx)
 		if err != nil {
 			return "", errors.New("IMAP unavailable")
 		}
-		defer func() { _ = client.Logout() }()
 		validity, _, err := client.SelectUID(performer.Config.Mailbox)
 		if err != nil {
+			performer.Release()
 			return "", errors.New("IMAP selection failed")
 		}
 		identityBytes, _ := json.Marshal([]any{performer.Config.Account, performer.Config.Host, performer.Config.Port, performer.Config.Username, performer.Config.Mailbox, validity})
@@ -95,15 +122,10 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 		if identity != string(identityBytes) {
 			return "", errors.New("mailbox identity changed; operation blocked")
 		}
-		uids, err := client.SearchUID(effect.UID)
+		exists, err := client.ExistsUID(effect.UID)
 		if err != nil {
+			performer.Release()
 			return "", errors.New("UID existence check failed")
-		}
-		exists := false
-		for _, uid := range uids {
-			if uid == effect.UID {
-				exists = true
-			}
 		}
 		if !exists {
 			return "", errors.New("source message vanished; reconcile move/read outcome")
@@ -114,6 +136,7 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 			err = client.MoveUID(effect.UID, effect.Target)
 		}
 		if err != nil {
+			performer.Release()
 			return "", errors.New("mailbox operation outcome unknown")
 		}
 		return "IMAP OK", nil
@@ -135,23 +158,12 @@ func (performer *HandlerPerformer) linear(ctx context.Context, effect Effect) (s
 		return "", errors.New("Linear team no longer approved")
 	}
 	id := issueID(effect.ID)
-	var existing struct {
-		Errors []json.RawMessage `json:"errors"`
-		Data   struct {
-			Issue *struct {
-				ID  string `json:"id"`
-				URL string `json:"url"`
-			} `json:"issue"`
-		} `json:"data"`
+	if url := performer.linearLookup(ctx, id); url != "" {
+		return url, nil
 	}
-	if err := performer.post(ctx, performer.LinearURL, map[string]any{"query": "query($id:String!){issue(id:$id){id url}}", "variables": map[string]string{"id": id}}, performer.LinearKey, &existing); err != nil {
-		return "", err
-	}
-	if existing.Data.Issue != nil && existing.Data.Issue.ID == id {
-		return existing.Data.Issue.URL, nil
-	}
-	// Linear may return a not-found GraphQL error for an absent UUID. A
-	// mutation with the same UUID is safe even then; it cannot create two IDs.
+	// Linear may report an absent UUID as a GraphQL error or an HTTP status, so
+	// a failed lookup says nothing about whether the issue exists. A mutation
+	// with the same UUID is safe either way; it cannot create two IDs.
 	input := map[string]any{"id": id, "teamId": effect.Target, "title": string([]rune(strings.SplitN(effect.Body, "\n", 2)[0])[:min(200, len([]rune(strings.SplitN(effect.Body, "\n", 2)[0])))]), "description": effect.Body}
 	if performer.Config.LinearProject != "" {
 		input["projectId"] = performer.Config.LinearProject
@@ -173,7 +185,33 @@ func (performer *HandlerPerformer) linear(ctx context.Context, effect Effect) (s
 		return "", err
 	}
 	if len(created.Errors) > 0 || !created.Data.Create.Success || created.Data.Create.Issue == nil || created.Data.Create.Issue.ID != id {
+		// The issue may exist already, from this UUID's earlier attempt or from
+		// a creation whose response was lost. Prefer that over a false failure.
+		if url := performer.linearLookup(ctx, id); url != "" {
+			return url, nil
+		}
 		return "", errors.New("Linear creation receipt invalid")
 	}
 	return created.Data.Create.Issue.URL, nil
+}
+
+// An empty result means "no issue we can confirm", whether that is a genuine
+// absence or an unreachable API. Callers treat both the same way.
+func (performer *HandlerPerformer) linearLookup(ctx context.Context, id string) string {
+	var existing struct {
+		Errors []json.RawMessage `json:"errors"`
+		Data   struct {
+			Issue *struct {
+				ID  string `json:"id"`
+				URL string `json:"url"`
+			} `json:"issue"`
+		} `json:"data"`
+	}
+	if err := performer.post(ctx, performer.LinearURL, map[string]any{"query": "query($id:String!){issue(id:$id){id url}}", "variables": map[string]string{"id": id}}, performer.LinearKey, &existing); err != nil {
+		return ""
+	}
+	if existing.Data.Issue == nil || existing.Data.Issue.ID != id {
+		return ""
+	}
+	return existing.Data.Issue.URL
 }

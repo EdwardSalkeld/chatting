@@ -219,18 +219,27 @@ type extractedContent struct {
 	plainTexts  []string
 	htmlTexts   []string
 	attachments []contracts.AttachmentRef
+	skipped     bool
 }
 
 func extractMessageContent(message *mail.Message, uid string, attachmentDir string) (string, []contracts.AttachmentRef) {
+	body, attachments, _ := extractMessageParts(message, uid, attachmentDir)
+	return body, attachments
+}
+
+// The third result reports whether the walk passed over a part it could not
+// read, so a caller that collects no attachments can still tell a fully read
+// message from one it only partly understood.
+func extractMessageParts(message *mail.Message, uid string, attachmentDir string) (string, []contracts.AttachmentRef, bool) {
 	content := extractedContent{}
 	attachmentIndex := 0
 	extractEntityContent(message.Header, message.Body, uid, attachmentDir, &attachmentIndex, &content)
 	for _, candidate := range append(content.plainTexts, content.htmlTexts...) {
 		if strings.TrimSpace(candidate) != "" {
-			return strings.TrimSpace(candidate), content.attachments
+			return strings.TrimSpace(candidate), content.attachments, content.skipped
 		}
 	}
-	return "(empty body)", content.attachments
+	return "(empty body)", content.attachments, content.skipped
 }
 
 func extractEntityContent(
@@ -251,6 +260,7 @@ func extractEntityContent(
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary := params["boundary"]
 		if strings.TrimSpace(boundary) == "" {
+			content.skipped = true
 			return
 		}
 		multiReader := multipart.NewReader(reader, boundary)
@@ -260,6 +270,7 @@ func extractEntityContent(
 				return
 			}
 			if err != nil {
+				content.skipped = true
 				return
 			}
 			extractEntityContent(part.Header, part, uid, attachmentDir, attachmentIndex, content)
@@ -267,12 +278,19 @@ func extractEntityContent(
 	}
 
 	if mediaType == "message/rfc822" {
+		// The body selector returns only one text part, so nested message
+		// content is not guaranteed to reach the personal-inbox classifier.
+		if attachmentDir == "" {
+			content.skipped = true
+		}
 		raw := readDecodedBody(header, reader)
 		if len(raw) == 0 {
+			content.skipped = true
 			return
 		}
 		nested, err := mail.ReadMessage(bytes.NewReader(raw))
 		if err != nil {
+			content.skipped = true
 			return
 		}
 		extractEntityContent(nested.Header, nested.Body, uid, attachmentDir, attachmentIndex, content)
@@ -290,6 +308,9 @@ func extractEntityContent(
 	}
 	if disposition == "attachment" || filename != "" {
 		if attachmentDir == "" {
+			if informationBearing(mediaType, disposition) {
+				content.skipped = true
+			}
 			return
 		}
 		payload := readDecodedBody(header, reader)
@@ -314,7 +335,17 @@ func extractEntityContent(
 		if body := htmlToText(string(readDecodedBody(header, reader))); body != "" {
 			content.htmlTexts = append(content.htmlTexts, body)
 		}
+	default:
+		if informationBearing(mediaType, disposition) {
+			content.skipped = true
+		}
 	}
+}
+
+// A part the walk did not read only leaves the message incomplete when it could
+// have carried meaning. Inline images are decoration: logos and tracking pixels.
+func informationBearing(mediaType string, disposition string) bool {
+	return disposition == "attachment" || !strings.HasPrefix(mediaType, "image/")
 }
 
 func readDecodedBody(header headerGetter, reader io.Reader) []byte {
@@ -435,10 +466,20 @@ func parseReceivedAt(value string, fallback time.Time) time.Time {
 }
 
 type NetClient struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
-	nextID atomic.Uint64
+	conn    net.Conn
+	reader  *bufio.Reader
+	writer  *bufio.Writer
+	nextID  atomic.Uint64
+	timeout time.Duration
+}
+
+// Each command and each read gets the full timeout. A single absolute deadline
+// set at dial would cap the whole session instead, so a long but healthy run of
+// fetches would fail partway through on its own success.
+func (client *NetClient) extendDeadline() {
+	if client.timeout > 0 {
+		_ = client.conn.SetDeadline(time.Now().Add(client.timeout))
+	}
 }
 
 func DialClient(ctx context.Context, config ClientConfig) (Client, error) {
@@ -470,11 +511,9 @@ func dialClient(ctx context.Context, config ClientConfig, sessionDeadline bool) 
 		writer: bufio.NewWriter(conn),
 	}
 	if sessionDeadline {
-		if err := conn.SetDeadline(time.Now().Add(config.Timeout)); err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
+		client.timeout = config.Timeout
 	}
+	client.extendDeadline()
 	if _, err := client.reader.ReadString('\n'); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -513,6 +552,7 @@ func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 	}
 	var payload []byte
 	for {
+		client.extendDeadline()
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
 			return nil, err
@@ -529,6 +569,7 @@ func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 			continue
 		}
 		payload = make([]byte, size)
+		client.extendDeadline()
 		if _, err := io.ReadFull(client.reader, payload); err != nil {
 			return nil, err
 		}
@@ -550,6 +591,7 @@ func (client *NetClient) commandOK(format string, args ...any) ([]string, error)
 	}
 	lines := []string{}
 	for {
+		client.extendDeadline()
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
 			return lines, err
@@ -566,6 +608,7 @@ func (client *NetClient) commandOK(format string, args ...any) ([]string, error)
 }
 
 func (client *NetClient) writeCommand(tag string, format string, args ...any) error {
+	client.extendDeadline()
 	if _, err := fmt.Fprintf(client.writer, tag+" "+format+"\r\n", args...); err != nil {
 		return err
 	}

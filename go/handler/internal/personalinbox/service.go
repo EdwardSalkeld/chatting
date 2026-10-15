@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,10 @@ func (value Classification) Validate() error {
 type Performer interface {
 	Perform(context.Context, Effect) (string, error)
 }
+
+// A performer holding a mailbox connection between effects gives it back when
+// the pass ends.
+type Releaser interface{ Release() }
 type Dial func(context.Context) (imap.UIDClient, error)
 
 type Service struct {
@@ -107,12 +112,27 @@ func (service *Service) Cycle(ctx context.Context) error {
 			return errors.New("personal inbox queue unavailable")
 		}
 	}
-	// Recovery and notifications continue even if IMAP is temporarily down.
+	// Recovery and notifications continue even if IMAP is temporarily down, so
+	// each step records its own health: one failing step must not make the
+	// whole workflow look dead to whoever is watching the status endpoint.
+	steps := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"results", service.results}, {"ingest", service.ingest}, {"publish", service.publish},
+		{"digest", service.digest}, {"perform", service.perform},
+	}
+	stamp := service.Now().UTC().Format(time.RFC3339)
 	var failures []error
-	for _, step := range []func(context.Context) error{service.results, service.ingest, service.publish, service.digest, service.perform} {
-		if err := step(ctx); err != nil {
+	for _, step := range steps {
+		err := step.run(ctx)
+		if err != nil {
 			failures = append(failures, err)
+			_ = service.Store.putMeta(ctx, "step_error:"+step.name, err.Error())
+			continue
 		}
+		_ = service.Store.putMeta(ctx, "step_success:"+step.name, stamp)
+		_ = service.Store.putMeta(ctx, "step_error:"+step.name, "")
 	}
 	return errors.Join(failures...)
 }
@@ -342,15 +362,24 @@ func (service *Service) perform(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if releaser, ok := service.Performer.(Releaser); ok {
+		defer releaser.Release()
+	}
+	var failures []error
 	for _, effect := range effects {
 		if service.Config.DryRun {
 			continue
 		} // Pausing live effects is immediate.
-		// Read must precede move. Never change a UID in the wrong mailbox.
+		// Read must precede move. Never change a UID in the wrong mailbox. A move
+		// planned while mark_news_read was off has no read to wait for; ordering
+		// it against a sibling that will never exist blocks it forever.
 		if effect.Kind == "move" && service.Config.MarkNewsRead {
 			var status string
 			err := service.Store.db.QueryRowContext(ctx, "SELECT json_extract(data,'$.status') FROM inbox_effects WHERE id=?", effect.MessageID+":read").Scan(&status)
-			if err != nil || status != "done" {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil && status != "done" {
 				continue
 			}
 		}
@@ -367,6 +396,7 @@ func (service *Service) perform(ctx context.Context) error {
 			effect.Status = "uncertain"
 			effect.Note = "external outcome unknown; inspect destination before resolving"
 			log.Printf("personal_inbox_effect_uncertain id=%s kind=%s", effect.ID, effect.Kind)
+			failures = append(failures, errors.New("personal inbox effect outcome uncertain"))
 		} else {
 			effect.Status = "done"
 			effect.Receipt = receipt
@@ -376,5 +406,5 @@ func (service *Service) perform(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

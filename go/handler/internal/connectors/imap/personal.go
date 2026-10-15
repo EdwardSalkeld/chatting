@@ -17,6 +17,7 @@ type UIDClient interface {
 	Login(string, string) error
 	SelectUID(string) (uint32, uint32, error)
 	SearchUID(uint32) ([]uint32, error)
+	ExistsUID(uint32) (bool, error)
 	PeekUID(uint32) ([]byte, error)
 	MarkReadUID(uint32) error
 	MoveUID(uint32, string) error
@@ -103,6 +104,33 @@ func (client *NetClient) SearchUID(start uint32) ([]uint32, error) {
 	return uids, nil
 }
 
+// Existence of one UID, asked as a closed range. Reusing the open-ended search
+// would make the server return every UID from here to the end of the mailbox.
+func (client *NetClient) ExistsUID(uid uint32) (bool, error) {
+	if uid == 0 {
+		return false, errors.New("zero UID")
+	}
+	lines, err := client.commandOK("UID SEARCH UID %d:%d", uid, uid)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "* SEARCH") {
+			continue
+		}
+		for _, field := range strings.Fields(strings.TrimPrefix(line, "* SEARCH")) {
+			value, err := strconv.ParseUint(field, 10, 32)
+			if err != nil {
+				return false, errors.New("invalid UID search response")
+			}
+			if uint32(value) == uid {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func (client *NetClient) PeekUID(uid uint32) ([]byte, error) {
 	if uid == 0 {
 		return nil, errors.New("zero UID")
@@ -113,6 +141,7 @@ func (client *NetClient) PeekUID(uid uint32) ([]byte, error) {
 	}
 	var payload []byte
 	for {
+		client.extendDeadline()
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
 			return nil, err
@@ -130,6 +159,7 @@ func (client *NetClient) PeekUID(uid uint32) ([]byte, error) {
 				return nil, ErrMessageTooLarge
 			}
 			payload = make([]byte, size)
+			client.extendDeadline()
 			if _, err := io.ReadFull(client.reader, payload); err != nil {
 				return nil, err
 			}
@@ -178,13 +208,13 @@ func ParseText(raw []byte) TextMessage {
 	if err != nil {
 		return TextMessage{Subject: "Unreadable email", Body: "Message could not be parsed; inspect original inbox.", Incomplete: true}
 	}
-	body, _ := extractMessageContent(message, "", "")
+	body, _, skipped := extractMessageParts(message, "", "")
 	// v1 does not inspect attachments, encrypted mail, or calendar invitations.
 	// Surface these rather than quietly filing information we could not read.
-	incomplete := bytes.Contains(bytes.ToLower(raw), []byte("content-disposition: attachment")) ||
-		bytes.Contains(bytes.ToLower(raw), []byte("filename=")) ||
-		bytes.Contains(bytes.ToLower(raw), []byte("application/")) ||
-		bytes.Contains(bytes.ToLower(raw), []byte("text/calendar")) || body == "(empty body)"
+	// The signal comes from the MIME walk itself: scanning the raw bytes for
+	// "filename=" or "application/" also matches ordinary HTML bodies and
+	// tracking links, which sent nearly every newsletter to review.
+	incomplete := skipped || body == "(empty body)"
 	if len(body) > 60000 {
 		body = string([]rune(body)[:min(len([]rune(body)), 15000)])
 		incomplete = true

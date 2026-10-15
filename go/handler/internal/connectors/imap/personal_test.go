@@ -78,3 +78,28 @@ func TestPersonalParseNeverWritesAttachments(t *testing.T) {
 		t.Fatalf("%q %v", quoted, err)
 	}
 }
+
+func TestOrdinaryHTMLMailIsNotIncomplete(t *testing.T) {
+	// An inline logo, a schema.org block and a tracking link all used to match
+	// the raw-bytes scan and push routine mail into the review path.
+	newsletter := []byte("From: News <news@example.com>\r\nSubject: Weekly\r\n" +
+		"Content-Type: multipart/related; boundary=r\r\n\r\n--r\r\n" +
+		"Content-Type: text/html\r\n\r\n" +
+		"<script type=\"application/ld+json\">{}</script><a href=\"https://x.test/d?filename=offer.pdf\">Offer</a>\r\n" +
+		"--r\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=logo.png\r\n\r\npng\r\n--r--\r\n")
+	if parsed := ParseText(newsletter); parsed.Incomplete {
+		t.Fatalf("ordinary newsletter held for review: %+v", parsed)
+	}
+	invite := []byte("From: A <a@example.com>\r\nSubject: Invite\r\n" +
+		"Content-Type: multipart/mixed; boundary=c\r\n\r\n--c\r\n" +
+		"Content-Type: text/plain\r\n\r\nSee attached\r\n--c\r\n" +
+		"Content-Type: text/calendar; method=REQUEST\r\n\r\nBEGIN:VCALENDAR\r\n--c--\r\n")
+	if parsed := ParseText(invite); !parsed.Incomplete {
+		t.Fatalf("calendar invitation filed without review: %+v", parsed)
+	}
+	encrypted := []byte("From: A <a@example.com>\r\nSubject: Secret\r\n" +
+		"Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name=smime.p7m\r\n\r\ndata\r\n")
+	if parsed := ParseText(encrypted); !parsed.Incomplete {
+		t.Fatalf("encrypted mail filed without review: %+v", parsed)
+	}
+}

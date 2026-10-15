@@ -150,6 +150,10 @@ These routes exist only when the connector is enabled, on the existing
 - `GET /api/personal-inbox`: first 100 messages, their derived status, pending/
   uncertain effects, effect counts, last successful cycle and last cycle error.
   Pass `?after=<last message id>` to page through messages in ID order.
+  `steps` reports the last success and last error of each cycle step
+  (`results`, `ingest`, `publish`, `digest`, `perform`) separately. An IMAP
+  outage holds back `last_success` for the whole cycle, so read `steps` to tell
+  a dead workflow from one that is only failing to ingest.
 - `GET /api/personal-inbox/effects`: first 100 effects, including durable receipts
   and previews. Pass `?after=<last effect id>` for subsequent pages.
 - `POST /api/personal-inbox/resolve`: body with `id`, `outcome` (`done` or `retry`),
