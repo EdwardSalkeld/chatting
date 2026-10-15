@@ -27,7 +27,7 @@ from app.broker.bbmb_client import BBMBQueueAdapter
 def mail_task():
     return {
         "kind": "personal_inbox.classify.v1",
-        "message_id": "a" * 64,
+        "message_id": "Stm4-9ebGwd3",
         "work_item_id": "personal-inbox:main",
         "mail": {
             "from": "shop@example.com",
@@ -189,7 +189,7 @@ class PersonalInboxTests(unittest.TestCase):
         broker = Broker()
         result = {
             "kind": "personal_inbox.result.v1",
-            "message_id": "a" * 64,
+            "message_id": "Stm4-9ebGwd3",
             "classification": {
                 "category": "order",
                 "summary": "A receipt",

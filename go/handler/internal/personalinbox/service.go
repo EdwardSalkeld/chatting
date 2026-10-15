@@ -3,22 +3,26 @@ package personalinbox
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
-	"sort"
-	"strconv"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/jmap"
+)
+
+// How much of a body is handed to the classifier, and how many new messages one
+// cycle takes on. Both bound a single pass, not the backlog: whatever is left
+// arrives on the next cycle.
+const (
+	MaxBodyBytes   = 60000
+	ChangesPerPass = 25
+	BackfillLimit  = 500
 )
 
 type Broker interface {
@@ -26,6 +30,28 @@ type Broker interface {
 	PublishJSON(context.Context, string, map[string]any) (string, error)
 	PickupJSON(context.Context, string, int, int) (*bbmb.PickedMessage, error)
 	Ack(context.Context, string, string) error
+}
+
+// Mailbox is the JMAP surface this workflow needs. Nothing here can send mail,
+// delete it, or reach any mailbox the token does not already cover.
+type Mailbox interface {
+	AccountID(context.Context) (string, error)
+	Mailboxes(context.Context) ([]jmap.Mailbox, error)
+	EmailState(context.Context) (string, error)
+	Changes(context.Context, string, int) (jmap.Changes, error)
+	InMailbox(context.Context, string, int) ([]string, error)
+	Emails(context.Context, []string, int) ([]jmap.Email, error)
+	File(context.Context, string, string, bool) error
+}
+
+// Mail is the classifier's view of a message: text only, no attachments, no
+// headers beyond the ones shown here.
+type Mail struct {
+	From       string `json:"from"`
+	Subject    string `json:"subject"`
+	Date       string `json:"date"`
+	Body       string `json:"body"`
+	Incomplete bool   `json:"incomplete"`
 }
 
 type Classification struct {
@@ -53,19 +79,39 @@ type Performer interface {
 	Perform(context.Context, Effect) (string, error)
 }
 
-// A performer holding a mailbox connection between effects gives it back when
-// the pass ends.
-type Releaser interface{ Release() }
-type Dial func(context.Context) (imap.UIDClient, error)
-
 type Service struct {
 	Config    Config
 	Store     *Store
 	Broker    Broker
-	Dial      Dial
+	Mail      Mailbox
+	Folders   *Resolver
 	Performer Performer
 	Now       func() time.Time
-	mu        sync.Mutex
+
+	mu      sync.Mutex
+	account string
+}
+
+func limitRunes(value string, max int) string {
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max])
+}
+
+// mail converts a JMAP message into the classifier's view. Attachments and
+// degraded bodies are surfaced rather than quietly filed: the server tells us
+// outright, so there is no heuristic here.
+func mail(email jmap.Email) Mail {
+	body, degraded := email.Body()
+	return Mail{
+		From:       limitRunes(email.Sender(), 300),
+		Subject:    limitRunes(email.Subject, 300),
+		Date:       limitRunes(email.ReceivedAt, 100),
+		Body:       limitRunes(body, MaxBodyBytes),
+		Incomplete: degraded || email.HasAttachment,
+	}
 }
 
 func strictJSON(raw []byte, value any) error {
@@ -112,7 +158,14 @@ func (service *Service) Cycle(ctx context.Context) error {
 			return errors.New("personal inbox queue unavailable")
 		}
 	}
-	// Recovery and notifications continue even if IMAP is temporarily down, so
+	if service.account == "" {
+		account, err := service.Mail.AccountID(ctx)
+		if err != nil {
+			return errors.New("personal inbox account unavailable")
+		}
+		service.account = account
+	}
+	// Recovery and notifications continue even if the mail server is down, so
 	// each step records its own health: one failing step must not make the
 	// whole workflow look dead to whoever is watching the status endpoint.
 	steps := []struct {
@@ -137,89 +190,92 @@ func (service *Service) Cycle(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func (service *Service) ingest(ctx context.Context) error {
-	client, err := service.Dial(ctx)
-	if err != nil {
-		return errors.New("personal inbox IMAP unavailable")
-	}
-	defer func() { _ = client.Logout() }()
-	validity, next, err := client.SelectUID(service.Config.Mailbox)
-	if err != nil {
-		return errors.New("personal inbox mailbox selection failed")
-	}
-	stored, err := service.Store.getMeta(ctx, "identity")
-	if err != nil {
-		return err
-	}
-	identityBytes, _ := json.Marshal([]any{service.Config.Account, service.Config.Host, service.Config.Port, service.Config.Username, service.Config.Mailbox, validity})
-	identity := string(identityBytes)
-	if stored == "" {
-		cursor := uint32(0)
-		if !service.Config.Backfill {
-			cursor = next - 1
-		}
-		// Baseline and identity must commit together, including first startup.
-		tx, err := service.Store.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
-		for key, value := range map[string]string{"identity": identity, "cursor": strconv.FormatUint(uint64(cursor), 10)} {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO inbox_meta VALUES (?,?)", key, value); err != nil {
-				return err
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	} else if stored != identity {
-		return errors.New("personal inbox identity/UIDVALIDITY changed: ingestion paused; operator must reconcile")
-	}
-	value, err := service.Store.getMeta(ctx, "cursor")
-	if err != nil {
-		return err
-	}
-	cursor, err := strconv.ParseUint(value, 10, 32)
-	if err != nil {
-		return err
-	}
-	if cursor == uint64(^uint32(0)) {
+func (service *Service) store(ctx context.Context, inbox string, ids []string) error {
+	if len(ids) == 0 {
 		return nil
 	}
-	uids, err := client.SearchUID(uint32(cursor + 1))
+	emails, err := service.Mail.Emails(ctx, ids, MaxBodyBytes)
 	if err != nil {
-		return errors.New("personal inbox UID search failed")
+		return errors.New("personal inbox fetch failed")
 	}
-	sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
-	count := 0
-	for _, uid := range uids {
-		if uint64(uid) <= cursor {
+	for _, email := range emails {
+		// Mail that arrived and was filed elsewhere before we looked is outside
+		// this workflow's view, exactly as it was under IMAP.
+		if !email.MailboxIDs[inbox] {
 			continue
 		}
-		if count >= 25 {
-			break
-		}
-		raw, err := client.PeekUID(uid)
-		oversized := errors.Is(err, imap.ErrMessageTooLarge)
-		if err != nil && !oversized {
-			return fmt.Errorf("personal inbox fetch failed at UID %d; cursor retained", uid)
-		}
-		// A vanished message still receives a durable review record.
-		hash := sha256.Sum256([]byte(identity + ":" + strconv.FormatUint(uint64(uid), 10)))
-		message := Message{ID: hex.EncodeToString(hash[:]), UID: uid, Mail: imap.ParseText(raw), Created: service.Now().Unix()}
-		if oversized {
-			message.Mail = imap.TextMessage{Subject: "Large email requires review", Body: "Message exceeded the safe fetch limit; inspect original inbox.", Incomplete: true}
-		}
-		if err := service.Store.saveMessage(ctx, message, nil, strconv.FormatUint(uint64(uid), 10)); err != nil {
+		message := Message{ID: email.ID, ThreadID: email.ThreadID, Mail: mail(email), Created: service.Now().Unix()}
+		if err := service.Store.insertMessage(ctx, message); err != nil {
 			return err
 		}
-		cursor = uint64(uid)
-		count++
-		if oversized {
-			break
-		} // The oversized literal closed the IMAP session.
 	}
 	return nil
+}
+
+func (service *Service) ingest(ctx context.Context) error {
+	inbox, err := service.Folders.Inbox(ctx)
+	if err != nil {
+		return errors.New("personal inbox mailbox unavailable")
+	}
+	state, err := service.Store.getMeta(ctx, "email_state")
+	if err != nil {
+		return err
+	}
+	if state == "" {
+		return service.baseline(ctx, inbox)
+	}
+	changes, err := service.Mail.Changes(ctx, state, ChangesPerPass)
+	if errors.Is(err, jmap.ErrCannotCalculateChanges) {
+		// The server can no longer answer from this state. Re-baseline instead
+		// of replaying the whole mailbox as if it had just arrived.
+		log.Printf("personal_inbox_state_expired")
+		_ = service.Store.putMeta(ctx, "state_reset_at", service.Now().UTC().Format(time.RFC3339))
+		return service.baselineAt(ctx)
+	}
+	if err != nil {
+		return errors.New("personal inbox change feed unavailable")
+	}
+	// Every created id in this batch is stored before the state advances, so an
+	// interruption replays them; inserts ignore ids already held.
+	if err := service.store(ctx, inbox, changes.Created); err != nil {
+		return err
+	}
+	if changes.NewState == "" {
+		return errors.New("personal inbox change feed returned no new state")
+	}
+	return service.Store.putMeta(ctx, "email_state", changes.NewState)
+}
+
+// baselineAt records where the mailbox is now and ingests nothing before it.
+func (service *Service) baselineAt(ctx context.Context) error {
+	state, err := service.Mail.EmailState(ctx)
+	if err != nil {
+		return errors.New("personal inbox state unavailable")
+	}
+	return service.Store.putMeta(ctx, "email_state", state)
+}
+
+func (service *Service) baseline(ctx context.Context, inbox string) error {
+	if !service.Config.Backfill {
+		return service.baselineAt(ctx)
+	}
+	// Read the state first: anything arriving during the backfill then shows up
+	// as a change rather than being skipped.
+	state, err := service.Mail.EmailState(ctx)
+	if err != nil {
+		return errors.New("personal inbox state unavailable")
+	}
+	ids, err := service.Mail.InMailbox(ctx, inbox, BackfillLimit)
+	if err != nil {
+		return errors.New("personal inbox backfill query failed")
+	}
+	for start := 0; start < len(ids); start += ChangesPerPass {
+		end := min(start+ChangesPerPass, len(ids))
+		if err := service.store(ctx, inbox, ids[start:end]); err != nil {
+			return err
+		}
+	}
+	return service.Store.putMeta(ctx, "email_state", state)
 }
 
 func (service *Service) publish(ctx context.Context) error {
@@ -234,7 +290,7 @@ func (service *Service) publish(ctx context.Context) error {
 			return errors.New("personal inbox task publish failed")
 		}
 		message.Published = service.Now().Unix()
-		if err := service.Store.saveMessage(ctx, message, nil, ""); err != nil {
+		if err := service.Store.saveMessage(ctx, message, nil); err != nil {
 			return err
 		}
 	}
@@ -289,7 +345,7 @@ func (service *Service) results(ctx context.Context) error {
 					classification.Category = "review"
 				}
 				message.Classification = &classification
-				if err := service.Store.saveMessage(ctx, message, service.plan(message), ""); err != nil {
+				if err := service.Store.saveMessage(ctx, message, service.plan(message)); err != nil {
 					return err
 				}
 			}
@@ -301,8 +357,28 @@ func (service *Service) results(ctx context.Context) error {
 	return nil
 }
 
+// link points at the message in the mail client. The folder segment is
+// decorative — Fastmail resolves by thread and message id — so a link keeps
+// working after the message is filed, or moved again by hand.
+func (service *Service) link(message Message, folder string) string {
+	if service.Config.LinkTemplate == "" || message.ThreadID == "" || service.account == "" {
+		return ""
+	}
+	if folder == "" {
+		folder = "Inbox"
+	}
+	return strings.NewReplacer(
+		"{folder}", url.PathEscape(folder),
+		"{thread}", url.PathEscape(message.ThreadID),
+		"{email}", url.PathEscape(message.ID),
+		"{account}", url.PathEscape(strings.TrimPrefix(service.account, "u")),
+		"{account_id}", url.PathEscape(service.account),
+	).Replace(service.Config.LinkTemplate)
+}
+
 func (service *Service) plan(message Message) []Effect {
 	classification := message.Classification
+	folder := service.Config.Folder(classification.Category)
 	body := classification.Category + ": " + message.Mail.Subject + "\nFrom: " + message.Mail.From + "\n" + classification.Summary
 	if classification.Action != "" {
 		body += "\nAction: " + classification.Action
@@ -310,9 +386,13 @@ func (service *Service) plan(message Message) []Effect {
 	if classification.Deadline != "" {
 		body += "\nDeadline: " + classification.Deadline
 	}
-	body += "\nMail reference: " + message.ID
-	if len([]rune(body)) > 1900 {
-		body = string([]rune(body)[:1800]) + "\nMail reference: " + message.ID
+	if len([]rune(body)) > 1800 {
+		body = limitRunes(body, 1800)
+	}
+	if link := service.link(message, folder); link != "" {
+		body += "\n" + link
+	} else {
+		body += "\nMail reference: " + message.ID
 	}
 	effects := []Effect{}
 	add := func(kind, target string) {
@@ -320,16 +400,10 @@ func (service *Service) plan(message Message) []Effect {
 		if service.Config.DryRun {
 			status = "preview"
 		}
-		effects = append(effects, Effect{ID: message.ID + ":" + kind, MessageID: message.ID, Kind: kind, Target: target, Body: body, UID: message.UID, Status: status})
+		effects = append(effects, Effect{ID: message.ID + ":" + kind, MessageID: message.ID, Kind: kind,
+			Category: classification.Category, Target: target, Body: body, Status: status})
 	}
 	switch classification.Category {
-	case "news":
-		if service.Config.MarkNewsRead {
-			add("read", service.Config.Mailbox)
-		}
-		if service.Config.MoveNews {
-			add("move", service.Config.NewsFolder)
-		}
 	case "order":
 		add("telegram", service.Config.OrdersTarget)
 	case "action":
@@ -337,6 +411,10 @@ func (service *Service) plan(message Message) []Effect {
 		add("linear", service.Config.LinearTeam)
 	case "review":
 		add("telegram", service.Config.ActionTarget)
+	}
+	// News is relayed by the digest rather than one alert per newsletter.
+	if folder != "" {
+		add("file", folder)
 	}
 	return effects
 }
@@ -362,29 +440,13 @@ func (service *Service) perform(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if releaser, ok := service.Performer.(Releaser); ok {
-		defer releaser.Release()
-	}
 	var failures []error
 	for _, effect := range effects {
 		if service.Config.DryRun {
 			continue
 		} // Pausing live effects is immediate.
-		// Read must precede move. Never change a UID in the wrong mailbox. A move
-		// planned while mark_news_read was off has no read to wait for; ordering
-		// it against a sibling that will never exist blocks it forever.
-		if effect.Kind == "move" && service.Config.MarkNewsRead {
-			var status string
-			err := service.Store.db.QueryRowContext(ctx, "SELECT json_extract(data,'$.status') FROM inbox_effects WHERE id=?", effect.MessageID+":read").Scan(&status)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-			if err == nil && status != "done" {
-				continue
-			}
-		}
-		// Stop previously planned changes too when the operator disables them.
-		if (effect.Kind == "move" && !service.Config.MoveNews) || (effect.Kind == "read" && !service.Config.MarkNewsRead) {
+		// Stop a previously planned filing when the operator clears the folder.
+		if effect.Kind == "file" && service.Config.Folder(effect.Category) != effect.Target {
 			continue
 		}
 		effect.Status = "inflight"

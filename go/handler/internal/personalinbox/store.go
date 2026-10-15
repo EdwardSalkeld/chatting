@@ -12,27 +12,26 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 	_ "modernc.org/sqlite"
 )
 
 type Message struct {
-	ID             string           `json:"id"`
-	UID            uint32           `json:"uid"`
-	Mail           imap.TextMessage `json:"mail"`
-	Classification *Classification  `json:"classification,omitempty"`
-	Created        int64            `json:"created"`
-	Published      int64            `json:"published"`
-	DigestID       string           `json:"digest_id,omitempty"`
+	ID             string          `json:"id"`
+	ThreadID       string          `json:"thread_id,omitempty"`
+	Mail           Mail            `json:"mail"`
+	Classification *Classification `json:"classification,omitempty"`
+	Created        int64           `json:"created"`
+	Published      int64           `json:"published"`
+	DigestID       string          `json:"digest_id,omitempty"`
 }
 
 type Effect struct {
 	ID        string `json:"id"`
 	MessageID string `json:"message_id"`
 	Kind      string `json:"kind"`
+	Category  string `json:"category,omitempty"`
 	Target    string `json:"target"`
 	Body      string `json:"body"`
-	UID       uint32 `json:"uid"`
 	Status    string `json:"status"`
 	Receipt   string `json:"receipt,omitempty"`
 	Note      string `json:"note,omitempty"`
@@ -140,7 +139,7 @@ func saveJSON(ctx context.Context, tx *sql.Tx, table, id string, value any) erro
 	return err
 }
 
-func (store *Store) saveMessage(ctx context.Context, message Message, effects []Effect, cursor string) error {
+func (store *Store) saveMessage(ctx context.Context, message Message, effects []Effect) error {
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -154,12 +153,18 @@ func (store *Store) saveMessage(ctx context.Context, message Message, effects []
 			return err
 		}
 	}
-	if cursor != "" {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO inbox_meta VALUES ('cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", cursor); err != nil {
-			return err
-		}
-	}
 	return tx.Commit()
+}
+
+// insertMessage keeps the first record of a message. A replayed change feed
+// must not overwrite a classification that has already been acted on.
+func (store *Store) insertMessage(ctx context.Context, message Message) error {
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	_, err = store.db.ExecContext(ctx, "INSERT OR IGNORE INTO inbox_messages (id,data) VALUES (?,?)", message.ID, string(encoded))
+	return err
 }
 
 func (store *Store) messages(ctx context.Context, predicate string, args ...any) ([]Message, error) {

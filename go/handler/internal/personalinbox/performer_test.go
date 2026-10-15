@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/jmap"
 )
 
 func TestLinearRetryReconcilesStableIssueID(t *testing.T) {
@@ -85,46 +87,64 @@ func TestTelegramIsPlainTextAndFixedDestination(t *testing.T) {
 	}
 }
 
-func TestMailboxUIDResetPreventsMutation(t *testing.T) {
-	service, client, _, _ := fixture(t)
-	_ = service.ingest(context.Background())
-	service.Config.MoveNews = true
-	service.Config.MarkNewsRead = true
-	service.Config.NewsFolder = "News"
-	performer := &HandlerPerformer{Config: service.Config, Store: service.Store, Dial: service.Dial}
-	client.validity++
-	for _, effect := range []Effect{{Kind: "move", UID: 10, Target: "News"}, {Kind: "read", UID: 10, Target: "INBOX"}} {
-		if _, err := performer.Perform(context.Background(), effect); err == nil {
-			t.Fatal("reused UID changed")
-		}
+func TestFilingResolvesTheFolderAndMarksReadTogether(t *testing.T) {
+	service, mail, _, _ := fixture(t)
+	performer := &HandlerPerformer{Config: service.Config, Mail: mail, Folders: service.Folders}
+	receipt, err := performer.Perform(context.Background(),
+		Effect{Kind: "file", MessageID: "Stm4", Category: "news", Target: "Triage/News"})
+	if err != nil || receipt != "filed:T2" {
+		t.Fatalf("receipt %q err %v", receipt, err)
 	}
-	if len(client.read)+len(client.moved) != 0 {
-		t.Fatal("mailbox mutated after reset")
+	if len(mail.filed) != 1 || mail.filed[0] != (filing{Email: "Stm4", Mailbox: "T2", MarkRead: true}) {
+		t.Fatalf("%+v", mail.filed)
 	}
 }
 
-func TestLinearCreatesWhenLookupIsUnavailable(t *testing.T) {
-	effect := Effect{ID: "mail:linear", Kind: "linear", Target: "team", Body: "action: Invoice\nPay Friday"}
-	expected := issueID(effect.ID)
-	mutations := 0
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var payload struct {
-			Query string `json:"query"`
-		}
-		_ = json.NewDecoder(request.Body).Decode(&payload)
-		if strings.HasPrefix(payload.Query, "query") {
-			// Linear can answer an unknown UUID with a status rather than a
-			// null issue; that says nothing about whether creation is needed.
-			http.Error(writer, `{"errors":[{"message":"Entity not found"}]}`, http.StatusBadRequest)
-			return
-		}
-		mutations++
-		fmt.Fprintf(writer, `{"data":{"issueCreate":{"success":true,"issue":{"id":%q,"url":"https://linear.app/team/issue/ABC-2"}}}}`, expected)
-	}))
-	defer server.Close()
-	performer := &HandlerPerformer{Config: Config{LinearTeam: "team"}, HTTP: server.Client(), LinearURL: server.URL, LinearKey: "test-key"}
-	receipt, err := performer.Perform(context.Background(), effect)
-	if err != nil || receipt != "https://linear.app/team/issue/ABC-2" || mutations != 1 {
-		t.Fatalf("receipt %q err %v mutations %d", receipt, err, mutations)
+func TestFilingRefusesADestinationConfigurationNoLongerNames(t *testing.T) {
+	service, mail, _, _ := fixture(t)
+	performer := &HandlerPerformer{Config: service.Config, Mail: mail, Folders: service.Folders}
+	// Planned for one folder, configuration now names another.
+	_, err := performer.Perform(context.Background(),
+		Effect{Kind: "file", MessageID: "Stm4", Category: "news", Target: "Triage/Orders"})
+	if err == nil {
+		t.Fatal("filed into an unapproved destination")
+	}
+	if len(mail.filed) != 0 {
+		t.Fatalf("mailbox changed anyway: %+v", mail.filed)
+	}
+}
+
+func TestAmbiguousFolderNameIsRefused(t *testing.T) {
+	service, mail, _, _ := fixture(t)
+	mail.boxes = append(mail.boxes, jmap.Mailbox{ID: "T9", Name: "News", ParentID: "T1"})
+	service.Folders.Forget()
+	service.Config.Folders = map[string]string{"news": "News"}
+	performer := &HandlerPerformer{Config: service.Config, Mail: mail, Folders: service.Folders}
+	if _, err := performer.Perform(context.Background(),
+		Effect{Kind: "file", MessageID: "Stm4", Category: "news", Target: "News"}); err == nil {
+		t.Fatal("ambiguous folder name accepted")
+	}
+	if len(mail.filed) != 0 {
+		t.Fatalf("filed despite ambiguity: %+v", mail.filed)
+	}
+}
+
+func TestResolverReportsAmbiguityAndAbsence(t *testing.T) {
+	service, mail, _, _ := fixture(t)
+	mail.boxes = append(mail.boxes, jmap.Mailbox{ID: "T9", Name: "News", ParentID: "T1"})
+	service.Folders.Forget()
+	ctx := context.Background()
+	if _, err := service.Folders.ID(ctx, "News"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("want ambiguity reported, got %v", err)
+	}
+	// The full path still resolves even when the leaf name does not.
+	if id, err := service.Folders.ID(ctx, "Triage/Orders"); err != nil || id != "T3" {
+		t.Fatalf("id %q err %v", id, err)
+	}
+	if _, err := service.Folders.ID(ctx, "Nope"); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("want absence reported, got %v", err)
+	}
+	if err := service.Folders.CheckConfigured(ctx, Config{Folders: map[string]string{"news": "Nope"}}); err == nil {
+		t.Fatal("startup check passed a missing folder")
 	}
 }
