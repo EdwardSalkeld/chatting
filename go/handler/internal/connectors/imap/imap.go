@@ -461,10 +461,20 @@ func parseReceivedAt(value string, fallback time.Time) time.Time {
 }
 
 type NetClient struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
-	nextID atomic.Uint64
+	conn    net.Conn
+	reader  *bufio.Reader
+	writer  *bufio.Writer
+	nextID  atomic.Uint64
+	timeout time.Duration
+}
+
+// Each command and each read gets the full timeout. A single absolute deadline
+// set at dial would cap the whole session instead, so a long but healthy run of
+// fetches would fail partway through on its own success.
+func (client *NetClient) extendDeadline() {
+	if client.timeout > 0 {
+		_ = client.conn.SetDeadline(time.Now().Add(client.timeout))
+	}
 }
 
 func DialClient(ctx context.Context, config ClientConfig) (Client, error) {
@@ -496,11 +506,9 @@ func dialClient(ctx context.Context, config ClientConfig, sessionDeadline bool) 
 		writer: bufio.NewWriter(conn),
 	}
 	if sessionDeadline {
-		if err := conn.SetDeadline(time.Now().Add(config.Timeout)); err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
+		client.timeout = config.Timeout
 	}
+	client.extendDeadline()
 	if _, err := client.reader.ReadString('\n'); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -539,6 +547,7 @@ func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 	}
 	var payload []byte
 	for {
+		client.extendDeadline()
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
 			return nil, err
@@ -555,6 +564,7 @@ func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 			continue
 		}
 		payload = make([]byte, size)
+		client.extendDeadline()
 		if _, err := io.ReadFull(client.reader, payload); err != nil {
 			return nil, err
 		}
@@ -576,6 +586,7 @@ func (client *NetClient) commandOK(format string, args ...any) ([]string, error)
 	}
 	lines := []string{}
 	for {
+		client.extendDeadline()
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
 			return lines, err
@@ -592,6 +603,7 @@ func (client *NetClient) commandOK(format string, args ...any) ([]string, error)
 }
 
 func (client *NetClient) writeCommand(tag string, format string, args ...any) error {
+	client.extendDeadline()
 	if _, err := fmt.Fprintf(client.writer, tag+" "+format+"\r\n", args...); err != nil {
 		return err
 	}

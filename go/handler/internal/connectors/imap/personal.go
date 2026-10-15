@@ -113,6 +113,7 @@ func (client *NetClient) PeekUID(uid uint32) ([]byte, error) {
 	}
 	var payload []byte
 	for {
+		client.extendDeadline()
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
 			return nil, err
@@ -130,6 +131,7 @@ func (client *NetClient) PeekUID(uid uint32) ([]byte, error) {
 				return nil, ErrMessageTooLarge
 			}
 			payload = make([]byte, size)
+			client.extendDeadline()
 			if _, err := io.ReadFull(client.reader, payload); err != nil {
 				return nil, err
 			}
