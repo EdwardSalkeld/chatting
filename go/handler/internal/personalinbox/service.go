@@ -112,12 +112,27 @@ func (service *Service) Cycle(ctx context.Context) error {
 			return errors.New("personal inbox queue unavailable")
 		}
 	}
-	// Recovery and notifications continue even if IMAP is temporarily down.
+	// Recovery and notifications continue even if IMAP is temporarily down, so
+	// each step records its own health: one failing step must not make the
+	// whole workflow look dead to whoever is watching the status endpoint.
+	steps := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"results", service.results}, {"ingest", service.ingest}, {"publish", service.publish},
+		{"digest", service.digest}, {"perform", service.perform},
+	}
+	stamp := service.Now().UTC().Format(time.RFC3339)
 	var failures []error
-	for _, step := range []func(context.Context) error{service.results, service.ingest, service.publish, service.digest, service.perform} {
-		if err := step(ctx); err != nil {
+	for _, step := range steps {
+		err := step.run(ctx)
+		if err != nil {
 			failures = append(failures, err)
+			_ = service.Store.putMeta(ctx, "step_error:"+step.name, err.Error())
+			continue
 		}
+		_ = service.Store.putMeta(ctx, "step_success:"+step.name, stamp)
+		_ = service.Store.putMeta(ctx, "step_error:"+step.name, "")
 	}
 	return errors.Join(failures...)
 }

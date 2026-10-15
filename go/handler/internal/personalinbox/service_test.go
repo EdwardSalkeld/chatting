@@ -549,3 +549,23 @@ func TestMailboxEffectsShareOneLoginPerPass(t *testing.T) {
 		t.Fatalf("dials %d logouts %d", client.dials, client.logouts)
 	}
 }
+
+func TestStepHealthSeparatesIngestFromTheRest(t *testing.T) {
+	service, _, _, _ := fixture(t)
+	service.Dial = func(context.Context) (imap.UIDClient, error) { return nil, errors.New("offline") }
+	if err := service.Cycle(context.Background()); err == nil {
+		t.Fatal("expected the ingest failure to surface")
+	}
+	health, err := service.Store.stepHealth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health["ingest"]["error"] == "" || health["ingest"]["success"] != "" {
+		t.Fatalf("ingest health %+v", health["ingest"])
+	}
+	for _, step := range []string{"results", "publish", "digest", "perform"} {
+		if health[step]["success"] == "" || health[step]["error"] != "" {
+			t.Fatalf("%s reported unhealthy because ingest failed: %+v", step, health[step])
+		}
+	}
+}

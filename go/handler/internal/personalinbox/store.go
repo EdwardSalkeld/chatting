@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -97,6 +98,32 @@ func (store *Store) getMeta(ctx context.Context, key string) (string, error) {
 		return "", nil
 	}
 	return value, err
+}
+
+// Health of each cycle step, so a reader can tell a workflow that is wholly
+// down from one where only ingestion is degraded.
+func (store *Store) stepHealth(ctx context.Context) (map[string]map[string]string, error) {
+	rows, err := store.db.QueryContext(ctx, "SELECT key,value FROM inbox_meta WHERE key LIKE 'step_success:%' OR key LIKE 'step_error:%'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	health := map[string]map[string]string{}
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		field, step, found := strings.Cut(key, ":")
+		if !found {
+			continue
+		}
+		if health[step] == nil {
+			health[step] = map[string]string{}
+		}
+		health[step][strings.TrimPrefix(field, "step_")] = value
+	}
+	return health, rows.Err()
 }
 
 func (store *Store) putMeta(ctx context.Context, key, value string) error {
