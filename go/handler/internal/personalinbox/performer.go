@@ -158,23 +158,12 @@ func (performer *HandlerPerformer) linear(ctx context.Context, effect Effect) (s
 		return "", errors.New("Linear team no longer approved")
 	}
 	id := issueID(effect.ID)
-	var existing struct {
-		Errors []json.RawMessage `json:"errors"`
-		Data   struct {
-			Issue *struct {
-				ID  string `json:"id"`
-				URL string `json:"url"`
-			} `json:"issue"`
-		} `json:"data"`
+	if url := performer.linearLookup(ctx, id); url != "" {
+		return url, nil
 	}
-	if err := performer.post(ctx, performer.LinearURL, map[string]any{"query": "query($id:String!){issue(id:$id){id url}}", "variables": map[string]string{"id": id}}, performer.LinearKey, &existing); err != nil {
-		return "", err
-	}
-	if existing.Data.Issue != nil && existing.Data.Issue.ID == id {
-		return existing.Data.Issue.URL, nil
-	}
-	// Linear may return a not-found GraphQL error for an absent UUID. A
-	// mutation with the same UUID is safe even then; it cannot create two IDs.
+	// Linear may report an absent UUID as a GraphQL error or an HTTP status, so
+	// a failed lookup says nothing about whether the issue exists. A mutation
+	// with the same UUID is safe either way; it cannot create two IDs.
 	input := map[string]any{"id": id, "teamId": effect.Target, "title": string([]rune(strings.SplitN(effect.Body, "\n", 2)[0])[:min(200, len([]rune(strings.SplitN(effect.Body, "\n", 2)[0])))]), "description": effect.Body}
 	if performer.Config.LinearProject != "" {
 		input["projectId"] = performer.Config.LinearProject
@@ -196,7 +185,33 @@ func (performer *HandlerPerformer) linear(ctx context.Context, effect Effect) (s
 		return "", err
 	}
 	if len(created.Errors) > 0 || !created.Data.Create.Success || created.Data.Create.Issue == nil || created.Data.Create.Issue.ID != id {
+		// The issue may exist already, from this UUID's earlier attempt or from
+		// a creation whose response was lost. Prefer that over a false failure.
+		if url := performer.linearLookup(ctx, id); url != "" {
+			return url, nil
+		}
 		return "", errors.New("Linear creation receipt invalid")
 	}
 	return created.Data.Create.Issue.URL, nil
+}
+
+// An empty result means "no issue we can confirm", whether that is a genuine
+// absence or an unreachable API. Callers treat both the same way.
+func (performer *HandlerPerformer) linearLookup(ctx context.Context, id string) string {
+	var existing struct {
+		Errors []json.RawMessage `json:"errors"`
+		Data   struct {
+			Issue *struct {
+				ID  string `json:"id"`
+				URL string `json:"url"`
+			} `json:"issue"`
+		} `json:"data"`
+	}
+	if err := performer.post(ctx, performer.LinearURL, map[string]any{"query": "query($id:String!){issue(id:$id){id url}}", "variables": map[string]string{"id": id}}, performer.LinearKey, &existing); err != nil {
+		return ""
+	}
+	if existing.Data.Issue == nil || existing.Data.Issue.ID != id {
+		return ""
+	}
+	return existing.Data.Issue.URL
 }
