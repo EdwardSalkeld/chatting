@@ -1,7 +1,9 @@
-# Explicit executor termination (opt-in)
+# Explicit executor termination
 
-Each work item has an `explicit_finish` setting, default **off**, including migrated
-items. Deploying this change preserves exit-based completion for all existing chats.
+Each work item has an `explicit_finish` setting, default **on**. A one-time
+migration enables it for all existing items, including those previously off.
+After deployment, `/finish off` persists across restarts and disables it for that
+work item. New items default on even in databases created with the old off default.
 
 Send `/finish on` in the chat to enable it for the current work item. `/finish`
 shows the setting; `/finish off` disables it. Commands do not launch an executor.

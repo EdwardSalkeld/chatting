@@ -6,11 +6,13 @@ import http.client
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from app.state import SQLiteStateStore
@@ -355,12 +357,9 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
                     ),
                 )
 
-                handler_store = SQLiteStateStore(str(handler_db_path))
+                self.assertIn("termination_contract", prompt)
                 self.assertTrue(
-                    handler_store.has_dispatched_event_id(
-                        task_id=task_id,
-                        event_id=expected_event_id,
-                    )
+                    self._has_completion(handler_db_path, task_id, expected_event_id)
                 )
             finally:
                 for proc in (
@@ -442,6 +441,22 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
         )
         self.fail(f"prompt file never appeared\n\n{diagnostics}")
 
+    @staticmethod
+    def _has_completion(handler_db_path: Path, task_id: str, event_id: str) -> bool:
+        # Inspect the Go handler's database without running Python migrations.
+        # Those migrations write and can invalidate the live handler's snapshot
+        # while it is upgrading a read transaction to a write transaction.
+        with closing(
+            sqlite3.connect(f"{handler_db_path.as_uri()}?mode=ro", uri=True)
+        ) as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM dispatched_event_ids WHERE task_id = ? AND event_id = ?",
+                    (task_id, event_id),
+                ).fetchone()
+                is not None
+            )
+
     def _wait_for_completion(
         self,
         *,
@@ -467,10 +482,7 @@ class AuxiliaryIngressE2ETests(unittest.TestCase):
     ) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            handler_store = SQLiteStateStore(str(handler_db_path))
-            if handler_store.has_dispatched_event_id(
-                task_id=task_id, event_id=event_id
-            ):
+            if self._has_completion(handler_db_path, task_id, event_id):
                 return
             time.sleep(1)
         diagnostics = self._dump_diagnostics(

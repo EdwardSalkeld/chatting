@@ -52,6 +52,9 @@ def main():
     )
 
     print("fake codex transcript", file=sys.stdout)
+    sys.stdout.flush()
+    if "termination_contract" in parsed:
+        subprocess.run([sys.executable, "-P", "-m", "app.main_finish"], check=True)
 
 
 if __name__ == "__main__":

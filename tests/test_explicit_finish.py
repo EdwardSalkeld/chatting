@@ -43,7 +43,11 @@ class ExplicitFinishTests(unittest.TestCase):
     def enable(self):
         self.store.set_work_explicit_finish(work_item_id=self.item, enabled=True)
 
-    def test_default_off_preserves_exit_completion_and_payload(self):
+    def test_default_on(self):
+        self.assertTrue(self.store.get_work_explicit_finish(work_item_id=self.item))
+
+    def test_disabled_preserves_exit_completion_and_payload(self):
+        self.store.set_work_explicit_finish(work_item_id=self.item, enabled=False)
         self.assertFalse(self.store.get_work_explicit_finish(work_item_id=self.item))
         result = self.executor("import sys; print(sys.stdin.read())").execute(
             _envelope()
@@ -56,7 +60,7 @@ class ExplicitFinishTests(unittest.TestCase):
             payload["reply_contract"]["executor_exit_status_drives_completion"]
         )
 
-    def test_migration_defaults_existing_item_off(self):
+    def test_migration_defaults_existing_item_on(self):
         path = str(Path(self.temporary.name) / "old-worker.db")
         with closing(sqlite3.connect(path)) as connection, connection:
             connection.execute(
@@ -66,11 +70,10 @@ class ExplicitFinishTests(unittest.TestCase):
                 "INSERT INTO work_items VALUES ('existing', 'chat', '{}', 'open', 'high', '2026-10-14T00:00:00Z')"
             )
         migrated = SQLiteStateStore(path)
-        self.assertFalse(migrated.get_work_explicit_finish(work_item_id="existing"))
+        self.assertTrue(migrated.get_work_explicit_finish(work_item_id="existing"))
         self.assertEqual(migrated.get_work_model_tier(work_item_id="existing"), "high")
 
     def test_finish_records_then_kills_executor_and_child(self):
-        self.enable()
         script = """
 import json, os, subprocess, sys
 from pathlib import Path
@@ -108,6 +111,35 @@ Path('executor-survived').touch()
         time.sleep(1)
         self.assertFalse((Path(self.temporary.name) / "child-survived").exists())
         self.assertFalse((Path(self.temporary.name) / "executor-survived").exists())
+
+    def test_rollout_from_default_off_database_runs_once(self):
+        path = str(Path(self.temporary.name) / "default-off-worker.db")
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute(
+                "CREATE TABLE work_items (work_item_id TEXT PRIMARY KEY, origin_conversation_id TEXT NOT NULL, preferred_reply_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', model_tier TEXT NOT NULL DEFAULT 'auto', explicit_finish INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
+            )
+            for item, enabled in (("existing_off", 0), ("existing_on", 1)):
+                connection.execute(
+                    "INSERT INTO work_items VALUES (?, 'chat', '{}', 'open', 'high', ?, '2026-10-14T00:00:00Z')",
+                    (item, enabled),
+                )
+        migrated = SQLiteStateStore(path)
+        for item in ("existing_off", "existing_on"):
+            self.assertTrue(migrated.get_work_explicit_finish(work_item_id=item))
+        migrated.set_work_explicit_finish(work_item_id="existing_off", enabled=False)
+        reopened = SQLiteStateStore(path)
+        self.assertFalse(reopened.get_work_explicit_finish(work_item_id="existing_off"))
+        self.assertTrue(reopened.get_work_explicit_finish(work_item_id="existing_on"))
+        reopened.stage_inbox_task(self.task)
+        self.assertTrue(reopened.get_work_explicit_finish(work_item_id=self.item))
+        reopened.set_work_explicit_finish(work_item_id=self.item, enabled=False)
+        next_task = replace(
+            self.task,
+            task_id="task:next",
+            envelope=replace(self.task.envelope, id="next"),
+        )
+        reopened.stage_inbox_task(next_task)
+        self.assertFalse(reopened.get_work_explicit_finish(work_item_id=self.item))
 
     def test_unrequested_zero_and_nonzero_exits_restart_with_context(self):
         self.enable()
@@ -198,9 +230,7 @@ subprocess.run([sys.executable, '-P', '-m', 'app.main_finish'])
                 self.store.get_work_explicit_finish(work_item_id="item_chat"),
                 mode != "off",
             )
-            self.assertFalse(
-                self.store.get_work_explicit_finish(work_item_id=self.item)
-            )
+            self.assertTrue(self.store.get_work_explicit_finish(work_item_id=self.item))
 
     def test_low_escalation_can_finish_explicitly(self):
         self.enable()

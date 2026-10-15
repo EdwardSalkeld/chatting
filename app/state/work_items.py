@@ -24,6 +24,7 @@ def initialize(connection: sqlite3.Connection) -> None:
             preferred_reply_json TEXT NOT NULL,
             state TEXT NOT NULL DEFAULT 'open',
             model_tier TEXT NOT NULL DEFAULT 'auto',
+            explicit_finish INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS work_item_events (
@@ -32,6 +33,9 @@ def initialize(connection: sqlite3.Connection) -> None:
             conversation_id TEXT NOT NULL,
             route_reason TEXT NOT NULL,
             created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS work_item_migrations (
+            migration TEXT PRIMARY KEY
         );
         """
     )
@@ -42,8 +46,15 @@ def initialize(connection: sqlite3.Connection) -> None:
         )
     if "explicit_finish" not in columns:
         connection.execute(
-            "ALTER TABLE work_items ADD COLUMN explicit_finish INTEGER NOT NULL DEFAULT 0"
+            "ALTER TABLE work_items ADD COLUMN explicit_finish INTEGER NOT NULL DEFAULT 1"
         )
+    # Apply the rollout once. Reopening the store must preserve /finish off.
+    migration = "explicit_finish_default_on"
+    if connection.execute(
+        "INSERT OR IGNORE INTO work_item_migrations (migration) VALUES (?)",
+        (migration,),
+    ).rowcount:
+        connection.execute("UPDATE work_items SET explicit_finish = 1")
 
 
 def assign(
@@ -66,8 +77,8 @@ def assign(
     reply = task.envelope.reply_channel
     connection.execute(
         """INSERT OR IGNORE INTO work_items
-           (work_item_id, origin_conversation_id, preferred_reply_json, state, model_tier, created_at)
-           VALUES (?, ?, ?, 'open', 'auto', ?)""",
+           (work_item_id, origin_conversation_id, preferred_reply_json, state, model_tier, explicit_finish, created_at)
+           VALUES (?, ?, ?, 'open', 'auto', 1, ?)""",
         (
             item_id,
             conversation_id,
