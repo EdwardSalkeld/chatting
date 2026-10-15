@@ -178,13 +178,13 @@ func ParseText(raw []byte) TextMessage {
 	if err != nil {
 		return TextMessage{Subject: "Unreadable email", Body: "Message could not be parsed; inspect original inbox.", Incomplete: true}
 	}
-	body, _ := extractMessageContent(message, "", "")
+	body, _, skipped := extractMessageParts(message, "", "")
 	// v1 does not inspect attachments, encrypted mail, or calendar invitations.
 	// Surface these rather than quietly filing information we could not read.
-	incomplete := bytes.Contains(bytes.ToLower(raw), []byte("content-disposition: attachment")) ||
-		bytes.Contains(bytes.ToLower(raw), []byte("filename=")) ||
-		bytes.Contains(bytes.ToLower(raw), []byte("application/")) ||
-		bytes.Contains(bytes.ToLower(raw), []byte("text/calendar")) || body == "(empty body)"
+	// The signal comes from the MIME walk itself: scanning the raw bytes for
+	// "filename=" or "application/" also matches ordinary HTML bodies and
+	// tracking links, which sent nearly every newsletter to review.
+	incomplete := skipped || body == "(empty body)"
 	if len(body) > 60000 {
 		body = string([]rune(body)[:min(len([]rune(body)), 15000)])
 		incomplete = true

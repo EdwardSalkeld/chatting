@@ -219,18 +219,27 @@ type extractedContent struct {
 	plainTexts  []string
 	htmlTexts   []string
 	attachments []contracts.AttachmentRef
+	skipped     bool
 }
 
 func extractMessageContent(message *mail.Message, uid string, attachmentDir string) (string, []contracts.AttachmentRef) {
+	body, attachments, _ := extractMessageParts(message, uid, attachmentDir)
+	return body, attachments
+}
+
+// The third result reports whether the walk passed over a part it could not
+// read, so a caller that collects no attachments can still tell a fully read
+// message from one it only partly understood.
+func extractMessageParts(message *mail.Message, uid string, attachmentDir string) (string, []contracts.AttachmentRef, bool) {
 	content := extractedContent{}
 	attachmentIndex := 0
 	extractEntityContent(message.Header, message.Body, uid, attachmentDir, &attachmentIndex, &content)
 	for _, candidate := range append(content.plainTexts, content.htmlTexts...) {
 		if strings.TrimSpace(candidate) != "" {
-			return strings.TrimSpace(candidate), content.attachments
+			return strings.TrimSpace(candidate), content.attachments, content.skipped
 		}
 	}
-	return "(empty body)", content.attachments
+	return "(empty body)", content.attachments, content.skipped
 }
 
 func extractEntityContent(
@@ -251,6 +260,7 @@ func extractEntityContent(
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary := params["boundary"]
 		if strings.TrimSpace(boundary) == "" {
+			content.skipped = true
 			return
 		}
 		multiReader := multipart.NewReader(reader, boundary)
@@ -260,6 +270,7 @@ func extractEntityContent(
 				return
 			}
 			if err != nil {
+				content.skipped = true
 				return
 			}
 			extractEntityContent(part.Header, part, uid, attachmentDir, attachmentIndex, content)
@@ -269,10 +280,12 @@ func extractEntityContent(
 	if mediaType == "message/rfc822" {
 		raw := readDecodedBody(header, reader)
 		if len(raw) == 0 {
+			content.skipped = true
 			return
 		}
 		nested, err := mail.ReadMessage(bytes.NewReader(raw))
 		if err != nil {
+			content.skipped = true
 			return
 		}
 		extractEntityContent(nested.Header, nested.Body, uid, attachmentDir, attachmentIndex, content)
@@ -290,6 +303,9 @@ func extractEntityContent(
 	}
 	if disposition == "attachment" || filename != "" {
 		if attachmentDir == "" {
+			if informationBearing(mediaType, disposition) {
+				content.skipped = true
+			}
 			return
 		}
 		payload := readDecodedBody(header, reader)
@@ -314,7 +330,17 @@ func extractEntityContent(
 		if body := htmlToText(string(readDecodedBody(header, reader))); body != "" {
 			content.htmlTexts = append(content.htmlTexts, body)
 		}
+	default:
+		if informationBearing(mediaType, disposition) {
+			content.skipped = true
+		}
 	}
+}
+
+// A part the walk did not read only leaves the message incomplete when it could
+// have carried meaning. Inline images are decoration: logos and tracking pixels.
+func informationBearing(mediaType string, disposition string) bool {
+	return disposition == "attachment" || !strings.HasPrefix(mediaType, "image/")
 }
 
 func readDecodedBody(header headerGetter, reader io.Reader) []byte {
