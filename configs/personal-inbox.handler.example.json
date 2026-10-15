@@ -1,0 +1,24 @@
+{
+  "personal_inbox": {
+    "enabled": false,
+    "db_path": "/var/lib/chatting/personal-inbox.db",
+    "account": "personal",
+    "imap_host": "imap.example.com",
+    "imap_port": 993,
+    "imap_username": "person@example.com",
+    "imap_password_env": "CHATTING_PERSONAL_IMAP_PASSWORD",
+    "imap_mailbox": "INBOX",
+    "backfill": false,
+    "dry_run": true,
+    "move_news": false,
+    "mark_news_read": false,
+    "news_folder": "Chatting/News",
+    "orders_telegram_target": "REPLACE_WITH_ORDERS_CHAT_ID",
+    "action_telegram_target": "REPLACE_WITH_ACTION_CHAT_ID",
+    "digest_telegram_target": "REPLACE_WITH_DIGEST_CHAT_ID",
+    "digest_interval_seconds": 86400,
+    "linear_key_env": "CHATTING_PERSONAL_LINEAR_KEY",
+    "linear_team_id": "REPLACE_WITH_TEAM_UUID",
+    "linear_project_id": ""
+  }
+}

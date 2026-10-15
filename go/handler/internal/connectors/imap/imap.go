@@ -289,6 +289,9 @@ func extractEntityContent(
 		filename = decodeHeader(filename)
 	}
 	if disposition == "attachment" || filename != "" {
+		if attachmentDir == "" {
+			return
+		}
 		payload := readDecodedBody(header, reader)
 		if len(payload) == 0 {
 			return
@@ -439,6 +442,10 @@ type NetClient struct {
 }
 
 func DialClient(ctx context.Context, config ClientConfig) (Client, error) {
+	return dialClient(ctx, config, false)
+}
+
+func dialClient(ctx context.Context, config ClientConfig, sessionDeadline bool) (Client, error) {
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Second
 	}
@@ -461,6 +468,12 @@ func DialClient(ctx context.Context, config ClientConfig) (Client, error) {
 		conn:   conn,
 		reader: bufio.NewReader(conn),
 		writer: bufio.NewWriter(conn),
+	}
+	if sessionDeadline {
+		if err := conn.SetDeadline(time.Now().Add(config.Timeout)); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
 	}
 	if _, err := client.reader.ReadString('\n'); err != nil {
 		_ = conn.Close()

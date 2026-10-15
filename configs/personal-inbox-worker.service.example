@@ -1,0 +1,32 @@
+[Unit]
+Description=Chatting personal inbox classifier
+After=network-online.target
+
+[Service]
+Type=simple
+# Create a distinct service user. It must not be the coding worker's user.
+User=chatting-mail
+Group=chatting-mail
+WorkingDirectory=/opt/chatting
+EnvironmentFile=/etc/chatting-personal-worker.env
+StateDirectory=chatting-personal-worker
+UMask=0077
+# Set SUMMARY_MODEL in the root-owned environment file to a model supporting
+# Responses API structured outputs. Only the two model keys belong in this file.
+ExecStart=/opt/chatting/.venv/bin/python -m app.main_personal_inbox_worker --db-path /var/lib/chatting-personal-worker/classifications.db --summary-model ${SUMMARY_MODEL}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=-/var/lib/chatting -/etc/chatting
+
+[Install]
+WantedBy=multi-user.target
