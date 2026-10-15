@@ -365,6 +365,7 @@ func (service *Service) perform(ctx context.Context) error {
 	if releaser, ok := service.Performer.(Releaser); ok {
 		defer releaser.Release()
 	}
+	var failures []error
 	for _, effect := range effects {
 		if service.Config.DryRun {
 			continue
@@ -395,6 +396,7 @@ func (service *Service) perform(ctx context.Context) error {
 			effect.Status = "uncertain"
 			effect.Note = "external outcome unknown; inspect destination before resolving"
 			log.Printf("personal_inbox_effect_uncertain id=%s kind=%s", effect.ID, effect.Kind)
+			failures = append(failures, errors.New("personal inbox effect outcome uncertain"))
 		} else {
 			effect.Status = "done"
 			effect.Receipt = receipt
@@ -404,5 +406,5 @@ func (service *Service) perform(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

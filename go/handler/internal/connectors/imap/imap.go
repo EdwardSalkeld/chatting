@@ -278,6 +278,11 @@ func extractEntityContent(
 	}
 
 	if mediaType == "message/rfc822" {
+		// The body selector returns only one text part, so nested message
+		// content is not guaranteed to reach the personal-inbox classifier.
+		if attachmentDir == "" {
+			content.skipped = true
+		}
 		raw := readDecodedBody(header, reader)
 		if len(raw) == 0 {
 			content.skipped = true

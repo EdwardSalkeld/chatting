@@ -216,8 +216,8 @@ func TestPartialSuccessAndDuplicateResults(t *testing.T) {
 	broker.result(message.ID, classification)
 	broker.result(message.ID, classification)
 	performer.failKind = "telegram"
-	if err := service.Cycle(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := service.Cycle(context.Background()); err == nil {
+		t.Fatal("expected uncertain delivery error")
 	}
 	effects, _ := service.Store.effects(context.Background(), "1=1")
 	if len(effects) != 2 || effects[0].Status != "done" || effects[1].Status != "uncertain" {
