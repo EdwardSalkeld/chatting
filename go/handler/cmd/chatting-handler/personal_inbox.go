@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,9 +33,19 @@ func newPersonalInbox(config handlerconfig.Config, broker *bbmb.Adapter) (*perso
 		return nil, errors.New("personal inbox JMAP token is missing")
 	}
 	telegram := os.Getenv(config.TelegramBotTokenEnv)
-	linearKey := os.Getenv(personal.LinearKeyEnv)
-	if !personal.DryRun && (telegram == "" || linearKey == "") {
-		return nil, errors.New("personal inbox live mode requires Telegram and Linear credentials")
+	if !personal.DryRun && telegram == "" {
+		return nil, errors.New("personal inbox live mode requires the Telegram bot token")
+	}
+	// Ticketing is the one part that can be left out while the rest runs. A
+	// configured team with no key in the environment turns it off rather than
+	// failing startup, so action mail is still notified and filed.
+	linearKey := ""
+	if personal.CreatesTickets() {
+		linearKey = os.Getenv(personal.LinearKeyEnv)
+		if linearKey == "" {
+			log.Printf("personal_inbox_linear_disabled: %s is unset", personal.LinearKeyEnv)
+			personal.LinearTeam = ""
+		}
 	}
 	mail := &jmap.Client{
 		HTTP:       &http.Client{Timeout: 60 * time.Second},

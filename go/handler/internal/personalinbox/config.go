@@ -89,10 +89,18 @@ func (config Config) Validate() error {
 		return nil
 	}
 	for _, value := range []string{config.DBPath, config.Account, config.TokenEnv, config.OrdersTarget,
-		config.ActionTarget, config.DigestTarget, config.LinearKeyEnv, config.LinearTeam} {
+		config.ActionTarget, config.DigestTarget} {
 		if !safeValue(value) {
-			return errors.New("personal_inbox requires database, account, JMAP token, Telegram destinations and Linear team")
+			return errors.New("personal_inbox requires database, account, JMAP token and Telegram destinations")
 		}
+	}
+	// Ticketing is opt-in. Configuring a team without somewhere to read its key
+	// from is a half-configuration rather than a choice, so it is refused.
+	if config.LinearTeam != "" && !safeValue(config.LinearKeyEnv) {
+		return errors.New("personal_inbox linear_team_id needs linear_key_env")
+	}
+	if config.LinearTeam != "" && !safeValue(config.LinearTeam) {
+		return errors.New("personal_inbox linear_team_id must not contain control characters")
 	}
 	if _, _, err := config.DigestTime(); err != nil {
 		return err
@@ -125,6 +133,12 @@ func (config Config) Validate() error {
 // Folder is the mailbox a category is filed into, or "" to leave it in place.
 func (config Config) Folder(category string) string {
 	return strings.TrimSpace(config.Folders[category])
+}
+
+// CreatesTickets reports whether action mail also opens a Linear issue. With
+// no team configured it is simply notified and filed.
+func (config Config) CreatesTickets() bool {
+	return strings.TrimSpace(config.LinearTeam) != ""
 }
 
 func (config Config) MarksRead(category string) bool {

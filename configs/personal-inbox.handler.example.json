@@ -20,7 +20,7 @@
     "digest_at": "08:00",
     "timezone": "Europe/London",
     "linear_key_env": "CHATTING_PERSONAL_LINEAR_KEY",
-    "linear_team_id": "REPLACE_WITH_TEAM_UUID",
+    "linear_team_id": "",
     "linear_project_id": ""
   }
 }
