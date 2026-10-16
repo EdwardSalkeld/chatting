@@ -9,7 +9,7 @@ import (
 func validConfig() Config {
 	return Config{Enabled: true, DBPath: "/data/inbox.db", Account: "main", TokenEnv: "JMAP_TOKEN",
 		OrdersTarget: "orders", ActionTarget: "actions", DigestTarget: "digest",
-		DigestAt: "08:00", Timezone: "Europe/London",
+		DigestAt: "08:00", Timezone: "Europe/London", ConfidenceThreshold: 0.8,
 		LinearKeyEnv: "LINEAR_KEY", LinearTeam: "team", LinkTemplate: DefaultLinkTemplate,
 		Folders: map[string]string{"news": "Triage/News", "order": "Triage/Orders"}}
 }
@@ -44,6 +44,8 @@ func TestConfigRejectsUnknownCategoriesAndUnsafeValues(t *testing.T) {
 		"nonsense digest time":     func(c *Config) { c.DigestAt = "half eight" },
 		"out of range digest time": func(c *Config) { c.DigestAt = "25:00" },
 		"unknown timezone":         func(c *Config) { c.Timezone = "Mars/Olympus" },
+		"threshold above one":      func(c *Config) { c.ConfidenceThreshold = 1.5 },
+		"negative threshold":       func(c *Config) { c.ConfidenceThreshold = -0.1 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -53,6 +55,19 @@ func TestConfigRejectsUnknownCategoriesAndUnsafeValues(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+func TestThresholdIsConfigurableWithASafeDefault(t *testing.T) {
+	config := validConfig()
+	if config.Threshold() != 0.8 {
+		t.Fatalf("%v", config.Threshold())
+	}
+	// An unset threshold falls back rather than accepting everything, which is
+	// what a zero value would otherwise mean.
+	config.ConfidenceThreshold = 0
+	if config.Threshold() != DefaultConfidenceThreshold {
+		t.Fatalf("%v", config.Threshold())
 	}
 }
 

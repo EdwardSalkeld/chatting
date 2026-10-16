@@ -17,6 +17,7 @@
     "orders_telegram_target": "REPLACE_WITH_ORDERS_CHAT_ID",
     "action_telegram_target": "REPLACE_WITH_ACTION_CHAT_ID",
     "digest_telegram_target": "REPLACE_WITH_DIGEST_CHAT_ID",
+    "confidence_threshold": 0.8,
     "digest_at": "08:00",
     "timezone": "Europe/London",
     "linear_key_env": "CHATTING_PERSONAL_LINEAR_KEY",

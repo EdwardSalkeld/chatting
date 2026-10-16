@@ -148,29 +148,35 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertEqual(result["classification"]["category"], "review")
         post.codex.assert_not_called()
 
-    def test_uncertainty_failure_and_attachments_stay_for_review(self):
-        for answer in [
-            jev_answer(confidence=0.6),
-            TimeoutError(),
-            {},
-            jev_answer(confidence=float("nan")),
-        ]:
-            with self.subTest(answer=answer):
-                result, _ = self.classify_with([answer, summary_answer()])
-                self.assertEqual(result["classification"]["category"], "review")
-        task = mail_task()
-        task["mail"]["incomplete"] = True
-        result, _ = self.classify_with([jev_answer(), summary_answer()], task)
-        self.assertEqual(result["classification"]["category"], "review")
+    def test_triage_is_reported_not_decided(self):
+        # The handler owns the category policy and its threshold. This side
+        # reports what Jev said, so a weak reading is passed through with the
+        # confidence attached rather than being downgraded twice.
+        result, _ = self.classify_with([jev_answer(confidence=0.6), summary_answer()])
+        c = result["classification"]
+        self.assertEqual(c["category"], "order")
+        self.assertAlmostEqual(c["confidence"], 0.6)
+        self.assertAlmostEqual(c["trace"]["jev_confidence"], 0.6)
+        self.assertFalse(c["trace"]["suspicious"])
+        self.assertTrue(c["trace"]["summarised"])
 
-    def test_summary_action_wins_over_routine_classification(self):
-        result, _ = self.classify_with(
-            [
-                jev_answer("news", action="yes"),
-                summary_answer("Pay failed payment", "Friday"),
-            ]
+    def test_losing_jev_fails_closed(self):
+        for answer in [TimeoutError(), {}, jev_answer(confidence=float("nan"))]:
+            with self.subTest(answer=answer):
+                result, post = self.classify_with([answer])
+                c = result["classification"]
+                self.assertEqual(c["category"], "review")
+                self.assertTrue(c["trace"]["suspicious"])
+                post.codex.assert_not_called()
+
+    def test_doubtful_routine_mail_still_buys_a_summary(self):
+        # Only a confident routine reading skips the summary, so anything the
+        # handler may hold for review still carries one for whoever looks.
+        result, post = self.classify_with(
+            [jev_answer("news", confidence=0.82), summary_answer()]
         )
-        self.assertEqual(result["classification"]["category"], "action")
+        self.assertEqual(post.codex.call_count, 1)
+        self.assertTrue(result["classification"]["trace"]["summarised"])
 
     def test_summary_failure_or_tool_call_never_runs_anything(self):
         for result in [

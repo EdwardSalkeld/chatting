@@ -73,38 +73,39 @@ func TestStaleStateIsReportedDistinctly(t *testing.T) {
 	}
 }
 
-func TestEmailBodyPrefersTextAndFlagsDegradedParts(t *testing.T) {
+func TestBodyTextPrefersTextConvertsHTMLAndSeparatesFailures(t *testing.T) {
 	cases := []struct {
-		name     string
-		email    Email
-		body     string
-		degraded bool
+		name  string
+		email Email
+		want  Body
 	}{
 		{"plain text wins", Email{
 			TextBody:   []BodyPart{{PartID: "1"}},
 			HTMLBody:   []BodyPart{{PartID: "2"}},
-			BodyValues: map[string]BodyValue{"1": {Value: " plain "}, "2": {Value: "html"}},
-		}, "plain", false},
-		{"falls back to html", Email{
-			TextBody:   []BodyPart{{PartID: "1"}},
+			BodyValues: map[string]BodyValue{"1": {Value: " plain "}, "2": {Value: "<p>html</p>"}},
+		}, Body{Text: "plain"}},
+		{"html is converted, not passed through", Email{
 			HTMLBody:   []BodyPart{{PartID: "2"}},
-			BodyValues: map[string]BodyValue{"1": {Value: "   "}, "2": {Value: "html"}},
-		}, "html", false},
-		{"truncation is degraded", Email{
+			BodyValues: map[string]BodyValue{"2": {Value: "<style>.a{color:red}</style><p>50% off</p>"}},
+		}, Body{Text: "50% off", HTML: true}},
+		{"truncation is our limit, not a defect", Email{
 			TextBody:   []BodyPart{{PartID: "1"}},
 			BodyValues: map[string]BodyValue{"1": {Value: "cut", IsTruncated: true}},
-		}, "cut", true},
-		{"encoding problem is degraded", Email{
+		}, Body{Text: "cut", Truncated: true}},
+		{"an encoding problem is a defect", Email{
 			TextBody:   []BodyPart{{PartID: "1"}},
 			BodyValues: map[string]BodyValue{"1": {Value: "mojibake", IsEncodingProblem: true}},
-		}, "mojibake", true},
-		{"no body at all is degraded", Email{}, "", true},
+		}, Body{Text: "mojibake", Degraded: true}},
+		{"a part that converts to nothing falls through", Email{
+			HTMLBody:   []BodyPart{{PartID: "1"}, {PartID: "2"}},
+			BodyValues: map[string]BodyValue{"1": {Value: `<img src="x.png">`}, "2": {Value: "<p>real words</p>"}},
+		}, Body{Text: "real words", HTML: true}},
+		{"no usable body at all is degraded", Email{}, Body{Degraded: true}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			body, degraded := test.email.Body()
-			if body != test.body || degraded != test.degraded {
-				t.Fatalf("got %q/%v want %q/%v", body, degraded, test.body, test.degraded)
+			if got := test.email.BodyText(); got != test.want {
+				t.Fatalf("got %+v want %+v", got, test.want)
 			}
 		})
 	}
