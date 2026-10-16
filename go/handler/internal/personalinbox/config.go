@@ -46,9 +46,8 @@ type Config struct {
 	// a daily round-up at a time the reader chose, not a per-message delay.
 	DigestAt string `json:"digest_at"`
 	Timezone string `json:"timezone"`
-	// ConfidenceThreshold is the level below which a classification is held
-	// for review instead of acted on. Real mail has a long uncertain tail, so
-	// this is the dial for how much of it to accept.
+	// ConfidenceThreshold is the level below which Jev has not made a settled
+	// decision. Those messages are held for review.
 	ConfidenceThreshold float64 `json:"confidence_threshold"`
 	LinearKeyEnv        string  `json:"linear_key_env"`
 	LinearTeam          string  `json:"linear_team_id"`

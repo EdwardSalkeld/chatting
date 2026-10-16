@@ -135,8 +135,8 @@ class PersonalInboxTests(unittest.TestCase):
 
     def test_suspicious_mail_never_reaches_codex(self):
         result, post = self.classify_with([jev_answer("news", injection="yes")])
-        self.assertEqual(result["classification"]["category"], "review")
-        self.assertEqual(result["classification"]["confidence"], 0.0)
+        self.assertEqual(result["classification"]["category"], "news")
+        self.assertEqual(result["classification"]["confidence"], 0.99)
         self.assertIn("aimed at", result["classification"]["summary"])
         post.codex.assert_not_called()
 
@@ -144,7 +144,7 @@ class PersonalInboxTests(unittest.TestCase):
         answer = jev_answer("news")
         answer["answers"]["prompt_injection"] = choice_answer("no", YES_NO, 0.5)
         result, post = self.classify_with([answer])
-        self.assertEqual(result["classification"]["category"], "review")
+        self.assertEqual(result["classification"]["category"], "news")
         post.codex.assert_not_called()
 
     def test_a_failed_triage_withholds_the_mail_too(self):
@@ -155,9 +155,7 @@ class PersonalInboxTests(unittest.TestCase):
         post.codex.assert_not_called()
 
     def test_triage_is_reported_not_decided(self):
-        # The handler owns the category policy and its threshold. This side
-        # reports what Jev said, so a weak reading is passed through with the
-        # confidence attached rather than being downgraded twice.
+        # The worker reports confidence; the handler applies its review threshold.
         result, _ = self.classify_with([jev_answer(confidence=0.6), summary_answer()])
         c = result["classification"]
         self.assertEqual(c["category"], "order")
@@ -238,7 +236,8 @@ class PersonalInboxTests(unittest.TestCase):
                 answer, _ = self.classify_with(
                     [jev_answer("news", action="yes"), result]
                 )
-                self.assertEqual(answer["classification"]["category"], "review")
+                self.assertEqual(answer["classification"]["category"], "news")
+                self.assertEqual(answer["classification"]["confidence"], 0.99)
                 self.assertIn("unavailable", answer["classification"]["summary"])
 
     def test_routine_news_costs_one_call_and_no_summary(self):
@@ -249,6 +248,31 @@ class PersonalInboxTests(unittest.TestCase):
         # One Jev call and nothing else: the digest summarises the batch.
         self.assertEqual(post.call_count, 1)
         self.assertEqual(post.call_args_list[0].args[0], JEV_ENDPOINT)
+
+    def test_summary_failure_preserves_every_jev_category(self):
+        for category in ("news", "order", "action", "review"):
+            with self.subTest(category=category):
+                result, _ = self.classify_with(
+                    [jev_answer(category, action="yes"), TimeoutError()]
+                )
+                c = result["classification"]
+                self.assertEqual(c["category"], category)
+                self.assertEqual(c["confidence"], 0.99)
+                self.assertFalse(c["trace"]["summarised"])
+                self.assertIn("unavailable", c["summary"])
+
+    def test_extracted_task_never_changes_jev_category(self):
+        for category in ("news", "order", "action", "review"):
+            with self.subTest(category=category):
+                result, _ = self.classify_with(
+                    [
+                        jev_answer(category, action="yes"),
+                        summary_answer(
+                            action="Find an available seat", deadline="10:00"
+                        ),
+                    ]
+                )
+                self.assertEqual(result["classification"]["category"], category)
 
     def test_unsure_about_action_still_buys_a_summary(self):
         # A low-confidence "no" is treated as a maybe, because the cost of being

@@ -260,15 +260,14 @@ def jev_triage(mail: dict[str, Any], key: str) -> tuple[str, float, bool, bool, 
     action, action_confidence = check_answer(answers["requires_action"], YES_NO)
     deadline, deadline_confidence = check_answer(answers["has_deadline"], YES_NO)
     injection, injection_confidence = check_answer(answers["prompt_injection"], YES_NO)
-    # The category stands as Jev gave it. The handler owns what to do with a
-    # weak one, and its threshold is configurable; deciding it twice, in two
-    # places, with one of them hardcoded, is how it drifts.
+    # Report Jev's category and confidence. The handler holds unsettled
+    # readings for review using its configured confidence threshold.
     # An unsure "no" is treated as a maybe: the cost of being wrong is one
     # summary call, against missing something the recipient had to do.
     requires_action = action == "yes" or action_confidence < 0.9
     has_deadline = deadline == "yes" or deadline_confidence < 0.9
     # Anything but a confident "no" counts as suspicious. The cost of being
-    # wrong is one email going to review unsummarised.
+    # wrong is one email going unsummarised. Its category is unchanged.
     suspicious = injection == "yes" or injection_confidence < 0.9
     return category, confidence, requires_action, has_deadline, suspicious
 
@@ -481,8 +480,8 @@ def classify(
             else "the classifier was unavailable"
         )
         return result(
-            "review",
-            0.0,
+            category,
+            confidence,
             {
                 "summary": "Not summarised: %s. Read the original before acting."
                 % reason,
@@ -506,7 +505,6 @@ def classify(
         summary = summarize(mail, summary_model)
         trace["summarised"] = True
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        category, confidence = "review", 0.0
         summary = {
             "summary": "Automatic summary unavailable; inspect the original email.",
             "action": "",
