@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from app.personal_inbox import (
     CATEGORIES,
+    DEAD_QUEUE,
     YES_NO,
     JEV_ENDPOINT,
     TASKS_QUEUE,
@@ -489,3 +490,76 @@ class PersonalInboxCollectorTests(unittest.TestCase):
             self.assertEqual(collector.jev_key, "shared-with-the-worker")
             self.assertEqual(collector.summary_model, "configured-model")
             collector.cache.close()
+
+
+class WorkerCacheTests(unittest.TestCase):
+    def cache(self):
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.execute(
+            "CREATE TABLE classifications "
+            "(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL)"
+        )
+        return connection
+
+    def run_one(self, cache, task, answer):
+        class Broker:
+            published = []
+
+            def pickup_json(self, queue, **kwargs):
+                return (
+                    PickedMessage(guid="g", payload=task)
+                    if queue == TASKS_QUEUE
+                    else None
+                )
+
+            def publish_json(self, queue, payload):
+                self.published.append((queue, payload))
+
+            def ack(self, queue, guid):
+                pass
+
+        broker = Broker()
+        with patch("app.worker.personal_inbox.classify", return_value=answer) as model:
+            process_one(broker, cache, jev_key="j", summary_model="m")
+        return broker, model
+
+    def test_a_changed_body_is_reclassified_not_refused(self):
+        # The same message reads differently once the parser improves. Refusing
+        # it leaves the handler asking forever and never getting an answer.
+        cache = self.cache()
+        task = mail_task()
+        first = {
+            "kind": "personal_inbox.result.v1",
+            "message_id": task["message_id"],
+            "classification": {"category": "news", "confidence": 0.95},
+        }
+        self.run_one(cache, task, first)
+
+        task["mail"]["body"] = "the same email, now without the markup"
+        second = {
+            "kind": "personal_inbox.result.v1",
+            "message_id": task["message_id"],
+            "classification": {"category": "order", "confidence": 0.99},
+        }
+        broker, model = self.run_one(cache, task, second)
+
+        model.assert_called_once()
+        results = [p for q, p in broker.published if q == RESULTS_QUEUE]
+        self.assertEqual(results[-1]["classification"]["category"], "order")
+        self.assertNotIn(DEAD_QUEUE, [q for q, _ in broker.published])
+        # The stale row is replaced, so the next identical ask is a cache hit.
+        rows = cache.execute("SELECT count(*) FROM classifications").fetchone()[0]
+        self.assertEqual(rows, 1)
+
+    def test_an_unchanged_body_still_replays_without_calling_a_model(self):
+        cache = self.cache()
+        task = mail_task()
+        answer = {
+            "kind": "personal_inbox.result.v1",
+            "message_id": task["message_id"],
+            "classification": {"category": "news", "confidence": 0.95},
+        }
+        self.run_one(cache, task, answer)
+        _, model = self.run_one(cache, task, answer)
+        model.assert_not_called()
