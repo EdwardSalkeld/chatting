@@ -390,8 +390,6 @@ func extensionForMediaType(mediaType string) string {
 	}
 }
 
-var ()
-
 func parseReceivedAt(value string, fallback time.Time) time.Time {
 	if strings.TrimSpace(value) == "" {
 		return fallback.UTC()

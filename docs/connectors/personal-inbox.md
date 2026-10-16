@@ -40,9 +40,10 @@ holds it back too. Review is not notified, because it means the workflow could
 not classify the mail and such mail stays in the inbox — saying so twice helps
 nobody. The threshold is a dial, not a measured guarantee: real mail has a long
 uncertain tail, so start at 0.8 and watch `trace.reason` before moving it.
-The Jev version is pinned to `jev-1.13.0`; its chosen probability and reported
-confidence must both be at least 0.90. Test with labelled real mail before
-allowing automatic filing.
+The Jev version is pinned to `jev-1.13.0`, and the confidence it reports is
+the lower of its reported confidence and the probability of the category it
+chose. That number is what `confidence_threshold` is compared against. Test
+with labelled real mail before allowing automatic filing.
 
 The handler rejects unknown result fields: the model cannot supply a target,
 folder, team, shell command, attachment path, or arbitrary mailbox operation.
