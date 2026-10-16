@@ -69,7 +69,12 @@ func (value Classification) Validate() error {
 	if value.Category != "news" && value.Category != "order" && value.Category != "action" && value.Category != "review" {
 		return errors.New("invalid category")
 	}
-	if strings.TrimSpace(value.Summary) == "" || len([]rune(value.Summary)) > 600 || len([]rune(value.Action)) > 600 || len([]rune(value.Deadline)) > 100 {
+	// Routine mail carries no summary: the digest writes one line per message
+	// from a single batch call rather than buying one summary per newsletter.
+	if value.Category != "news" && strings.TrimSpace(value.Summary) == "" {
+		return errors.New("classification needs a summary")
+	}
+	if len([]rune(value.Summary)) > 600 || len([]rune(value.Action)) > 600 || len([]rune(value.Deadline)) > 100 {
 		return errors.New("invalid classification text")
 	}
 	return nil
