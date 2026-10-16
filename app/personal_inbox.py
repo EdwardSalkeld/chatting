@@ -43,12 +43,18 @@ CODEX_FLAGS = (
 CODEX_TIMEOUT_SECONDS = 180
 # Only a confident routine reading skips the summary call.
 SUMMARY_SKIP_CONFIDENCE = 0.9
+# The key is what the model picks, so it has to fit the mail. "news" read
+# wrong for a car rental offer, and anything with an expiry in it drifted
+# towards action; naming the category for both halves keeps it in one piece,
+# which splitting them did not.
 CATEGORIES = {
-    "news": (
-        "Sales, newsletters, routine terms or informational mail; no action "
-        "needed. Also any request for feedback, a review, a rating, a survey "
-        "response or an opinion, however personally addressed or urgently "
-        "worded: answering is always optional."
+    "news_or_marketing": (
+        "Newsletters, informational updates, routine notices of terms or "
+        "policy, and promotional mail selling something: an offer, discount, "
+        "sale, voucher, loyalty perk or product launch. Still this however "
+        "urgent it sounds, however personally addressed, and however soon an "
+        "offer ends. Also any request for feedback, a review, a rating, a "
+        "survey response or an opinion."
     ),
     "order": "Successful order, booking, shipment or receipt; no action needed.",
     "action": (
@@ -58,6 +64,11 @@ CATEGORIES = {
     ),
     "review": "Ambiguous, suspicious, personal correspondence, or insufficient information to safely classify.",
 }
+
+# What the handler is told. The question is asked in the mail's own terms; the
+# workflow only has one bucket for anything needing no reply.
+CATEGORY_RESULT = {"news_or_marketing": "news"}
+
 YES_NO = {
     "yes": "Yes, this is true of the email.",
     "no": "No, this is not true of the email.",
@@ -224,6 +235,7 @@ def jev_triage(mail: dict[str, Any], key: str) -> tuple[str, float, bool, bool, 
     )
     answers = result["answers"]
     category, confidence = check_answer(answers["category"], CATEGORIES)
+    category = CATEGORY_RESULT.get(category, category)
     action, action_confidence = check_answer(answers["requires_action"], YES_NO)
     deadline, deadline_confidence = check_answer(answers["has_deadline"], YES_NO)
     injection, injection_confidence = check_answer(answers["prompt_injection"], YES_NO)
