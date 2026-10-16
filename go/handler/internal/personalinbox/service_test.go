@@ -817,3 +817,23 @@ func TestDeadLetteredResultsAreCounted(t *testing.T) {
 		t.Fatalf("dead letters counted as %q", count)
 	}
 }
+
+func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		trace  *Trace
+		reason string
+	}{
+		{"classifier unavailable", &Trace{TriageFailed: true}, "triage_unavailable"},
+		{"mail aimed at the machine", &Trace{Suspicious: true}, "injection_suspected"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, _, broker, _ := fixture(t)
+			got := classifyOnce(t, service, broker,
+				Classification{Category: "review", Summary: "x", Confidence: 0, Trace: test.trace}).Classification
+			if got.Trace.Reason != test.reason {
+				t.Fatalf("reason %q, want %q", got.Trace.Reason, test.reason)
+			}
+		})
+	}
+}

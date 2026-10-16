@@ -85,6 +85,7 @@ type Trace struct {
 	RequiresAction bool    `json:"requires_action,omitempty"`
 	HasDeadline    bool    `json:"has_deadline,omitempty"`
 	Suspicious     bool    `json:"suspicious,omitempty"`
+	TriageFailed   bool    `json:"triage_failed,omitempty"`
 	Summarised     bool    `json:"summarised,omitempty"`
 }
 
@@ -415,6 +416,8 @@ func (service *Service) classificationResult(ctx context.Context, raw []byte) (b
 	}
 	// One place settles the category, and records which rule did it.
 	switch {
+	case classification.Trace.TriageFailed:
+		classification.Category, classification.Trace.Reason = "review", "triage_unavailable"
 	case classification.Trace.Suspicious:
 		classification.Category, classification.Trace.Reason = "review", "injection_suspected"
 	case strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "":
