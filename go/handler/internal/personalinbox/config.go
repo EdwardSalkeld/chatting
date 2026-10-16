@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 )
 
 const TasksQueue = "chatting.personal-inbox.tasks.v1"
@@ -34,19 +35,39 @@ type Config struct {
 	Folders map[string]string `json:"folders"`
 	// MarkRead lists the categories filed as already read. Action mail is
 	// deliberately left unread even once it has been filed.
-	MarkRead      []string `json:"mark_read"`
-	LinkTemplate  string   `json:"mail_link_template"`
-	OrdersTarget  string   `json:"orders_telegram_target"`
-	ActionTarget  string   `json:"action_telegram_target"`
-	DigestTarget  string   `json:"digest_telegram_target"`
-	DigestSeconds int      `json:"digest_interval_seconds"`
-	LinearKeyEnv  string   `json:"linear_key_env"`
-	LinearTeam    string   `json:"linear_team_id"`
-	LinearProject string   `json:"linear_project_id"`
+	MarkRead     []string `json:"mark_read"`
+	LinkTemplate string   `json:"mail_link_template"`
+	OrdersTarget string   `json:"orders_telegram_target"`
+	ActionTarget string   `json:"action_telegram_target"`
+	DigestTarget string   `json:"digest_telegram_target"`
+	// DigestAt is a wall-clock time of day, "HH:MM" in Timezone. The digest is
+	// a daily round-up at a time the reader chose, not a per-message delay.
+	DigestAt      string `json:"digest_at"`
+	Timezone      string `json:"timezone"`
+	LinearKeyEnv  string `json:"linear_key_env"`
+	LinearTeam    string `json:"linear_team_id"`
+	LinearProject string `json:"linear_project_id"`
+}
+
+// Location is the timezone the digest time is read in.
+func (config Config) Location() (*time.Location, error) {
+	if strings.TrimSpace(config.Timezone) == "" {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(config.Timezone)
+}
+
+// DigestTime is the hour and minute the daily digest is sent.
+func (config Config) DigestTime() (int, int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(config.DigestAt))
+	if err != nil {
+		return 0, 0, errors.New("digest_at must be a wall-clock time such as \"08:00\"")
+	}
+	return parsed.Hour(), parsed.Minute(), nil
 }
 
 func Decode(raw []byte) (*Config, error) {
-	config := Config{DryRun: true, DigestSeconds: 86400, LinkTemplate: DefaultLinkTemplate,
+	config := Config{DryRun: true, DigestAt: "08:00", Timezone: "UTC", LinkTemplate: DefaultLinkTemplate,
 		TokenEnv: "CHATTING_PERSONAL_JMAP_TOKEN", LinearKeyEnv: "CHATTING_PERSONAL_LINEAR_KEY"}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -73,8 +94,11 @@ func (config Config) Validate() error {
 			return errors.New("personal_inbox requires database, account, JMAP token, Telegram destinations and Linear team")
 		}
 	}
-	if config.DigestSeconds < 1 {
-		return errors.New("invalid personal_inbox digest interval")
+	if _, _, err := config.DigestTime(); err != nil {
+		return err
+	}
+	if _, err := config.Location(); err != nil {
+		return errors.New("personal_inbox timezone is not a known IANA location")
 	}
 	for category, folder := range config.Folders {
 		if !slices.Contains(Categories, category) {

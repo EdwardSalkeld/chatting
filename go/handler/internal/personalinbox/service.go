@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/url"
@@ -23,6 +24,10 @@ const (
 	MaxBodyBytes   = 60000
 	ChangesPerPass = 25
 	BackfillLimit  = 500
+	// One digest covers at most this many messages, and each contributes this
+	// much of its body to the single batch call that writes the round-up.
+	DigestMaxItems  = 60
+	DigestBodyChars = 2000
 )
 
 type Broker interface {
@@ -311,48 +316,26 @@ func (service *Service) results(ctx context.Context) error {
 		if picked == nil {
 			return nil
 		}
-		var result struct {
-			Kind           string         `json:"kind"`
-			MessageID      string         `json:"message_id"`
-			Classification Classification `json:"classification"`
-		}
 		raw, _ := json.Marshal(picked.Payload)
-		err = strictJSON(raw, &result)
-		if err == nil {
-			err = result.Classification.Validate()
+		var probe struct {
+			Kind string `json:"kind"`
 		}
-		if err != nil || result.Kind != "personal_inbox.result.v1" {
+		_ = json.Unmarshal(raw, &probe)
+		var invalid bool
+		switch probe.Kind {
+		case "personal_inbox.result.v1":
+			invalid, err = service.classificationResult(ctx, raw)
+		case "personal_inbox.digest_result.v1":
+			invalid, err = service.digestResult(ctx, raw)
+		default:
+			invalid = true
+		}
+		if err != nil {
+			return err
+		}
+		if invalid {
 			if _, err := service.Broker.PublishJSON(ctx, DeadQueue, map[string]any{"guid": picked.GUID, "reason": "invalid_result", "payload": picked.Payload}); err != nil {
 				return err
-			}
-		} else {
-			messages, err := service.Store.messages(ctx, "id=?", result.MessageID)
-			if err != nil {
-				return err
-			}
-			if len(messages) == 0 {
-				if _, err := service.Broker.PublishJSON(ctx, DeadQueue, map[string]any{"guid": picked.GUID, "reason": "unknown_message", "message_id": result.MessageID}); err != nil {
-					return err
-				}
-			}
-			if len(messages) > 0 && messages[0].Classification == nil {
-				message := messages[0]
-				classification := result.Classification
-				// Action always wins, including an action extracted by a model
-				// that mistakenly labelled an order/news email as routine.
-				if strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "" {
-					classification.Category = "action"
-				}
-				if message.Mail.Incomplete && classification.Category != "action" {
-					classification.Category = "review"
-				}
-				if classification.Confidence < 0.90 {
-					classification.Category = "review"
-				}
-				message.Classification = &classification
-				if err := service.Store.saveMessage(ctx, message, service.plan(message)); err != nil {
-					return err
-				}
 			}
 		}
 		if err := service.Broker.Ack(ctx, ResultsQueue, picked.GUID); err != nil {
@@ -360,6 +343,94 @@ func (service *Service) results(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// The first result returns true when the payload is rubbish and belongs in the
+// dead queue; an error is a storage failure worth retrying the whole cycle for.
+func (service *Service) classificationResult(ctx context.Context, raw []byte) (bool, error) {
+	var result struct {
+		Kind           string         `json:"kind"`
+		MessageID      string         `json:"message_id"`
+		Classification Classification `json:"classification"`
+	}
+	if err := strictJSON(raw, &result); err != nil {
+		return true, nil
+	}
+	if err := result.Classification.Validate(); err != nil {
+		return true, nil
+	}
+	messages, err := service.Store.messages(ctx, "id=?", result.MessageID)
+	if err != nil {
+		return false, err
+	}
+	if len(messages) == 0 {
+		return true, nil
+	}
+	if messages[0].Classification != nil {
+		return false, nil
+	}
+	message := messages[0]
+	classification := result.Classification
+	// Action always wins, including an action extracted by a model that
+	// mistakenly labelled an order/news email as routine.
+	if strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "" {
+		classification.Category = "action"
+	}
+	if message.Mail.Incomplete && classification.Category != "action" {
+		classification.Category = "review"
+	}
+	if classification.Confidence < 0.90 {
+		classification.Category = "review"
+	}
+	// Only routine mail is allowed to arrive without a summary, so anything
+	// promoted out of news must have bought one.
+	if classification.Category != "news" && strings.TrimSpace(classification.Summary) == "" {
+		return true, nil
+	}
+	message.Classification = &classification
+	return false, service.Store.saveMessage(ctx, message, service.plan(message))
+}
+
+func (service *Service) digestResult(ctx context.Context, raw []byte) (bool, error) {
+	var result struct {
+		Kind     string       `json:"kind"`
+		DigestID string       `json:"digest_id"`
+		Items    []DigestLine `json:"items"`
+	}
+	if err := strictJSON(raw, &result); err != nil {
+		return true, nil
+	}
+	digests, err := service.Store.digests(ctx, "id=?", result.DigestID)
+	if err != nil {
+		return false, err
+	}
+	if len(digests) == 0 {
+		return true, nil
+	}
+	digest := digests[0]
+	if digest.Lines != nil {
+		return false, nil
+	}
+	// The round-up must account for exactly the membership frozen when it was
+	// opened: a model cannot drop a message, invent one, or list one twice.
+	outstanding := map[string]bool{}
+	for _, id := range digest.Messages {
+		outstanding[id] = true
+	}
+	if len(result.Items) != len(outstanding) {
+		return true, nil
+	}
+	for _, item := range result.Items {
+		if !outstanding[item.Ref] {
+			return true, nil
+		}
+		delete(outstanding, item.Ref)
+		if strings.TrimSpace(item.Line) == "" || len([]rune(item.Line)) > 200 || len([]rune(item.Sender)) > 120 {
+			return true, nil
+		}
+	}
+	digest.Lines = result.Items
+	return false, service.Store.saveDigest(ctx, digest)
 }
 
 // link points at the message in the mail client. The folder segment is
@@ -424,18 +495,147 @@ func (service *Service) plan(message Message) []Effect {
 	return effects
 }
 
+// latestOccurrence is the most recent daily boundary at or before now.
+func latestOccurrence(now time.Time, hour, minute int, location *time.Location) time.Time {
+	local := now.In(location)
+	today := time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 0, 0, location)
+	if today.After(local) {
+		return today.AddDate(0, 0, -1)
+	}
+	return today
+}
+
 func (service *Service) digest(ctx context.Context) error {
-	messages, err := service.Store.messages(ctx, "json_extract(data,'$.classification.category')='news' AND COALESCE(json_extract(data,'$.digest_id'),'')='' AND json_extract(data,'$.created')<=?", service.Now().Unix()-int64(service.Config.DigestSeconds))
+	if err := service.openDigest(ctx); err != nil {
+		return err
+	}
+	if err := service.publishDigests(ctx); err != nil {
+		return err
+	}
+	return service.deliverDigests(ctx)
+}
+
+// openDigest freezes one day's routine mail into a round-up when its send time
+// passes. A day with no routine mail still records the occurrence, so the next
+// newsletter waits for tomorrow instead of firing a digest the moment it lands.
+func (service *Service) openDigest(ctx context.Context) error {
+	location, err := service.Config.Location()
 	if err != nil {
 		return err
 	}
-	// Bounded messages keep every Telegram digest comfortably below its limit.
-	for len(messages) > 0 {
-		size := min(2, len(messages))
-		if err := service.Store.planDigest(ctx, messages[:size], service.Config.DigestTarget, service.Config.DryRun); err != nil {
+	hour, minute, err := service.Config.DigestTime()
+	if err != nil {
+		return err
+	}
+	id := "digest:" + latestOccurrence(service.Now(), hour, minute, location).Format("2006-01-02T15:04")
+	seen, err := service.Store.getMeta(ctx, "digest_occurrence")
+	if err != nil {
+		return err
+	}
+	if seen >= id {
+		return nil
+	}
+	messages, err := service.Store.messages(ctx, "json_extract(data,'$.classification.category')='news' AND COALESCE(json_extract(data,'$.digest_id'),'')=''")
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 {
+		return service.Store.putMeta(ctx, "digest_occurrence", id)
+	}
+	if len(messages) > DigestMaxItems {
+		messages = messages[:DigestMaxItems]
+	}
+	digest := Digest{ID: id, Created: service.Now().Unix()}
+	for _, message := range messages {
+		digest.Messages = append(digest.Messages, message.ID)
+	}
+	return service.Store.createDigest(ctx, digest, messages)
+}
+
+func (service *Service) publishDigests(ctx context.Context) error {
+	digests, err := service.Store.digests(ctx, "json_extract(data,'$.lines') IS NULL AND json_extract(data,'$.published') <= ?", service.Now().Unix()-600)
+	if err != nil {
+		return err
+	}
+	for _, digest := range digests {
+		items := []map[string]any{}
+		for _, id := range digest.Messages {
+			messages, err := service.Store.messages(ctx, "id=?", id)
+			if err != nil {
+				return err
+			}
+			if len(messages) == 0 {
+				continue
+			}
+			// Marketing subjects say nothing ("A little thank you from us"), so
+			// the line has to come from the body. The lead is enough: offers and
+			// announcements put the substance at the top.
+			items = append(items, map[string]any{"ref": id, "from": messages[0].Mail.From,
+				"subject": messages[0].Mail.Subject, "body": limitRunes(messages[0].Mail.Body, DigestBodyChars)})
+		}
+		if len(items) == 0 {
+			digest.Lines = []DigestLine{}
+			if err := service.Store.saveDigest(ctx, digest); err != nil {
+				return err
+			}
+			continue
+		}
+		payload := map[string]any{"kind": "personal_inbox.digest.v1", "digest_id": digest.ID,
+			"work_item_id": "personal-inbox:" + service.Config.Account, "items": items}
+		if _, err := service.Broker.PublishJSON(ctx, TasksQueue, payload); err != nil {
+			return errors.New("personal inbox digest publish failed")
+		}
+		digest.Published = service.Now().Unix()
+		if err := service.Store.saveDigest(ctx, digest); err != nil {
 			return err
 		}
-		messages = messages[size:]
+	}
+	return nil
+}
+
+func (service *Service) digestBody(digest Digest) string {
+	date := strings.TrimPrefix(digest.ID, "digest:")
+	if parsed, err := time.Parse("2006-01-02T15:04", date); err == nil {
+		date = parsed.Format("2 Jan")
+	}
+	body := fmt.Sprintf("Inbox digest — %d since yesterday, %s\n", len(digest.Lines), date)
+	shown := 0
+	for _, line := range digest.Lines {
+		entry := "\n• " + line.Sender + " — " + line.Line
+		if len([]rune(body))+len([]rune(entry)) > 3800 {
+			break
+		}
+		body += entry
+		shown++
+	}
+	if remaining := len(digest.Lines) - shown; remaining > 0 {
+		body += fmt.Sprintf("\n\n+%d more", remaining)
+	}
+	return body
+}
+
+func (service *Service) deliverDigests(ctx context.Context) error {
+	digests, err := service.Store.digests(ctx, "json_extract(data,'$.lines') IS NOT NULL AND json_extract(data,'$.sent')=0")
+	if err != nil {
+		return err
+	}
+	for _, digest := range digests {
+		digest.Sent = true
+		if len(digest.Lines) == 0 {
+			if err := service.Store.saveDigest(ctx, digest); err != nil {
+				return err
+			}
+			continue
+		}
+		status := "pending"
+		if service.Config.DryRun {
+			status = "preview"
+		}
+		effect := Effect{ID: digest.ID + ":telegram", Kind: "telegram", Target: service.Config.DigestTarget,
+			Body: service.digestBody(digest), Status: status}
+		if err := service.Store.completeDigest(ctx, digest, effect); err != nil {
+			return err
+		}
 	}
 	return nil
 }

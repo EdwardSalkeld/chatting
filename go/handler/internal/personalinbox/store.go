@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -75,6 +74,7 @@ func Open(path string) (*Store, error) {
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS inbox_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 		CREATE TABLE IF NOT EXISTS inbox_messages (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 		CREATE TABLE IF NOT EXISTS inbox_effects (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS inbox_digests (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 		CREATE INDEX IF NOT EXISTS inbox_messages_unclassified ON inbox_messages(json_extract(data,'$.classification'),json_extract(data,'$.published'));
 		CREATE INDEX IF NOT EXISTS inbox_messages_digest ON inbox_messages(json_extract(data,'$.classification.category'),json_extract(data,'$.digest_id'),json_extract(data,'$.created'));
 		CREATE INDEX IF NOT EXISTS inbox_effects_status ON inbox_effects(json_extract(data,'$.status'));
@@ -218,33 +218,95 @@ func (store *Store) saveEffect(ctx context.Context, effect Effect) error {
 	return err
 }
 
-func (store *Store) planDigest(ctx context.Context, messages []Message, target string, preview bool) error {
-	if len(messages) == 0 {
-		return nil
-	}
-	effect := Effect{ID: "digest:" + messages[0].ID, Kind: "telegram", Target: target, Status: "pending", Body: "Personal inbox digest\n"}
-	if preview {
-		effect.Status = "preview"
-	}
-	for _, message := range messages {
-		effect.Body += "\n" + message.Mail.Subject + ": " + message.Classification.Summary + "\n"
-	}
+// DigestLine is one message rendered for the daily round-up: who sent it and
+// what it was actually about, which the subject line frequently does not say.
+type DigestLine struct {
+	Ref    string `json:"ref"`
+	Sender string `json:"sender"`
+	Line   string `json:"line"`
+}
+
+type Digest struct {
+	ID        string       `json:"id"`
+	Messages  []string     `json:"messages"`
+	Created   int64        `json:"created"`
+	Published int64        `json:"published"`
+	Lines     []DigestLine `json:"lines,omitempty"`
+	Sent      bool         `json:"sent"`
+}
+
+// createDigest freezes the membership of one digest and stamps every message in
+// it, in one transaction, so a replay cannot regroup messages into a second
+// round-up or leave a message belonging to two.
+func (store *Store) createDigest(ctx context.Context, digest Digest, messages []Message) error {
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := saveJSON(ctx, tx, "inbox_effects", effect.ID, effect); err != nil {
+	if err := saveJSON(ctx, tx, "inbox_digests", digest.ID, digest); err != nil {
 		return err
 	}
 	for _, message := range messages {
-		message.DigestID = effect.ID
+		message.DigestID = digest.ID
 		if err := saveJSON(ctx, tx, "inbox_messages", message.ID, message); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO inbox_meta VALUES ('digest_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", time.Now().Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO inbox_meta VALUES ('digest_occurrence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", digest.ID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// putEffect writes an effect that may not exist yet; saveEffect only updates.
+func putEffect(ctx context.Context, tx *sql.Tx, effect Effect) error {
+	return saveJSON(ctx, tx, "inbox_effects", effect.ID, effect)
+}
+
+// completeDigest records the rendered round-up and the one message that sends
+// it together, so a crash cannot leave a digest marked sent with nothing queued.
+func (store *Store) completeDigest(ctx context.Context, digest Digest, effect Effect) error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := putEffect(ctx, tx, effect); err != nil {
+		return err
+	}
+	if err := saveJSON(ctx, tx, "inbox_digests", digest.ID, digest); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (store *Store) saveDigest(ctx context.Context, digest Digest) error {
+	encoded, err := json.Marshal(digest)
+	if err != nil {
+		return err
+	}
+	_, err = store.db.ExecContext(ctx, "INSERT INTO inbox_digests (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", digest.ID, string(encoded))
+	return err
+}
+
+func (store *Store) digests(ctx context.Context, predicate string, args ...any) ([]Digest, error) {
+	rows, err := store.db.QueryContext(ctx, "SELECT data FROM inbox_digests WHERE "+predicate+" ORDER BY id LIMIT 100", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Digest{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var value Digest
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
 }

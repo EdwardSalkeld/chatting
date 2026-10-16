@@ -11,6 +11,8 @@ from pathlib import Path
 import signal
 import sqlite3
 import threading
+from collections.abc import Callable
+from typing import Any
 
 from app.broker.bbmb_client import BBMBQueueAdapter
 from app.personal_inbox import (
@@ -18,10 +20,35 @@ from app.personal_inbox import (
     RESULTS_QUEUE,
     TASKS_QUEUE,
     classify,
+    digest_lines,
+    validate_digest_task,
     validate_task,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def prepare(
+    task: object, *, jev_key: str, summary_key: str, summary_model: str
+) -> tuple[str, Callable[[], dict[str, Any]]] | None:
+    """The cache key and the work for one task, or None if it is not ours."""
+    if not isinstance(task, dict):
+        return None
+    kind = task.get("kind")
+    if kind == "personal_inbox.classify.v1":
+        validate_task(task)
+        return task["message_id"], lambda: classify(
+            task,
+            jev_key=jev_key,
+            summary_key=summary_key,
+            summary_model=summary_model,
+        )
+    if kind == "personal_inbox.digest.v1":
+        validate_digest_task(task)
+        return task["digest_id"], lambda: digest_lines(
+            task, summary_key=summary_key, summary_model=summary_model
+        )
+    return None
 
 
 def process_one(
@@ -36,12 +63,19 @@ def process_one(
     if picked is None:
         return False
     try:
-        validate_task(picked.payload)
+        prepared = prepare(
+            picked.payload,
+            jev_key=jev_key,
+            summary_key=summary_key,
+            summary_model=summary_model,
+        )
     except (ValueError, TypeError, KeyError):
+        prepared = None
+    if prepared is None:
         broker.publish_json(DEAD_QUEUE, {"guid": picked.guid, "reason": "invalid_task"})
         broker.ack(TASKS_QUEUE, picked.guid)
         return True
-    task_id = picked.payload["message_id"]
+    task_id, work = prepared
     fingerprint = hashlib.sha256(
         json.dumps(picked.payload, sort_keys=True).encode()
     ).hexdigest()
@@ -57,12 +91,7 @@ def process_one(
             return True
         result = json.loads(row[1])
     else:
-        result = classify(
-            picked.payload,
-            jev_key=jev_key,
-            summary_key=summary_key,
-            summary_model=summary_model,
-        )
+        result = work()
         with cache:
             cache.execute(
                 "INSERT INTO classifications VALUES (?,?,?)",

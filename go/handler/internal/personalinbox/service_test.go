@@ -158,7 +158,7 @@ func fixture(t *testing.T) (*Service, *fakeMail, *fakeBroker, *fakePerformer) {
 	broker := &fakeBroker{queues: map[string][]*bbmb.PickedMessage{}, publications: map[string]int{}}
 	performer := &fakePerformer{}
 	config := Config{Account: "main", Backfill: true, OrdersTarget: "orders", ActionTarget: "actions",
-		DigestTarget: "digest", DigestSeconds: 1, LinearTeam: "team", LinkTemplate: DefaultLinkTemplate,
+		DigestTarget: "digest", DigestAt: "08:00", Timezone: "UTC", LinearTeam: "team", LinkTemplate: DefaultLinkTemplate,
 		Folders:  map[string]string{"news": "Triage/News", "order": "Triage/Orders", "action": "Triage/Actions"},
 		MarkRead: []string{"news"}}
 	service := &Service{Config: config, Store: store, Broker: broker, Mail: mail,
@@ -338,33 +338,40 @@ func TestAttachmentsAndDegradedBodiesGoToReview(t *testing.T) {
 	}
 }
 
-func TestNewsIsFiledAndDigestedButNotAlerted(t *testing.T) {
+func TestNewsIsFiledAndNeverAlertedIndividually(t *testing.T) {
 	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
 	if err := service.ingest(ctx); err != nil {
 		t.Fatal(err)
 	}
-	message := oneMessage(t, service)
-	message.Created -= 10
-	if err := service.Store.saveMessage(ctx, message, nil); err != nil {
-		t.Fatal(err)
-	}
-	broker.result("Stm4", Classification{Category: "news", Summary: "A newsletter", Confidence: .99})
+	broker.result("Stm4", Classification{Category: "news", Confidence: .99})
 	if err := service.Cycle(ctx); err != nil {
 		t.Fatal(err)
-	}
-	kinds := map[string]int{}
-	for _, call := range performer.calls {
-		kinds[call.Kind]++
-	}
-	// A filing and a digest, but no per-newsletter alert.
-	if kinds["file"] != 1 || kinds["telegram"] != 1 {
-		t.Fatalf("effects %+v", performer.calls)
 	}
 	for _, call := range performer.calls {
 		if call.Kind == "telegram" && call.Target != "digest" {
 			t.Fatalf("news alerted outside the digest: %+v", call)
 		}
+	}
+	filed := 0
+	for _, call := range performer.calls {
+		if call.Kind == "file" && call.Target == "Triage/News" {
+			filed++
+		}
+	}
+	if filed != 1 {
+		t.Fatalf("news not filed: %+v", performer.calls)
+	}
+}
+
+func TestRoutineNewsNeedsNoSummary(t *testing.T) {
+	// The digest writes the line, so a news classification with no summary is
+	// valid; anything promoted out of news is not.
+	if err := (Classification{Category: "news", Confidence: .99}).Validate(); err != nil {
+		t.Fatalf("news without a summary rejected: %v", err)
+	}
+	if err := (Classification{Category: "order", Confidence: .99}).Validate(); err == nil {
+		t.Fatal("order without a summary accepted")
 	}
 }
 
@@ -487,5 +494,163 @@ func TestPublishFailureKeepsTheMessageForRetry(t *testing.T) {
 	}
 	if oneMessage(t, service).Published == 0 {
 		t.Fatal("retry did not publish")
+	}
+}
+
+// classifyAsNews ingests the fixture message and marks it routine.
+func classifyAsNews(t *testing.T, service *Service, broker *fakeBroker) {
+	t.Helper()
+	ctx := context.Background()
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	broker.result("Stm4", Classification{Category: "news", Confidence: .99})
+	if err := service.results(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func digestTask(t *testing.T, broker *fakeBroker) map[string]any {
+	t.Helper()
+	for _, picked := range broker.queues[TasksQueue] {
+		if picked.Payload["kind"] == "personal_inbox.digest.v1" {
+			return picked.Payload
+		}
+	}
+	t.Fatal("no digest task published")
+	return nil
+}
+
+func TestDigestFreezesTheDayAndAsksForOneBatch(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	ctx := context.Background()
+	classifyAsNews(t, service, broker)
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	payload := digestTask(t, broker)
+	items := payload["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["ref"] != "Stm4" {
+		t.Fatalf("items %+v", items)
+	}
+	// The line has to come from the body: marketing subjects say nothing.
+	if items[0]["body"] != "Thanks for your order." {
+		t.Fatalf("body not sent for summarising: %+v", items[0])
+	}
+	// Membership is frozen, so a second pass neither re-opens nor re-publishes.
+	before := broker.publications[TasksQueue]
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if broker.publications[TasksQueue] != before {
+		t.Fatal("digest re-published within its own window")
+	}
+}
+
+func TestDigestSendsOneMessageWithPerSenderLines(t *testing.T) {
+	service, _, broker, performer := fixture(t)
+	ctx := context.Background()
+	classifyAsNews(t, service, broker)
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	broker.queues[ResultsQueue] = append(broker.queues[ResultsQueue], &bbmb.PickedMessage{GUID: "d1",
+		Payload: map[string]any{"kind": "personal_inbox.digest_result.v1",
+			"digest_id": digestTask(t, broker)["digest_id"],
+			"items":     []any{map[string]any{"ref": "Stm4", "sender": "Echelon Coffee", "line": "order shipped"}}}})
+	if err := service.results(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.perform(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sent := []Effect{}
+	for _, call := range performer.calls {
+		if call.Target == "digest" {
+			sent = append(sent, call)
+		}
+	}
+	if len(sent) != 1 {
+		t.Fatalf("want one digest message, got %d: %+v", len(sent), performer.calls)
+	}
+	if !strings.Contains(sent[0].Body, "• Echelon Coffee — order shipped") {
+		t.Fatalf("digest body:\n%s", sent[0].Body)
+	}
+}
+
+func TestDigestRejectsLinesThatDoNotMatchItsMembership(t *testing.T) {
+	cases := map[string][]any{
+		"dropped a message": {},
+		"invented a message": {
+			map[string]any{"ref": "Stm4", "sender": "Echelon", "line": "ok"},
+			map[string]any{"ref": "nope", "sender": "Ghost", "line": "ok"},
+		},
+		"unknown reference": {map[string]any{"ref": "nope", "sender": "Ghost", "line": "ok"}},
+		"empty line":        {map[string]any{"ref": "Stm4", "sender": "Echelon", "line": "  "}},
+	}
+	for name, items := range cases {
+		t.Run(name, func(t *testing.T) {
+			service, _, broker, _ := fixture(t)
+			ctx := context.Background()
+			classifyAsNews(t, service, broker)
+			if err := service.digest(ctx); err != nil {
+				t.Fatal(err)
+			}
+			broker.queues[ResultsQueue] = append(broker.queues[ResultsQueue], &bbmb.PickedMessage{GUID: "d1",
+				Payload: map[string]any{"kind": "personal_inbox.digest_result.v1",
+					"digest_id": digestTask(t, broker)["digest_id"], "items": items}})
+			if err := service.results(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if broker.publications[DeadQueue] != 1 {
+				t.Fatal("mismatched digest accepted")
+			}
+			digests, _ := service.Store.digests(ctx, "1=1")
+			if len(digests) != 1 || digests[0].Lines != nil {
+				t.Fatalf("digest recorded lines anyway: %+v", digests)
+			}
+		})
+	}
+}
+
+func TestQuietDayRecordsTheOccurrenceWithoutSending(t *testing.T) {
+	service, _, broker, performer := fixture(t)
+	ctx := context.Background()
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(performer.calls) != 0 || broker.publications[TasksQueue] != 0 {
+		t.Fatal("quiet day sent something")
+	}
+	seen, _ := service.Store.getMeta(ctx, "digest_occurrence")
+	if seen == "" {
+		t.Fatal("quiet day did not record its occurrence")
+	}
+	// A newsletter arriving after the send time waits for tomorrow rather than
+	// firing a digest the moment it lands.
+	classifyAsNews(t, service, broker)
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if broker.publications[TasksQueue] != 0 {
+		t.Fatal("late newsletter fired its own digest")
+	}
+}
+
+func TestLatestOccurrenceRollsBackBeforeTheSendTime(t *testing.T) {
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skip("no tzdata")
+	}
+	morning := time.Date(2026, 10, 16, 7, 30, 0, 0, london)
+	if got := latestOccurrence(morning, 8, 0, london); got.Day() != 15 {
+		t.Fatalf("before the send time should use yesterday, got %s", got)
+	}
+	evening := time.Date(2026, 10, 16, 20, 0, 0, 0, london)
+	if got := latestOccurrence(evening, 8, 0, london); got.Day() != 16 {
+		t.Fatalf("after the send time should use today, got %s", got)
 	}
 }
