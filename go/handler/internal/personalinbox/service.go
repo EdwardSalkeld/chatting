@@ -32,6 +32,9 @@ const (
 	// much of its body to the single batch call that writes the round-up.
 	DigestMaxItems  = 60
 	DigestBodyChars = 2000
+	// A message republished this many times without an answer is not slow, it
+	// is stuck, and the cycle says so rather than retrying in silence.
+	StuckAttempts = 2
 )
 
 type Broker interface {
@@ -82,6 +85,7 @@ type Trace struct {
 	RequiresAction bool    `json:"requires_action,omitempty"`
 	HasDeadline    bool    `json:"has_deadline,omitempty"`
 	Suspicious     bool    `json:"suspicious,omitempty"`
+	TriageFailed   bool    `json:"triage_failed,omitempty"`
 	Summarised     bool    `json:"summarised,omitempty"`
 }
 
@@ -322,9 +326,20 @@ func (service *Service) publish(ctx context.Context) error {
 			return errors.New("personal inbox task publish failed")
 		}
 		message.Published = service.Now().Unix()
+		message.Attempts++
 		if err := service.Store.saveMessage(ctx, message, nil); err != nil {
 			return err
 		}
+	}
+	// Read from stored state rather than from what this pass happened to
+	// republish, so the signal stays up between windows instead of blinking
+	// green until the next one comes round.
+	_, _, stuck, err := service.Store.awaiting(ctx, service.Now().Unix())
+	if err != nil {
+		return err
+	}
+	if stuck > 0 {
+		return fmt.Errorf("%d personal inbox messages have no classification after %d attempts", stuck, StuckAttempts)
 	}
 	return nil
 }
@@ -357,6 +372,9 @@ func (service *Service) results(ctx context.Context) error {
 		}
 		if invalid {
 			if _, err := service.Broker.PublishJSON(ctx, DeadQueue, map[string]any{"guid": picked.GUID, "reason": "invalid_result", "payload": picked.Payload}); err != nil {
+				return err
+			}
+			if err := service.Store.countDeadLetter(ctx); err != nil {
 				return err
 			}
 		}
@@ -398,6 +416,8 @@ func (service *Service) classificationResult(ctx context.Context, raw []byte) (b
 	}
 	// One place settles the category, and records which rule did it.
 	switch {
+	case classification.Trace.TriageFailed:
+		classification.Category, classification.Trace.Reason = "review", "triage_unavailable"
 	case classification.Trace.Suspicious:
 		classification.Category, classification.Trace.Reason = "review", "injection_suspected"
 	case strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "":

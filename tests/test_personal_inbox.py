@@ -12,13 +12,16 @@ from unittest.mock import patch
 
 from app.personal_inbox import (
     CATEGORIES,
+    DEAD_QUEUE,
     YES_NO,
     JEV_ENDPOINT,
     TASKS_QUEUE,
     RESULTS_QUEUE,
+    TRIAGE_QUESTIONS,
     classify,
     codex_structured,
     digest_lines,
+    summarize,
     validate_digest_task,
     validate_task,
 )
@@ -160,14 +163,41 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertFalse(c["trace"]["suspicious"])
         self.assertTrue(c["trace"]["summarised"])
 
-    def test_losing_jev_fails_closed(self):
+    def test_losing_jev_fails_closed_without_crying_injection(self):
         for answer in [TimeoutError(), {}, jev_answer(confidence=float("nan"))]:
             with self.subTest(answer=answer):
                 result, post = self.classify_with([answer])
                 c = result["classification"]
                 self.assertEqual(c["category"], "review")
-                self.assertTrue(c["trace"]["suspicious"])
                 post.codex.assert_not_called()
+                # Both fail closed, but a reader must be able to tell an
+                # outage from an attack.
+                self.assertTrue(c["trace"]["triage_failed"])
+                self.assertFalse(c["trace"]["suspicious"])
+                self.assertIn("unavailable", c["summary"])
+
+    def test_a_real_injection_says_so(self):
+        result, post = self.classify_with([jev_answer("news", injection="yes")])
+        c = result["classification"]
+        self.assertTrue(c["trace"]["suspicious"])
+        self.assertFalse(c["trace"]["triage_failed"])
+        self.assertIn("automated system", c["summary"])
+        post.codex.assert_not_called()
+
+    def test_surveys_and_feedback_requests_are_named_as_news(self):
+        # The model had no bucket for these and sat at low confidence, which
+        # held a third of a real mailbox in review. All three prompts that can
+        # route a message to action have to agree.
+        self.assertIn("survey", CATEGORIES["news"])
+        self.assertIn("feedback", CATEGORIES["news"])
+        self.assertIn("not acting", CATEGORIES["action"])
+        action_question = TRIAGE_QUESTIONS["requires_action"]["instructions"]
+        self.assertIn("survey", action_question)
+        with patch(
+            "app.personal_inbox.codex_structured", return_value=summary_answer()
+        ) as codex:
+            summarize(mail_task()["mail"], "model")
+        self.assertIn("feedback", codex.call_args.args[0])
 
     def test_doubtful_routine_mail_still_buys_a_summary(self):
         # Only a confident routine reading skips the summary, so anything the
@@ -489,3 +519,76 @@ class PersonalInboxCollectorTests(unittest.TestCase):
             self.assertEqual(collector.jev_key, "shared-with-the-worker")
             self.assertEqual(collector.summary_model, "configured-model")
             collector.cache.close()
+
+
+class WorkerCacheTests(unittest.TestCase):
+    def cache(self):
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.execute(
+            "CREATE TABLE classifications "
+            "(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL)"
+        )
+        return connection
+
+    def run_one(self, cache, task, answer):
+        class Broker:
+            published = []
+
+            def pickup_json(self, queue, **kwargs):
+                return (
+                    PickedMessage(guid="g", payload=task)
+                    if queue == TASKS_QUEUE
+                    else None
+                )
+
+            def publish_json(self, queue, payload):
+                self.published.append((queue, payload))
+
+            def ack(self, queue, guid):
+                pass
+
+        broker = Broker()
+        with patch("app.worker.personal_inbox.classify", return_value=answer) as model:
+            process_one(broker, cache, jev_key="j", summary_model="m")
+        return broker, model
+
+    def test_a_changed_body_is_reclassified_not_refused(self):
+        # The same message reads differently once the parser improves. Refusing
+        # it leaves the handler asking forever and never getting an answer.
+        cache = self.cache()
+        task = mail_task()
+        first = {
+            "kind": "personal_inbox.result.v1",
+            "message_id": task["message_id"],
+            "classification": {"category": "news", "confidence": 0.95},
+        }
+        self.run_one(cache, task, first)
+
+        task["mail"]["body"] = "the same email, now without the markup"
+        second = {
+            "kind": "personal_inbox.result.v1",
+            "message_id": task["message_id"],
+            "classification": {"category": "order", "confidence": 0.99},
+        }
+        broker, model = self.run_one(cache, task, second)
+
+        model.assert_called_once()
+        results = [p for q, p in broker.published if q == RESULTS_QUEUE]
+        self.assertEqual(results[-1]["classification"]["category"], "order")
+        self.assertNotIn(DEAD_QUEUE, [q for q, _ in broker.published])
+        # The stale row is replaced, so the next identical ask is a cache hit.
+        rows = cache.execute("SELECT count(*) FROM classifications").fetchone()[0]
+        self.assertEqual(rows, 1)
+
+    def test_an_unchanged_body_still_replays_without_calling_a_model(self):
+        cache = self.cache()
+        task = mail_task()
+        answer = {
+            "kind": "personal_inbox.result.v1",
+            "message_id": task["message_id"],
+            "classification": {"category": "news", "confidence": 0.95},
+        }
+        self.run_one(cache, task, answer)
+        _, model = self.run_one(cache, task, answer)
+        model.assert_not_called()

@@ -765,3 +765,75 @@ func TestHTMLBodiesAreConvertedAndRecorded(t *testing.T) {
 		t.Fatal("truncation treated as a defect in the mail")
 	}
 }
+
+func TestMailThatNeverComesBackIsReportedNotRetriedInSilence(t *testing.T) {
+	service, _, _, _ := fixture(t)
+	ctx := context.Background()
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Unix(2000000000, 0)
+	service.Now = func() time.Time { return clock }
+	// Nothing ever answers, and the republish window keeps passing.
+	for attempt := 1; attempt <= StuckAttempts; attempt++ {
+		if err := service.publish(ctx); err != nil {
+			t.Fatalf("attempt %d reported a problem too early: %v", attempt, err)
+		}
+		clock = clock.Add(601 * time.Second)
+	}
+	err := service.publish(ctx)
+	if err == nil {
+		t.Fatal("a message with no classification after repeated attempts was not reported")
+	}
+	if !strings.Contains(err.Error(), "no classification") {
+		t.Fatalf("unhelpful error: %v", err)
+	}
+	count, oldest, stuck, storeErr := service.Store.awaiting(ctx, clock.Unix())
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if count != 1 || stuck != 1 || oldest <= 0 {
+		t.Fatalf("awaiting count=%d stuck=%d oldest=%d", count, stuck, oldest)
+	}
+	// The failure has to reach the status endpoint, not just the return value.
+	if err := service.Cycle(ctx); err == nil {
+		t.Fatal("the cycle reported healthy while mail was stuck")
+	}
+	health, _ := service.Store.stepHealth(ctx)
+	if health["publish"]["error"] == "" {
+		t.Fatalf("publish reported healthy: %+v", health["publish"])
+	}
+}
+
+func TestDeadLetteredResultsAreCounted(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	ctx := context.Background()
+	broker.queues[ResultsQueue] = append(broker.queues[ResultsQueue],
+		&bbmb.PickedMessage{GUID: "junk", Payload: map[string]any{"kind": "nonsense"}})
+	if err := service.results(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := service.Store.getMeta(ctx, "dead_letters"); count != "1" {
+		t.Fatalf("dead letters counted as %q", count)
+	}
+}
+
+func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		trace  *Trace
+		reason string
+	}{
+		{"classifier unavailable", &Trace{TriageFailed: true}, "triage_unavailable"},
+		{"mail aimed at the machine", &Trace{Suspicious: true}, "injection_suspected"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, _, broker, _ := fixture(t)
+			got := classifyOnce(t, service, broker,
+				Classification{Category: "review", Summary: "x", Confidence: 0, Trace: test.trace}).Classification
+			if got.Trace.Reason != test.reason {
+				t.Fatalf("reason %q, want %q", got.Trace.Reason, test.reason)
+			}
+		})
+	}
+}

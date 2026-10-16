@@ -25,6 +25,7 @@ type Message struct {
 	Classification *Classification `json:"classification,omitempty"`
 	Created        int64           `json:"created"`
 	Published      int64           `json:"published"`
+	Attempts       int             `json:"attempts,omitempty"`
 	DigestID       string          `json:"digest_id,omitempty"`
 }
 
@@ -127,6 +128,32 @@ func (store *Store) stepHealth(ctx context.Context) (map[string]map[string]strin
 		health[step][strings.TrimPrefix(field, "step_")] = value
 	}
 	return health, rows.Err()
+}
+
+// countDeadLetter keeps a running total, because a message pushed to the dead
+// queue is otherwise invisible to anyone reading the status endpoint.
+func (store *Store) countDeadLetter(ctx context.Context) error {
+	_, err := store.db.ExecContext(ctx,
+		"INSERT INTO inbox_meta VALUES ('dead_letters','1') ON CONFLICT(key) "+
+			"DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)")
+	return err
+}
+
+// awaiting reports mail still waiting for a classification: how much, how long
+// the oldest has waited, and how many have been asked for more than once.
+func (store *Store) awaiting(ctx context.Context, now int64) (count int, oldest int64, stuck int, err error) {
+	row := store.db.QueryRowContext(ctx, `SELECT count(*),
+		COALESCE(MIN(json_extract(data,'$.created')),0),
+		COALESCE(SUM(CASE WHEN COALESCE(json_extract(data,'$.attempts'),0) > ? THEN 1 ELSE 0 END),0)
+		FROM inbox_messages WHERE json_extract(data,'$.classification') IS NULL`, StuckAttempts)
+	var created int64
+	if err = row.Scan(&count, &created, &stuck); err != nil {
+		return 0, 0, 0, err
+	}
+	if count > 0 && created > 0 {
+		oldest = now - created
+	}
+	return count, oldest, stuck, nil
 }
 
 func (store *Store) putMeta(ctx context.Context, key, value string) error {

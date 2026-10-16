@@ -78,19 +78,19 @@ def process_one(
     row = cache.execute(
         "SELECT fingerprint, result FROM classifications WHERE id=?", (task_id,)
     ).fetchone()
-    if row is not None:
-        if row[0] != fingerprint:
-            broker.publish_json(
-                DEAD_QUEUE, {"guid": picked.guid, "reason": "identity_conflict"}
-            )
-            broker.ack(TASKS_QUEUE, picked.guid)
-            return True
+    if row is not None and row[0] == fingerprint:
         result = json.loads(row[1])
     else:
+        # A cached answer to a different question is stale, not suspicious:
+        # the same message reads differently when the parser improves. The
+        # cache saves a model call, it does not decide identity — the handler
+        # does that, by keeping only the first classification per message. So
+        # answer the question actually asked and replace the stale row.
         result = work()
         with cache:
             cache.execute(
-                "INSERT INTO classifications VALUES (?,?,?)",
+                "INSERT INTO classifications VALUES (?,?,?) ON CONFLICT(id) "
+                "DO UPDATE SET fingerprint=excluded.fingerprint, result=excluded.result",
                 (task_id, fingerprint, json.dumps(result)),
             )
     # A publish/ACK failure replays the saved result rather than calling models
