@@ -120,29 +120,53 @@ name alone when that name is unambiguous.
 
 Classification runs as a thread of the ordinary worker, not a separate service.
 It shares that process and its existing `TYPESAFE_API_KEY`, but not its
-executor: personal mail has its own queue and never enters `chatting.tasks.v1`,
-and the only thing the thread can do with an email is ask two fixed HTTPS
-endpoints about it and publish the answer. It touches no mailbox, no
-filesystem beyond its own cache, and runs no classification response as code.
+executor: personal mail has its own queue and never enters `chatting.tasks.v1`.
 
-The thread starts only when all four of these are set, so the default is off:
+The thread starts only when both of these are set, so the default is off:
 
 - `TYPESAFE_API_KEY` — the worker already has this for model routing.
-- `CHATTING_PERSONAL_SUMMARY_API_KEY` and `CHATTING_PERSONAL_SUMMARY_MODEL` —
-  a model supporting Responses API structured outputs. This is the one
-  credential the worker did not already hold.
 - `CHATTING_PERSONAL_CACHE_PATH` — where model output is cached before
   publication, so a failed publish or ACK replays the saved answer rather than
   paying for the call again.
 
-Both model requests use `tools: []`, `tool_choice: none`, `store: false` and no
-previous conversation. Tool calls, refusals and incomplete outputs are rejected.
-Jev or summarizer failures produce a review alert, never automatic filing.
+`CHATTING_PERSONAL_SUMMARY_MODEL` is optional and passed to Codex as `-m`;
+without it Codex uses its own configured default.
 
-Mail is sent to TypeSafe for classification and to the summary provider for the
-lines; this must be part of the operator's rollout decision. Provider calls are
-stateless, but local message records and the cache persist; v1 has no automatic
-retention pruning. Protect the databases and backups as personal email data.
+### Why there is no second API key
+
+Jev classifies, and summaries are written by the locally installed Codex CLI
+using its existing login. There is no second provider and no second credential.
+
+Codex is an agent and its shell tool cannot be disabled — `tools.shell=false`
+is accepted and then ignored. Two things stand in front of it:
+
+1. **Jev screens every email first.** One of its questions asks whether the
+   email contains text addressed to an automated system: instructions to ignore
+   previous instructions, to run a command, to reveal a file or credential, or
+   to change how the mail is handled. Anything but a confident "no" is withheld
+   from Codex entirely and surfaced to the owner as a review alert instead.
+   A failed or unavailable Jev call fails closed the same way, because Jev is
+   the only thing standing between an untrusted email and an agent with a shell.
+2. **Codex runs locked down.** `--ephemeral` (no session files on disk),
+   `--ignore-user-config`, `--ignore-rules`, `--sandbox read-only`, an empty
+   working directory, and an environment with `TYPESAFE_API_KEY` and every
+   `CHATTING_*` variable removed. Output is constrained by `--output-schema`
+   and re-validated by the handler.
+
+Whether the read-only sandbox also blocks network egress depends on the host
+sandbox implementation, which differs between macOS and Linux. Nothing here
+relies on it. Verify it on the machine you actually deploy to before trusting
+it, with a read-only `codex exec` that attempts an outbound request.
+
+Routing is never Codex's to decide. Jev sets the category, the handler chooses
+the folder and destinations from its own configuration, and the handler
+performs every effect itself. A hostile email can at worst affect the wording
+of text its own owner reads.
+
+Mail is sent to TypeSafe for classification and to Codex for summarising; this
+must be part of the operator's rollout decision. Provider calls are stateless,
+but local message records and the cache persist; v1 has no automatic retention
+pruning. Protect the databases and backups as personal email data.
 
 ## The daily digest
 

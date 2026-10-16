@@ -34,7 +34,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def prepare(
-    task: object, *, jev_key: str, summary_key: str, summary_model: str
+    task: object, *, jev_key: str, summary_model: str
 ) -> tuple[str, Callable[[], dict[str, Any]]] | None:
     """The cache key and the work for one task, or None if it is not ours."""
     if not isinstance(task, dict):
@@ -43,15 +43,12 @@ def prepare(
     if kind == "personal_inbox.classify.v1":
         validate_task(task)
         return task["message_id"], lambda: classify(
-            task,
-            jev_key=jev_key,
-            summary_key=summary_key,
-            summary_model=summary_model,
+            task, jev_key=jev_key, summary_model=summary_model
         )
     if kind == "personal_inbox.digest.v1":
         validate_digest_task(task)
         return task["digest_id"], lambda: digest_lines(
-            task, summary_key=summary_key, summary_model=summary_model
+            task, summary_model=summary_model
         )
     return None
 
@@ -61,19 +58,13 @@ def process_one(
     cache: sqlite3.Connection,
     *,
     jev_key: str,
-    summary_key: str,
     summary_model: str,
 ) -> bool:
     picked = broker.pickup_json(TASKS_QUEUE, timeout_seconds=120, wait_seconds=1)
     if picked is None:
         return False
     try:
-        prepared = prepare(
-            picked.payload,
-            jev_key=jev_key,
-            summary_key=summary_key,
-            summary_model=summary_model,
-        )
+        prepared = prepare(picked.payload, jev_key=jev_key, summary_model=summary_model)
     except (ValueError, TypeError, KeyError):
         prepared = None
     if prepared is None:
@@ -127,7 +118,6 @@ class PersonalInboxCollector:
     broker: BBMBQueueAdapter
     cache: sqlite3.Connection
     jev_key: str
-    summary_key: str
     summary_model: str
     _stop: Event = field(init=False, default_factory=Event)
     _thread: Thread | None = field(init=False, default=None)
@@ -152,7 +142,6 @@ class PersonalInboxCollector:
                     self.broker,
                     self.cache,
                     jev_key=self.jev_key,
-                    summary_key=self.summary_key,
                     summary_model=self.summary_model,
                 )
             except Exception as error:  # noqa: BLE001
@@ -167,17 +156,16 @@ def collector_from_environment(
 ) -> PersonalInboxCollector | None:
     """None when the personal inbox is not configured, which is the default."""
     jev_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    summary_key = os.environ.get("CHATTING_PERSONAL_SUMMARY_API_KEY", "").strip()
-    summary_model = os.environ.get("CHATTING_PERSONAL_SUMMARY_MODEL", "").strip()
     cache_path = os.environ.get("CHATTING_PERSONAL_CACHE_PATH", "").strip()
-    if not (jev_key and summary_key and summary_model and cache_path):
+    if not (jev_key and cache_path):
         return None
+    # Summaries use the logged-in Codex CLI, so an empty model is fine: Codex
+    # falls back to its own configured default.
     return PersonalInboxCollector(
         broker=broker,
         cache=open_cache(cache_path),
         jev_key=jev_key,
-        summary_key=summary_key,
-        summary_model=summary_model,
+        summary_model=os.environ.get("CHATTING_PERSONAL_SUMMARY_MODEL", "").strip(),
     )
 
 

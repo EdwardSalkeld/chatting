@@ -14,10 +14,10 @@ from app.personal_inbox import (
     CATEGORIES,
     YES_NO,
     JEV_ENDPOINT,
-    SUMMARY_ENDPOINT,
     TASKS_QUEUE,
     RESULTS_QUEUE,
     classify,
+    codex_structured,
     digest_lines,
     validate_digest_task,
     validate_task,
@@ -76,66 +76,77 @@ def choice_answer(choice, criteria, confidence):
     }
 
 
-def jev_answer(category="order", confidence=0.99, action="no", deadline="no"):
+def jev_answer(
+    category="order", confidence=0.99, action="no", deadline="no", injection="no"
+):
     return {
         "answers": {
             "category": choice_answer(category, CATEGORIES, confidence),
             "requires_action": choice_answer(action, YES_NO, 0.99),
             "has_deadline": choice_answer(deadline, YES_NO, 0.99),
+            "prompt_injection": choice_answer(injection, YES_NO, 0.99),
         }
     }
 
 
 def summary_answer(action="", deadline=""):
-    return {
-        "status": "completed",
-        "output": [
-            {
-                "type": "message",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": json.dumps(
-                            {
-                                "summary": "Order confirmed.",
-                                "action": action,
-                                "deadline": deadline,
-                            }
-                        ),
-                    }
-                ],
-            }
-        ],
-    }
+    return {"summary": "Order confirmed.", "action": action, "deadline": deadline}
 
 
 class PersonalInboxTests(unittest.TestCase):
     def classify_with(self, answers, task=None):
-        with patch("app.personal_inbox.post", side_effect=answers) as post:
-            result = classify(
-                task or mail_task(),
-                jev_key="jev-test",
-                summary_key="summary-test",
-                summary_model="configured-model",
-            )
+        """answers[0] is Jev's reply; anything after it is what Codex returns."""
+        jev, summaries = answers[0], answers[1:]
+        with patch("app.personal_inbox.post", side_effect=[jev]) as post:
+            with patch(
+                "app.personal_inbox.codex_structured", side_effect=summaries or [{}]
+            ) as codex:
+                result = classify(
+                    task or mail_task(),
+                    jev_key="jev-test",
+                    summary_model="configured-model",
+                )
+        post.codex = codex
         return result, post
 
-    def test_jev_classifies_and_summary_has_no_tools_or_history(self):
+    def test_jev_triages_and_codex_sees_only_the_mail(self):
         result, post = self.classify_with([jev_answer(), summary_answer()])
         self.assertEqual(result["classification"]["category"], "order")
-        jev, summary = post.call_args_list
+        jev = post.call_args
         self.assertEqual(jev.args[0], JEV_ENDPOINT)
-        self.assertEqual(jev.args[2]["questions"]["category"]["type"], "choice")
         self.assertEqual(jev.args[2]["state"], mail_task()["mail"])
-        self.assertEqual(summary.args[0], SUMMARY_ENDPOINT)
-        payload = summary.args[2]
-        self.assertEqual(payload["model"], "configured-model")
-        self.assertEqual(payload["tools"], [])
-        self.assertEqual(payload["tool_choice"], "none")
-        self.assertFalse(payload["store"])
-        self.assertNotIn("previous_response_id", payload)
-        self.assertNotIn("message_id", json.loads(payload["input"][0]["content"]))
-        self.assertTrue(payload["text"]["format"]["strict"])
+        for question in (
+            "category",
+            "requires_action",
+            "has_deadline",
+            "prompt_injection",
+        ):
+            self.assertEqual(jev.args[2]["questions"][question]["type"], "choice")
+        sent = post.codex.call_args
+        self.assertEqual(sent.args[1], mail_task()["mail"])
+        self.assertEqual(sent.kwargs["model"], "configured-model")
+        self.assertNotIn("message_id", json.dumps(sent.args[1]))
+
+    def test_suspicious_mail_never_reaches_codex(self):
+        result, post = self.classify_with([jev_answer("news", injection="yes")])
+        self.assertEqual(result["classification"]["category"], "review")
+        self.assertEqual(result["classification"]["confidence"], 0.0)
+        self.assertIn("aimed at", result["classification"]["summary"])
+        post.codex.assert_not_called()
+
+    def test_unsure_about_injection_also_withholds_the_mail(self):
+        answer = jev_answer("news")
+        answer["answers"]["prompt_injection"] = choice_answer("no", YES_NO, 0.5)
+        result, post = self.classify_with([answer])
+        self.assertEqual(result["classification"]["category"], "review")
+        post.codex.assert_not_called()
+
+    def test_a_failed_triage_withholds_the_mail_too(self):
+        # Jev is the only thing standing between an untrusted email and an
+        # agent with a shell, so losing it must fail closed.
+        result, post = self.classify_with([TimeoutError()])
+        self.assertEqual(result["classification"]["category"], "review")
+        post.codex.assert_not_called()
 
     def test_uncertainty_failure_and_attachments_stay_for_review(self):
         for answer in [
@@ -202,49 +213,28 @@ class PersonalInboxTests(unittest.TestCase):
         answer = jev_answer("news")
         answer["answers"]["requires_action"] = choice_answer("no", YES_NO, 0.5)
         result, post = self.classify_with([answer, summary_answer()])
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.codex.call_count, 1)
         self.assertEqual(result["classification"]["summary"], "Order confirmed.")
 
     def test_digest_summarises_the_whole_day_in_one_call(self):
         task = digest_task()
         answer = {
-            "status": "completed",
-            "output": [
+            "items": [
                 {
-                    "type": "message",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": json.dumps(
-                                {
-                                    "items": [
-                                        {
-                                            "ref": "Stm4",
-                                            "sender": "Saal Digital",
-                                            "line": "50% off print orders",
-                                        },
-                                        {
-                                            "ref": "Stm5",
-                                            "sender": "Namecheap",
-                                            "line": ".com prices rising",
-                                        },
-                                    ]
-                                }
-                            ),
-                        }
-                    ],
-                }
-            ],
+                    "ref": "Stm4",
+                    "sender": "Saal Digital",
+                    "line": "50% off print orders",
+                },
+                {"ref": "Stm5", "sender": "Namecheap", "line": ".com prices rising"},
+            ]
         }
-        with patch("app.personal_inbox.post", return_value=answer) as post:
-            result = digest_lines(task, summary_key="s", summary_model="m")
-        self.assertEqual(post.call_count, 1)
+        with patch("app.personal_inbox.codex_structured", return_value=answer) as codex:
+            result = digest_lines(task, summary_model="m")
+        self.assertEqual(codex.call_count, 1)
         self.assertEqual(result["kind"], "personal_inbox.digest_result.v1")
         self.assertEqual([item["ref"] for item in result["items"]], ["Stm4", "Stm5"])
         # The bodies are what the model reads: subjects alone say nothing.
-        sent = json.loads(post.call_args.args[2]["input"][0]["content"])
-        self.assertEqual(len(sent["emails"]), 2)
-        self.assertEqual(post.call_args.args[2]["tool_choice"], "none")
+        self.assertEqual(len(codex.call_args.args[1]["emails"]), 2)
 
     def test_digest_rejects_a_response_that_loses_or_invents_emails(self):
         for items in [
@@ -259,24 +249,12 @@ class PersonalInboxTests(unittest.TestCase):
                 {"ref": "Stm5", "sender": "N", "line": "ok"},
             ],
         ]:
-            answer = {
-                "status": "completed",
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [
-                            {
-                                "type": "output_text",
-                                "text": json.dumps({"items": items}),
-                            }
-                        ],
-                    }
-                ],
-            }
             with self.subTest(items=items):
-                with patch("app.personal_inbox.post", return_value=answer):
+                with patch(
+                    "app.personal_inbox.codex_structured", return_value={"items": items}
+                ):
                     with self.assertRaises(ValueError):
-                        digest_lines(digest_task(), summary_key="s", summary_model="m")
+                        digest_lines(digest_task(), summary_model="m")
 
     def test_digest_task_fields_are_strict(self):
         task = digest_task()
@@ -337,11 +315,9 @@ class PersonalInboxTests(unittest.TestCase):
         }
         with patch("app.worker.personal_inbox.classify", return_value=result) as model:
             with self.assertRaises(OSError):
-                process_one(
-                    broker, cache, jev_key="j", summary_key="s", summary_model="m"
-                )
+                process_one(broker, cache, jev_key="j", summary_model="m")
             broker.fail_ack = False
-            process_one(broker, cache, jev_key="j", summary_key="s", summary_model="m")
+            process_one(broker, cache, jev_key="j", summary_model="m")
         self.assertEqual(model.call_count, 1)
         self.assertEqual(
             broker.outputs, [(RESULTS_QUEUE, result), (RESULTS_QUEUE, result)]
@@ -391,9 +367,7 @@ class PersonalInboxBrokerTests(unittest.TestCase):
                     "app.personal_inbox.post",
                     side_effect=[jev_answer(), summary_answer()],
                 ) as providers:
-                    process_one(
-                        broker, cache, jev_key="j", summary_key="s", summary_model="m"
-                    )
+                    process_one(broker, cache, jev_key="j", summary_model="m")
                 cache.close()
                 first = broker.pickup_json(RESULTS_QUEUE, timeout_seconds=30)
                 self.assertIsNotNone(first)
@@ -412,7 +386,6 @@ class PersonalInboxBrokerTests(unittest.TestCase):
                             broker,
                             cache,
                             jev_key="j",
-                            summary_key="s",
                             summary_model="m",
                         )
                 finally:
@@ -433,23 +406,69 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CodexInvocationTests(unittest.TestCase):
+    def test_codex_runs_sandboxed_with_a_scrubbed_environment(self):
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            captured["env"] = kwargs["env"]
+            captured["workspace"] = os.listdir(command[command.index("--cd") + 1])
+            Path(command[command.index("--output-last-message") + 1]).write_text(
+                json.dumps({"ok": True})
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        environment = {
+            "TYPESAFE_API_KEY": "secret",
+            "CHATTING_PERSONAL_JMAP_TOKEN": "secret",
+            "PATH": "/usr/bin",
+            "HOME": "/home/worker",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            with patch("app.personal_inbox.subprocess.run", side_effect=fake_run):
+                value = codex_structured(
+                    "do it", {"a": 1}, {"type": "object"}, model="m"
+                )
+        self.assertEqual(value, {"ok": True})
+        command = captured["command"]
+        for flag in (
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "--output-schema",
+        ):
+            self.assertIn(flag, command)
+        self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
+        # An empty working directory, so there is no repository in scope.
+        self.assertEqual(captured["workspace"], [])
+        # Codex keeps its own login; nothing else of ours goes with it.
+        self.assertNotIn("TYPESAFE_API_KEY", captured["env"])
+        self.assertNotIn("CHATTING_PERSONAL_JMAP_TOKEN", captured["env"])
+        self.assertEqual(captured["env"]["HOME"], "/home/worker")
+
+    def test_codex_failure_is_an_error_not_a_silent_empty_summary(self):
+        def fake_run(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, "", "boom")
+
+        with patch("app.personal_inbox.subprocess.run", side_effect=fake_run):
+            with self.assertRaises(ValueError):
+                codex_structured("do it", {}, {"type": "object"}, model="m")
+
+
 class PersonalInboxCollectorTests(unittest.TestCase):
     def test_collector_is_absent_until_configured(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(collector_from_environment(object()))
-        # A summary key alone is not enough; every part must be present.
-        with patch.dict(
-            os.environ,
-            {"TYPESAFE_API_KEY": "j", "CHATTING_PERSONAL_SUMMARY_API_KEY": "s"},
-            clear=True,
-        ):
+        # The TypeSafe key alone is not enough; the cache path must be set too.
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": "j"}, clear=True):
             self.assertIsNone(collector_from_environment(object()))
 
     def test_collector_shares_the_workers_typesafe_key(self):
         with tempfile.TemporaryDirectory() as directory:
             environment = {
                 "TYPESAFE_API_KEY": "shared-with-the-worker",
-                "CHATTING_PERSONAL_SUMMARY_API_KEY": "s",
                 "CHATTING_PERSONAL_SUMMARY_MODEL": "configured-model",
                 "CHATTING_PERSONAL_CACHE_PATH": str(Path(directory) / "cache.db"),
             }
