@@ -10,44 +10,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
 )
 
 type HandlerPerformer struct {
 	Config        Config
-	Store         *Store
-	Dial          Dial
+	Mail          Mailbox
+	Folders       *Resolver
 	HTTP          *http.Client
 	TelegramToken string
 	TelegramBase  string
 	LinearKey     string
 	LinearURL     string
-
-	session imap.UIDClient
-}
-
-// One login per perform pass rather than one per effect: a backfill can plan
-// dozens of mailbox effects at a time, and personal mail providers throttle or
-// lock accounts that reconnect that often. Any failure drops the session so the
-// next effect reconnects rather than reusing a half-broken one.
-func (performer *HandlerPerformer) mailbox(ctx context.Context) (imap.UIDClient, error) {
-	if performer.session != nil {
-		return performer.session, nil
-	}
-	client, err := performer.Dial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	performer.session = client
-	return client, nil
-}
-
-func (performer *HandlerPerformer) Release() {
-	if performer.session != nil {
-		_ = performer.session.Logout()
-		performer.session = nil
-	}
 }
 
 func (performer *HandlerPerformer) post(ctx context.Context, endpoint string, value any, authorization string, result any) error {
@@ -100,46 +73,26 @@ func (performer *HandlerPerformer) Perform(ctx context.Context, effect Effect) (
 		return fmt.Sprint(result.Result.MessageID), nil
 	case "linear":
 		return performer.linear(ctx, effect)
-	case "read", "move":
-		if (effect.Kind == "move" && (!performer.Config.MoveNews || effect.Target != performer.Config.NewsFolder)) ||
-			(effect.Kind == "read" && (!performer.Config.MarkNewsRead || effect.Target != performer.Config.Mailbox)) {
-			return "", errors.New("mailbox operation no longer approved")
+	case "file":
+		// The destination is re-checked against configuration at the moment of
+		// the call, so clearing a folder stops mail being filed into it even if
+		// the effect was planned while it was set.
+		if effect.Target == "" || effect.Target != performer.Config.Folder(effect.Category) {
+			return "", errors.New("mailbox destination no longer approved")
 		}
-		client, err := performer.mailbox(ctx)
+		mailbox, err := performer.Folders.ID(ctx, effect.Target)
 		if err != nil {
-			return "", errors.New("IMAP unavailable")
+			// The operator may have just created it; drop the cached list so
+			// the next attempt sees it.
+			performer.Folders.Forget()
+			return "", errors.New("mailbox destination unavailable")
 		}
-		validity, _, err := client.SelectUID(performer.Config.Mailbox)
-		if err != nil {
-			performer.Release()
-			return "", errors.New("IMAP selection failed")
-		}
-		identityBytes, _ := json.Marshal([]any{performer.Config.Account, performer.Config.Host, performer.Config.Port, performer.Config.Username, performer.Config.Mailbox, validity})
-		identity, err := performer.Store.getMeta(ctx, "identity")
-		if err != nil {
-			return "", err
-		}
-		if identity != string(identityBytes) {
-			return "", errors.New("mailbox identity changed; operation blocked")
-		}
-		exists, err := client.ExistsUID(effect.UID)
-		if err != nil {
-			performer.Release()
-			return "", errors.New("UID existence check failed")
-		}
-		if !exists {
-			return "", errors.New("source message vanished; reconcile move/read outcome")
-		}
-		if effect.Kind == "read" {
-			err = client.MarkReadUID(effect.UID)
-		} else {
-			err = client.MoveUID(effect.UID, effect.Target)
-		}
-		if err != nil {
-			performer.Release()
+		// One atomic set: the move and the read flag cannot half-apply, so
+		// there is no ordering to enforce between them.
+		if err := performer.Mail.File(ctx, effect.MessageID, mailbox, performer.Config.MarksRead(effect.Category)); err != nil {
 			return "", errors.New("mailbox operation outcome unknown")
 		}
-		return "IMAP OK", nil
+		return "filed:" + mailbox, nil
 	}
 	return "", errors.New("operation not permitted")
 }

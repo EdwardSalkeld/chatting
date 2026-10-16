@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import urllib.request
 from typing import Any
 
 TASKS_QUEUE = "chatting.personal-inbox.tasks.v1"
 RESULTS_QUEUE = "chatting.personal-inbox.results.v1"
 DEAD_QUEUE = "chatting.personal-inbox.invalid.v1"
+MESSAGE_ID = re.compile(r"[A-Za-z0-9_-]+")
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 SUMMARY_ENDPOINT = "https://api.openai.com/v1/responses"
 CATEGORIES = {
@@ -61,10 +63,12 @@ def validate_task(task: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid task fields")
     if task["kind"] != "personal_inbox.classify.v1":
         raise ValueError("invalid task kind")
+    # Message ids are the mail server's own opaque identifiers, so the shape is
+    # checked rather than the alphabet of a hash.
     if (
         not isinstance(task["message_id"], str)
-        or len(task["message_id"]) != 64
-        or any(char not in "0123456789abcdef" for char in task["message_id"])
+        or not 0 < len(task["message_id"]) <= 128
+        or not MESSAGE_ID.fullmatch(task["message_id"])
         or not isinstance(task["work_item_id"], str)
         or not task["work_item_id"].startswith("personal-inbox:")
     ):
