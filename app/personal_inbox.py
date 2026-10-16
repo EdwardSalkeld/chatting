@@ -41,6 +41,8 @@ CODEX_FLAGS = (
     "read-only",
 )
 CODEX_TIMEOUT_SECONDS = 180
+# Only a confident routine reading skips the summary call.
+SUMMARY_SKIP_CONFIDENCE = 0.9
 CATEGORIES = {
     "news": "Sales, newsletters, routine terms or informational mail; no action needed.",
     "order": "Successful order, booking, shipment or receipt; no action needed.",
@@ -213,8 +215,9 @@ def jev_triage(mail: dict[str, Any], key: str) -> tuple[str, float, bool, bool, 
     action, action_confidence = check_answer(answers["requires_action"], YES_NO)
     deadline, deadline_confidence = check_answer(answers["has_deadline"], YES_NO)
     injection, injection_confidence = check_answer(answers["prompt_injection"], YES_NO)
-    if confidence < 0.9 or mail["incomplete"]:
-        category = "review"
+    # The category stands as Jev gave it. The handler owns what to do with a
+    # weak one, and its threshold is configurable; deciding it twice, in two
+    # places, with one of them hardcoded, is how it drifts.
     # An unsure "no" is treated as a maybe: the cost of being wrong is one
     # summary call, against missing something the recipient had to do.
     requires_action = action == "yes" or action_confidence < 0.9
@@ -383,23 +386,38 @@ def classify(
             mail, jev_key
         )
     except (OSError, ValueError, KeyError, TypeError):
-        category, confidence, requires_action, has_deadline = (
-            "review",
-            0.0,
-            False,
-            False,
-        )
+        category, confidence = "review", 0.0
+        requires_action = has_deadline = False
         suspicious = True
-    # Mail that talks to the machine never reaches the agent that has a shell.
-    # It still reaches its owner, as a review alert they can read themselves.
-    # Losing Jev fails closed for the same reason.
-    if suspicious:
+    trace = {
+        "jev_category": category,
+        "jev_confidence": confidence,
+        "requires_action": requires_action,
+        "has_deadline": has_deadline,
+        "suspicious": suspicious,
+        "summarised": False,
+    }
+
+    def result(category, confidence, summary):
         return {
             "kind": "personal_inbox.result.v1",
             "message_id": task["message_id"],
             "classification": {
-                "category": "review",
-                "confidence": 0.0,
+                "category": category,
+                "confidence": confidence,
+                "trace": trace,
+                **summary,
+            },
+        }
+
+    # Mail that talks to the machine never reaches the agent that has a shell.
+    # It still reaches its owner, who can read the original themselves. Losing
+    # Jev fails closed for the same reason.
+    if suspicious:
+        return result(
+            "review",
+            0.0,
+            {
                 "summary": (
                     "Not summarised: this email contains instructions aimed at "
                     "an automated system. Read the original before acting."
@@ -407,24 +425,22 @@ def classify(
                 "action": "",
                 "deadline": "",
             },
-        }
+        )
     # Routine mail needing nothing from the recipient is relayed by the daily
     # digest, which summarises the whole batch in one call. Summarising it here
-    # as well would pay twice for the newsletters and buy nothing.
-    if category == "news" and not requires_action and not has_deadline:
-        return {
-            "kind": "personal_inbox.result.v1",
-            "message_id": task["message_id"],
-            "classification": {
-                "category": "news",
-                "confidence": confidence,
-                "summary": "",
-                "action": "",
-                "deadline": "",
-            },
-        }
+    # as well would pay twice for the newsletters and buy nothing. Only a
+    # confident reading skips it, so anything doubtful still carries a summary
+    # for whoever looks at it.
+    if (
+        category == "news"
+        and confidence >= SUMMARY_SKIP_CONFIDENCE
+        and not requires_action
+        and not has_deadline
+    ):
+        return result("news", confidence, {"summary": "", "action": "", "deadline": ""})
     try:
         summary = summarize(mail, summary_model)
+        trace["summarised"] = True
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         category, confidence = "review", 0.0
         summary = {
@@ -432,12 +448,4 @@ def classify(
             "action": "",
             "deadline": "",
         }
-    if category != "review" and (
-        summary["action"].strip() or summary["deadline"].strip()
-    ):
-        category = "action"
-    return {
-        "kind": "personal_inbox.result.v1",
-        "message_id": task["message_id"],
-        "classification": {"category": category, "confidence": confidence, **summary},
-    }
+    return result(category, confidence, summary)

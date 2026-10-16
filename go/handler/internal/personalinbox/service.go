@@ -21,6 +21,10 @@ import (
 // cycle takes on. Both bound a single pass, not the backlog: whatever is left
 // arrives on the next cycle.
 const (
+	// Fetched generously because the raw part is usually HTML: it is stripped
+	// to text afterwards, so capping the fetch would cut the markup rather
+	// than the words. MaxBodyBytes then caps the text that is kept.
+	MaxFetchBytes  = 400000
 	MaxBodyBytes   = 60000
 	ChangesPerPass = 25
 	BackfillLimit  = 500
@@ -65,6 +69,20 @@ type Classification struct {
 	Action     string  `json:"action"`
 	Deadline   string  `json:"deadline"`
 	Confidence float64 `json:"confidence"`
+	Trace      *Trace  `json:"trace,omitempty"`
+}
+
+// Trace records what the classifier saw and which rule settled the category,
+// so "why is this in review" is answerable from the record instead of being
+// inferred from the mail afterwards.
+type Trace struct {
+	Reason         string  `json:"reason,omitempty"`
+	JevCategory    string  `json:"jev_category,omitempty"`
+	JevConfidence  float64 `json:"jev_confidence,omitempty"`
+	RequiresAction bool    `json:"requires_action,omitempty"`
+	HasDeadline    bool    `json:"has_deadline,omitempty"`
+	Suspicious     bool    `json:"suspicious,omitempty"`
+	Summarised     bool    `json:"summarised,omitempty"`
 }
 
 func (value Classification) Validate() error {
@@ -110,18 +128,19 @@ func limitRunes(value string, max int) string {
 	return string(runes[:max])
 }
 
-// mail converts a JMAP message into the classifier's view. Attachments and
-// degraded bodies are surfaced rather than quietly filed: the server tells us
-// outright, so there is no heuristic here.
-func mail(email jmap.Email) Mail {
-	body, degraded := email.Body()
+// mail converts a JMAP message into the classifier's view. Only an attachment
+// or a body the server could not render makes it incomplete; being longer than
+// we asked for does not, since that is our limit rather than a fault in the
+// mail. The body facts come back too, for the record rather than the model.
+func mail(email jmap.Email) (Mail, jmap.Body) {
+	body := email.BodyText()
 	return Mail{
 		From:       limitRunes(email.Sender(), 300),
 		Subject:    limitRunes(email.Subject, 300),
 		Date:       limitRunes(email.ReceivedAt, 100),
-		Body:       limitRunes(body, MaxBodyBytes),
-		Incomplete: degraded || email.HasAttachment,
-	}
+		Body:       limitRunes(body.Text, MaxBodyBytes),
+		Incomplete: body.Degraded || email.HasAttachment,
+	}, body
 }
 
 func strictJSON(raw []byte, value any) error {
@@ -204,7 +223,7 @@ func (service *Service) store(ctx context.Context, inbox string, ids []string) e
 	if len(ids) == 0 {
 		return nil
 	}
-	emails, err := service.Mail.Emails(ctx, ids, MaxBodyBytes)
+	emails, err := service.Mail.Emails(ctx, ids, MaxFetchBytes)
 	if err != nil {
 		return errors.New("personal inbox fetch failed")
 	}
@@ -214,7 +233,10 @@ func (service *Service) store(ctx context.Context, inbox string, ids []string) e
 		if !email.MailboxIDs[inbox] {
 			continue
 		}
-		message := Message{ID: email.ID, ThreadID: email.ThreadID, Mail: mail(email), Created: service.Now().Unix()}
+		view, body := mail(email)
+		message := Message{ID: email.ID, ThreadID: email.ThreadID, Mail: view,
+			BodyHTML: body.HTML, BodyTruncated: body.Truncated,
+			BodyChars: len([]rune(view.Body)), Created: service.Now().Unix()}
 		if err := service.Store.insertMessage(ctx, message); err != nil {
 			return err
 		}
@@ -371,16 +393,22 @@ func (service *Service) classificationResult(ctx context.Context, raw []byte) (b
 	}
 	message := messages[0]
 	classification := result.Classification
-	// Action always wins, including an action extracted by a model that
-	// mistakenly labelled an order/news email as routine.
-	if strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "" {
-		classification.Category = "action"
+	if classification.Trace == nil {
+		classification.Trace = &Trace{}
 	}
-	if message.Mail.Incomplete && classification.Category != "action" {
-		classification.Category = "review"
-	}
-	if classification.Confidence < 0.90 {
-		classification.Category = "review"
+	// One place settles the category, and records which rule did it.
+	switch {
+	case classification.Trace.Suspicious:
+		classification.Category, classification.Trace.Reason = "review", "injection_suspected"
+	case strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "":
+		// An action wins even when a model labelled the mail routine.
+		classification.Category, classification.Trace.Reason = "action", "action_extracted"
+	case message.Mail.Incomplete:
+		classification.Category, classification.Trace.Reason = "review", "incomplete_body_or_attachment"
+	case classification.Confidence < service.Config.Threshold():
+		classification.Category, classification.Trace.Reason = "review", "confidence_below_threshold"
+	default:
+		classification.Trace.Reason = "accepted"
 	}
 	// Only routine mail is allowed to arrive without a summary, so anything
 	// promoted out of news must have bought one.
@@ -487,9 +515,10 @@ func (service *Service) plan(message Message) []Effect {
 		if service.Config.CreatesTickets() {
 			add("linear", service.Config.LinearTeam)
 		}
-	case "review":
-		add("telegram", service.Config.ActionTarget)
 	}
+	// Review is deliberately not alerted. It means the workflow could not
+	// classify the mail, and such mail is left in the inbox, so a message
+	// saying so repeats what opening the inbox already shows.
 	// News is relayed by the digest rather than one alert per newsletter.
 	if folder != "" {
 		add("file", folder)

@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/mailtext"
 )
 
 const (
@@ -137,20 +139,39 @@ func (email Email) HeaderMessageID() string {
 	return email.MessageID[0]
 }
 
-// Body prefers the plain text part and falls back to HTML. The second result
-// reports that the server could not give us the whole part cleanly, which the
-// caller treats the same way it treats an attachment: hold it for review.
-func (email Email) Body() (string, bool) {
+// Body is a message rendered for reading: markup stripped, and the two ways it
+// can fall short kept apart. Truncated means the part was longer than we asked
+// for, which is our limit rather than a fault in the mail. Degraded means the
+// server could not give us readable content at all.
+type Body struct {
+	Text      string
+	HTML      bool
+	Truncated bool
+	Degraded  bool
+}
+
+// BodyText prefers the plain text part and falls back to HTML, converting it.
+// Parts are not always labelled accurately, so content decides, not the type.
+func (email Email) BodyText() Body {
 	for _, parts := range [][]BodyPart{email.TextBody, email.HTMLBody} {
 		for _, part := range parts {
 			value, ok := email.BodyValues[part.PartID]
 			if !ok || strings.TrimSpace(value.Value) == "" {
 				continue
 			}
-			return strings.TrimSpace(value.Value), value.IsTruncated || value.IsEncodingProblem
+			text, markup := value.Value, mailtext.LooksLikeHTML(value.Value)
+			if markup {
+				text = mailtext.HTMLToText(text)
+			}
+			// An image-only part converts to nothing; try the next one.
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			return Body{Text: strings.TrimSpace(text), HTML: markup,
+				Truncated: value.IsTruncated, Degraded: value.IsEncodingProblem}
 		}
 	}
-	return "", true
+	return Body{Degraded: true}
 }
 
 func (client *Client) sessionURL() string {

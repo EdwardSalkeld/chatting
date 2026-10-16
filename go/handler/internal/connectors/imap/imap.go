@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/mailtext"
 )
 
 const Source = "email"
@@ -308,7 +308,7 @@ func extractEntityContent(
 			content.plainTexts = append(content.plainTexts, body)
 		}
 	case "text/html":
-		if body := htmlToText(string(readDecodedBody(header, reader))); body != "" {
+		if body := mailtext.HTMLToText(string(readDecodedBody(header, reader))); body != "" {
 			content.htmlTexts = append(content.htmlTexts, body)
 		}
 	}
@@ -390,35 +390,7 @@ func extensionForMediaType(mediaType string) string {
 	}
 }
 
-var (
-	htmlBlockBreakPattern = regexp.MustCompile(`(?i)<\s*(br|/p|/div|/li|/tr|/table)\b[^>]*>`)
-	htmlOpenBreakPattern  = regexp.MustCompile(`(?i)<\s*(p|div|li|tr)\b[^>]*>`)
-	htmlTagPattern        = regexp.MustCompile(`(?s)<[^>]+>`)
-	htmlMultiBreakPattern = regexp.MustCompile(`\n\s*\n\s*\n+`)
-	htmlSpacePattern      = regexp.MustCompile(`[ \t]+`)
-)
-
-func htmlToText(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	text := htmlBlockBreakPattern.ReplaceAllString(value, "\n")
-	text = htmlOpenBreakPattern.ReplaceAllString(text, "\n")
-	text = htmlTagPattern.ReplaceAllString(text, "")
-	text = html.UnescapeString(text)
-	text = strings.ReplaceAll(text, "\r", "\n")
-	text = htmlSpacePattern.ReplaceAllString(text, " ")
-	text = htmlMultiBreakPattern.ReplaceAllString(text, "\n\n")
-	lines := strings.Split(text, "\n")
-	trimmed := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			trimmed = append(trimmed, line)
-		}
-	}
-	return strings.TrimSpace(strings.Join(trimmed, "\n"))
-}
+var ()
 
 func parseReceivedAt(value string, fallback time.Time) time.Time {
 	if strings.TrimSpace(value) == "" {

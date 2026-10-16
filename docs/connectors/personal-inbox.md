@@ -24,7 +24,7 @@ Its inspection endpoint is described below.
 | `news` | One daily digest, not an alert per newsletter | `folders.news` |
 | `order` | Immediate Telegram to the orders destination | `folders.order` |
 | `action` | Immediate Telegram to the action destination, and a Linear issue if ticketing is configured | `folders.action` |
-| `review` | Immediate Telegram to the action destination; no ticket | Nothing, by default |
+| `review` | Nothing: it stays in the inbox, which is the queue to read | Nothing, by default |
 
 Filing is driven entirely by the `folders` map. A category with no entry, or an
 empty one, is left where it is. `review` is deliberately configured that way:
@@ -33,9 +33,13 @@ becomes the queue of mail it did not understand. An empty inbox then means
 nothing needs you, rather than that you have not looked today. Set
 `folders.review` if you would rather file it anyway.
 
-Action/deadline extraction promotes routine classifications to `action`.
-Confidence below 0.90 becomes `review` regardless of other fields. This
-threshold is a conservative starting policy, not a measured accuracy guarantee.
+Exactly one rule settles each category, and the record says which: an
+extracted action outranks the model's own label, an attachment or an
+unreadable body holds mail back, and confidence below `confidence_threshold`
+holds it back too. Review is not notified, because it means the workflow could
+not classify the mail and such mail stays in the inbox — saying so twice helps
+nobody. The threshold is a dial, not a measured guarantee: real mail has a long
+uncertain tail, so start at 0.8 and watch `trace.reason` before moving it.
 The Jev version is pinned to `jev-1.13.0`; its chosen probability and reported
 confidence must both be at least 0.90. Test with labelled real mail before
 allowing automatic filing.
@@ -276,10 +280,28 @@ statuses explain why it is unfinished: classification, processing, digest,
 review, reconciliation, or preview. Reviewing a classifier's uncertain decision
 is currently manual; v1 has no reclassification editor.
 
-Mail with attachments, or whose body the server could not return cleanly, is
-held for review rather than silently filed. Both signals come from JMAP
-directly — `hasAttachment`, and the `isTruncated`/`isEncodingProblem` flags on
-the body value — rather than from inspecting raw MIME.
+Mail with attachments, or whose body the server could not render, is held for
+review rather than silently filed. Both come from JMAP directly:
+`hasAttachment` and `isEncodingProblem`. A body longer than the fetch limit is
+**not** held back — that is our limit, not a fault in the mail — but it is
+recorded as `body_truncated`.
+
+HTML is converted to text before anything sees it. Markup reaches the model as
+noise otherwise, and inflates the body enough to hit the fetch limit, so the
+raw part is fetched generously and the text capped afterwards rather than the
+other way round.
+
+## Diagnosing a decision
+
+Each classification carries a `trace`: the category and confidence Jev gave,
+whether it judged an action, a deadline or an injection attempt, whether a
+summary was bought, and a `reason` naming the rule that settled the outcome —
+`accepted`, `confidence_below_threshold`, `action_extracted`,
+`incomplete_body_or_attachment` or `injection_suspected`. Alongside it each
+message records `body_html`, `body_chars` and `body_truncated`.
+
+That is enough to answer "why is this in review" from the record, without
+going back to the mailbox to guess.
 
 ## Validation references
 

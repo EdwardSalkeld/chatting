@@ -15,9 +15,13 @@ import (
 )
 
 type Message struct {
-	ID             string          `json:"id"`
-	ThreadID       string          `json:"thread_id,omitempty"`
-	Mail           Mail            `json:"mail"`
+	ID       string `json:"id"`
+	ThreadID string `json:"thread_id,omitempty"`
+	Mail     Mail   `json:"mail"`
+	// What the body looked like before the model saw it, for diagnosis.
+	BodyHTML       bool            `json:"body_html,omitempty"`
+	BodyTruncated  bool            `json:"body_truncated,omitempty"`
+	BodyChars      int             `json:"body_chars,omitempty"`
 	Classification *Classification `json:"classification,omitempty"`
 	Created        int64           `json:"created"`
 	Published      int64           `json:"published"`

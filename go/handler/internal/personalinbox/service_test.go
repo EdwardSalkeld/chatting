@@ -298,7 +298,7 @@ func TestOrderIsNotifiedFiledAndLinked(t *testing.T) {
 	_ = mail
 }
 
-func TestReviewStaysInTheInboxAndIsStillRelayed(t *testing.T) {
+func TestReviewIsLeftInTheInboxAndNotAlerted(t *testing.T) {
 	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
 	if err := service.ingest(ctx); err != nil {
@@ -308,12 +308,10 @@ func TestReviewStaysInTheInboxAndIsStillRelayed(t *testing.T) {
 	if err := service.Cycle(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(performer.calls) != 1 || performer.calls[0].Kind != "telegram" {
-		t.Fatalf("review should alert and nothing else: %+v", performer.calls)
-	}
-	// The link still points somewhere useful even with no destination folder.
-	if !strings.Contains(performer.calls[0].Body, "/mail/Inbox/AUjt.Stm4?u=b8884168") {
-		t.Fatalf("review link wrong:\n%s", performer.calls[0].Body)
+	// Review means the workflow could not classify it, and such mail stays in
+	// the inbox, so alerting as well would repeat what the inbox already shows.
+	if len(performer.calls) != 0 {
+		t.Fatalf("review produced effects: %+v", performer.calls)
 	}
 }
 
@@ -676,5 +674,94 @@ func TestActionMailWithoutLinearIsStillNotifiedAndFiled(t *testing.T) {
 	}
 	if kinds["telegram"] != 1 || kinds["file"] != 1 {
 		t.Fatalf("action mail lost its alert or filing: %+v", performer.calls)
+	}
+}
+
+func classifyOnce(t *testing.T, service *Service, broker *fakeBroker, c Classification) Message {
+	t.Helper()
+	ctx := context.Background()
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	broker.result("Stm4", c)
+	if err := service.results(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return oneMessage(t, service)
+}
+
+func TestEveryOutcomeRecordsWhichRuleSettledIt(t *testing.T) {
+	cases := []struct {
+		name     string
+		incoming Classification
+		attach   bool
+		category string
+		reason   string
+	}{
+		{"accepted", Classification{Category: "order", Summary: "Order", Confidence: .95},
+			false, "order", "accepted"},
+		{"below the threshold", Classification{Category: "order", Summary: "Order", Confidence: .7},
+			false, "review", "confidence_below_threshold"},
+		{"an extracted action outranks the category", Classification{Category: "news", Summary: "x", Action: "Pay it", Confidence: .95},
+			false, "action", "action_extracted"},
+		{"an attachment holds it back", Classification{Category: "order", Summary: "Order", Confidence: .95},
+			true, "review", "incomplete_body_or_attachment"},
+		{"mail aimed at the machine", Classification{Category: "review", Summary: "x", Confidence: 0,
+			Trace: &Trace{Suspicious: true}}, false, "review", "injection_suspected"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			service, mail, broker, _ := fixture(t)
+			if test.attach {
+				email := mail.emails["Stm4"]
+				email.HasAttachment = true
+				mail.emails["Stm4"] = email
+			}
+			got := classifyOnce(t, service, broker, test.incoming).Classification
+			if got.Category != test.category || got.Trace == nil || got.Trace.Reason != test.reason {
+				t.Fatalf("category=%q trace=%+v, want %q/%q", got.Category, got.Trace, test.category, test.reason)
+			}
+		})
+	}
+}
+
+func TestLoweringTheThresholdAcceptsMoreMail(t *testing.T) {
+	// The same classification, held at one setting and accepted at another.
+	for _, test := range []struct {
+		threshold float64
+		category  string
+	}{{0.9, "review"}, {0.8, "order"}} {
+		service, _, broker, _ := fixture(t)
+		service.Config.ConfidenceThreshold = test.threshold
+		got := classifyOnce(t, service, broker, Classification{Category: "order", Summary: "Order", Confidence: .85})
+		if got.Classification.Category != test.category {
+			t.Fatalf("threshold %v gave %q, want %q", test.threshold, got.Classification.Category, test.category)
+		}
+	}
+}
+
+func TestHTMLBodiesAreConvertedAndRecorded(t *testing.T) {
+	service, mail, _, _ := fixture(t)
+	email := mail.emails["Stm4"]
+	email.TextBody = nil
+	email.HTMLBody = []jmap.BodyPart{{PartID: "1"}}
+	email.BodyValues = map[string]jmap.BodyValue{"1": {
+		Value:       `<html><head><style>.a{color:red}</style></head><body><p>50% off until 31 October</p></body></html>`,
+		IsTruncated: true,
+	}}
+	mail.emails["Stm4"] = email
+	if err := service.ingest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	message := oneMessage(t, service)
+	if message.Mail.Body != "50% off until 31 October" {
+		t.Fatalf("body not converted: %q", message.Mail.Body)
+	}
+	if !message.BodyHTML || message.BodyChars == 0 || !message.BodyTruncated {
+		t.Fatalf("body facts missing: %+v", message)
+	}
+	// Truncation is our own fetch limit, so it must not hold the mail back.
+	if message.Mail.Incomplete {
+		t.Fatal("truncation treated as a defect in the mail")
 	}
 }

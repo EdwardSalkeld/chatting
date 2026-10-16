@@ -70,10 +70,10 @@ func TestLiveReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, email := range emails {
-		body, degraded := email.Body()
-		t.Logf("id=%s thread=%s sender=%q attach=%v degraded=%v bodyRunes=%d msgid=%q",
-			email.ID, email.ThreadID, email.Sender(), email.HasAttachment, degraded,
-			len([]rune(body)), email.HeaderMessageID())
+		body := email.BodyText()
+		t.Logf("id=%s sender=%q attach=%v html=%v trunc=%v degraded=%v textRunes=%d",
+			email.ID, email.Sender(), email.HasAttachment, body.HTML, body.Truncated,
+			body.Degraded, len([]rune(body.Text)))
 	}
 
 	changes, err := client.Changes(ctx, state, 50)

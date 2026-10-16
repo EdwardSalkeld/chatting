@@ -21,6 +21,8 @@ var Categories = []string{"news", "order", "action", "review"}
 
 const DefaultLinkTemplate = "https://app.fastmail.com/mail/{folder}/{thread}.{email}?u={account}"
 
+const DefaultConfidenceThreshold = 0.90
+
 type Config struct {
 	Enabled    bool   `json:"enabled"`
 	DBPath     string `json:"db_path"`
@@ -42,11 +44,15 @@ type Config struct {
 	DigestTarget string   `json:"digest_telegram_target"`
 	// DigestAt is a wall-clock time of day, "HH:MM" in Timezone. The digest is
 	// a daily round-up at a time the reader chose, not a per-message delay.
-	DigestAt      string `json:"digest_at"`
-	Timezone      string `json:"timezone"`
-	LinearKeyEnv  string `json:"linear_key_env"`
-	LinearTeam    string `json:"linear_team_id"`
-	LinearProject string `json:"linear_project_id"`
+	DigestAt string `json:"digest_at"`
+	Timezone string `json:"timezone"`
+	// ConfidenceThreshold is the level below which a classification is held
+	// for review instead of acted on. Real mail has a long uncertain tail, so
+	// this is the dial for how much of it to accept.
+	ConfidenceThreshold float64 `json:"confidence_threshold"`
+	LinearKeyEnv        string  `json:"linear_key_env"`
+	LinearTeam          string  `json:"linear_team_id"`
+	LinearProject       string  `json:"linear_project_id"`
 }
 
 // Location is the timezone the digest time is read in.
@@ -68,7 +74,8 @@ func (config Config) DigestTime() (int, int, error) {
 
 func Decode(raw []byte) (*Config, error) {
 	config := Config{DryRun: true, DigestAt: "08:00", Timezone: "UTC", LinkTemplate: DefaultLinkTemplate,
-		TokenEnv: "CHATTING_PERSONAL_JMAP_TOKEN", LinearKeyEnv: "CHATTING_PERSONAL_LINEAR_KEY"}
+		ConfidenceThreshold: DefaultConfidenceThreshold,
+		TokenEnv:            "CHATTING_PERSONAL_JMAP_TOKEN", LinearKeyEnv: "CHATTING_PERSONAL_LINEAR_KEY"}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&config); err != nil {
@@ -105,6 +112,9 @@ func (config Config) Validate() error {
 	if _, _, err := config.DigestTime(); err != nil {
 		return err
 	}
+	if config.ConfidenceThreshold <= 0 || config.ConfidenceThreshold > 1 {
+		return errors.New("personal_inbox confidence_threshold must be above 0 and at most 1")
+	}
 	if _, err := config.Location(); err != nil {
 		return errors.New("personal_inbox timezone is not a known IANA location")
 	}
@@ -133,6 +143,14 @@ func (config Config) Validate() error {
 // Folder is the mailbox a category is filed into, or "" to leave it in place.
 func (config Config) Folder(category string) string {
 	return strings.TrimSpace(config.Folders[category])
+}
+
+// Threshold is the confidence a classification needs to be acted on.
+func (config Config) Threshold() float64 {
+	if config.ConfidenceThreshold <= 0 || config.ConfidenceThreshold > 1 {
+		return DefaultConfidenceThreshold
+	}
+	return config.ConfidenceThreshold
 }
 
 // CreatesTickets reports whether action mail also opens a Linear issue. With
