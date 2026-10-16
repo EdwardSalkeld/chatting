@@ -1,17 +1,22 @@
-"""Dedicated personal inbox worker; never imports or launches the executor."""
+"""Personal inbox classification, run as a thread of the ordinary worker.
+
+It shares the worker's process and its TypeSafe key, but not its executor: the
+only thing this code can do with an email is ask two fixed HTTPS endpoints about
+it and publish the answer. It never touches the mailbox, the task queue the
+executor reads, or the filesystem beyond its own cache.
+"""
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import logging
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-import signal
 import sqlite3
-import threading
 from collections.abc import Callable
+from threading import Event, Thread
 from typing import Any
 
 from app.broker.bbmb_client import BBMBQueueAdapter
@@ -104,58 +109,81 @@ def process_one(
     return True
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bbmb-address", default="127.0.0.1:9876")
-    parser.add_argument("--db-path", required=True)
-    parser.add_argument("--summary-model", required=True)
-    parser.add_argument("--once", action="store_true")
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
-    jev_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    summary_key = os.environ.get("CHATTING_PERSONAL_SUMMARY_API_KEY", "").strip()
-    if not jev_key or not summary_key:
-        parser.error(
-            "TYPESAFE_API_KEY and CHATTING_PERSONAL_SUMMARY_API_KEY are required"
-        )
-    os.umask(0o077)
-    Path(args.db_path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    cache = sqlite3.connect(args.db_path, timeout=5)
+def open_cache(path: str) -> sqlite3.Connection:
+    """Model output is cached before publication, so a failed publish or ACK
+    replays the saved answer instead of paying for the call again."""
+    Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    cache = sqlite3.connect(path, timeout=5, check_same_thread=False)
     cache.execute("PRAGMA journal_mode=WAL")
     cache.execute(
         "CREATE TABLE IF NOT EXISTS classifications "
         "(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL)"
     )
-    broker = BBMBQueueAdapter(address=args.bbmb_address)
-    for queue in (TASKS_QUEUE, RESULTS_QUEUE, DEAD_QUEUE):
-        broker.ensure_queue(queue)
-    stop = threading.Event()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: stop.set())
-    try:
-        while not stop.is_set():
+    return cache
+
+
+@dataclass
+class PersonalInboxCollector:
+    broker: BBMBQueueAdapter
+    cache: sqlite3.Connection
+    jev_key: str
+    summary_key: str
+    summary_model: str
+    _stop: Event = field(init=False, default_factory=Event)
+    _thread: Thread | None = field(init=False, default=None)
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("personal inbox collector already started")
+        self._thread = Thread(target=self._run, name="personal-inbox", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        for queue in (TASKS_QUEUE, RESULTS_QUEUE, DEAD_QUEUE):
+            self.broker.ensure_queue(queue)
+        while not self._stop.is_set():
             try:
                 process_one(
-                    broker,
-                    cache,
-                    jev_key=jev_key,
-                    summary_key=summary_key,
-                    summary_model=args.summary_model,
+                    self.broker,
+                    self.cache,
+                    jev_key=self.jev_key,
+                    summary_key=self.summary_key,
+                    summary_model=self.summary_model,
                 )
-            except Exception as error:
-                # Never print request bodies, mail, credentials or HTTP URLs
-                # with tokens. An unacked task is leased for a later retry.
-                LOGGER.error(
-                    "personal_inbox_worker_failed type=%s", type(error).__name__
-                )
-                if args.once:
-                    raise SystemExit(1) from None
-                stop.wait(5)
-            if args.once:
-                break
-    finally:
-        cache.close()
+            except Exception as error:  # noqa: BLE001
+                # Never log request bodies, mail, credentials or URLs with
+                # tokens. An unacked task is leased for a later retry.
+                LOGGER.error("personal_inbox_failed type=%s", type(error).__name__)
+                self._stop.wait(5)
 
 
-if __name__ == "__main__":
-    main()
+def collector_from_environment(
+    broker: BBMBQueueAdapter,
+) -> PersonalInboxCollector | None:
+    """None when the personal inbox is not configured, which is the default."""
+    jev_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
+    summary_key = os.environ.get("CHATTING_PERSONAL_SUMMARY_API_KEY", "").strip()
+    summary_model = os.environ.get("CHATTING_PERSONAL_SUMMARY_MODEL", "").strip()
+    cache_path = os.environ.get("CHATTING_PERSONAL_CACHE_PATH", "").strip()
+    if not (jev_key and summary_key and summary_model and cache_path):
+        return None
+    return PersonalInboxCollector(
+        broker=broker,
+        cache=open_cache(cache_path),
+        jev_key=jev_key,
+        summary_key=summary_key,
+        summary_model=summary_model,
+    )
+
+
+__all__ = [
+    "PersonalInboxCollector",
+    "collector_from_environment",
+    "open_cache",
+    "process_one",
+]

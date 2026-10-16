@@ -22,7 +22,7 @@ from app.personal_inbox import (
     validate_digest_task,
     validate_task,
 )
-from app.main_personal_inbox_worker import process_one
+from app.worker.personal_inbox import collector_from_environment, process_one
 from app.broker.bbmb_client import PickedMessage
 from app.broker.bbmb_client import BBMBQueueAdapter
 
@@ -335,9 +335,7 @@ class PersonalInboxTests(unittest.TestCase):
                 "confidence": 0.99,
             },
         }
-        with patch(
-            "app.main_personal_inbox_worker.classify", return_value=result
-        ) as model:
+        with patch("app.worker.personal_inbox.classify", return_value=result) as model:
             with self.assertRaises(OSError):
                 process_one(
                     broker, cache, jev_key="j", summary_key="s", summary_model="m"
@@ -405,7 +403,7 @@ class PersonalInboxBrokerTests(unittest.TestCase):
                 cache = sqlite3.connect(cache_path)
                 try:
                     with patch(
-                        "app.main_personal_inbox_worker.classify",
+                        "app.worker.personal_inbox.classify",
                         side_effect=AssertionError(
                             "model must not be called on replay"
                         ),
@@ -433,3 +431,31 @@ class PersonalInboxBrokerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersonalInboxCollectorTests(unittest.TestCase):
+    def test_collector_is_absent_until_configured(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(collector_from_environment(object()))
+        # A summary key alone is not enough; every part must be present.
+        with patch.dict(
+            os.environ,
+            {"TYPESAFE_API_KEY": "j", "CHATTING_PERSONAL_SUMMARY_API_KEY": "s"},
+            clear=True,
+        ):
+            self.assertIsNone(collector_from_environment(object()))
+
+    def test_collector_shares_the_workers_typesafe_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "TYPESAFE_API_KEY": "shared-with-the-worker",
+                "CHATTING_PERSONAL_SUMMARY_API_KEY": "s",
+                "CHATTING_PERSONAL_SUMMARY_MODEL": "configured-model",
+                "CHATTING_PERSONAL_CACHE_PATH": str(Path(directory) / "cache.db"),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                collector = collector_from_environment(object())
+            self.assertIsNotNone(collector)
+            self.assertEqual(collector.jev_key, "shared-with-the-worker")
+            self.assertEqual(collector.summary_model, "configured-model")
+            collector.cache.close()
