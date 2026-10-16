@@ -304,6 +304,14 @@ message records `body_html`, `body_chars` and `body_truncated`.
 That is enough to answer "why is this in review" from the record, without
 going back to the mailbox to guess.
 
+`GET /personal-inbox` on the handler's own UI server lists the same thing as a
+page: when each message arrived, who sent it, its subject linked back to the
+mailbox, the decision, the score and the rule that settled it, newest first.
+Mail still waiting for a classification is shown too, and the header carries
+the running mode, the threshold in force, the counts per category and anything
+rejected. That server binds loopback and is reached through the internal TLS
+front end, which matters because the page shows mail subjects.
+
 ## Validation references
 
 - [TypeSafe's typed questions](https://docs.typesafe.ai/introduction)

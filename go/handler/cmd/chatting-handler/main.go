@@ -322,6 +322,11 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		schedules.RegisterUIRoutes(mux, scheduleService)
 		reminders.RegisterRoutes(mux, reminderService)
 		reminders.RegisterUIRoutes(mux, reminderService)
+		// This server carries the handler's own pages as well as metrics, and
+		// binds loopback. The page shows mail subjects, so that matters.
+		if personal != nil {
+			personalinbox.RegisterUIRoutes(mux, personal)
+		}
 	})
 	if err != nil {
 		_ = store.Close()

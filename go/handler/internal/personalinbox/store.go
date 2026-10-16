@@ -219,6 +219,29 @@ func (store *Store) messages(ctx context.Context, predicate string, args ...any)
 	return result, rows.Err()
 }
 
+// recent lists messages newest first, which is the order a person reads them.
+func (store *Store) recent(ctx context.Context, limit int) ([]Message, error) {
+	rows, err := store.db.QueryContext(ctx,
+		"SELECT data FROM inbox_messages ORDER BY json_extract(data,'$.created') DESC, id LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Message{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var value Message
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
 func (store *Store) effects(ctx context.Context, predicate string, args ...any) ([]Effect, error) {
 	rows, err := store.db.QueryContext(ctx, "SELECT data FROM inbox_effects WHERE "+predicate+" ORDER BY id LIMIT 100", args...)
 	if err != nil {
