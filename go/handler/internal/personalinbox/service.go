@@ -120,8 +120,21 @@ type Service struct {
 	Performer Performer
 	Now       func() time.Time
 
-	mu      sync.Mutex
-	account string
+	mu        sync.Mutex
+	accountMu sync.RWMutex
+	account   string
+}
+
+func (service *Service) accountID() string {
+	service.accountMu.RLock()
+	defer service.accountMu.RUnlock()
+	return service.account
+}
+
+func (service *Service) setAccountID(value string) {
+	service.accountMu.Lock()
+	defer service.accountMu.Unlock()
+	service.account = value
 }
 
 func limitRunes(value string, max int) string {
@@ -191,12 +204,12 @@ func (service *Service) Cycle(ctx context.Context) error {
 			return errors.New("personal inbox queue unavailable")
 		}
 	}
-	if service.account == "" {
+	if service.accountID() == "" {
 		account, err := service.Mail.AccountID(ctx)
 		if err != nil {
 			return errors.New("personal inbox account unavailable")
 		}
-		service.account = account
+		service.setAccountID(account)
 	}
 	// Recovery and notifications continue even if the mail server is down, so
 	// each step records its own health: one failing step must not make the
@@ -485,7 +498,8 @@ func (service *Service) digestResult(ctx context.Context, raw []byte) (bool, err
 // decorative — Fastmail resolves by thread and message id — so a link keeps
 // working after the message is filed, or moved again by hand.
 func (service *Service) link(message Message, folder string) string {
-	if service.Config.LinkTemplate == "" || message.ThreadID == "" || service.account == "" {
+	account := service.accountID()
+	if service.Config.LinkTemplate == "" || message.ThreadID == "" || account == "" {
 		return ""
 	}
 	if folder == "" {
@@ -495,8 +509,8 @@ func (service *Service) link(message Message, folder string) string {
 		"{folder}", url.PathEscape(folder),
 		"{thread}", url.PathEscape(message.ThreadID),
 		"{email}", url.PathEscape(message.ID),
-		"{account}", url.PathEscape(strings.TrimPrefix(service.account, "u")),
-		"{account_id}", url.PathEscape(service.account),
+		"{account}", url.PathEscape(strings.TrimPrefix(account, "u")),
+		"{account_id}", url.PathEscape(account),
 	).Replace(service.Config.LinkTemplate)
 }
 

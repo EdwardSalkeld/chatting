@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -835,5 +837,58 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 				t.Fatalf("reason %q, want %q", got.Trace.Reason, test.reason)
 			}
 		})
+	}
+}
+
+func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	ctx := context.Background()
+	service.Config.DryRun = true
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A reading the policy overrode, which is the case worth explaining.
+	broker.result("Stm4", Classification{Category: "order", Summary: "Order", Confidence: .5,
+		Trace: &Trace{JevCategory: "order", JevConfidence: .5}})
+	if err := service.results(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	RegisterUIRoutes(mux, service)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/personal-inbox", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d", recorder.Code)
+	}
+	page := recorder.Body.String()
+	for _, want := range []string{
+		"Echelon Coffee",             // sender
+		"Your order",                 // subject
+		"review",                     // the decision
+		"0.50",                       // the score
+		"confidence_below_threshold", // why
+		"read as order",              // what it was before the policy
+		"preview only",               // the mode it is running in
+		"app.fastmail.com",           // a way back to the message
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page missing %q:\n%s", want, page)
+		}
+	}
+}
+
+func TestDecisionsPageWarnsWhenMailIsWaiting(t *testing.T) {
+	service, _, _, _ := fixture(t)
+	ctx := context.Background()
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	RegisterUIRoutes(mux, service)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/personal-inbox", nil))
+	page := recorder.Body.String()
+	if !strings.Contains(page, "waiting 1") || !strings.Contains(page, `class="warn"`) {
+		t.Fatalf("unclassified mail not surfaced:\n%s", page)
 	}
 }
