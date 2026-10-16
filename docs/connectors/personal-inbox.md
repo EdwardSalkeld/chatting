@@ -153,10 +153,17 @@ is accepted and then ignored. Two things stand in front of it:
    `CHATTING_*` variable removed. Output is constrained by `--output-schema`
    and re-validated by the handler.
 
-Whether the read-only sandbox also blocks network egress depends on the host
-sandbox implementation, which differs between macOS and Linux. Nothing here
-relies on it. Verify it on the machine you actually deploy to before trusting
-it, with a read-only `codex exec` that attempts an outbound request.
+The read-only sandbox also blocks network egress. Measured on the deployment
+host as the worker user: an outbound request succeeds unsandboxed and fails to
+resolve inside `codex exec --sandbox read-only`. That is a property of the
+host's sandbox implementation and differs between platforms, so the screening
+above does not depend on it; re-measure if the host or the Codex version
+changes, by running a read-only `codex exec` that attempts an outbound request
+and comparing it against the same request outside the sandbox.
+
+`--ignore-user-config` also discards the deployment's `codex-config.toml`,
+including its model setting, so set `CHATTING_PERSONAL_SUMMARY_MODEL` to the
+model that file names rather than letting Codex fall back to its own default.
 
 Routing is never Codex's to decide. Jev sets the category, the handler chooses
 the folder and destinations from its own configuration, and the handler

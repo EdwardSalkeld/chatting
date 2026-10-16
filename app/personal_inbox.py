@@ -26,10 +26,11 @@ JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 # disabled, so two things stand in front of it. Jev screens every email for text
 # aimed at an automated system and refuses to pass those on at all, and Codex
 # then runs with no user config, no execpolicy rules, an empty working
-# directory, a scrubbed environment and a read-only sandbox. Whether that
-# sandbox also blocks network egress depends on the host, so nothing here
-# relies on it. Routing is never Codex's to decide: Jev sets the category and
-# the handler performs every effect itself.
+# directory, a scrubbed environment and a read-only sandbox, which on the
+# deployment host also blocks network egress. That last part is a property of
+# the host's sandbox implementation rather than of this code, so the screening
+# above does not depend on it. Routing is never Codex's to decide: Jev sets the
+# category and the handler performs every effect itself.
 CODEX_FLAGS = (
     "exec",
     "--ephemeral",
