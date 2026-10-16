@@ -31,6 +31,7 @@ from app.worker.activity import (
 from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
+from app.worker.personal_inbox import collector_from_environment
 from app.worker.supervisor import SupervisorPool
 from app.worker.runtime import (
     build_coalesced_task_result,
@@ -477,6 +478,12 @@ def main() -> int:
         pickup_timeout_seconds=poll_timeout_seconds,
     )
     collector.start()
+    # Personal mail is classified in this process but never reaches the
+    # executor: it has its own queue, and the only thing this thread can do
+    # with an email is ask two fixed endpoints about it.
+    personal = collector_from_environment(broker)
+    if personal is not None:
+        personal.start()
     try:
         loop_count = 0
         while True:
@@ -503,6 +510,8 @@ def main() -> int:
         return 0
     finally:
         collector.stop()
+        if personal is not None:
+            personal.stop()
         if max_loops:
             supervisors.drain()
         activity_server.shutdown()

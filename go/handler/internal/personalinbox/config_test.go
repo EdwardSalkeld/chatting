@@ -3,11 +3,13 @@ package personalinbox
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func validConfig() Config {
 	return Config{Enabled: true, DBPath: "/data/inbox.db", Account: "main", TokenEnv: "JMAP_TOKEN",
-		OrdersTarget: "orders", ActionTarget: "actions", DigestTarget: "digest", DigestSeconds: 3600,
+		OrdersTarget: "orders", ActionTarget: "actions", DigestTarget: "digest",
+		DigestAt: "08:00", Timezone: "Europe/London",
 		LinearKeyEnv: "LINEAR_KEY", LinearTeam: "team", LinkTemplate: DefaultLinkTemplate,
 		Folders: map[string]string{"news": "Triage/News", "order": "Triage/Orders"}}
 }
@@ -33,13 +35,15 @@ func TestConfigOptInAndStrictPolicy(t *testing.T) {
 
 func TestConfigRejectsUnknownCategoriesAndUnsafeValues(t *testing.T) {
 	cases := map[string]func(*Config){
-		"unknown folder category": func(c *Config) { c.Folders = map[string]string{"spam": "Junk"} },
-		"unknown mark_read":       func(c *Config) { c.MarkRead = []string{"everything"} },
-		"folder with newline":     func(c *Config) { c.Folders = map[string]string{"news": "News\r\nEXPUNGE"} },
-		"plaintext session url":   func(c *Config) { c.SessionURL = "http://api.example.com/jmap/session" },
-		"plaintext link template": func(c *Config) { c.LinkTemplate = "http://mail.example.com/{email}" },
-		"missing token env":       func(c *Config) { c.TokenEnv = "" },
-		"zero digest interval":    func(c *Config) { c.DigestSeconds = 0 },
+		"unknown folder category":  func(c *Config) { c.Folders = map[string]string{"spam": "Junk"} },
+		"unknown mark_read":        func(c *Config) { c.MarkRead = []string{"everything"} },
+		"folder with newline":      func(c *Config) { c.Folders = map[string]string{"news": "News\r\nEXPUNGE"} },
+		"plaintext session url":    func(c *Config) { c.SessionURL = "http://api.example.com/jmap/session" },
+		"plaintext link template":  func(c *Config) { c.LinkTemplate = "http://mail.example.com/{email}" },
+		"missing token env":        func(c *Config) { c.TokenEnv = "" },
+		"nonsense digest time":     func(c *Config) { c.DigestAt = "half eight" },
+		"out of range digest time": func(c *Config) { c.DigestAt = "25:00" },
+		"unknown timezone":         func(c *Config) { c.Timezone = "Mars/Olympus" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -49,6 +53,22 @@ func TestConfigRejectsUnknownCategoriesAndUnsafeValues(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+func TestDigestTimeIsReadInTheConfiguredZone(t *testing.T) {
+	config := validConfig()
+	hour, minute, err := config.DigestTime()
+	if err != nil || hour != 8 || minute != 0 {
+		t.Fatalf("%d:%d %v", hour, minute, err)
+	}
+	location, err := config.Location()
+	if err != nil || location.String() != "Europe/London" {
+		t.Fatalf("%v %v", location, err)
+	}
+	config.Timezone = ""
+	if location, err := config.Location(); err != nil || location != time.UTC {
+		t.Fatalf("empty timezone should mean UTC, got %v %v", location, err)
 	}
 }
 

@@ -21,7 +21,7 @@ Its inspection endpoint is described below.
 
 | Category | Relayed as | Filed into |
 | --- | --- | --- |
-| `news` | A periodic digest, not one alert per newsletter | `folders.news` |
+| `news` | One daily digest, not an alert per newsletter | `folders.news` |
 | `order` | Immediate Telegram to the orders destination | `folders.order` |
 | `action` | Immediate Telegram to the action destination, plus a Linear issue | `folders.action` |
 | `review` | Immediate Telegram to the action destination; no ticket | Nothing, by default |
@@ -45,12 +45,6 @@ folder, team, shell command, attachment path, or arbitrary mailbox operation.
 No sending, deleting or arbitrary JMAP method is exposed — the only mailbox
 change available is moving one ingested message into one configured folder,
 optionally marking it read in the same operation.
-
-Digests collect saved routine summaries after `digest_interval_seconds` from
-ingestion, checked every ten seconds, in bounded two-message Telegram chunks.
-They are delayed summaries rather than a calendar-time daily digest. Each
-digest's membership and body are committed before sending so replay cannot
-regroup previously delivered messages into another digest.
 
 ## Links back to the message
 
@@ -124,22 +118,95 @@ name alone when that name is unambiguous.
 
 ## Worker boundary
 
-Run `python -m app.main_personal_inbox_worker` as a dedicated user/process using
-[the service example](../../configs/personal-inbox-worker.service.example).
-It needs `TYPESAFE_API_KEY` and `CHATTING_PERSONAL_SUMMARY_API_KEY`, plus an
-explicit `--summary-model` supporting structured outputs. These are model
-credentials, not mailbox credentials. The summary request has `tools: []`,
-`tool_choice: none`, `store: false`, and no previous conversation. Tool
-calls/refusals/incomplete outputs are rejected. Jev or summarizer failures
-produce a review alert, never automatic filing. No classification response is
-executed as code.
+Classification runs as a thread of the ordinary worker, not a separate service.
+It shares that process and its existing `TYPESAFE_API_KEY`, but not its
+executor: personal mail has its own queue and never enters `chatting.tasks.v1`.
 
-No provider request contains local context, history, credentials or handler
-destinations. Mail is sent to TypeSafe for classification and OpenAI for
-summarization; this must be part of the operator's account rollout decision.
-Provider calls are stateless but local message records and cached summaries
-persist; v1 has no automatic retention pruning. Protect the databases and
-backups as personal email data.
+The thread starts only when both of these are set, so the default is off:
+
+- `TYPESAFE_API_KEY` — the worker already has this for model routing.
+- `CHATTING_PERSONAL_CACHE_PATH` — where model output is cached before
+  publication, so a failed publish or ACK replays the saved answer rather than
+  paying for the call again.
+
+`CHATTING_PERSONAL_SUMMARY_MODEL` is optional and passed to Codex as `-m`;
+without it Codex uses its own configured default.
+
+### Why there is no second API key
+
+Jev classifies, and summaries are written by the locally installed Codex CLI
+using its existing login. There is no second provider and no second credential.
+
+Codex is an agent and its shell tool cannot be disabled — `tools.shell=false`
+is accepted and then ignored. Two things stand in front of it:
+
+1. **Jev screens every email first.** One of its questions asks whether the
+   email contains text addressed to an automated system: instructions to ignore
+   previous instructions, to run a command, to reveal a file or credential, or
+   to change how the mail is handled. Anything but a confident "no" is withheld
+   from Codex entirely and surfaced to the owner as a review alert instead.
+   A failed or unavailable Jev call fails closed the same way, because Jev is
+   the only thing standing between an untrusted email and an agent with a shell.
+2. **Codex runs locked down.** `--ephemeral` (no session files on disk),
+   `--ignore-user-config`, `--ignore-rules`, `--sandbox read-only`, an empty
+   working directory, and an environment with `TYPESAFE_API_KEY` and every
+   `CHATTING_*` variable removed. Output is constrained by `--output-schema`
+   and re-validated by the handler.
+
+The read-only sandbox also blocks network egress. Measured on the deployment
+host as the worker user: an outbound request succeeds unsandboxed and fails to
+resolve inside `codex exec --sandbox read-only`. That is a property of the
+host's sandbox implementation and differs between platforms, so the screening
+above does not depend on it; re-measure if the host or the Codex version
+changes, by running a read-only `codex exec` that attempts an outbound request
+and comparing it against the same request outside the sandbox.
+
+`--ignore-user-config` also discards the deployment's `codex-config.toml`,
+including its model setting, so set `CHATTING_PERSONAL_SUMMARY_MODEL` to the
+model that file names rather than letting Codex fall back to its own default.
+
+Routing is never Codex's to decide. Jev sets the category, the handler chooses
+the folder and destinations from its own configuration, and the handler
+performs every effect itself. A hostile email can at worst affect the wording
+of text its own owner reads.
+
+Mail is sent to TypeSafe for classification and to Codex for summarising; this
+must be part of the operator's rollout decision. Provider calls are stateless,
+but local message records and the cache persist; v1 has no automatic retention
+pruning. Protect the databases and backups as personal email data.
+
+## The daily digest
+
+Routine mail is relayed once a day rather than one alert per newsletter. At
+`digest_at`, read in `timezone`, the handler freezes that day's routine mail
+into one round-up and asks for every line in a single call. The result is one
+Telegram message:
+
+```
+Inbox digest — 4 since yesterday, 16 Oct
+
+• Namecheap — .com registry prices rising in January
+• Saal Digital — 50% off print orders until 31 October
+• J.P. Morgan — terms and conditions updated
+• Lauren McGuire Mulvihill — Simon on the Streets donation drive
+```
+
+Lines come from message bodies, not subjects, because marketing subject lines
+hide the thing worth knowing: "A little thank you from us" is a discount, and
+only the body says which. Each message contributes its first 2000 characters,
+and a digest covers at most 60 messages.
+
+The handler accepts the lines only when they account for exactly the membership
+frozen when the digest opened — no dropped, invented or duplicated rows — and
+dead-letters the result otherwise. Membership and the rendered body are
+committed before sending, so a replay cannot regroup messages into a second
+round-up.
+
+A day with no routine mail records its occurrence without sending anything, so
+a newsletter arriving after the send time waits for the next one rather than
+firing a digest of its own. Routine mail therefore carries no per-message
+summary at all: Jev decides the category and whether the recipient must act,
+and only mail that needs acting on buys a summary.
 
 ## Configuration and rollout
 
@@ -156,12 +223,17 @@ folders. The handler alone receives:
 - `CHATTING_PERSONAL_LINEAR_KEY` (or the configured name), a Linear personal key
   with access to the selected team/project.
 
+The worker's model credentials are listed under **Worker boundary** above and
+are deliberately separate from these: the worker never receives mailbox,
+Telegram or Linear credentials.
+
 Dry-run needs the JMAP token but does not require live Telegram/Linear keys.
 All destinations and the Linear team still need explicit configuration so
 previews are meaningful.
 
-1. Create the folders you intend to file into. Configure the account, folder map
-   and Telegram destinations/Linear team. Provision the worker and model keys.
+1. Create the folders you intend to file into. Configure the account, folder
+   map, digest time and Telegram destinations/Linear team. Set the worker's
+   model variables.
 2. Enable the connector with `dry_run: true`. Inspect classifications/previews
    using the loopback API. Read-only ingestion still reaches the model
    providers; dry-run suppresses external effects, not model requests.
