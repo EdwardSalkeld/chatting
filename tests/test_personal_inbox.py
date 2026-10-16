@@ -17,6 +17,7 @@ from app.personal_inbox import (
     JEV_ENDPOINT,
     TASKS_QUEUE,
     RESULTS_QUEUE,
+    CATEGORY_RESULT,
     TRIAGE_QUESTIONS,
     classify,
     codex_structured,
@@ -82,6 +83,8 @@ def choice_answer(choice, criteria, confidence):
 def jev_answer(
     category="order", confidence=0.99, action="no", deadline="no", injection="no"
 ):
+    # "news" is the handler's word for it; Jev is asked in the mail's own terms.
+    category = {"news": "news_or_marketing"}.get(category, category)
     return {
         "answers": {
             "category": choice_answer(category, CATEGORIES, confidence),
@@ -188,9 +191,13 @@ class PersonalInboxTests(unittest.TestCase):
         # The model had no bucket for these and sat at low confidence, which
         # held a third of a real mailbox in review. All three prompts that can
         # route a message to action have to agree.
-        self.assertIn("survey", CATEGORIES["news"])
-        self.assertIn("feedback", CATEGORIES["news"])
-        self.assertIn("not acting", CATEGORIES["action"])
+        routine = CATEGORIES["news_or_marketing"]
+        self.assertIn("survey", routine)
+        self.assertIn("feedback", routine)
+        # The name has to cover promotional mail, or anything with an expiry
+        # in it drifts towards action.
+        self.assertIn("offer", routine)
+        self.assertEqual(CATEGORY_RESULT["news_or_marketing"], "news")
         action_question = TRIAGE_QUESTIONS["requires_action"]["instructions"]
         self.assertIn("survey", action_question)
         with patch(
