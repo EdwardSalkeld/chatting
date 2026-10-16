@@ -23,7 +23,7 @@ Its inspection endpoint is described below.
 | --- | --- | --- |
 | `news` | One daily digest, not an alert per newsletter | `folders.news` |
 | `order` | Immediate Telegram to the orders destination | `folders.order` |
-| `action` | Immediate Telegram to the action destination, plus a Linear issue | `folders.action` |
+| `action` | Immediate Telegram to the action destination, and a Linear issue if ticketing is configured | `folders.action` |
 | `review` | Immediate Telegram to the action destination; no ticket | Nothing, by default |
 
 Filing is driven entirely by the `folders` map. A category with no entry, or an
@@ -220,8 +220,12 @@ folders. The handler alone receives:
   A read-only token is enough until you enable filing; filing needs the Email
   scope without read-only.
 - Its existing configured Telegram bot token.
-- `CHATTING_PERSONAL_LINEAR_KEY` (or the configured name), a Linear personal key
-  with access to the selected team/project.
+- `CHATTING_PERSONAL_LINEAR_KEY` (or the configured name), **only if** you want
+  action mail to raise tickets. Leave `linear_team_id` empty and ticketing is
+  off: action mail is still alerted and filed, there is just no issue. A
+  configured team whose key is missing from the environment logs that ticketing
+  is disabled and carries on rather than failing startup, so the rest of the
+  workflow can run before Linear is set up.
 
 The worker's model credentials are listed under **Worker boundary** above and
 are deliberately separate from these: the worker never receives mailbox,
@@ -232,8 +236,8 @@ All destinations and the Linear team still need explicit configuration so
 previews are meaningful.
 
 1. Create the folders you intend to file into. Configure the account, folder
-   map, digest time and Telegram destinations/Linear team. Set the worker's
-   model variables.
+   map, digest time and Telegram destinations. Set the worker's cache path.
+   Ticketing can be left out entirely at this stage.
 2. Enable the connector with `dry_run: true`. Inspect classifications/previews
    using the loopback API. Read-only ingestion still reaches the model
    providers; dry-run suppresses external effects, not model requests.

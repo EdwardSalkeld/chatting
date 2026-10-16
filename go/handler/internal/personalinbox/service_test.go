@@ -654,3 +654,27 @@ func TestLatestOccurrenceRollsBackBeforeTheSendTime(t *testing.T) {
 		t.Fatalf("after the send time should use today, got %s", got)
 	}
 }
+
+func TestActionMailWithoutLinearIsStillNotifiedAndFiled(t *testing.T) {
+	service, _, broker, performer := fixture(t)
+	ctx := context.Background()
+	service.Config.LinearTeam = ""
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	broker.result("Stm4", Classification{Category: "action", Summary: "Pay the invoice",
+		Action: "Pay it", Confidence: .99})
+	if err := service.Cycle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int{}
+	for _, call := range performer.calls {
+		kinds[call.Kind]++
+	}
+	if kinds["linear"] != 0 {
+		t.Fatalf("ticket raised with no team configured: %+v", performer.calls)
+	}
+	if kinds["telegram"] != 1 || kinds["file"] != 1 {
+		t.Fatalf("action mail lost its alert or filing: %+v", performer.calls)
+	}
+}

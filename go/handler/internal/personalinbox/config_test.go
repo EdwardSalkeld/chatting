@@ -87,3 +87,24 @@ func TestFolderAndMarkReadLookups(t *testing.T) {
 		t.Fatal("mark_read lookup wrong")
 	}
 }
+
+func TestTicketingIsOptional(t *testing.T) {
+	config := validConfig()
+	config.LinearTeam = ""
+	config.LinearKeyEnv = ""
+	if err := config.Validate(); err != nil {
+		t.Fatalf("a configuration with no ticketing was refused: %v", err)
+	}
+	if config.CreatesTickets() {
+		t.Fatal("no team should mean no tickets")
+	}
+	// A team with nowhere to read its key from is a half-configuration.
+	config.LinearTeam = "team"
+	if err := config.Validate(); err == nil {
+		t.Fatal("team without a key environment variable accepted")
+	}
+	config.LinearKeyEnv = "LINEAR_KEY"
+	if err := config.Validate(); err != nil || !config.CreatesTickets() {
+		t.Fatalf("%v %v", err, config.CreatesTickets())
+	}
+}

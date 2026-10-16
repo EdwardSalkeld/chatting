@@ -484,7 +484,9 @@ func (service *Service) plan(message Message) []Effect {
 		add("telegram", service.Config.OrdersTarget)
 	case "action":
 		add("telegram", service.Config.ActionTarget)
-		add("linear", service.Config.LinearTeam)
+		if service.Config.CreatesTickets() {
+			add("linear", service.Config.LinearTeam)
+		}
 	case "review":
 		add("telegram", service.Config.ActionTarget)
 	}
