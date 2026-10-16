@@ -363,11 +363,15 @@ class PersonalInboxBrokerTests(unittest.TestCase):
                 cache.execute(
                     "CREATE TABLE classifications (id TEXT PRIMARY KEY, fingerprint TEXT, result TEXT)"
                 )
+                # Triage goes over HTTP; the summary is a Codex subprocess.
                 with patch(
-                    "app.personal_inbox.post",
-                    side_effect=[jev_answer(), summary_answer()],
-                ) as providers:
-                    process_one(broker, cache, jev_key="j", summary_model="m")
+                    "app.personal_inbox.post", side_effect=[jev_answer()]
+                ) as triage:
+                    with patch(
+                        "app.personal_inbox.codex_structured",
+                        side_effect=[summary_answer()],
+                    ) as summariser:
+                        process_one(broker, cache, jev_key="j", summary_model="m")
                 cache.close()
                 first = broker.pickup_json(RESULTS_QUEUE, timeout_seconds=30)
                 self.assertIsNotNone(first)
@@ -392,7 +396,8 @@ class PersonalInboxBrokerTests(unittest.TestCase):
                     cache.close()
                 replay = broker.pickup_json(RESULTS_QUEUE, timeout_seconds=30)
                 self.assertEqual(first.payload, replay.payload)
-                self.assertEqual(providers.call_count, 2)
+                self.assertEqual(triage.call_count, 1)
+                self.assertEqual(summariser.call_count, 1)
                 broker.ensure_queue("chatting.tasks.v1")
                 self.assertIsNone(
                     broker.pickup_json("chatting.tasks.v1", timeout_seconds=1)
