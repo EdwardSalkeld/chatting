@@ -1,0 +1,26 @@
+{
+  "personal_inbox": {
+    "enabled": false,
+    "db_path": "/var/lib/chatting/personal-inbox.db",
+    "account": "personal",
+    "jmap_token_env": "CHATTING_PERSONAL_JMAP_TOKEN",
+    "backfill": false,
+    "dry_run": true,
+    "folders": {
+      "news": "Triage/News",
+      "order": "Triage/Orders",
+      "action": "Triage/Actions",
+      "review": ""
+    },
+    "mark_read": ["news", "order"],
+    "mail_link_template": "https://app.fastmail.com/mail/{folder}/{thread}.{email}?u={account}",
+    "orders_telegram_target": "REPLACE_WITH_ORDERS_CHAT_ID",
+    "action_telegram_target": "REPLACE_WITH_ACTION_CHAT_ID",
+    "digest_telegram_target": "REPLACE_WITH_DIGEST_CHAT_ID",
+    "digest_at": "08:00",
+    "timezone": "Europe/London",
+    "linear_key_env": "CHATTING_PERSONAL_LINEAR_KEY",
+    "linear_team_id": "",
+    "linear_project_id": ""
+  }
+}

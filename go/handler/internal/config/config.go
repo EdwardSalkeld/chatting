@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 	"io"
 	"math"
 	"os"
@@ -26,6 +27,7 @@ const (
 )
 
 var allowedKeys = map[string]bool{
+	"personal_inbox":                 true,
 	"bbmb_address":                   true,
 	"db_path":                        true,
 	"max_loops":                      true,
@@ -83,6 +85,7 @@ var allowedKeys = map[string]bool{
 }
 
 type Config struct {
+	PersonalInbox               *personalinbox.Config
 	BBMBAddress                 string
 	DBPath                      string
 	MaxLoops                    int
@@ -254,6 +257,13 @@ func Load(raw []byte) (Config, error) {
 	}
 
 	config := Defaults()
+	if value, ok := payload["personal_inbox"]; ok {
+		parsed, err := personalinbox.Decode(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("personal_inbox: %w", err)
+		}
+		config.PersonalInbox = parsed
+	}
 	var err error
 	if rawValue, ok := payload["bbmb_address"]; ok && !isNull(rawValue) {
 		config.BBMBAddress, err = decodeNonEmptyString(rawValue, "bbmb_address")

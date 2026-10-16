@@ -28,6 +28,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/reminders"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
@@ -107,6 +108,17 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	if err != nil {
 		return nil, err
 	}
+	personal, err := newPersonalInbox(config, adapter)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	setupComplete := false
+	defer func() {
+		if !setupComplete && personal != nil {
+			_ = personal.Store.Close()
+		}
+	}()
 	dispatcher, emailSender, err := buildDispatcher(config)
 	if err != nil {
 		_ = store.Close()
@@ -323,6 +335,9 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
 	}, func(mux *http.ServeMux) {
 		workitems.RegisterRoutes(mux, store)
+		if personal != nil {
+			personal.RegisterRoutes(mux)
+		}
 	})
 	if err != nil {
 		_ = metricsServer.Close()
@@ -345,7 +360,12 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		_ = store.Close()
 		return nil, err
 	}
-	return &closingRunner{runner: runner, closers: []closer{egressServer, metricsServer, store}}, nil
+	closers := []closer{egressServer, metricsServer, store}
+	if personal != nil {
+		closers = append(closers, personal.Store)
+	}
+	setupComplete = true
+	return &closingRunner{runner: runner, personal: personal, closers: closers}, nil
 }
 
 type githubCheckpointStore struct {
@@ -532,12 +552,23 @@ type closer interface {
 }
 
 type closingRunner struct {
-	runner  runner
-	closers []closer
+	runner   runner
+	personal *personalinbox.Service
+	closers  []closer
 }
 
 func (runner *closingRunner) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopped := make(chan struct{})
+	if runner.personal != nil {
+		go func() { defer close(stopped); runner.personal.Run(ctx) }()
+	} else {
+		close(stopped)
+	}
 	defer func() {
+		cancel()
+		<-stopped
 		for _, closer := range runner.closers {
 			_ = closer.Close()
 		}
