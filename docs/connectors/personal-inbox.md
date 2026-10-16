@@ -294,6 +294,14 @@ other way round.
 
 ## Diagnosing a decision
 
+Paid bookings and reservations belong in `order` when they require no separate
+outstanding task. Travel/event times, finding a seat and showing or downloading
+issued tickets describe using the purchase; they do not create an action or
+deadline. Explicit required check-in, a failed payment, an unpaid balance or
+missing details needed to complete the booking still belong in `action`.
+Both Jev's questions and the summary prompt use this distinction: an extracted
+action can promote an otherwise successful order in the handler.
+
 Each classification carries a `trace`: the category and confidence Jev gave,
 whether it judged an action, a deadline or an injection attempt, whether a
 summary was bought, and a `reason` naming the rule that settled the outcome —
