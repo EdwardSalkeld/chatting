@@ -63,10 +63,6 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"telegram_attachment_max_age_seconds": 60,
 		"telegram_prompt_context": ["Telegram replies are visible in chat."],
 		"telegram_context_refs": ["repo:/workspace/telegram"],
-		"auxiliary_ingress_enabled": true,
-		"auxiliary_ingress_bbmb_address": "10.0.0.2:9998",
-		"auxiliary_ingress_queues": ["generic-post"],
-		"auxiliary_ingress_context_refs": ["repo:/workspace/chatting"],
 		"github_repositories": ["EdwardSalkeld/chatting", "EdwardSalkeld/*", "EdwardSalkeld/chatting"],
 		"github_assignee_login": "BillyAcachofa",
 		"github_context_refs": ["repo:/workspace/chatting"],
@@ -191,18 +187,6 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	if !reflect.DeepEqual(config.TelegramContextRefs, []string{"repo:/workspace/telegram"}) {
 		t.Fatalf("TelegramContextRefs = %#v", config.TelegramContextRefs)
 	}
-	if !config.AuxiliaryIngressEnabled {
-		t.Fatal("AuxiliaryIngressEnabled = false")
-	}
-	if config.AuxiliaryIngressBBMBAddress != "10.0.0.2:9998" {
-		t.Fatalf("AuxiliaryIngressBBMBAddress = %q", config.AuxiliaryIngressBBMBAddress)
-	}
-	if !reflect.DeepEqual(config.AuxiliaryIngressQueues, []string{"generic-post"}) {
-		t.Fatalf("AuxiliaryIngressQueues = %#v", config.AuxiliaryIngressQueues)
-	}
-	if !reflect.DeepEqual(config.AuxiliaryIngressContextRefs, []string{"repo:/workspace/chatting"}) {
-		t.Fatalf("AuxiliaryIngressContextRefs = %#v", config.AuxiliaryIngressContextRefs)
-	}
 	if !reflect.DeepEqual(config.GitHubRepositories, []string{"EdwardSalkeld/chatting", "EdwardSalkeld/*"}) {
 		t.Fatalf("GitHubRepositories = %#v", config.GitHubRepositories)
 	}
@@ -296,11 +280,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			message: "config allowed_egress_channels must be a list of strings",
 		},
 		{
-			name:    "non-bool auxiliary enabled",
-			raw:     `{"auxiliary_ingress_enabled": "yes"}`,
-			message: "config auxiliary_ingress_enabled must be a boolean",
-		},
-		{
 			name:    "imap without username",
 			raw:     `{"imap_host": "imap.example.com"}`,
 			message: "imap_username is required when imap_host is set",
@@ -339,16 +318,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "blank telegram token env",
 			raw:     `{"telegram_bot_token_env": ""}`,
 			message: "config telegram_bot_token_env must be a non-empty string",
-		},
-		{
-			name:    "enabled auxiliary without queues",
-			raw:     `{"auxiliary_ingress_enabled": true}`,
-			message: "auxiliary ingress requires auxiliary_ingress_queues",
-		},
-		{
-			name:    "blank auxiliary queue",
-			raw:     `{"auxiliary_ingress_queues": ["generic-post", ""]}`,
-			message: "auxiliary_ingress_queues entries must not be empty",
 		},
 		{
 			name:    "invalid github repository selector",

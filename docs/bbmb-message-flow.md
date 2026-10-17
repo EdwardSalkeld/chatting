@@ -23,16 +23,13 @@ BBMB now carries ingress only. Egress does not use BBMB — see [Egress transpor
 
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
-| `generic-post` or any configured auxiliary ingress queue | `auxiliary-ingress` | `message-handler` | Carries raw JSON webhook bodies as `chatting.auxiliary_ingress.v1` payloads |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
 
 Important details:
-- The task queue name is hardcoded; auxiliary ingress queue names are configured per route.
+- The task queue name is hardcoded.
 - There is no separate BBMB retry queue, dead-letter queue, or approval queue.
 - Retries, dead letters, ingress dedupe state, the task ledger, and the worker egress outbox all
   live in SQLite, not in BBMB.
-- `auxiliary-ingress` only publishes `event_id`, `received_at`, and the parsed JSON `body`; HTTP
-  request metadata is intentionally not forwarded into the worker-visible task.
 
 ### Egress transport
 
@@ -56,7 +53,6 @@ Examples:
 - IMAP email
 - Telegram update
 - interval schedule trigger
-- auxiliary ingress JSON POST body
 - GitHub issue assignment
 - internal heartbeat ping
 
@@ -262,7 +258,7 @@ This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBM
 - `poll_timeout_seconds`
   Bounds how long the message-handler blocks on a BBMB pickup per loop iteration. (Egress no
   longer drains a queue, so this no longer gates egress; it applies to the retained-for-tests
-  egress drain and any auxiliary-ingress pickups.)
+  egress drain.)
 - `allowed_egress_channels`
   Main control for what the worker is allowed to cause externally. Internal heartbeat pong on
   `log/heartbeat` is the only built-in exception.

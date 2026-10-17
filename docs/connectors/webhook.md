@@ -1,31 +1,8 @@
-# Connector: Webhook
+# Webhooks
 
-Modules:
-- `go/handler/internal/connectors/auxiliary`
-- `app.main_auxiliary_ingress`
+There is currently no webhook ingress listener.
 
-## Purpose
-
-Accept JSON webhook-style POST bodies on a secret path, push them through BBMB, and normalize them
-into canonical webhook envelopes.
-
-## Integration state
-
-Split mode supports BBMB-backed auxiliary ingress with:
-- `app.main_auxiliary_ingress` listening on configured secret paths from `ingress_routes`
-- the Go auxiliary connector draining configured handler-side queue names from `auxiliary_ingress_queues`
-- worker-visible task content set to the JSON body only
-
-## Queue payload
-
-Auxiliary ingress queue message fields:
-- `event_id`
-- `received_at` (timezone-aware datetime)
-- `body` (any valid JSON value)
-
-## Output mapping
-
-- `source`: `webhook`
-- `id` / `dedupe_key`: `webhook:<event_id>`
-- `reply_channel`: `webhook:<queue_name>`
-- `content`: exact JSON body rendered as text, without request-path or header metadata
+If webhook support is needed, add a dedicated route to the main message handler
+and expose only that route through the firewall or reverse proxy. Normalize
+requests into the existing task envelope and use the handler's task publication
+path; a separate ingress process and additional BBMB queues are unnecessary.

@@ -19,7 +19,6 @@ SourceType = Literal["cron", "email", "im", "webhook", "internal", "reminder"]
 
 _TASK_MESSAGE_TYPE = "chatting.task.v1"
 _EGRESS_MESSAGE_TYPE_V2 = "chatting.egress.v2"
-_AUXILIARY_INGRESS_MESSAGE_TYPE = "chatting.auxiliary_ingress.v1"
 
 
 def _require_non_empty_string(value: object, *, field_name: str) -> str:
@@ -100,21 +99,6 @@ def _parse_prompt_context_list(value: object, *, field_name: str) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list")
     return [_require_non_empty_string(item, field_name=field_name) for item in value]
-
-
-def _parse_json_value(value: object, *, field_name: str) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, list):
-        return [_parse_json_value(item, field_name=field_name) for item in value]
-    if isinstance(value, dict):
-        parsed: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key.strip():
-                raise ValueError(f"{field_name} object keys must be non-empty strings")
-            parsed[key] = _parse_json_value(item, field_name=field_name)
-        return parsed
-    raise ValueError(f"{field_name} must be valid JSON data")
 
 
 @dataclass(frozen=True)
@@ -411,61 +395,7 @@ def _parse_message_attachment(value: object) -> AttachmentRef | None:
     )
 
 
-@dataclass(frozen=True)
-class AuxiliaryIngressQueueMessage:
-    """Raw JSON body received by the auxiliary ingress service."""
-
-    event_id: str
-    received_at: datetime
-    body: Any
-    schema_version: str = SCHEMA_VERSION
-    message_type: str = _AUXILIARY_INGRESS_MESSAGE_TYPE
-
-    def __post_init__(self) -> None:
-        if self.schema_version != SCHEMA_VERSION:
-            raise ValueError(f"unsupported_schema_version:{self.schema_version}")
-        if self.message_type != _AUXILIARY_INGRESS_MESSAGE_TYPE:
-            raise ValueError("message_type must be chatting.auxiliary_ingress.v1")
-        _require_non_empty_string(self.event_id, field_name="event_id")
-        if self.received_at.tzinfo is None:
-            raise ValueError("received_at must be timezone-aware")
-        _parse_json_value(self.body, field_name="body")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "message_type": self.message_type,
-            "event_id": self.event_id,
-            "received_at": _serialize_utc_datetime(self.received_at),
-            "body": self.body,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "AuxiliaryIngressQueueMessage":
-        if not isinstance(payload, dict):
-            raise ValueError("auxiliary_ingress_payload_must_be_object")
-        message_type = _require_non_empty_string(
-            payload.get("message_type"), field_name="message_type"
-        )
-        if message_type != _AUXILIARY_INGRESS_MESSAGE_TYPE:
-            raise ValueError("auxiliary_ingress_message_type_invalid")
-        return cls(
-            event_id=_require_non_empty_string(
-                payload.get("event_id"), field_name="event_id"
-            ),
-            received_at=_parse_utc_datetime(
-                payload.get("received_at"), field_name="received_at"
-            ),
-            body=_parse_json_value(payload.get("body"), field_name="body"),
-            schema_version=_require_non_empty_string(
-                payload.get("schema_version", SCHEMA_VERSION),
-                field_name="schema_version",
-            ),
-        )
-
-
 __all__ = [
-    "AuxiliaryIngressQueueMessage",
     "TaskQueueMessage",
     "EgressQueueMessage",
 ]
