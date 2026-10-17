@@ -61,6 +61,30 @@ live in the configured `supervisor_dir`, by default beside the worker database;
 keep that directory persistent and writable by the worker user. Do not place it
 in a service-private temporary directory that changes across restarts.
 
+The worker unit must also disable `PrivateTmp`. systemd removes that unit's
+private temporary directories when the manager stops, even though
+`KillMode=process` leaves its supervisors and executors alive. Their inherited
+mount then points to a deleted directory: existing finish sockets disappear,
+and creating new temporary files fails. A successful manager reconnection does
+not check this resource lifetime.
+
+Set `TMPDIR` to a short, persistent, worker-owned directory with mode `0700`
+(for example `/var/lib/worker/chatting-tmp`), and create it through tmpfiles
+without an age-based cleanup rule. The directory must be writable under the
+unit's filesystem restrictions and survive manager restarts. This also keeps
+Python's finish and escalation sockets/files away from temporary-directory
+cleanup. Disabling `PrivateTmp` preserves ordinary `/tmp` use by tools that do
+not honor `TMPDIR`.
+With `ProtectSystem=strict`, explicitly include `/tmp` and `/var/tmp` in
+`ReadWritePaths` too: they no longer get writable private mounts implicitly.
+
+These settings protect newly started supervisors. A busy supervisor retains
+its old mount namespace and environment until it finishes; changing the unit
+does not restore files already deleted from that namespace. Do not kill or
+requeue an affected executor automatically, since it may have completed side
+effects. Resolve an affected task explicitly with the operator before retiring
+its supervisor.
+
 On first rollout, drain the old worker before upgrading: its executors do not yet
 have separate supervisors. After rollout, a manager restart preserves existing
 work. Busy supervisors continue with the runtime and environment they started
