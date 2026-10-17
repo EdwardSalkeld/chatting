@@ -2,7 +2,6 @@ import unittest
 from datetime import datetime, timezone
 
 from app.broker import (
-    AuxiliaryIngressQueueMessage,
     EgressQueueMessage,
     TaskQueueMessage,
 )
@@ -231,25 +230,6 @@ class EgressQueueMessageTests(unittest.TestCase):
                 event_kind="completion",
                 message_type="chatting.egress.v2",
             )
-
-
-class AuxiliaryIngressQueueMessageTests(unittest.TestCase):
-    def test_auxiliary_ingress_message_round_trip(self) -> None:
-        message = AuxiliaryIngressQueueMessage(
-            event_id="aux:1",
-            received_at=datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc),
-            body={"hello": ["world", 1, True, None]},
-        )
-
-        parsed = AuxiliaryIngressQueueMessage.from_dict(message.to_dict())
-
-        self.assertEqual(parsed.event_id, "aux:1")
-        self.assertEqual(parsed.received_at, message.received_at)
-        self.assertEqual(parsed.body, {"hello": ["world", 1, True, None]})
-
-    def test_auxiliary_ingress_message_rejects_wrong_type(self) -> None:
-        with self.assertRaises(ValueError):
-            AuxiliaryIngressQueueMessage.from_dict({"message_type": "chatting.task.v1"})
 
 
 if __name__ == "__main__":

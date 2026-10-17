@@ -1,18 +1,15 @@
 # Running Split Mode With BBMB
 
-`chatting` runs under Docker Compose as three services by default, or four when auxiliary webhook
-ingress is enabled:
+`chatting` runs under Docker Compose as three services:
 - `message-handler` on the integration host (connectors + outbound dispatch)
 - `worker` on the execution host (routing + executor + policy)
 - `bbmb-server` in the middle (message bus)
-- optional `auxiliary-ingress` on a web-facing host (secret-path JSON POST listener)
 
 GitHub assignment polling is part of the Go `message-handler` when configured.
 
 BBMB sits in the middle over TCP.
 
 Queues (ingress only — egress does not use BBMB):
-- auxiliary ingress uses one configured queue per route
 - `chatting.tasks.v1`
 
 Egress is a synchronous HTTP call, not a queue:
@@ -29,7 +26,6 @@ For a worked message example and the full message-handler <-> worker conversatio
 - `handler`: `chatting-handler --config /config/handler.json`
 - `worker`: `python -m app.main_worker`
 - `bbmb`: `bbmb-server` on `:9876`
-- optional `auxiliary-ingress`: `python -m app.main_auxiliary_ingress`
 
 All app services must have network reachability to the BBMB TCP endpoint. In the default compose
 stack, that address is `bbmb:9876`.
@@ -75,11 +71,6 @@ export LOCAL_WORKSPACE=/absolute/path/to/the/workspace/codex-should-use
 docker compose pull
 docker compose up -d
 ```
-
-Optional auxiliary ingress connector settings in message-handler config:
-- `auxiliary_ingress_enabled`
-- `auxiliary_ingress_queues`
-- `auxiliary_ingress_context_refs`
 
 If the container working directory is not where you want Codex to run, set `codex_working_dir` in
 worker config to control only the Codex subprocess cwd without changing the worker service working
@@ -129,31 +120,6 @@ It serves a Docker-managed `html-output` volume that is mounted read-write into 
 `/workspace/html`. The worker still uses the existing `${LOCAL_WORKSPACE}:/workspace` bind for its
 main working tree, and the extra volume just provides a stable place for worker-generated HTML
 reports without tying that output to a checkout-specific host path.
-
-## 3.5) Optional auxiliary webhook ingress
-
-```bash
-uv run python -m app.main_auxiliary_ingress \
-  --bbmb-address 127.0.0.1:9876 \
-  --ingress-route generic-post:very-secret-path
-```
-
-This service accepts JSON `POST` requests on any configured secret path and publishes only the
-parsed JSON body into the configured queue for that route.
-
-Example config-driven setup:
-
-```json
-{
-  "bbmb_address": "127.0.0.1:9876",
-  "ingress_routes": ["generic-post:12334", "new-service:secret-two"]
-}
-```
-
-With that config, auxiliary ingress listens on `/12334` and `/secret-two`, and publishes those
-JSON bodies to `generic-post` and `new-service` respectively. To make the handler poll those same
-queues, add `auxiliary_ingress_queues: ["generic-post", "new-service"]` to the message-handler
-config.
 
 ## 4) Security boundary expectations
 

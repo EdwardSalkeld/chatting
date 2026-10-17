@@ -3,7 +3,6 @@ import unittest
 from pathlib import Path
 
 from app.broker.messages import (
-    AuxiliaryIngressQueueMessage,
     EgressQueueMessage,
     TaskQueueMessage,
 )
@@ -46,15 +45,6 @@ class ContractFixtureTests(unittest.TestCase):
         self.assertEqual(parsed.event_kind, "incremental")
         self.assertIsNone(parsed.sequence)
         self.assertNotIn("sequence", parsed.to_dict())
-        self.assertEqual(parsed.to_dict(), payload)
-
-    def test_auxiliary_ingress_fixture_parses_and_serializes(self) -> None:
-        payload = load_fixture("auxiliary_ingress.v1.json")
-
-        parsed = AuxiliaryIngressQueueMessage.from_dict(payload)
-
-        self.assertEqual(parsed.message_type, "chatting.auxiliary_ingress.v1")
-        self.assertEqual(parsed.event_id, "aux:fixture:1")
         self.assertEqual(parsed.to_dict(), payload)
 
 

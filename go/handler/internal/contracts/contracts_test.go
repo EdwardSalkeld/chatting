@@ -162,31 +162,6 @@ func TestEgressQueueMessageRequiresSequenceForCompletion(t *testing.T) {
 	}
 }
 
-func TestAuxiliaryIngressQueueMessageRoundTrip(t *testing.T) {
-	message := AuxiliaryIngressQueueMessage{
-		SchemaVersion: SchemaVersion,
-		MessageType:   AuxiliaryIngressMessageType,
-		EventID:       "aux:1",
-		ReceivedAt:    mustTimestamp(t, "2026-04-01T12:00:00Z"),
-		Body: map[string]any{
-			"hello":  "world",
-			"nested": []any{float64(1), float64(2)},
-		},
-	}
-
-	raw, err := json.Marshal(message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := DecodeAuxiliaryIngressQueueMessage(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsed.EventID != "aux:1" {
-		t.Fatalf("EventID = %q", parsed.EventID)
-	}
-}
-
 func TestGoldenContractFixtures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -224,16 +199,6 @@ func TestGoldenContractFixtures(t *testing.T) {
 				}
 				if parsed.Sequence != nil {
 					t.Fatalf("%s sequence = %#v", "egress.v2.incremental.json", parsed.Sequence)
-				}
-				return json.Marshal(parsed)
-			},
-		},
-		{
-			name: "auxiliary_ingress.v1.json",
-			decode: func(raw []byte) ([]byte, error) {
-				parsed, err := DecodeAuxiliaryIngressQueueMessage(raw)
-				if err != nil {
-					return nil, err
 				}
 				return json.Marshal(parsed)
 			},

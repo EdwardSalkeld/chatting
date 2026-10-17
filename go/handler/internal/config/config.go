@@ -72,11 +72,6 @@ var allowedKeys = map[string]bool{
 	"telegram_prompt_context":                   true,
 	"telegram_context_refs":                     true,
 
-	"auxiliary_ingress_enabled":      true,
-	"auxiliary_ingress_bbmb_address": true,
-	"auxiliary_ingress_queues":       true,
-	"auxiliary_ingress_context_refs": true,
-
 	"github_repositories":        true,
 	"github_assignee_login":      true,
 	"github_context_refs":        true,
@@ -130,11 +125,6 @@ type Config struct {
 	TelegramPromptContext                 []string
 	TelegramContextRefs                   []string
 
-	AuxiliaryIngressEnabled     bool
-	AuxiliaryIngressBBMBAddress string
-	AuxiliaryIngressQueues      []string
-	AuxiliaryIngressContextRefs []string
-
 	GitHubRepositories      []string
 	GitHubAssigneeLogin     string
 	GitHubContextRefs       []string
@@ -187,11 +177,6 @@ func Defaults() Config {
 		TelegramAttachmentMaxAgeSeconds:       2592000,
 		TelegramPromptContext:                 []string{},
 		TelegramContextRefs:                   []string{},
-
-		AuxiliaryIngressEnabled:     false,
-		AuxiliaryIngressBBMBAddress: "",
-		AuxiliaryIngressQueues:      []string{},
-		AuxiliaryIngressContextRefs: []string{},
 
 		GitHubRepositories:      []string{},
 		GitHubAssigneeLogin:     "",
@@ -520,30 +505,6 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if rawValue, ok := payload["auxiliary_ingress_enabled"]; ok && !isNull(rawValue) {
-		config.AuxiliaryIngressEnabled, err = decodeBool(rawValue, "auxiliary_ingress_enabled")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["auxiliary_ingress_bbmb_address"]; ok && !isNull(rawValue) {
-		config.AuxiliaryIngressBBMBAddress, err = decodeNonEmptyString(rawValue, "auxiliary_ingress_bbmb_address")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["auxiliary_ingress_queues"]; ok && !isNull(rawValue) {
-		config.AuxiliaryIngressQueues, err = decodeStringList(rawValue, "auxiliary_ingress_queues")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["auxiliary_ingress_context_refs"]; ok && !isNull(rawValue) {
-		config.AuxiliaryIngressContextRefs, err = decodeStringList(rawValue, "auxiliary_ingress_context_refs")
-		if err != nil {
-			return Config{}, err
-		}
-	}
 	if rawValue, ok := payload["github_repositories"]; ok && !isNull(rawValue) {
 		config.GitHubRepositories, err = decodeGitHubRepositories(rawValue)
 		if err != nil {
@@ -573,9 +534,6 @@ func Load(raw []byte) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-	}
-	if config.AuxiliaryIngressEnabled && len(config.AuxiliaryIngressQueues) == 0 {
-		return Config{}, errors.New("auxiliary ingress requires auxiliary_ingress_queues")
 	}
 	if config.IMAPHost != "" {
 		if config.IMAPUsername == "" {

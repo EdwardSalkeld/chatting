@@ -9,10 +9,9 @@ import (
 )
 
 const (
-	SchemaVersion               = "1.0"
-	TaskMessageType             = "chatting.task.v1"
-	EgressMessageTypeV2         = "chatting.egress.v2"
-	AuxiliaryIngressMessageType = "chatting.auxiliary_ingress.v1"
+	SchemaVersion       = "1.0"
+	TaskMessageType     = "chatting.task.v1"
+	EgressMessageTypeV2 = "chatting.egress.v2"
 )
 
 var validSources = map[string]bool{
@@ -358,30 +357,6 @@ func (value EgressQueueMessage) Validate() error {
 	return value.Message.Validate()
 }
 
-type AuxiliaryIngressQueueMessage struct {
-	SchemaVersion string    `json:"schema_version"`
-	MessageType   string    `json:"message_type"`
-	EventID       string    `json:"event_id"`
-	ReceivedAt    Timestamp `json:"received_at"`
-	Body          any       `json:"body"`
-}
-
-func (value AuxiliaryIngressQueueMessage) Validate() error {
-	if value.SchemaVersion != SchemaVersion {
-		return fmt.Errorf("unsupported_schema_version:%s", value.SchemaVersion)
-	}
-	if value.MessageType != AuxiliaryIngressMessageType {
-		return errors.New("auxiliary_ingress_message_type_invalid")
-	}
-	if strings.TrimSpace(value.EventID) == "" {
-		return errors.New("event_id is required")
-	}
-	if value.ReceivedAt.Time.IsZero() {
-		return errors.New("received_at is required")
-	}
-	return validateJSONValue(value.Body, "body")
-}
-
 func DecodeTaskQueueMessage(raw []byte) (TaskQueueMessage, error) {
 	var message TaskQueueMessage
 	if err := json.Unmarshal(raw, &message); err != nil {
@@ -394,14 +369,6 @@ func DecodeEgressQueueMessage(raw []byte) (EgressQueueMessage, error) {
 	var message EgressQueueMessage
 	if err := json.Unmarshal(raw, &message); err != nil {
 		return EgressQueueMessage{}, err
-	}
-	return message, message.Validate()
-}
-
-func DecodeAuxiliaryIngressQueueMessage(raw []byte) (AuxiliaryIngressQueueMessage, error) {
-	var message AuxiliaryIngressQueueMessage
-	if err := json.Unmarshal(raw, &message); err != nil {
-		return AuxiliaryIngressQueueMessage{}, err
 	}
 	return message, message.Validate()
 }
@@ -425,32 +392,6 @@ func validateMetadata(values map[string]any, fieldName string) error {
 		}
 	}
 	return nil
-}
-
-func validateJSONValue(value any, fieldName string) error {
-	switch typed := value.(type) {
-	case nil, string, bool, float64:
-		return nil
-	case []any:
-		for _, item := range typed {
-			if err := validateJSONValue(item, fieldName); err != nil {
-				return err
-			}
-		}
-		return nil
-	case map[string]any:
-		for key, item := range typed {
-			if strings.TrimSpace(key) == "" {
-				return fmt.Errorf("%s object keys must be non-empty strings", fieldName)
-			}
-			if err := validateJSONValue(item, fieldName); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("%s must be valid JSON data", fieldName)
-	}
 }
 
 func nonNilStrings(values []string) []string {

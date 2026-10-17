@@ -17,7 +17,6 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/auxiliary"
 	githubconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
@@ -282,38 +281,6 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			return nil, err
 		}
 		connectors = append(connectors, assignmentConnector, reviewConnector)
-	}
-	auxiliaryAdapter := adapter
-	if config.AuxiliaryIngressEnabled {
-		auxiliaryAddress := config.AuxiliaryIngressBBMBAddress
-		if auxiliaryAddress == "" {
-			auxiliaryAddress = config.BBMBAddress
-		}
-		if auxiliaryAddress != config.BBMBAddress {
-			auxiliaryAdapter, err = bbmb.NewAdapter(auxiliaryAddress)
-			if err != nil {
-				_ = store.Close()
-				return nil, err
-			}
-		}
-		prompt := contracts.PromptContext{GlobalInstructions: config.GlobalPromptContext}
-		for _, queueName := range config.AuxiliaryIngressQueues {
-			if err := auxiliaryAdapter.EnsureQueue(ctx, queueName); err != nil {
-				_ = store.Close()
-				return nil, err
-			}
-			connector, err := auxiliary.New(
-				auxiliaryAdapter,
-				queueName,
-				config.AuxiliaryIngressContextRefs,
-				prompt,
-			)
-			if err != nil {
-				_ = store.Close()
-				return nil, err
-			}
-			connectors = append(connectors, connector)
-		}
 	}
 	scheduleService := schedules.NewService(store)
 	reminderService := reminders.NewService(store, metricRecorder)
