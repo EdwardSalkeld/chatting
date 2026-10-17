@@ -33,16 +33,20 @@ becomes the queue of mail it did not understand. An empty inbox then means
 nothing needs you, rather than that you have not looked today. Set
 `folders.review` if you would rather file it anyway.
 
-Exactly one rule settles each category, and the record says which: an
-extracted action outranks the model's own label, an attachment or an
-unreadable body holds mail back, and confidence below `confidence_threshold`
-holds it back too. Review is not notified, because it means the workflow could
-not classify the mail and such mail stays in the inbox — saying so twice helps
-nobody. The threshold is a dial, not a measured guarantee: real mail has a long
-uncertain tail, so start at 0.8 and watch `trace.reason` before moving it.
+Jev's confident category is authoritative. Below `confidence_threshold`, there
+is no settled decision and the message goes to `review`. Extracted actions or
+deadlines, incomplete bodies, attachments and summary failures cannot change a
+confident category. Jev sees the completeness flag and is instructed to choose
+`review` when uncertain. Review
+is not notified and stays in the inbox by default. If Jev is unavailable or its
+answer is invalid, there is no decision to use: the worker returns `review`
+without calling the summariser. Suspicious mail is withheld from both summary
+paths, while retaining Jev's category. Summary failures produce a notice to read
+the original, retaining the category and confidence.
 The Jev version is pinned to `jev-1.13.0`, and the confidence it reports is
 the lower of its reported confidence and the probability of the category it
-chose. That number is what `confidence_threshold` is compared against. Test
+chose. The handler compares it with `confidence_threshold` to distinguish a
+decision from an unsettled reading. Test
 with labelled real mail before allowing automatic filing.
 
 The handler rejects unknown result fields: the model cannot supply a target,
@@ -294,11 +298,19 @@ other way round.
 
 ## Diagnosing a decision
 
+Paid bookings and reservations belong in `order` when they require no separate
+outstanding task. Travel/event times, finding a seat and showing or downloading
+issued tickets describe using the purchase; they do not create an action or
+deadline. Explicit required check-in, a failed payment, an unpaid balance or
+missing details needed to complete the booking still belong in `action`.
+Both Jev's questions and the summary prompt use this distinction. The summary
+adds descriptive text; only Jev decides the route.
+
 Each classification carries a `trace`: the category and confidence Jev gave,
 whether it judged an action, a deadline or an injection attempt, whether a
-summary was bought, and a `reason` naming the rule that settled the outcome —
-`accepted`, `confidence_below_threshold`, `action_extracted`,
-`incomplete_body_or_attachment` or `injection_suspected`. Alongside it each
+summary was bought, and a `reason`: `accepted`, `confidence_below_threshold`, `triage_unavailable` or
+`injection_suspected`. Older records retain their historical override reasons;
+this change does not reclassify or replay them. Alongside it each
 message records `body_html`, `body_chars` and `body_truncated`.
 
 That is enough to answer "why is this in review" from the record, without
@@ -308,7 +320,7 @@ going back to the mailbox to guess.
 page: when each message arrived, who sent it, its subject linked back to the
 mailbox, the decision, the score and the rule that settled it, newest first.
 Mail still waiting for a classification is shown too, and the header carries
-the running mode, the threshold in force, the counts per category and anything
+the running mode, the confidence threshold, the counts per category and anything
 rejected. That server binds loopback and is reached through the internal TLS
 front end, which matters because the page shows mail subjects.
 

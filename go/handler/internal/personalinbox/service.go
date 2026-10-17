@@ -75,9 +75,7 @@ type Classification struct {
 	Trace      *Trace  `json:"trace,omitempty"`
 }
 
-// Trace records what the classifier saw and which rule settled the category,
-// so "why is this in review" is answerable from the record instead of being
-// inferred from the mail afterwards.
+// Trace records Jev's decision and whether a summary was available.
 type Trace struct {
 	Reason         string  `json:"reason,omitempty"`
 	JevCategory    string  `json:"jev_category,omitempty"`
@@ -427,26 +425,20 @@ func (service *Service) classificationResult(ctx context.Context, raw []byte) (b
 	if classification.Trace == nil {
 		classification.Trace = &Trace{}
 	}
-	// One place settles the category, and records which rule did it.
+	// A confident Jev category is final. Below the configured threshold there
+	// is no settled decision, so hold it for review. Summary text has no vote.
 	switch {
 	case classification.Trace.TriageFailed:
 		classification.Category, classification.Trace.Reason = "review", "triage_unavailable"
-	case classification.Trace.Suspicious:
-		classification.Category, classification.Trace.Reason = "review", "injection_suspected"
-	case strings.TrimSpace(classification.Action) != "" || strings.TrimSpace(classification.Deadline) != "":
-		// An action wins even when a model labelled the mail routine.
-		classification.Category, classification.Trace.Reason = "action", "action_extracted"
-	case message.Mail.Incomplete:
-		classification.Category, classification.Trace.Reason = "review", "incomplete_body_or_attachment"
 	case classification.Confidence < service.Config.Threshold():
 		classification.Category, classification.Trace.Reason = "review", "confidence_below_threshold"
+	case classification.Trace.Suspicious:
+		classification.Trace.Reason = "injection_suspected"
 	default:
 		classification.Trace.Reason = "accepted"
 	}
-	// Only routine mail is allowed to arrive without a summary, so anything
-	// promoted out of news must have bought one.
-	if classification.Category != "news" && strings.TrimSpace(classification.Summary) == "" {
-		return true, nil
+	if classification.Category == "review" && strings.TrimSpace(classification.Summary) == "" {
+		classification.Summary = "Classification uncertain; inspect the original email."
 	}
 	message.Classification = &classification
 	return false, service.Store.saveMessage(ctx, message, service.plan(message))
@@ -630,6 +622,14 @@ func (service *Service) publishDigests(ctx context.Context) error {
 				return err
 			}
 			if len(messages) == 0 {
+				continue
+			}
+			// Withholding suspicious mail from the summary agent applies to
+			// the batch path too, even when Jev chose news. Send a fixed notice
+			// instead of any untrusted sender, subject or body.
+			if trace := messages[0].Classification.Trace; trace != nil && (trace.Suspicious || trace.TriageFailed) {
+				items = append(items, map[string]any{"ref": id, "from": "Withheld email",
+					"subject": "Summary withheld", "body": "Automatic summary withheld; read the original email."})
 				continue
 			}
 			// Marketing subjects say nothing ("A little thank you from us"), so

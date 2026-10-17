@@ -317,7 +317,7 @@ func TestReviewIsLeftInTheInboxAndNotAlerted(t *testing.T) {
 	}
 }
 
-func TestAttachmentsAndDegradedBodiesGoToReview(t *testing.T) {
+func TestIncompleteContentDoesNotOverrideJev(t *testing.T) {
 	service, mail, broker, _ := fixture(t)
 	ctx := context.Background()
 	attached := mail.emails["Stm4"]
@@ -333,8 +333,8 @@ func TestAttachmentsAndDegradedBodiesGoToReview(t *testing.T) {
 	if err := service.results(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := oneMessage(t, service).Classification.Category; got != "review" {
-		t.Fatalf("category %q, want review", got)
+	if got := oneMessage(t, service).Classification.Category; got != "news" {
+		t.Fatalf("category %q, want news", got)
 	}
 }
 
@@ -366,7 +366,7 @@ func TestNewsIsFiledAndNeverAlertedIndividually(t *testing.T) {
 
 func TestRoutineNewsNeedsNoSummary(t *testing.T) {
 	// The digest writes the line, so a news classification with no summary is
-	// valid; anything promoted out of news is not.
+	// valid; other categories need a summary or a fallback notice.
 	if err := (Classification{Category: "news", Confidence: .99}).Validate(); err != nil {
 		t.Fatalf("news without a summary rejected: %v", err)
 	}
@@ -547,6 +547,50 @@ func TestDigestFreezesTheDayAndAsksForOneBatch(t *testing.T) {
 	}
 }
 
+func TestSuspiciousNewsCannotReachTheDigestSummariser(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	ctx := context.Background()
+	classifyOnce(t, service, broker, Classification{Category: "news", Confidence: .99,
+		Summary: "Withheld", Trace: &Trace{Suspicious: true}})
+	if err := service.digest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	items := digestTask(t, broker)["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["ref"] != "Stm4" || items[0]["from"] != "Withheld email" ||
+		items[0]["subject"] != "Summary withheld" || items[0]["body"] != "Automatic summary withheld; read the original email." {
+		t.Fatalf("untrusted mail reached digest: %+v", items)
+	}
+}
+
+func TestLNEROrderWithExtractedTaskUsesOnlyOrderEffects(t *testing.T) {
+	service, _, broker, performer := fixture(t)
+	classifyOnce(t, service, broker, Classification{Category: "order", Summary: "Paid LNER booking",
+		Action: "Find an available seat", Deadline: "Departure 10:00", Confidence: .99})
+	if err := service.perform(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	notifications, filings := 0, 0
+	for _, call := range performer.calls {
+		switch call.Kind {
+		case "linear":
+			t.Fatal("order created a Linear ticket")
+		case "telegram":
+			if call.Target != "orders" {
+				t.Fatalf("wrong notification destination: %+v", call)
+			}
+			notifications++
+		case "file":
+			if call.Target != "Triage/Orders" {
+				t.Fatalf("wrong folder: %+v", call)
+			}
+			filings++
+		}
+	}
+	if notifications != 1 || filings != 1 {
+		t.Fatalf("missing order effects: %+v", performer.calls)
+	}
+}
+
 func TestDigestSendsOneMessageWithPerSenderLines(t *testing.T) {
 	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
@@ -704,11 +748,23 @@ func TestEveryOutcomeRecordsWhichRuleSettledIt(t *testing.T) {
 			false, "order", "accepted"},
 		{"below the threshold", Classification{Category: "order", Summary: "Order", Confidence: .7},
 			false, "review", "confidence_below_threshold"},
-		{"an extracted action outranks the category", Classification{Category: "news", Summary: "x", Action: "Pay it", Confidence: .95},
-			false, "action", "action_extracted"},
-		{"an attachment holds it back", Classification{Category: "order", Summary: "Order", Confidence: .95},
-			true, "review", "incomplete_body_or_attachment"},
-		{"mail aimed at the machine", Classification{Category: "review", Summary: "x", Confidence: 0,
+		{"weak reading with extracted action is still unsettled", Classification{Category: "order", Summary: "Order", Action: "Pay it", Deadline: "Tomorrow", Confidence: .7},
+			false, "review", "confidence_below_threshold"},
+		{"an extracted action preserves news", Classification{Category: "news", Summary: "x", Action: "Pay it", Confidence: .95},
+			false, "news", "accepted"},
+		{"an extracted action preserves order", Classification{Category: "order", Summary: "LNER booking", Action: "Find an available seat", Confidence: .95},
+			false, "order", "accepted"},
+		{"an extracted deadline preserves order", Classification{Category: "order", Summary: "LNER booking", Deadline: "Departure 10:00", Confidence: .95},
+			false, "order", "accepted"},
+		{"an action with no extracted task stays action", Classification{Category: "action", Summary: "Inspect the original", Confidence: .95},
+			false, "action", "accepted"},
+		{"review with an extracted task stays review", Classification{Category: "review", Summary: "Uncertain", Action: "Pay it", Confidence: .5},
+			false, "review", "confidence_below_threshold"},
+		{"an attachment preserves the category", Classification{Category: "order", Summary: "Order", Confidence: .95},
+			true, "order", "accepted"},
+		{"suspicion preserves the category", Classification{Category: "news", Summary: "Withheld", Confidence: .95,
+			Trace: &Trace{Suspicious: true}}, false, "news", "injection_suspected"},
+		{"mail aimed at the machine", Classification{Category: "review", Summary: "x", Confidence: .99,
 			Trace: &Trace{Suspicious: true}}, false, "review", "injection_suspected"},
 	}
 	for _, test := range cases {
@@ -727,8 +783,7 @@ func TestEveryOutcomeRecordsWhichRuleSettledIt(t *testing.T) {
 	}
 }
 
-func TestLoweringTheThresholdAcceptsMoreMail(t *testing.T) {
-	// The same classification, held at one setting and accepted at another.
+func TestThresholdHoldsUnsettledReadingsForReview(t *testing.T) {
 	for _, test := range []struct {
 		threshold float64
 		category  string
@@ -739,6 +794,14 @@ func TestLoweringTheThresholdAcceptsMoreMail(t *testing.T) {
 		if got.Classification.Category != test.category {
 			t.Fatalf("threshold %v gave %q, want %q", test.threshold, got.Classification.Category, test.category)
 		}
+	}
+}
+
+func TestWeakNewsWithoutSummaryIsHeldForReview(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	got := classifyOnce(t, service, broker, Classification{Category: "news", Confidence: .5}).Classification
+	if got.Category != "review" || got.Summary == "" || got.Trace.Reason != "confidence_below_threshold" {
+		t.Fatalf("unsettled news not held: %+v", got)
 	}
 }
 
@@ -832,7 +895,7 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			service, _, broker, _ := fixture(t)
 			got := classifyOnce(t, service, broker,
-				Classification{Category: "review", Summary: "x", Confidence: 0, Trace: test.trace}).Classification
+				Classification{Category: "review", Summary: "x", Confidence: .99, Trace: test.trace}).Classification
 			if got.Trace.Reason != test.reason {
 				t.Fatalf("reason %q, want %q", got.Trace.Reason, test.reason)
 			}
@@ -847,7 +910,7 @@ func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 	if err := service.ingest(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// A reading the policy overrode, which is the case worth explaining.
+	// A low confidence reading is unsettled and goes to review.
 	broker.result("Stm4", Classification{Category: "order", Summary: "Order", Confidence: .5,
 		Trace: &Trace{JevCategory: "order", JevConfidence: .5}})
 	if err := service.results(ctx); err != nil {
@@ -867,7 +930,7 @@ func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 		"review",                     // the decision
 		"0.50",                       // the score
 		"confidence_below_threshold", // why
-		"read as order",              // what it was before the policy
+		"Jev decides the category",   // routing policy
 		"preview only",               // the mode it is running in
 		"app.fastmail.com",           // a way back to the message
 	} {

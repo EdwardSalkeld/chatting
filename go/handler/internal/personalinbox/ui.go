@@ -136,6 +136,7 @@ var decisionsTemplate = template.Must(template.New("personal-inbox").Parse(
 <h1>Personal inbox decisions</h1><p><a href="/reminders">Reminders</a> &middot; <a href="/schedules">Schedules</a></p>
 <div class="summary">
 <span>{{if .DryRun}}<strong>preview only</strong>{{else}}acting{{end}}</span>
+<span>Jev decides the category</span>
 <span>threshold {{.Threshold}}</span>
 {{range $category, $count := .Counts}}<span>{{$category}} {{$count}}</span>{{end}}
 <span{{if .Awaiting}} class="warn"{{end}}>waiting {{.Awaiting}}{{if .Awaiting}} (oldest {{.OldestWait}}){{end}}</span>
