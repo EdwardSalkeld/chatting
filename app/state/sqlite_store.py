@@ -190,6 +190,12 @@ class SQLiteStateStore:
                 """
             )
             connection.execute(
+                """CREATE TABLE IF NOT EXISTS conversation_executors (
+                    conversation_id TEXT PRIMARY KEY,
+                    backend TEXT NOT NULL CHECK (backend IN ('exec', 'app-server'))
+                )"""
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS worker_inbox (
                     task_id TEXT PRIMARY KEY,
@@ -407,6 +413,33 @@ class SQLiteStateStore:
             )
             if cursor.rowcount != 1:
                 raise KeyError(work_item_id)
+            connection.commit()
+
+    def get_conversation_executor(self, *, conversation_id: str) -> str:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT backend FROM conversation_executors WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return str(row["backend"]) if row else "exec"
+
+    def set_conversation_executor(self, *, conversation_id: str, backend: str) -> None:
+        if backend not in ("exec", "app-server"):
+            raise ValueError("executor must be exec or app-server")
+        with closing(self._connect()) as connection:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM conversation_routes WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                is None
+            ):
+                raise KeyError(conversation_id)
+            connection.execute(
+                "INSERT INTO conversation_executors (conversation_id, backend) VALUES (?, ?) "
+                "ON CONFLICT(conversation_id) DO UPDATE SET backend = excluded.backend",
+                (conversation_id, backend),
+            )
             connection.commit()
 
     def get_work_explicit_finish(self, *, work_item_id: str) -> bool:
@@ -669,12 +702,20 @@ class SQLiteStateStore:
                        OR (candidate.state = 'closing' AND candidate.parent_task_id IS NULL))
                   AND NOT EXISTS (
                       SELECT 1 FROM worker_inbox AS owned
-                      WHERE owned.work_item_id = candidate.work_item_id
+                      WHERE (owned.work_item_id = candidate.work_item_id
+                             OR (owned.conversation_id = candidate.conversation_id
+                                 AND EXISTS (SELECT 1 FROM conversation_executors AS mode
+                                             WHERE mode.conversation_id = candidate.conversation_id
+                                               AND mode.backend = 'app-server')))
                         AND owned.lease_owner IS NOT NULL
                   )
                   AND NOT EXISTS (
                       SELECT 1 FROM worker_inbox AS earlier
-                      WHERE earlier.work_item_id = candidate.work_item_id
+                      WHERE (earlier.work_item_id = candidate.work_item_id
+                             OR (earlier.conversation_id = candidate.conversation_id
+                                 AND EXISTS (SELECT 1 FROM conversation_executors AS mode
+                                             WHERE mode.conversation_id = candidate.conversation_id
+                                               AND mode.backend = 'app-server')))
                         AND earlier.parent_task_id IS NULL
                         AND earlier.state IN ('pending', 'active', 'closing')
                         AND (earlier.staged_at < candidate.staged_at
@@ -788,6 +829,8 @@ class SQLiteStateStore:
 
     def claim_conversation_followups(self, *, parent_task_id: str) -> list[InboxTask]:
         """Attach all currently pending Telegram turns in the parent's conversation."""
+        from app.model_command import parse_model_command
+
         if not parent_task_id:
             raise ValueError("parent_task_id is required")
         now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
@@ -808,12 +851,18 @@ class SQLiteStateStore:
                 """,
                 (parent["conversation_id"], parent_task_id),
             ).fetchall()
+            attached: list[InboxTask] = []
             for row in rows:
                 message = TaskQueueMessage.from_dict(
                     json.loads(row["task_payload_json"])
                 )
                 if message.envelope.reply_channel.type != "telegram":
                     continue
+                command = parse_model_command(message.envelope)
+                if command and command[0] == "executor":
+                    # Apply backend changes deterministically as a queued task,
+                    # before any subsequent messages enter a model turn.
+                    break
                 connection.execute(
                     """
                     UPDATE worker_inbox
@@ -822,15 +871,13 @@ class SQLiteStateStore:
                     """,
                     (parent_task_id, now, row["task_id"]),
                 )
+                attached.append(
+                    _inbox_task_from_row(
+                        row, state="attached", parent_task_id=parent_task_id
+                    )
+                )
             connection.commit()
-        return [
-            _inbox_task_from_row(row, state="attached", parent_task_id=parent_task_id)
-            for row in rows
-            if TaskQueueMessage.from_dict(
-                json.loads(row["task_payload_json"])
-            ).envelope.reply_channel.type
-            == "telegram"
-        ]
+        return attached
 
     def has_unresolved_attached_followups(self, *, parent_task_id: str) -> bool:
         with closing(self._connect()) as connection:

@@ -7,6 +7,7 @@
 - [Schedules](schedules.md) and [one-off reminders](reminders.md)
 - [Explicit executor termination](explicit-finish.md)
 - [Work item model selection](model-selection.md)
+- [Persistent conversation executor](conversation-executor.md): opt individual conversations into Codex app-server
 
 ## Architecture decisions
 

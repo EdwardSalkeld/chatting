@@ -110,6 +110,22 @@ def process_task_message(
         assignment
         and store.get_work_explicit_finish(work_item_id=assignment.work_item_id)
     )
+    executor_backend = (
+        store.get_conversation_executor(conversation_id=inbox_task.conversation_id)
+        if inbox_task
+        else "exec"
+    )
+    if executor_backend == "app-server":
+        explicit_finish = False
+    backend_selector = getattr(executor_impl, "select_backend", None)
+    if inbox_task and callable(backend_selector):
+        # Freeze selection for this task, including recovery and model escalation.
+        executor_impl = cast(
+            Executor,
+            backend_selector(
+                conversation_id=inbox_task.conversation_id, backend=executor_backend
+            ),
+        )
     model_tier = (
         store.get_work_model_tier(work_item_id=assignment.work_item_id)
         if assignment is not None
@@ -318,6 +334,7 @@ def process_task_message(
                 "reason_codes": reason_codes,
                 "attempt_count": attempt_count,
                 "executor_launch_count": executor_launch_count,
+                "executor_backend": executor_backend,
                 "max_attempts": max_attempts,
                 "last_error": last_error,
                 "last_error_stage": last_error_stage,
@@ -654,7 +671,13 @@ def _process_work_item_command(
     if assignment is None:
         raise ValueError("model command has no work item")
     action, tier = command
-    command_kind = "explicit_finish_command" if action == "finish" else "model_command"
+    command_kind = (
+        "conversation_executor_command"
+        if action == "executor"
+        else "explicit_finish_command"
+        if action == "finish"
+        else "model_command"
+    )
     if action == "set" and tier is not None:
         store.set_work_model_tier(work_item_id=assignment.work_item_id, tier=tier)
     current = store.get_work_model_tier(work_item_id=assignment.work_item_id)
@@ -672,6 +695,22 @@ def _process_work_item_command(
         body = (
             f"Explicit executor termination is {'on' if enabled else 'off'} for this work item. "
             "Use /finish on or /finish off to change it. Changes apply to the next task."
+        )
+    if action == "executor":
+        inbox_task = store.get_inbox_task(task_id=task_message.task_id)
+        if inbox_task is None:
+            raise ValueError("executor command has no conversation")
+        if tier is not None:
+            store.set_conversation_executor(
+                conversation_id=inbox_task.conversation_id, backend=tier
+            )
+        backend = store.get_conversation_executor(
+            conversation_id=inbox_task.conversation_id
+        )
+        body = (
+            f"This conversation uses the {backend} executor. "
+            "Use /executor app-server or /executor exec to change it. "
+            "Changes apply to the next task."
         )
     emitted_at = datetime.now(timezone.utc)
     visible = build_usage_egress(
