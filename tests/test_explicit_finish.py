@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from dataclasses import replace
@@ -18,6 +19,14 @@ from app.worker.executor.finish import FinishSession
 from app.worker.activity import WorkerActivityMonitor
 from app.worker.runtime import process_task_message
 from tests.test_executor import _envelope
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class ExplicitFinishTests(unittest.TestCase):
@@ -80,7 +89,8 @@ from pathlib import Path
 payload = json.load(sys.stdin)
 assert not payload['reply_contract']['executor_exit_status_drives_completion']
 assert payload['termination_contract']['execution_id'] == os.environ['CHATTING_FINISH_EXECUTION_ID']
-child = subprocess.Popen([sys.executable, '-c', "import time; time.sleep(.8); open('child-survived', 'w').close()"])
+child = subprocess.Popen([sys.executable, '-c', "import time; time.sleep(30)"])
+Path('child.pid').write_text(str(child.pid))
 subprocess.run([sys.executable, '-P', '-m', 'app.main_finish'])
 Path('executor-survived').touch()
 """
@@ -106,10 +116,11 @@ Path('executor-survived').touch()
         self.assertEqual(
             json.loads(records[0].read_text())["task_id"], self.task.task_id
         )
-        import time
-
-        time.sleep(1)
-        self.assertFalse((Path(self.temporary.name) / "child-survived").exists())
+        child_pid = int((Path(self.temporary.name) / "child.pid").read_text())
+        deadline = time.monotonic() + 5
+        while _process_exists(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(_process_exists(child_pid), "child must be killed")
         self.assertFalse((Path(self.temporary.name) / "executor-survived").exists())
 
     def test_rollout_from_default_off_database_runs_once(self):

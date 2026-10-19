@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.state import SQLiteStateStore
-from tests.e2e.handler_selector import message_handler_command
+from tests.e2e.handler_command import message_handler_command
 
 
 def _seed_schedule(
@@ -233,6 +233,7 @@ class SplitModeE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(worker_db_path),
+                        "workspace_root": str(Path(worker_db_path).parent / "workspaces"),
                         "bbmb_address": bbmb_address,
                         "max_attempts": 2,
                         "poll_timeout_seconds": 1,
