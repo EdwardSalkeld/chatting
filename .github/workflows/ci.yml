@@ -49,7 +49,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go/handler/go.mod
-          cache-dependency-path: go/handler/go.mod
+          cache-dependency-path: go/handler/go.sum
 
       - name: Sync dependencies
         run: uv sync --locked
@@ -71,3 +71,7 @@ jobs:
       - name: Run Go handler tests
         working-directory: go/handler
         run: go test ./...
+
+      - name: Run go vet
+        working-directory: go/handler
+        run: go vet ./...

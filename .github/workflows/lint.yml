@@ -25,7 +25,9 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go/handler/go.mod
-          cache-dependency-path: go/handler/go.mod
+          # gofmt builds nothing. A cache saved here would be empty and, sharing
+          # CI's key, would stop CI ever saving a useful one.
+          cache: false
 
       - name: Check gofmt
         working-directory: go/handler
