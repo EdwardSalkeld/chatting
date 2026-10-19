@@ -14,6 +14,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import shlex
 import socket
 import sqlite3
 import subprocess
@@ -25,6 +26,8 @@ from dataclasses import replace
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
 from app.worker.executor import CodexExecutor
+from app.worker.executor.app_server import AppServerExecutor
+from app.worker.executor.conversation import ConversationExecutor
 
 LOGGER = logging.getLogger(__name__)
 PROTOCOL_VERSION = 1
@@ -82,6 +85,25 @@ class Supervisor:
         )
         if isinstance(self.executor, CodexExecutor):
             self.executor = replace(self.executor, history_store=self.store)
+            config = settings["config"]
+            command = config.get("app_server_command", "codex app-server")
+            directory = config.get("app_server_dir", f"{settings['db_path']}.sessions")
+            if not isinstance(command, str) or not shlex.split(command):
+                raise ValueError("app_server_command must be a nonempty command")
+            if not isinstance(directory, str) or not Path(directory).is_absolute():
+                raise ValueError("app_server_dir must be absolute")
+            self.executor = ConversationExecutor(
+                legacy=self.executor,
+                persistent=AppServerExecutor(
+                    command=tuple(shlex.split(command)),
+                    cwd=self.executor.cwd,
+                    workspace_root=self.executor.workspace_root,
+                    history_store=self.store,
+                    env=self.executor.env,
+                    session_root=directory,
+                ),
+                store=self.store,
+            )
         self.lock = Lock()
         self.state = "idle"
         self.task_id: str | None = None

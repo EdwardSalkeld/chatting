@@ -22,6 +22,11 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     show = commands.add_parser("show")
     show.add_argument("task_id")
+    executor = commands.add_parser("executor")
+    executor.add_argument("task_id")
+    executor.add_argument(
+        "mode", choices=("exec", "app-server", "show"), default="show", nargs="?"
+    )
     finish = commands.add_parser("explicit-finish")
     finish.add_argument("task_id")
     finish.add_argument(
@@ -35,6 +40,13 @@ def main() -> int:
     assignment = store.get_work_assignment(task_id=args.task_id)
     if assignment is None:
         parser.error("unknown task")
+    inbox_task = store.get_inbox_task(task_id=args.task_id)
+    if args.command == "executor" and args.mode != "show":
+        if inbox_task is None:
+            parser.error("task has no conversation")
+        store.set_conversation_executor(
+            conversation_id=inbox_task.conversation_id, backend=args.mode
+        )
     if args.command == "explicit-finish" and args.mode != "show":
         store.set_work_explicit_finish(
             work_item_id=assignment.work_item_id, enabled=args.mode == "on"
@@ -59,6 +71,12 @@ def main() -> int:
             {
                 "work_item_id": assignment.work_item_id,
                 "reason": assignment.reason,
+                "conversation_id": inbox_task.conversation_id if inbox_task else None,
+                "executor": store.get_conversation_executor(
+                    conversation_id=inbox_task.conversation_id
+                )
+                if inbox_task
+                else "exec",
                 "explicit_finish": store.get_work_explicit_finish(
                     work_item_id=assignment.work_item_id
                 ),

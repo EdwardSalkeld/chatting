@@ -58,6 +58,8 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "sleep_seconds",
         "executor_pool_size",
         "supervisor_dir",
+        "app_server_command",
+        "app_server_dir",
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10

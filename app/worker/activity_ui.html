@@ -150,6 +150,14 @@
       if(event.phase==='executor_stdout'&&typeof body==='string'){
         stdoutBuffer+=body; const lines=stdoutBuffer.split('\n'); stdoutBuffer=lines.pop();
         for(const line of lines){try{const entry=JSON.parse(line);const item=entry.item||{};
+          if(entry.method){const params=entry.params||{}, nativeItem=params.item||{};
+            if(entry.method==='item/completed'&&nativeItem.type==='agentMessage')timelineEntry(transcript,'Assistant',nativeItem.text||'',event.occurred_at);
+            else if(entry.method==='item/started'&&nativeItem.type==='commandExecution')timelineEntry(transcript,'Command started',nativeItem.command||'',event.occurred_at);
+            else if(entry.method==='item/completed'&&nativeItem.type==='commandExecution')timelineEntry(transcript,`Command finished${nativeItem.exitCode==null?'':` · exit ${nativeItem.exitCode}`}`,[nativeItem.command,nativeItem.aggregatedOutput].filter(Boolean).join('\n'),event.occurred_at);
+            else if(entry.method==='turn/completed')timelineEntry(transcript,`Turn ${params.turn?.status||'completed'}`,'',event.occurred_at);
+            else if(entry.method==='error')timelineEntry(transcript,'Codex error',params.error?.message||line,event.occurred_at);
+            continue;
+          }
           if(item.type==='agent_message'&&item.text&&entry.type==='item.completed')timelineEntry(transcript,'Assistant',item.text,event.occurred_at);
           else if(item.type==='command_execution'&&entry.type==='item.started')timelineEntry(transcript,'Command started',item.command?`$ ${item.command}`:'',event.occurred_at);
           else if(item.type==='command_execution'&&entry.type==='item.completed'){
