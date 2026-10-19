@@ -62,7 +62,12 @@ class AppServerExecutor(CodexExecutor):
                 environment.pop(key)
         generation = hashlib.sha256(
             json.dumps(
-                [self.command, environment, str(Path(__file__).resolve())],
+                [
+                    self.command,
+                    "danger-full-access/never",
+                    environment,
+                    str(Path(__file__).resolve()),
+                ],
                 sort_keys=True,
             ).encode()
         ).hexdigest()

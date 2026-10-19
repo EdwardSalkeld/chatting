@@ -247,7 +247,13 @@ class Session:
                 )
                 self.server.send({"method": "initialized"})
             if not self.loaded:
-                params = {"cwd": request["cwd"], "approvalPolicy": "never"}
+                # Set both policies on resume too: saved threads otherwise retain
+                # their old sandbox even when process defaults have changed.
+                params = {
+                    "cwd": request["cwd"],
+                    "approvalPolicy": "never",
+                    "sandbox": "danger-full-access",
+                }
                 if thread_id:
                     params["threadId"] = thread_id
                     params["excludeTurns"] = True

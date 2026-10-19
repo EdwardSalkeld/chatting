@@ -133,6 +133,29 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(result.errors, [])
         self.assertEqual(result.escalation_reason, "Needs a broader change")
 
+    def test_full_access_and_no_approvals_apply_to_new_and_resumed_threads(self):
+        executor = self.executor
+        self.assertEqual(executor.execute(_telegram_task(1).envelope).errors, [])
+        self.assertEqual(
+            self.calls("thread/start")[0]["params"]["sandbox"], "danger-full-access"
+        )
+        self.assertEqual(
+            self.calls("thread/start")[0]["params"]["approvalPolicy"], "never"
+        )
+        deadline = time.monotonic() + 4
+        while (
+            list(self.root.glob("sessions/*/rpc.sock")) and time.monotonic() < deadline
+        ):
+            time.sleep(0.025)
+        self.assertFalse(list(self.root.glob("sessions/*/rpc.sock")))
+        self.assertEqual(executor.execute(_telegram_task(2).envelope).errors, [])
+        self.assertEqual(
+            self.calls("thread/resume")[0]["params"]["sandbox"], "danger-full-access"
+        )
+        self.assertEqual(
+            self.calls("thread/resume")[0]["params"]["approvalPolicy"], "never"
+        )
+
     def test_owner_death_leaves_uncertain_turn_blocked_after_restart(self):
         killed = False
 
