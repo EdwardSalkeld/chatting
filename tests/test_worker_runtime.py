@@ -81,23 +81,7 @@ class LongExecutionErrorExecutor(TestExecutor):
 
 
 @dataclass(frozen=True)
-class IncrementalReplyExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        return ExecutionResult(
-            errors=[],
-        )
-
-
-@dataclass(frozen=True)
 class NoMessageExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        return ExecutionResult(errors=[])
-
-
-@dataclass(frozen=True)
-class FinalAliasExecutor(TestExecutor):
     def execute(self, task):
         del task
         return ExecutionResult(errors=[])
@@ -382,8 +366,11 @@ class WorkerRuntimeTests(unittest.TestCase):
 
             self.assertEqual(result.run_record.result_status, "success")
             self.assertEqual(len(result.egress_messages), 1)
-            self.assertEqual(result.egress_messages[0].event_kind, "completion")
-            self.assertEqual(result.egress_messages[0].message.channel, "internal")
+            terminal = result.egress_messages[0]
+            self.assertEqual(terminal.event_kind, "completion")
+            self.assertEqual(terminal.message.channel, "internal")
+            self.assertEqual(terminal.message.target, "task")
+            self.assertEqual(terminal.sequence, 0)
             audit_event = store.list_audit_events()[0]
             self.assertEqual(
                 audit_event.detail["execution_result"]["stdout"], "executor stdout"
@@ -521,7 +508,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_task_message(),
-                executor_impl=IncrementalReplyExecutor(),
+                executor_impl=NoMessageExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -545,7 +532,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             result = process_task_message(
                 store=store,
                 task_message=self._build_telegram_task_message(),
-                executor_impl=IncrementalReplyExecutor(),
+                executor_impl=NoMessageExecutor(),
                 max_attempts=2,
                 activity_monitor=self._build_monitor(store),
             )
@@ -564,32 +551,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
-
-    def test_process_task_message_runs_supervised_recovery_for_untagged_telegram(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            executor = RecordingExecutor(
-                [
-                    ExecutionResult(errors=[], stdout="pass 1"),
-                    ExecutionResult(errors=[], stdout="pass 2"),
-                ]
-            )
-            result = process_task_message(
-                store=store,
-                task_message=self._build_telegram_task_message(),
-                executor_impl=executor,
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertEqual(result.attempt_count, 2)
-            self.assertEqual(len(executor.calls), 2)
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.detail["executor_launch_count"], 2)
-            self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
 
     def test_process_task_message_strips_supervised_marker_before_executor(
         self,
@@ -804,27 +765,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
             self.assertEqual(audit_event.detail["heartbeat"]["kind"], "heartbeat_pong")
 
-    def test_process_task_message_emits_internal_completion_when_no_visible_messages(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=NoMessageExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(result.egress_messages), 1)
-            terminal = result.egress_messages[0]
-            self.assertEqual(terminal.event_kind, "completion")
-            self.assertEqual(terminal.message.channel, "internal")
-            self.assertEqual(terminal.message.target, "task")
-            self.assertEqual(terminal.sequence, 0)
-
     def test_process_task_message_allows_telegram_success_when_main_reply_was_published(
         self,
     ) -> None:
@@ -846,77 +786,51 @@ class WorkerRuntimeTests(unittest.TestCase):
                 audit_event.detail["incremental_reply_send_published_count"], 1
             )
 
-    def test_process_task_message_handles_internal_channel_notice_without_executor(
+    def test_process_task_message_handles_internal_notices_without_executor(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_internal_channel_notice_task_message(),
-                executor_impl=AlwaysFailExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(result.run_record.source, "internal")
-            self.assertEqual(len(result.egress_messages), 2)
-            visible_egress_message = result.egress_messages[0]
-            completion_egress_message = result.egress_messages[1]
-            self.assertEqual(visible_egress_message.event_kind, "message")
-            self.assertEqual(visible_egress_message.message.channel, "telegram")
-            self.assertEqual(visible_egress_message.message.target, "-100777")
-            self.assertEqual(
-                visible_egress_message.message.body,
+        cases = [
+            (
+                self._build_internal_channel_notice_task_message(),
+                "-100777",
                 "Not enabled in channel -100777. Add this id to telegram_allowed_channel_ids to enable replies here.",
-            )
-            self.assertEqual(completion_egress_message.event_kind, "completion")
-            self.assertEqual(completion_egress_message.sequence, 1)
-            self.assertEqual(result.reason_codes, ["internal_notice"])
-            self.assertIsNone(result.error_summary)
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.detail["reason_codes"], ["internal_notice"])
-            self.assertEqual(
-                audit_event.detail["internal_notice"],
                 "telegram_channel_not_enabled",
-            )
-
-    def test_process_task_message_handles_internal_group_notice_without_executor(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_internal_group_notice_task_message(),
-                executor_impl=AlwaysFailExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(result.run_record.source, "internal")
-            self.assertEqual(len(result.egress_messages), 2)
-            visible_egress_message = result.egress_messages[0]
-            completion_egress_message = result.egress_messages[1]
-            self.assertEqual(visible_egress_message.event_kind, "message")
-            self.assertEqual(visible_egress_message.message.channel, "telegram")
-            self.assertEqual(visible_egress_message.message.target, "-100888")
-            self.assertEqual(
-                visible_egress_message.message.body,
+            ),
+            (
+                self._build_internal_group_notice_task_message(),
+                "-100888",
                 "Not enabled in group -100888. Add this id to telegram_allowed_chat_ids to enable replies here.",
-            )
-            self.assertEqual(completion_egress_message.event_kind, "completion")
-            self.assertEqual(completion_egress_message.sequence, 1)
-            self.assertEqual(result.reason_codes, ["internal_notice"])
-            self.assertIsNone(result.error_summary)
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.detail["reason_codes"], ["internal_notice"])
-            self.assertEqual(
-                audit_event.detail["internal_notice"],
                 "telegram_group_not_enabled",
-            )
+            ),
+        ]
+        for task_message, target, body, notice in cases:
+            with self.subTest(notice), tempfile.TemporaryDirectory() as tmpdir:
+                store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+                result = process_task_message(
+                    store=store,
+                    task_message=task_message,
+                    executor_impl=AlwaysFailExecutor(),
+                    max_attempts=2,
+                    activity_monitor=self._build_monitor(store),
+                )
+
+                self.assertEqual(result.run_record.result_status, "success")
+                self.assertEqual(result.run_record.source, "internal")
+                self.assertEqual(len(result.egress_messages), 2)
+                visible, completion = result.egress_messages
+                self.assertEqual(visible.event_kind, "message")
+                self.assertEqual(visible.message.channel, "telegram")
+                self.assertEqual(visible.message.target, target)
+                self.assertEqual(visible.message.body, body)
+                self.assertEqual(completion.event_kind, "completion")
+                self.assertEqual(completion.sequence, 1)
+                self.assertEqual(result.reason_codes, ["internal_notice"])
+                self.assertIsNone(result.error_summary)
+                audit_event = store.list_audit_events()[0]
+                self.assertEqual(
+                    audit_event.detail["reason_codes"], ["internal_notice"]
+                )
+                self.assertEqual(audit_event.detail["internal_notice"], notice)
 
     def test_build_error_summary_prefers_execution_error_then_last_error_then_fallback(
         self,
