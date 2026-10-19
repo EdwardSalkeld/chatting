@@ -1,7 +1,7 @@
 # BBMB Message Flow
 
 This document describes the runtime conversation between `message-handler`, `worker`, and
-`bbmb-server` in split mode.
+`bbmb-server`.
 
 Use it as the source of truth for:
 - which BBMB queues exist
@@ -11,22 +11,27 @@ Use it as the source of truth for:
 
 ## Topology
 
-- `message-handler` owns ingress polling, ingress idempotency, strict egress validation, and
-  real-world dispatch (`email`, `telegram`, `log`)
-- `worker` owns routing, executor calls, policy evaluation, retries, dead-lettering, and egress
-  publication
+- `message-handler` owns ingress polling, ingress idempotency, work item routing, strict egress
+  validation, and real-world dispatch (`email`, `telegram`, `telegram_reaction`, `github`, `log`)
+- `worker` owns executor calls, retries, dead-lettering, and egress publication
 - `bbmb-server` is only the transport layer between them
 
 ## Queues
 
-BBMB now carries ingress only. Egress does not use BBMB — see [Egress transport](#egress-transport).
+Egress does not use BBMB — see [Egress transport](#egress-transport).
 
 | Queue | Producer | Consumer | Purpose |
 | --- | --- | --- | --- |
 | `chatting.tasks.v1` | `message-handler` | `worker` | Carries normalized ingress tasks as `chatting.task.v1` payloads |
+| `chatting.personal-inbox.tasks.v1` | `message-handler` | `worker` | Personal mail classification requests |
+| `chatting.personal-inbox.results.v1` | `worker` | `message-handler` | Classification results |
+| `chatting.personal-inbox.invalid.v1` | both | nobody (inspect by hand) | Invalid personal inbox tasks and results |
+
+The personal inbox queues are described in [Personal inbox triage](connectors/personal-inbox.md).
+Personal mail never enters `chatting.tasks.v1`.
 
 Important details:
-- The task queue name is hardcoded.
+- Queue names are hardcoded.
 - There is no separate BBMB retry queue, dead-letter queue, or approval queue.
 - Retries, dead letters, ingress dedupe state, the task ledger, and the worker egress outbox all
   live in SQLite, not in BBMB.
@@ -52,13 +57,15 @@ A connector returns a normalized `TaskEnvelope`.
 Examples:
 - IMAP email
 - Telegram update
-- interval schedule trigger
-- GitHub issue assignment
+- schedule or reminder trigger
+- GitHub issue assignment or pull request review
 - internal heartbeat ping
 
 `message-handler` then:
 - skips the envelope if `(source, dedupe_key)` has already been seen
-- enriches Telegram ingress with recent conversation memory when applicable
+- records Telegram turns in its conversation history, without adding history to the envelope
+- assigns the task to a work item (one per Telegram chat and topic, a registered pull request's
+  work item for GitHub events, otherwise a general work item)
 - wraps the envelope in a `TaskQueueMessage`
 - publishes that task message to `chatting.tasks.v1`
 - records the task in the message-handler ledger so future egress can be matched back to a known
@@ -66,13 +73,15 @@ Examples:
 
 ### 2. Worker consumes the task
 
-`worker` picks one payload from `chatting.tasks.v1`, parses `chatting.task.v1`, routes it, executes
-it, runs policy, persists run and audit records, and always emits exactly one terminal
+`worker` picks one payload from `chatting.tasks.v1`, parses `chatting.task.v1`, executes it,
+persists run and audit records, and always emits exactly one terminal
 `event_kind="completion"` egress message.
 
 Worker behavior:
 - the executor returns only completion metadata, actions, config updates, and errors
-- the executor must publish any visible reply itself with `app.main_reply`
+- the executor must publish any visible reply itself with
+  `python3 -P -m app.main_reply --spec-file <path>`, writing the reply as a JSON file so the body
+  never passes through the shell
 - terminal task closure uses `event_kind="completion"` and is internal-only
 - worker-side `app.main_reply` submits unsequenced `event_kind="incremental"` messages for both
   intermediate acknowledgements and final user-visible replies
@@ -112,7 +121,7 @@ The handler receives each egress POST on its egress endpoint and then:
 - applies completion after all earlier sequenced visible messages and then rejects future egress for
   that task
 
-This is the strict boundary in split mode: the worker can suggest output, but only the
+This is the strict boundary: the worker can suggest output, but only the
 message-handler can dispatch it to external systems or close the task internally.
 
 ## Worked Example
@@ -210,7 +219,7 @@ Then `message-handler`:
 
 ## Internal Heartbeat
 
-Each message-handler loop also emits one internal heartbeat task by default.
+Each message-handler loop also emits one internal heartbeat task.
 
 Flow:
 - `message-handler` creates an internal `TaskEnvelope`
@@ -219,77 +228,44 @@ Flow:
 - `message-handler` accepts and logs that pong even if `log` is not otherwise allowlisted
 - `message-handler` closes the heartbeat task when the completion event arrives
 
-This gives a built-in round-trip signal for the handler -> BBMB -> worker -> BBMB -> handler path.
+This gives a built-in round-trip signal for the handler -> BBMB -> worker -> egress endpoint ->
+handler path.
 
 ## Config That Changes The Flow
 
-### Shared transport config
+The deployed values are in lab's `nixos/hosts/magpie/chatting-config.nix`.
 
-- `bbmb_address`
-  Must match on `message-handler` and `worker`.
+### Shared
 
-### Message-handler ingress config
+- `bbmb_address`: must match on `message-handler` and `worker`.
 
-- `poll_interval_seconds`
-  Controls how often connectors are polled.
-- `max_loops`
-  Useful for smoke runs; not a normal production setting.
-- `schedule_file`
-  Enables interval schedule ingress.
-- `prompt_context`
-  Global prompt guidance passed to supported ingress tasks.
-- `imap_host`, `imap_port`, `imap_username`, `imap_password_env`, `imap_mailbox`, `imap_search`
-  Enable IMAP ingress.
-- `email_prompt_context`
-  Extra prompt guidance only for email replies.
-- `telegram_enabled`, `telegram_bot_token_env`, `telegram_api_base_url`,
-  `telegram_poll_timeout_seconds`, `telegram_allowed_chat_ids`, `telegram_allowed_channel_ids`,
-  `telegram_context_refs`, `telegram_prompt_context`
-  Enable and scope Telegram ingress.
-- `cron_prompt_context`
-  Extra prompt guidance only for scheduled jobs.
-- `context_refs`
-  Default context refs attached to some ingress sources.
-- `github_repositories`, `github_assignee_login`, `github_context_refs`,
-  Enable and shape GitHub assignment ingress.
+### Message-handler
 
-### Message-handler egress and observability config
+- `poll_interval_seconds`: how often connectors are polled.
+- `allowed_egress_channels`: the main control over what the worker can cause externally. The
+  heartbeat pong on `log` and internal completion events are the only exceptions.
+- `egress_http_host`, `egress_http_port`: the loopback egress endpoint.
+- `egress_attachment_allowed_dirs`: the only directories an outbound attachment may come from.
+- `metrics_host`, `metrics_port`: the metrics/admin listener.
+- `context_refs`: default context refs for ingress tasks.
+- Connector settings are listed on each [connector page](connectors/README.md).
 
-- `poll_timeout_seconds`
-  Bounds how long the message-handler blocks on a BBMB pickup per loop iteration. (Egress no
-  longer drains a queue, so this no longer gates egress; it applies to the retained-for-tests
-  egress drain.)
-- `allowed_egress_channels`
-  Main control for what the worker is allowed to cause externally. Internal heartbeat pong on
-  `log/heartbeat` is the only built-in exception.
-- `smtp_host`, `smtp_port`, `smtp_username`, `smtp_password_env`, `smtp_from`, `smtp_starttls`
-  Required for real email dispatch.
-- `telegram_bot_token_env`, `telegram_api_base_url`
-  Also affect real Telegram dispatch.
-- `metrics_host`, `metrics_port`
-  Control the Prometheus-style `/metrics` endpoint on the message-handler.
-
-### Worker execution config
-
-Prompt context is inspectable in the task payload under `envelope.prompt_context`, with
-instructions assembled in this order before the task content itself:
-- global defaults from `prompt_context`
+Prompt guidance is inspectable in the task payload under `envelope.prompt_context`, assembled in
+this order before the task content:
+- `global_prompt_context`
 - source-specific defaults such as `cron_prompt_context`
 - reply-channel-specific defaults such as `email_prompt_context` or `telegram_prompt_context`
-- task-specific overrides such as a schedule job's own `prompt_context`
+- task-specific instructions such as a schedule's own `prompt_context`
 
-- `poll_timeout_seconds`
-  How long the worker waits on `chatting.tasks.v1` before treating the queue as empty.
-- `sleep_seconds`
-  Delay between empty polls.
-- `max_loops`
-  Useful for smoke runs; not a normal production setting.
-- `max_attempts`
-  Retry budget before the task becomes a dead letter.
-- `use_stub_executor`
-  Replaces the real executor path for testing/smoke runs.
-- `codex_command`, `codex_working_dir`
-  Shape the real executor subprocess.
+### Worker
+
+- `poll_timeout_seconds`: how long the worker waits on `chatting.tasks.v1` before treating the
+  queue as empty.
+- `sleep_seconds`: delay between empty polls.
+- `max_attempts`: retry budget before the task becomes a dead letter.
+- `codex_command`, `codex_working_dir`: shape the executor subprocess.
+- `workspace_root`, `executor_pool_size`, `supervisor_dir`: see [Operations](operations.md#worker).
+- `handler_egress_url`: the handler's egress endpoint.
 
 ## Recommendations
 

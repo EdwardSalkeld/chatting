@@ -1,9 +1,6 @@
 # Explicit executor termination
 
-Each work item has an `explicit_finish` setting, default **on**. A one-time
-migration enables it for all existing items, including those previously off.
-After deployment, `/finish off` persists across restarts and disables it for that
-work item. New items default on even in databases created with the old off default.
+Each work item has an `explicit_finish` setting, default **on**.
 
 Send `/finish on` in the chat to enable it for the current work item. `/finish`
 shows the setting; `/finish off` disables it. Commands do not launch an executor.
@@ -33,7 +30,5 @@ Timeouts remain failures. Credentials and sockets change on every launch; stale
 requests cannot finish a replacement executor. Transcripts help avoid duplicate
 effects but cannot guarantee exactly-once external operations.
 
-Supervisors still survive manager restarts. Supervisor crashes remain failures;
-this change does not add supervisor recovery. Completion records are retained for
-inspection, not used to resume crashed supervisors. Existing supervisors drain and
-are replaced when their code fingerprint changes, as in phase one.
+Supervisor crashes remain failures. Completion records are retained for
+inspection, not used to resume crashed supervisors.

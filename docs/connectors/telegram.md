@@ -1,6 +1,6 @@
 # Connector: Telegram
 
-Module: `app.connectors.telegram_connector`
+Package: `go/handler/internal/connectors/telegram`
 
 ## Purpose
 
@@ -8,7 +8,6 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 
 ## Runtime config keys
 
-- `prompt_context` (optional global prompt instructions)
 - `telegram_enabled` (bool)
 - `telegram_bot_token_env` (default `CHATTING_TELEGRAM_BOT_TOKEN`)
 - `telegram_api_base_url` (default `https://api.telegram.org`)
@@ -19,9 +18,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_allowed_chat_ids` (optional list)
 - `telegram_allowed_channel_ids` (optional list, required to ingest `channel_post`)
 - `telegram_prompt_context` (optional list)
-- `telegram_context_refs` (optional list)
-
-Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.).
+- `telegram_context_refs` (optional list; falls back to `context_refs`)
 
 ## Output mapping
 
@@ -40,7 +37,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 ## Notes
 
 - Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
-  global `prompt_context`, then `telegram_prompt_context`, then the task content itself.
+  `global_prompt_context`, then `telegram_prompt_context`, then the task content itself.
 - The handler still records conversation turns but passes the original message to the worker without adding its stored history.
 - The worker supplies up to 30 earlier turns from its own Telegram history to each executor run. It records inbound and successfully delivered outbound turns by chat, topic, and message ID, including reply anchors and attachments. This history starts when worker recording began; handler-only older turns are not copied into it.
 - The executor can search older worker turns by words, sender, and date using `app.main_history --query`, then retrieve turns around a returned message ID using `--around-message-id`. Both commands are scoped to the task's chat and topic.
@@ -59,7 +56,7 @@ Matching CLI flags exist (`--telegram-enabled`, `--telegram-bot-token-env`, etc.
 - Cleanup uses a hybrid policy:
   terminal tasks wait for `telegram_attachment_cleanup_grace_seconds`, while orphaned/dead-lettered attachments are reclaimed once they exceed `telegram_attachment_max_age_seconds`.
 - Cleanup runs in the message-handler loop and logs tracked, eligible, deleted, missing, and failed attachment cleanup events.
-- In production, point `telegram_attachment_dir` at durable storage when workers need access beyond ingress; the handler reclaims old files automatically unless you increase the retention settings.
+- `telegram_attachment_dir` must be readable by the worker, which runs as a different user, so the executor can open downloaded files.
 
 ## Outbound egress
 
