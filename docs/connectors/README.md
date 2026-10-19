@@ -1,11 +1,10 @@
-# Connector Docs
+# Connectors
 
-Implemented connector docs:
+Every connector runs inside the Go handler.
 
-- [Interval Schedule](interval-schedule.md)
-- [One-off reminders](../reminders.md)
 - [IMAP Email](imap-email.md)
-- [Personal inbox triage](personal-inbox.md)
 - [Telegram](telegram.md)
-- [Webhook](webhook.md)
-- [GitHub Issue Assignments](github-issue-assignments.md)
+- [GitHub](github.md)
+- [Personal inbox triage](personal-inbox.md)
+- [Schedules](../schedules.md)
+- [One-off reminders](../reminders.md)

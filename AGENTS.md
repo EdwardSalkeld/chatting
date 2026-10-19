@@ -1,30 +1,26 @@
-# Local Run Notes
+# Agent Notes
 
-- If starting a new feature, check that you have current code before doing any implementation work.
-  Update from current `main` / current branch tip first so new work does not start from stale code.
+- Before starting a feature, update from current `main` / the branch tip so new work does not start from stale code.
+- The only deployment is defined in the `lab` repo (`nixos/hosts/magpie/chatting*.nix`). A config option or entry point that lab does not use is not in use anywhere. See [docs/operations.md](docs/operations.md).
+- Docs are indexed in [docs/README.md](docs/README.md).
 
-- Sync local env: `uv sync`
-- Run all tests: `uv run python -m unittest discover -s tests`
-- Run handler-adjacent tests: `uv run python -m unittest tests.test_main_reply tests.test_split_mode_e2e`
-- Run worker tests: `uv run python -m unittest tests.test_worker_runtime`
-- Run app-main admin/query CLI tests: `uv run python -m unittest tests.test_main`
+## Commands
 
-## Runtime Entry Points
+- Sync env: `uv sync`
+- Python tests: `uv run python -m unittest discover -s tests`
+- Go tests: `cd go/handler && go test ./...`
+- Lint: `uv run ruff check app tests` and `uv run pyright app/`
+- E2E setup: [docs/testing.md](docs/testing.md)
 
-- Split mode only:
-  - `cd go/handler && go run ./cmd/chatting-handler --config <message-handler.json>`
-  - `uv run python -m app.main_worker --config <worker.json>`
+## Entry points
 
-## Query Examples
+- `cd go/handler && go run ./cmd/chatting-handler --config <handler.json>`
+- `uv run python -m app.main_worker --config <worker.json>`
 
-- List runs: `sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"`
-- List audit events: `sqlite3 /tmp/chatting-message-handler.db "select run_id, result_status, created_at from audit_events order by created_at desc limit 20;"`
-- List metrics: `sqlite3 /tmp/chatting-message-handler.db "select result_status, count(*) from run_records group by result_status order by result_status;"`
-
-## GitHub Workflow
+## GitHub workflow
 
 - If asked to complete a GitHub issue in this repo, opening or updating a PR is part of the expected deliverable unless the user explicitly says not to create one.
 
-## Tooling Note
+## Tooling note
 
 - If `rg` is unavailable locally, use `find . -type f` for file discovery and `grep -n` for content search.

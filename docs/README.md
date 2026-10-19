@@ -1,26 +1,14 @@
-# Documentation Index
+# Documentation
 
-## Getting started
+- [Operations](operations.md): the deployment, its services and the worker's supervisors
+- [Message flow](bbmb-message-flow.md): how tasks and replies move between handler and worker
+- [Testing](testing.md)
+- [Connectors](connectors/README.md)
+- [Schedules](schedules.md) and [one-off reminders](reminders.md)
+- [Explicit executor termination](explicit-finish.md)
+- [Work item model selection](model-selection.md)
 
-- [Quick Start](quick-start.md)
-- [Run Split Mode (BBMB)](run-split-bbmb.md)
-- [BBMB Message Flow](bbmb-message-flow.md)
-- [Debug And Test Guide](debug-and-test.md)
-- [Explicit Executor Termination](explicit-finish.md)
+## Architecture decisions
 
-## CI
-
-- [GitHub Actions CI Workflow](../.github/workflows/ci.yml)
-- [GitHub Actions Handler Release Workflow](../.github/workflows/handler-release.yml)
-
-## Connectors
-
-- [Connector Docs Index](connectors/README.md)
-
-## Architecture
-
-- [0001 Split-Mode Architecture For Private Single-User Automation](architecture/0001-python-prototype-architecture.md)
-- [0002 Interface Contracts And BBMB Payload Schemas](architecture/0002-interface-contracts.md)
-- [0003 Current Implementation Overview (Split Mode)](architecture/0003-implementation-overview.md)
-- [0004 Separate Visible Egress From Task Completion](architecture/0004-egress-completion-semantics.md)
-- [0005 Synchronous Egress Transport (No BBMB)](architecture/0005-synchronous-egress-transport.md)
+- [0004 Separate visible egress from task completion](architecture/0004-egress-completion-semantics.md)
+- [0005 Synchronous egress transport](architecture/0005-synchronous-egress-transport.md)

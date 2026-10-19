@@ -3,8 +3,7 @@
 Each new work item starts on **auto**. Jev selects Luna or Sol for each task.
 Send `/set low` to use Luna, `/set high` to use Sol, or `/model` to check the
 current setting. The setting is stored in the worker database and survives
-worker restarts. Existing work items keep their current setting when this
-default changes. Commands sent in a Telegram topic are accepted with the
+worker restarts. Commands sent in a Telegram topic are accepted with the
 connector's thread prefix, and Telegram bot command mentions are accepted.
 
 Send `/set auto` to have Jev select Luna or Sol for each new task. The worker

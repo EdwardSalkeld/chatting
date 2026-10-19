@@ -1,13 +1,11 @@
 # Personal inbox triage
 
-This is an opt-in workflow alongside the existing bot mailbox. Adding the code
-does not connect a personal account or change existing email routing. Configure
-one personal account per handler/broker deployment in v1.
+Triage for one personal mailbox, separate from the bot mailbox the IMAP
+connector reads.
 
 The handler reads mail over JMAP, persists messages, and publishes
-classification requests to `chatting.personal-inbox.tasks.v1`. A dedicated
-Python worker asks Jev for a category and a separate text model for a
-summary/action/deadline. It returns data on
+classification requests to `chatting.personal-inbox.tasks.v1`. A worker thread
+asks Jev for a category and Codex for a summary/action/deadline. It returns data on
 `chatting.personal-inbox.results.v1`. The handler applies fixed policy and
 records every external effect. Personal mail never enters `chatting.tasks.v1` or
 the general-purpose Codex executor.
@@ -27,9 +25,7 @@ Its inspection endpoint is described below.
 | `review` | Immediate Telegram to the action destination, labelled `review`; no Linear issue | Nothing, by default |
 
 Action mail always stays in the inbox, unread by this workflow, until you
-archive it yourself. Legacy `folders.action` entries are ignored, including
-for pending filing effects planned before this policy changed. Already-filed
-mail is not moved back automatically.
+archive it yourself. A `folders.action` entry is ignored.
 
 Other filing is driven by the `folders` map. A category with no entry, or an
 empty one, is left where it is. `review` is deliberately configured that way:
@@ -53,8 +49,7 @@ the original, retaining the category and confidence.
 The Jev version is pinned to `jev-1.13.0`, and the confidence it reports is
 the lower of its reported confidence and the probability of the category it
 chose. The handler compares it with `confidence_threshold` to distinguish a
-decision from an unsettled reading. Test
-with labelled real mail before allowing automatic filing.
+decision from an unsettled reading.
 
 The handler rejects unknown result fields: the model cannot supply a target,
 folder, team, shell command, attachment path, or arbitrary mailbox operation.
@@ -86,7 +81,7 @@ Each cycle asks for at most 25 changes. Created messages still in the inbox are
 stored, and only then does the state advance, so an interruption replays them;
 inserts keep the first record of a message, so a replay cannot overwrite a
 classification that has already been acted on. Mail delivered straight to
-another folder by a server-side rule is outside this connector's view, and v1
+another folder by a server-side rule is outside this connector's view, and it
 does not watch messages later moved *into* the inbox.
 
 If the server can no longer calculate changes from the stored state it reports
@@ -186,10 +181,9 @@ the folder and destinations from its own configuration, and the handler
 performs every effect itself. A hostile email can at worst affect the wording
 of text its own owner reads.
 
-Mail is sent to TypeSafe for classification and to Codex for summarising; this
-must be part of the operator's rollout decision. Provider calls are stateless,
-but local message records and the cache persist; v1 has no automatic retention
-pruning. Protect the databases and backups as personal email data.
+Mail is sent to TypeSafe for classification and to Codex for summarising.
+Provider calls are stateless, but local message records and the cache persist,
+with no automatic retention pruning. Protect the databases and backups as personal email data.
 
 ## The daily digest
 
@@ -224,48 +218,32 @@ firing a digest of its own. Routine mail therefore carries no per-message
 summary at all: Jev decides the category and whether the recipient must act,
 and only mail that needs acting on buys a summary.
 
-## Configuration and rollout
+## Configuration
 
-Merge the `personal_inbox` object from
-[the example](../../configs/personal-inbox.handler.example.json) into the normal
-handler configuration. Defaults are disabled, dry-run, no backfill and no
-folders. The handler alone receives:
+The `personal_inbox` object in the handler config enables the workflow;
+[the example](../../configs/personal-inbox.handler.example.json) lists its
+keys. Defaults are disabled, dry-run, no backfill and no folders. Folders in
+the `folders` map must exist before startup.
 
-- `CHATTING_PERSONAL_JMAP_TOKEN` (or the configured name). Create it under
-  Settings → Privacy & Security → Connected apps & API tokens, type **JMAP**.
-  A read-only token is enough until you enable filing; filing needs the Email
-  scope without read-only.
-- Its existing configured Telegram bot token.
-- `CHATTING_PERSONAL_LINEAR_KEY` (or the configured name), **only if** you want
-  action mail to raise tickets. Leave `linear_team_id` empty and ticketing is
-  off: action mail is still alerted and left in the inbox, there is just no
-  issue. A configured team whose key is missing from the environment logs that ticketing
-  is disabled and carries on rather than failing startup, so the rest of the
-  workflow can run before Linear is set up.
+The handler alone receives:
 
-The worker's model credentials are listed under **Worker boundary** above and
-are deliberately separate from these: the worker never receives mailbox,
-Telegram or Linear credentials.
+- `CHATTING_PERSONAL_JMAP_TOKEN` (or the configured name): a Fastmail JMAP
+  token with the Email scope, not read-only, since filing writes.
+- Its existing Telegram bot token.
+- `CHATTING_PERSONAL_LINEAR_KEY` (or the configured name), only for ticketing.
+  With `linear_team_id` empty, ticketing is off: action mail is still alerted
+  and left in the inbox. A configured team whose key is missing logs that
+  ticketing is disabled rather than failing startup.
 
-Dry-run needs the JMAP token but does not require live Telegram/Linear keys.
-All destinations and the Linear team still need explicit configuration so
-previews are meaningful.
+The worker never receives mailbox, Telegram or Linear credentials; its own are
+listed under **Worker boundary** above.
 
-1. Create the folders you intend to file into. Configure the account, folder
-   map, digest time and Telegram destinations. Set the worker's cache path.
-   Ticketing can be left out entirely at this stage.
-2. Enable the connector with `dry_run: true`. Inspect classifications/previews
-   using the loopback API. Read-only ingestion still reaches the model
-   providers; dry-run suppresses external effects, not model requests.
-3. Set `dry_run: false` for notifications/tickets on newly classified mail.
-   Earlier preview effects remain previews; they are never implicitly replayed.
-4. Add entries to `folders` once you trust the classifications. These apply to
-   newly planned effects; adding a folder does not retrospectively file mail
-   that was already classified.
-
-Setting `dry_run: true` pauses pending live effects. Clearing a folder also
-stops that pending filing. Disabling the entire connector stops its ingestion,
-results and effect loop; ordinary email processing continues.
+`dry_run: true` records effects as previews instead of performing them, but
+still sends mail to the model providers. Setting it pauses pending live
+effects, and previews are never replayed when it is cleared. Clearing a folder
+stops pending filing into it, and adding one does not file mail that was
+already classified. Disabling the connector stops its ingestion, results and
+effect loop; the rest of the handler carries on.
 
 ## Inspection and reconciliation
 
@@ -290,7 +268,7 @@ These routes exist only when the connector is enabled, on the existing
 A message is `processed` only when its required effects are all done. Other
 statuses explain why it is unfinished: classification, processing, digest,
 review, reconciliation, or preview. Reviewing a classifier's uncertain decision
-is currently manual; v1 has no reclassification editor.
+is currently manual; there is no reclassification editor.
 
 Mail with attachments, or whose body the server could not render, is held for
 review rather than silently filed. Both come from JMAP directly:
@@ -316,14 +294,13 @@ adds descriptive text; only Jev decides the route.
 Each classification carries a `trace`: the category and confidence Jev gave,
 whether it judged an action, a deadline or an injection attempt, whether a
 summary was bought, and a `reason`: `accepted`, `confidence_below_threshold`, `triage_unavailable` or
-`injection_suspected`. Older records retain their historical override reasons;
-this change does not reclassify or replay them. Alongside it each
+`injection_suspected`. Alongside it each
 message records `body_html`, `body_chars` and `body_truncated`.
 
 That is enough to answer "why is this in review" from the record, without
 going back to the mailbox to guess.
 
-`GET /personal-inbox` on the handler's own UI server lists the same thing as a
+`GET /personal-inbox` on the handler's metrics/admin listener lists the same thing as a
 page: when each message arrived, who sent it, its subject linked back to the
 mailbox, the decision, the score and the rule that settled it, newest first.
 Mail still waiting for a classification is shown too, and the header carries
