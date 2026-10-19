@@ -541,10 +541,9 @@ func (service *Service) plan(message Message) []Effect {
 		if service.Config.CreatesTickets() {
 			add("linear", service.Config.LinearTeam)
 		}
+	case "review":
+		add("telegram", service.Config.ActionTarget)
 	}
-	// Review is deliberately not alerted. It means the workflow could not
-	// classify the mail, and such mail is left in the inbox, so a message
-	// saying so repeats what opening the inbox already shows.
 	// News is relayed by the digest rather than one alert per newsletter.
 	if folder != "" {
 		add("file", folder)

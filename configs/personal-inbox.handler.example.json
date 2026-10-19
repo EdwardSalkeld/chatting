@@ -9,7 +9,7 @@
     "folders": {
       "news": "Triage/News",
       "order": "Triage/Orders",
-      "action": "Triage/Actions",
+      "action": "",
       "review": ""
     },
     "mark_read": ["news", "order"],

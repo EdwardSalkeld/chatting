@@ -23,23 +23,30 @@ Its inspection endpoint is described below.
 | --- | --- | --- |
 | `news` | One daily digest, not an alert per newsletter | `folders.news` |
 | `order` | Immediate Telegram to the orders destination | `folders.order` |
-| `action` | Immediate Telegram to the action destination, and a Linear issue if ticketing is configured | `folders.action` |
-| `review` | Nothing: it stays in the inbox, which is the queue to read | Nothing, by default |
+| `action` | Immediate Telegram to the action destination, and a Linear issue if ticketing is configured | Nothing: stays in the inbox until you archive it |
+| `review` | Immediate Telegram to the action destination, labelled `review`; no Linear issue | Nothing, by default |
 
-Filing is driven entirely by the `folders` map. A category with no entry, or an
+Action mail always stays in the inbox, unread by this workflow, until you
+archive it yourself. Legacy `folders.action` entries are ignored, including
+for pending filing effects planned before this policy changed. Already-filed
+mail is not moved back automatically.
+
+Other filing is driven by the `folders` map. A category with no entry, or an
 empty one, is left where it is. `review` is deliberately configured that way:
-it means *the workflow could not classify this confidently*, so the inbox
-becomes the queue of mail it did not understand. An empty inbox then means
-nothing needs you, rather than that you have not looked today. Set
-`folders.review` if you would rather file it anyway.
+it means *the workflow could not classify this confidently*. Both action and
+review mail alert immediately, keeping unsettled classifications visible so
+the rules can be improved. Each newly classified review email gets one alert,
+using the same delivery and reconciliation behaviour as action alerts; this
+does not add recurring reminders or replay alerts for historical review mail.
+Set `folders.review` if you would rather file it anyway.
 
 Jev's confident category is authoritative. Below `confidence_threshold`, there
 is no settled decision and the message goes to `review`. Extracted actions or
 deadlines, incomplete bodies, attachments and summary failures cannot change a
 confident category. Jev sees the completeness flag and is instructed to choose
-`review` when uncertain. Review
-is not notified and stays in the inbox by default. If Jev is unavailable or its
-answer is invalid, there is no decision to use: the worker returns `review`
+`review` when uncertain. Review is notified to the action destination and stays
+in the inbox by default. If Jev is unavailable or its answer is invalid, there
+is no decision to use: the worker returns `review`
 without calling the summariser. Suspicious mail is withheld from both summary
 paths, while retaining Jev's category. Summary failures produce a notice to read
 the original, retaining the category and confidence.
@@ -231,8 +238,8 @@ folders. The handler alone receives:
 - Its existing configured Telegram bot token.
 - `CHATTING_PERSONAL_LINEAR_KEY` (or the configured name), **only if** you want
   action mail to raise tickets. Leave `linear_team_id` empty and ticketing is
-  off: action mail is still alerted and filed, there is just no issue. A
-  configured team whose key is missing from the environment logs that ticketing
+  off: action mail is still alerted and left in the inbox, there is just no
+  issue. A configured team whose key is missing from the environment logs that ticketing
   is disabled and carries on rather than failing startup, so the rest of the
   workflow can run before Linear is set up.
 

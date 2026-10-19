@@ -32,11 +32,11 @@ type Config struct {
 	Backfill   bool   `json:"backfill"`
 	DryRun     bool   `json:"dry_run"`
 	// Folders maps a category to the mailbox its mail is filed into. A missing
-	// or empty entry leaves that category in the inbox, which is how review
-	// stays visible as the queue of mail the workflow did not understand.
+	// or empty entry leaves that category in the inbox. Action mail always
+	// stays in the inbox until the owner archives it, even with a legacy entry.
 	Folders map[string]string `json:"folders"`
 	// MarkRead lists the categories filed as already read. Action mail is
-	// deliberately left unread even once it has been filed.
+	// never filed, so this setting cannot mark it read.
 	MarkRead     []string `json:"mark_read"`
 	LinkTemplate string   `json:"mail_link_template"`
 	OrdersTarget string   `json:"orders_telegram_target"`
@@ -140,7 +140,11 @@ func (config Config) Validate() error {
 }
 
 // Folder is the mailbox a category is filed into, or "" to leave it in place.
+// Action mail is never filed automatically, including with older configs.
 func (config Config) Folder(category string) string {
+	if category == "action" {
+		return ""
+	}
 	return strings.TrimSpace(config.Folders[category])
 }
 
@@ -153,7 +157,7 @@ func (config Config) Threshold() float64 {
 }
 
 // CreatesTickets reports whether action mail also opens a Linear issue. With
-// no team configured it is simply notified and filed.
+// no team configured it is simply notified and left in the inbox.
 func (config Config) CreatesTickets() bool {
 	return strings.TrimSpace(config.LinearTeam) != ""
 }
