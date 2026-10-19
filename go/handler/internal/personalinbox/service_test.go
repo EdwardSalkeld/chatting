@@ -300,7 +300,7 @@ func TestOrderIsNotifiedFiledAndLinked(t *testing.T) {
 	_ = mail
 }
 
-func TestReviewIsLeftInTheInboxAndNotAlerted(t *testing.T) {
+func TestReviewIsLeftInTheInboxAndAlerted(t *testing.T) {
 	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
 	if err := service.ingest(ctx); err != nil {
@@ -310,10 +310,19 @@ func TestReviewIsLeftInTheInboxAndNotAlerted(t *testing.T) {
 	if err := service.Cycle(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Review means the workflow could not classify it, and such mail stays in
-	// the inbox, so alerting as well would repeat what the inbox already shows.
-	if len(performer.calls) != 0 {
-		t.Fatalf("review produced effects: %+v", performer.calls)
+	if len(performer.calls) != 1 || performer.calls[0].Kind != "telegram" || performer.calls[0].Target != "actions" {
+		t.Fatalf("review should only alert the action destination: %+v", performer.calls)
+	}
+	body := performer.calls[0].Body
+	if !strings.HasPrefix(body, "review: ") || !strings.Contains(body, "Not sure") ||
+		!strings.Contains(body, "https://app.fastmail.com/mail/Inbox/AUjt.Stm4?u=b8884168") {
+		t.Fatalf("review alert missing its category, summary or inbox link: %s", body)
+	}
+	if err := service.Cycle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(performer.calls) != 1 {
+		t.Fatalf("review alert repeated: %+v", performer.calls)
 	}
 }
 
@@ -699,7 +708,7 @@ func TestLatestOccurrenceRollsBackBeforeTheSendTime(t *testing.T) {
 	}
 }
 
-func TestActionMailWithoutLinearIsStillNotifiedAndFiled(t *testing.T) {
+func TestActionMailWithoutLinearIsNotifiedAndLeftInInbox(t *testing.T) {
 	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
 	service.Config.LinearTeam = ""
@@ -718,8 +727,42 @@ func TestActionMailWithoutLinearIsStillNotifiedAndFiled(t *testing.T) {
 	if kinds["linear"] != 0 {
 		t.Fatalf("ticket raised with no team configured: %+v", performer.calls)
 	}
-	if kinds["telegram"] != 1 || kinds["file"] != 1 {
-		t.Fatalf("action mail lost its alert or filing: %+v", performer.calls)
+	if kinds["telegram"] != 1 || kinds["file"] != 0 {
+		t.Fatalf("action mail should alert without filing: %+v", performer.calls)
+	}
+}
+
+func TestActionMailKeepsAlertsAndTicketsButNeverFiles(t *testing.T) {
+	service, mail, broker, performer := fixture(t)
+	ctx := context.Background()
+	service.Config.MarkRead = append(service.Config.MarkRead, "action")
+	classifyOnce(t, service, broker, Classification{Category: "action", Summary: "Pay the invoice", Confidence: .99})
+	// A filing planned by an older version must also stay paused after upgrade.
+	if err := service.Store.saveEffect(ctx, Effect{ID: "Stm4:file", MessageID: "Stm4", Kind: "file",
+		Category: "action", Target: "Triage/Actions", Status: "pending"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.perform(ctx); err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int{}
+	for _, call := range performer.calls {
+		kinds[call.Kind]++
+		if call.Kind == "telegram" && !strings.Contains(call.Body, "/mail/Inbox/") {
+			t.Fatalf("action alert must link to the inbox: %s", call.Body)
+		}
+	}
+	if kinds["telegram"] != 1 || kinds["linear"] != 1 || kinds["file"] != 0 {
+		t.Fatalf("action should alert and ticket without filing: %+v", performer.calls)
+	}
+	// The performer independently refuses old filing effects too.
+	handler := &HandlerPerformer{Config: service.Config, Mail: mail, Folders: service.Folders}
+	if _, err := handler.Perform(ctx, Effect{Kind: "file", MessageID: "Stm4",
+		Category: "action", Target: "Triage/Actions"}); err == nil {
+		t.Fatal("performer accepted an old action filing")
+	}
+	if len(mail.filed) != 0 {
+		t.Fatalf("action changed the mailbox: %+v", mail.filed)
 	}
 }
 
