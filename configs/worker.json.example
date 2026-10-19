@@ -9,6 +9,7 @@
   "codex_command": "codex exec",
   "app_server_command": "codex app-server",
   "app_server_dir": "/data/codex-sessions",
+  "app_server_sandbox_mode": null,
   "codex_working_dir": "/workspace",
   "workspace_root": "/workspace/.chatting-workspaces",
   "handler_egress_url": "http://handler:9467/egress"

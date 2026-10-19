@@ -88,6 +88,15 @@ class Supervisor:
             config = settings["config"]
             command = config.get("app_server_command", "codex app-server")
             directory = config.get("app_server_dir", f"{settings['db_path']}.sessions")
+            sandbox_mode = config.get("app_server_sandbox_mode")
+            if sandbox_mode is not None and sandbox_mode not in (
+                "read-only",
+                "workspace-write",
+                "danger-full-access",
+            ):
+                raise ValueError(
+                    "app_server_sandbox_mode must be read-only, workspace-write or danger-full-access"
+                )
             if not isinstance(command, str) or not shlex.split(command):
                 raise ValueError("app_server_command must be a nonempty command")
             if not isinstance(directory, str) or not Path(directory).is_absolute():
@@ -101,6 +110,7 @@ class Supervisor:
                     history_store=self.store,
                     env=self.executor.env,
                     session_root=directory,
+                    sandbox_mode=sandbox_mode,
                 ),
                 store=self.store,
             )

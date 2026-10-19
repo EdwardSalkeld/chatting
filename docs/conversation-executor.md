@@ -16,8 +16,13 @@ python3 -P -m app.main_work_items --db /var/lib/worker/chatting-worker.db execut
 Configure `app_server_command` separately from `codex_command`. Its default is
 `codex app-server`, with stdio transport. App-server inherits the installed Codex
 configuration and authentication; it does not inherit flags from `codex_command`.
-For an existing deployment that deliberately bypasses sandboxing, configure that
-policy explicitly, for example `codex app-server -c sandbox_mode='"danger-full-access"'`.
+Set `app_server_sandbox_mode` to `read-only`, `workspace-write`, or
+`danger-full-access` to explicitly select the sandbox for new and resumed threads.
+Omitting it (or setting it to null) preserves Codex defaults and saved policies.
+For an existing deployment that deliberately bypasses sandboxing, set
+`"app_server_sandbox_mode": "danger-full-access"` to match that access. Command-line
+defaults alone do not override the policy saved in an existing thread. Reply
+delivery needs write access to both workspace files and the worker database.
 Turns use approval policy `never`, so client approval or interactive input requests
 fail visibly rather than hanging an unattended worker. Per-work-item model
 selection, automatic routing and low-to-high escalation still apply.

@@ -27,6 +27,7 @@ class AppServerExecutor(CodexExecutor):
     session_root: str | None = None
     conversation_id: str | None = None
     idle_seconds: float = 300
+    sandbox_mode: str | None = None
 
     def for_workspace(self, *, work_item_id: str) -> AppServerExecutor:
         return cast(AppServerExecutor, super().for_workspace(work_item_id=work_item_id))
@@ -62,7 +63,12 @@ class AppServerExecutor(CodexExecutor):
                 environment.pop(key)
         generation = hashlib.sha256(
             json.dumps(
-                [self.command, environment, str(Path(__file__).resolve())],
+                [
+                    self.command,
+                    self.sandbox_mode,
+                    environment,
+                    str(Path(__file__).resolve()),
+                ],
                 sort_keys=True,
             ).encode()
         ).hexdigest()
@@ -122,6 +128,7 @@ class AppServerExecutor(CodexExecutor):
             "payload": payload,
             "cwd": self.cwd,
             "model_tier": self.model_tier,
+            "sandbox_mode": self.sandbox_mode,
             "timeout": self.timeout_seconds,
             "escalation_path": str(escalation_path)
             if self.model_tier == "low"
