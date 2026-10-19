@@ -7,7 +7,7 @@
 ## Commands
 
 - Sync env: `uv sync`
-- Python tests: `uv run python -m unittest discover -s tests`
+- Python tests: `uv run pytest -n auto`
 - Go tests: `cd go/handler && go test ./...`
 - Lint: `uv run ruff check app tests` and `uv run pyright app/`
 - E2E setup: [docs/testing.md](docs/testing.md)

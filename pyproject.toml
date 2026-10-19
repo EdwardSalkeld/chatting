@@ -10,6 +10,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pyright>=1.1.408",
+    "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.5",
 ]
 
@@ -18,3 +20,7 @@ target-version = "py313"
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
