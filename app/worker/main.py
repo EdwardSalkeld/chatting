@@ -60,7 +60,6 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "supervisor_dir",
         "app_server_command",
         "app_server_dir",
-        "app_server_sandbox_mode",
     }
 )
 BBMB_PICKUP_WAIT_SECONDS = 10

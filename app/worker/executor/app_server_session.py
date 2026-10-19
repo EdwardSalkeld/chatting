@@ -247,11 +247,13 @@ class Session:
                 )
                 self.server.send({"method": "initialized"})
             if not self.loaded:
-                params = {"cwd": request["cwd"], "approvalPolicy": "never"}
-                if request.get("sandbox_mode") is not None:
-                    # Resume otherwise retains the sandbox saved with the thread,
-                    # even when the process command sets a different default.
-                    params["sandbox"] = request["sandbox_mode"]
+                # Set both policies on resume too: saved threads otherwise retain
+                # their old sandbox even when process defaults have changed.
+                params = {
+                    "cwd": request["cwd"],
+                    "approvalPolicy": "never",
+                    "sandbox": "danger-full-access",
+                }
                 if thread_id:
                     params["threadId"] = thread_id
                     params["excludeTurns"] = True

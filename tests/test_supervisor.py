@@ -15,7 +15,7 @@ import time
 import unittest
 
 from app.state import SQLiteStateStore
-from app.worker.supervisor import Supervisor, SupervisorError, SupervisorPool, request
+from app.worker.supervisor import SupervisorError, SupervisorPool, request
 from tests.e2e.test_parallel_worker_e2e import _task
 from tests.test_worker_inbox import _telegram_task
 
@@ -80,16 +80,6 @@ class SupervisorTests(unittest.TestCase):
             if self.events.exists()
             else []
         )
-
-    def test_app_server_sandbox_config_is_validated_and_forwarded(self):
-        self.settings["config"]["app_server_sandbox_mode"] = "danger-full-access"
-        supervisor = Supervisor(slot=99, settings=self.settings)
-        self.assertEqual(
-            supervisor.executor.persistent.sandbox_mode, "danger-full-access"
-        )
-        self.settings["config"]["app_server_sandbox_mode"] = "invalid"
-        with self.assertRaisesRegex(ValueError, "app_server_sandbox_mode"):
-            Supervisor(slot=99, settings=self.settings)
 
     def test_reconnect_preserves_running_executor_and_finished_notice(self) -> None:
         task = _task(1, "item_restart", 0.8)
