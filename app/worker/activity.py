@@ -116,19 +116,6 @@ class WorkerActivityMonitor:
             detail={"attempt": attempt},
         )
 
-    def record_executor_pid(
-        self, *, pid: int | None, task_id: str | None = None
-    ) -> None:
-        if pid is None:
-            return
-        with self._lock:
-            active = self._active_executors.get(task_id) if task_id else None
-            if active is None and len(self._active_executors) == 1:
-                active = next(iter(self._active_executors.values()))
-            if active is None:
-                return
-            active["pid"] = pid
-
     def record_executor_finished(
         self,
         *,

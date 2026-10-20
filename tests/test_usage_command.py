@@ -292,13 +292,6 @@ class _ExplodingUsageExecutor:
         return self.report
 
 
-@dataclass(frozen=True)
-class _NoUsageExecutor:
-    def execute(self, task) -> ExecutionResult:
-        del task
-        raise AssertionError("/usage must not invoke the executor")
-
-
 class UsageCommandWorkerTests(unittest.TestCase):
     def _process(self, executor) -> WorkerProcessResult:
         with tempfile.TemporaryDirectory() as tmp:
@@ -332,13 +325,6 @@ class UsageCommandWorkerTests(unittest.TestCase):
         self.assertEqual(visible.message.target, "8605042448")
         self.assertIn("Primary window (7d): 42% used", visible.message.body or "")
         self.assertEqual(result.egress_messages[1].event_kind, "completion")
-
-    def test_executor_without_usage_support_says_so(self) -> None:
-        result = self._process(_NoUsageExecutor())
-
-        self.assertEqual(result.reason_codes, ["usage_command"])
-        body = result.egress_messages[0].message.body or ""
-        self.assertIn("does not report usage", body)
 
 
 if __name__ == "__main__":

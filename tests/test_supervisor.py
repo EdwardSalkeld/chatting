@@ -1,6 +1,5 @@
 """Exercise the real socket and process boundary without a broker."""
 
-import argparse
 import fcntl
 import json
 import os
@@ -28,17 +27,13 @@ class SupervisorTests(unittest.TestCase):
         self.store = SQLiteStateStore(str(self.root / "worker.db"))
         self.events = self.root / "events.jsonl"
         fake = Path(__file__).parent / "e2e/parallel_fake_codex.py"
-        args = argparse.Namespace(
-            codex_working_dir=None,
-            workspace_root=str(self.root / "workspaces"),
-            codex_command=f"{sys.executable} {fake.resolve()} {self.events}",
-            claude_command=None,
-            config=None,
-        )
         self.settings = {
             "db_path": str(self.root / "worker.db"),
-            "args": vars(args),
-            "config": {},
+            "config_path": None,
+            "config": {
+                "workspace_root": str(self.root / "workspaces"),
+                "codex_command": f"{sys.executable} {fake.resolve()} {self.events}",
+            },
             "max_attempts": 1,
             "handler_egress_url": "http://127.0.0.1:1/egress",
         }

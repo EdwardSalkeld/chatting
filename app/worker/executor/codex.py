@@ -203,30 +203,18 @@ class CodexExecutor:
         if self.model_tier is not None:
             command = (*command, "-m", MODELS[self.model_tier])
         try:
-            if self.output_callback is None and finish_session is None:
-                completed = subprocess.run(
-                    command,
-                    input=payload,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    cwd=self.cwd,
-                    env=_executor_env(self.env),
-                )
-            else:
-                completed = _run_streaming(
-                    command=command,
-                    payload=payload,
-                    cwd=self.cwd,
-                    env={
-                        **_executor_env(self.env),
-                        **(finish_session.environment() if finish_session else {}),
-                    },
-                    timeout_seconds=self.timeout_seconds,
-                    callback=self.output_callback or (lambda stream, content: None),
-                    finish_session=finish_session,
-                )
+            completed = _run_streaming(
+                command=command,
+                payload=payload,
+                cwd=self.cwd,
+                env={
+                    **_executor_env(self.env),
+                    **(finish_session.environment() if finish_session else {}),
+                },
+                timeout_seconds=self.timeout_seconds,
+                callback=self.output_callback or (lambda stream, content: None),
+                finish_session=finish_session,
+            )
         except subprocess.TimeoutExpired:
             return _error_result("executor_timeout")
 

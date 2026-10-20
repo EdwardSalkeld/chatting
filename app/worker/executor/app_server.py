@@ -54,7 +54,7 @@ class AppServerExecutor(CodexExecutor):
             raise ValueError("app-server session directory must be private")
         path = directory / "rpc.sock"
         if len(os.fsencode(path)) > 103:
-            raise ValueError("app_server_dir is too long for Unix sockets")
+            raise ValueError("app-server session directory is too long for Unix sockets")
         environment = _executor_env(self.env)
         # A persistent process must never inherit credentials for an outer turn.
         for key in tuple(environment):

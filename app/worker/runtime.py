@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from dataclasses import replace
 from dataclasses import dataclass
@@ -28,11 +27,9 @@ from app.internal_notices import (
 )
 from app.models import (
     AuditEvent,
-    ExecutionResult,
     OutboundMessage,
     PromptContext,
     RunRecord,
-    TaskEnvelope,
 )
 from app.model_command import MODELS, parse_model_command
 from app.worker.model_router import choose_model
@@ -40,8 +37,6 @@ from app.state import SQLiteStateStore
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
-
-_SUPERVISED_MARKER_RE = re.compile(r"(?<!\S)#super(?!\S)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -103,7 +98,6 @@ def process_task_message(
     egress_messages: list[EgressQueueMessage] = []
     executor_launch_count = 0
     used_supervised_recovery = False
-    normalized_envelope = _normalize_executor_envelope(envelope)
     inbox_task = store.get_inbox_task(task_id=task_message.task_id)
     assignment = store.get_work_assignment(task_id=task_message.task_id)
     explicit_finish = bool(
@@ -153,7 +147,6 @@ def process_task_message(
                 active_executor, "with_output_callback", None
             )
             if callable(output_callback_setter):
-                streaming_output = True
                 active_executor = cast(
                     Executor,
                     output_callback_setter(
@@ -162,20 +155,17 @@ def process_task_message(
                         )
                     ),
                 )
-            else:
-                streaming_output = False
             if not explicit_finish and _should_run_supervised_recovery(task_message):
                 active_executor = SupervisedReplyRecoveryExecutor(
                     inner=active_executor,
                     store=store,
                 )
-            active_envelope = normalized_envelope
             executor_launch_count += 1
             activity_monitor.record_executor_started(
                 task_message=task_message,
                 attempt=executor_launch_count,
             )
-            execution_result = active_executor.execute(active_envelope)
+            execution_result = active_executor.execute(envelope)
             if (
                 model_tier == "low"
                 and execution_result.escalation_reason
@@ -219,9 +209,9 @@ def process_task_message(
                     sol_executor = SupervisedReplyRecoveryExecutor(
                         inner=sol_executor, store=store
                     )
-                context = normalized_envelope.prompt_context
+                context = envelope.prompt_context
                 sol_envelope = replace(
-                    normalized_envelope,
+                    envelope,
                     prompt_context=PromptContext(
                         global_instructions=list(context.global_instructions),
                         source_instructions=list(context.source_instructions),
@@ -247,12 +237,6 @@ def process_task_message(
                 executor_launch_count = active_executor.last_launch_count
                 used_supervised_recovery = active_executor.last_recovery_attempted
             execution_payload = execution_result.to_dict()
-            if not streaming_output:
-                _record_execution_output(
-                    activity_monitor=activity_monitor,
-                    task_message=task_message,
-                    execution_result=execution_result,
-                )
 
             published_incremental_reply_count = (
                 store.count_conversation_bundle_main_reply_egress_events(
@@ -772,13 +756,8 @@ def _process_usage_command(
     executor_impl: Executor,
 ) -> WorkerProcessResult:
     emitted_at = datetime.now(timezone.utc)
-    if isinstance(executor_impl, UsageReporter):
-        report = executor_impl.usage_report()
-        body = format_usage_report(report, now=emitted_at)
-        report_detail = report.to_dict()
-    else:
-        body = "This executor does not report usage."
-        report_detail = None
+    report = cast(UsageReporter, executor_impl).usage_report()
+    body = format_usage_report(report, now=emitted_at)
     visible_egress_message = build_usage_egress(
         task_message=task_message,
         body=body,
@@ -822,7 +801,7 @@ def _process_usage_command(
                 "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": 0,
                 "egress_message_count": 2,
-                "usage_report": report_detail,
+                "usage_report": report.to_dict(),
             },
             created_at=run_record.created_at,
         )
@@ -952,43 +931,8 @@ def _result_status(reason_codes: list[str]) -> str:
     return "success"
 
 
-def _record_execution_output(
-    *,
-    activity_monitor: WorkerActivityMonitor,
-    task_message: TaskQueueMessage,
-    execution_result: ExecutionResult,
-) -> None:
-    if execution_result.stdout:
-        activity_monitor.record_executor_output(
-            task_message=task_message,
-            stream="stdout",
-            content=execution_result.stdout,
-        )
-    if execution_result.stderr:
-        activity_monitor.record_executor_output(
-            task_message=task_message,
-            stream="stderr",
-            content=execution_result.stderr,
-        )
-
-
 def _should_run_supervised_recovery(task_message: TaskQueueMessage) -> bool:
     return _requires_visible_telegram_reply(task_message)
-
-
-def _normalize_executor_envelope(envelope: TaskEnvelope) -> TaskEnvelope:
-    normalized_content = _strip_supervised_marker(envelope.content)
-    if normalized_content == envelope.content:
-        return envelope
-    return replace(envelope, content=normalized_content)
-
-
-def _strip_supervised_marker(content: str) -> str:
-    stripped = _SUPERVISED_MARKER_RE.sub("", content)
-    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
-    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
-    stripped = stripped.strip()
-    return stripped or content
 
 
 def _requires_visible_telegram_reply(task_message: TaskQueueMessage) -> bool:

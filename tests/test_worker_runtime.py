@@ -1,12 +1,18 @@
 import tempfile
 import unittest
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import sqlite3
 
 from app.broker import TaskQueueMessage
-from app.internal_heartbeat import build_internal_heartbeat_envelope
+from app.internal_heartbeat import (
+    INTERNAL_HEARTBEAT_TARGET,
+    INTERNAL_REPLY_CHANNEL_TYPE,
+    INTERNAL_SOURCE,
+)
 from app.internal_notices import (
     INTERNAL_NOTICE_METADATA_KEY,
     TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE,
@@ -30,8 +36,16 @@ class TestExecutor:
 
 @dataclass(frozen=True)
 class MultiMessageExecutor(TestExecutor):
+    output_callback: Callable[[str, str], None] | None = None
+
+    def with_output_callback(self, callback):
+        return replace(self, output_callback=callback)
+
     def execute(self, task):
         del task
+        assert self.output_callback is not None
+        self.output_callback("stdout", "executor stdout")
+        self.output_callback("stderr", "executor stderr")
         return ExecutionResult(
             errors=[], stdout="executor stdout", stderr="executor stderr"
         )
@@ -274,7 +288,7 @@ class WorkerRuntimeTests(unittest.TestCase):
             source="im",
             received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
             actor="8605042448:edsalkeld",
-            content="hello #super",
+            content="hello",
             attachments=[],
             context_refs=[],
             reply_channel=ReplyChannel(
@@ -289,12 +303,22 @@ class WorkerRuntimeTests(unittest.TestCase):
         )
 
     def _build_internal_heartbeat_task_message(self) -> TaskQueueMessage:
-        return TaskQueueMessage.from_envelope(
-            build_internal_heartbeat_envelope(
-                sequence=1,
-                now=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+        heartbeat_id = "internal-heartbeat:2026-03-09T12:00:00+00:00:1"
+        envelope = TaskEnvelope(
+            id=heartbeat_id,
+            source=INTERNAL_SOURCE,
+            received_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+            actor="message-handler",
+            content="internal heartbeat ping",
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type=INTERNAL_REPLY_CHANNEL_TYPE, target=INTERNAL_HEARTBEAT_TARGET
             ),
-            trace_id="trace:internal:heartbeat:1",
+            dedupe_key=heartbeat_id,
+        )
+        return TaskQueueMessage.from_envelope(
+            envelope, trace_id="trace:internal:heartbeat:1"
         )
 
     def _build_internal_channel_notice_task_message(self) -> TaskQueueMessage:
@@ -400,9 +424,11 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.attempt_count, 2)
             self.assertEqual(result.reason_codes, ["retry_exhausted"])
             self.assertEqual(result.error_summary, "RuntimeError: executor down")
-            self.assertEqual(
-                store.list_dead_letters()[0].reason_codes, ["retry_exhausted"]
-            )
+            with sqlite3.connect(Path(tmpdir) / "worker.db") as connection:
+                (reason_codes_json,) = connection.execute(
+                    "SELECT reason_codes_json FROM dead_letters"
+                ).fetchone()
+            self.assertEqual(json.loads(reason_codes_json), ["retry_exhausted"])
             self.assertEqual(len(result.egress_messages), 2)
             self.assertEqual(result.egress_messages[0].event_kind, "message")
             self.assertEqual(
@@ -552,25 +578,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
 
-    def test_process_task_message_strips_supervised_marker_before_executor(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            executor = MainReplyRecordingExecutor(store=store)
-            result = process_task_message(
-                store=store,
-                task_message=self._build_supervised_telegram_task_message(),
-                executor_impl=executor,
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(executor.calls), 1)
-            self.assertEqual(executor.calls[0].content, "hello")
-
-    def test_process_task_message_runs_supervised_recovery_for_tagged_telegram(
+    def test_process_task_message_runs_supervised_recovery_for_telegram(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

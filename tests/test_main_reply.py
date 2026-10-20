@@ -17,6 +17,7 @@ from app.main_reply import (
 from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.task_ledger import TaskLedgerStore
+from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
 
 
 class _FakeSubmit:
@@ -95,15 +96,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", _FakeSubmit()),
                 patch("sys.stdout", io.StringIO()),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 self.assertEqual(main(), 0)
@@ -148,15 +143,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch("sys.stdout", stdout),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()
@@ -180,15 +169,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch("sys.stdout", stdout),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 second_exit_code = main()
@@ -274,15 +257,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch("sys.stdout", stdout),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()
@@ -321,15 +298,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", _FakeSubmit()),
                 patch("sys.stdout", io.StringIO()),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()
@@ -365,9 +336,9 @@ class MainReplyCliTests(unittest.TestCase):
         _, payload = submit.calls[0]
         self.assertEqual(payload["message"]["body"], dangerous)
 
-    def test_inline_message_flag_is_rejected(self) -> None:
-        # The inline body path is retired: --message must not exist, so passing
-        # it fails hard rather than risking a shell-mangled send.
+    def test_inline_reply_flags_are_rejected(self) -> None:
+        # Replies only come from --spec-file, so passing the body or routing on
+        # the command line fails hard rather than risking a shell-mangled send.
         with patch(
             "sys.argv",
             [
@@ -405,15 +376,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch("sys.stdout", io.StringIO()),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()
@@ -445,15 +410,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch("sys.stderr", stderr),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()
@@ -525,27 +484,25 @@ class MainReplyCliTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unknown fields"):
                     main()
 
-    def test_reaction_via_flags_using_explicit_message_id(self) -> None:
+    def test_reaction_using_explicit_message_id(self) -> None:
         submit = _FakeSubmit()
-        with (
-            patch("app.main_reply.submit_egress", submit),
-            patch(
-                "sys.argv",
-                [
-                    "main_reply.py",
-                    "task:telegram:53",
-                    "--channel",
-                    "telegram",
-                    "--target",
-                    "8605042448",
-                    "--telegram-reaction",
-                    "👍",
-                    "--telegram-message-id",
-                    "123",
-                ],
-            ),
-        ):
-            exit_code = main()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "telegram_reaction": "👍",
+                    "telegram_message_id": 123,
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", io.StringIO()),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
 
         self.assertEqual(exit_code, 0)
         _, payload = submit.calls[0]
@@ -555,29 +512,26 @@ class MainReplyCliTests(unittest.TestCase):
 
     def test_unsupported_reaction_is_rejected_before_handler_submission(self) -> None:
         submit = _FakeSubmit()
-        with (
-            patch("app.main_reply.submit_egress", submit),
-            patch(
-                "sys.argv",
-                [
-                    "main_reply.py",
-                    "task:telegram:53",
-                    "--channel",
-                    "telegram",
-                    "--target",
-                    "8605042448",
-                    "--telegram-reaction",
-                    "🔎",
-                    "--telegram-message-id",
-                    "123",
-                ],
-            ),
-        ):
-            with self.assertRaisesRegex(
-                ValueError,
-                "telegram_reaction '🔎' is not supported by Telegram",
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "telegram_reaction": "🔎",
+                    "telegram_message_id": 123,
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
             ):
-                main()
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "telegram_reaction '🔎' is not supported by Telegram",
+                ):
+                    main()
 
         self.assertEqual(submit.calls, [])
 
@@ -691,15 +645,9 @@ class MainReplyCliTests(unittest.TestCase):
             submit = _FakeSubmit()
             with (
                 patch("app.main_reply.submit_egress", submit),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()
@@ -760,15 +708,9 @@ class MainReplyCliTests(unittest.TestCase):
             with (
                 patch("app.main_reply.submit_egress", submit),
                 patch("sys.stdout", io.StringIO()),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_reply.py",
-                        "--spec-file",
-                        spec,
-                        "--config",
-                        str(config_path),
-                    ],
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
                 ),
             ):
                 exit_code = main()

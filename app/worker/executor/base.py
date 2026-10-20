@@ -18,9 +18,8 @@ class Executor(Protocol):
     def for_workspace(self, *, work_item_id: str) -> Executor: ...
 
 
-# Kept separate from Executor so an executor can exist without one: reporting
-# usage is a backend-specific lookup, not part of running a task.
-@runtime_checkable
+# Kept separate from Executor: reporting usage is a backend-specific lookup,
+# not part of running a task, so per-run wrappers do not implement it.
 class UsageReporter(Protocol):
     """Report backend account usage without running any model work."""
 

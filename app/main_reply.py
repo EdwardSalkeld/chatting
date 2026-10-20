@@ -40,9 +40,8 @@ TELEGRAM_STANDARD_REACTION_EMOJI = tuple(
 )
 
 
-# Reply fields that a --spec-file JSON may set. These map 1:1 onto the argparse
-# namespace attributes below so the rest of the module is agnostic to whether a
-# reply came from a spec file or from flags.
+# Reply fields that a --spec-file JSON may set. They become attributes of the
+# namespace the rest of this module reads.
 _SPEC_FIELDS = (
     "task_id",
     "channel",
@@ -64,83 +63,30 @@ def _parse_args() -> argparse.Namespace:
             "Publish visible egress. "
             "Executors should use this for user-visible acknowledgements and final replies. "
             "A Telegram reaction may be combined with a message or attachment; both are sent. "
-            "Prefer --spec-file: it carries the whole reply (including the body) as a JSON "
-            "file so nothing is passed through the shell."
+            f"Worker config is read from {WORKER_CONFIG_PATH_ENV_VAR}."
         )
     )
-    # Reply body text is deliberately NOT a flag: passing arbitrary prose on the
-    # command line let the shell mangle backticks/quotes/$ and corrupt or split
-    # replies. The body only ever comes from --spec-file (a file the executor
-    # writes directly, never through the shell).
+    # The reply is only ever read from a file the executor writes directly:
+    # passing prose on the command line let the shell mangle backticks/quotes/$
+    # and corrupt or split replies.
     parser.add_argument(
         "--spec-file",
-        help=(
-            "Path to a JSON file describing the whole reply "
-            f"({', '.join(_SPEC_FIELDS)}). The only way to send a text body."
-        ),
+        required=True,
+        help=f"Path to a JSON file describing the whole reply ({', '.join(_SPEC_FIELDS)}).",
     )
-    # task_id/channel/target may come from the spec file, so they are optional at
-    # the argparse layer and validated after the spec is applied.
-    parser.add_argument(
-        "task_id", nargs="?", help="Task identifier (for example: task:email:53)."
-    )
-    parser.add_argument(
-        "--attachment-path",
-        help="Absolute path to a local file to send as an attachment.",
-    )
-    parser.add_argument(
-        "--attachment-name", help="Optional attachment filename override."
-    )
-    parser.add_argument(
-        "--channel",
-        help="Outbound channel (for example: email, telegram, github).",
-    )
-    parser.add_argument("--target", help="Outbound channel target.")
-    parser.add_argument(
-        "--telegram-reaction",
-        help="React to the Telegram source message instead of sending a text message.",
-    )
-    parser.add_argument(
-        "--telegram-message-id", type=int, help="Telegram message id to react to."
-    )
-    parser.add_argument("--event-id", help="Optional stable event id for idempotency.")
-    parser.add_argument(
-        "--envelope-id",
-        help="Envelope id (defaults to task_id without 'task:' prefix).",
-    )
-    parser.add_argument(
-        "--trace-id", help="Trace id (defaults to trace:<envelope_id>)."
-    )
-    parser.add_argument(
-        "--handler-egress-url",
-        help="Handler synchronous egress endpoint URL (default the worker config's handler_egress_url).",
-    )
-    parser.add_argument(
-        "--config",
-        help=(
-            "Path to worker config JSON. If omitted, this command also checks "
-            f"{WORKER_CONFIG_PATH_ENV_VAR}."
-        ),
-    )
-    args = parser.parse_args()
-    # message only exists via the spec file; give the namespace the attribute so
-    # the resolution code below can read it uniformly.
-    args.message = None
-    _apply_spec_file(args)
-    if not args.task_id:
-        parser.error("task_id is required (as a positional argument or in --spec-file)")
-    if not args.channel:
-        parser.error("channel is required (via --channel or in --spec-file)")
-    if not args.target:
-        parser.error("target is required (via --target or in --spec-file)")
+    spec = _read_spec_file(parser.parse_args().spec_file)
+    args = argparse.Namespace(**{field: spec.get(field) for field in _SPEC_FIELDS})
+    if isinstance(args.telegram_message_id, str) and args.telegram_message_id.strip():
+        args.telegram_message_id = int(args.telegram_message_id)
+    for field in ("task_id", "channel", "target"):
+        if not getattr(args, field):
+            parser.error(f"{field} is required in --spec-file")
     return args
 
 
-def _apply_spec_file(args: argparse.Namespace) -> None:
-    if args.spec_file is None:
-        return
+def _read_spec_file(path: str) -> dict[str, object]:
     try:
-        raw = Path(args.spec_file).read_text(encoding="utf-8")
+        raw = Path(path).read_text(encoding="utf-8")
     except OSError as error:
         raise ValueError(f"spec-file could not be read: {error}") from error
     try:
@@ -152,13 +98,7 @@ def _apply_spec_file(args: argparse.Namespace) -> None:
     unknown = sorted(set(spec) - set(_SPEC_FIELDS))
     if unknown:
         raise ValueError("spec-file contains unknown fields: " + ", ".join(unknown))
-    # The spec file is authoritative: it supplies the whole reply, so it wins
-    # over any overlapping flags (there should be none in normal use).
-    for field in _SPEC_FIELDS:
-        if field in spec and spec[field] is not None:
-            setattr(args, field, spec[field])
-    if isinstance(args.telegram_message_id, str) and args.telegram_message_id.strip():
-        args.telegram_message_id = int(args.telegram_message_id)
+    return spec
 
 
 def _resolve_envelope_id(task_id: str, explicit_value: str | None) -> str:
@@ -201,10 +141,7 @@ def _resolve_telegram_message_id(
         return explicit_value
 
     db_path = _resolve_str(
-        None,
-        config.get("db_path"),
-        default_value="",
-        setting_name="db_path",
+        config.get("db_path"), default_value="", setting_name="db_path"
     ).strip()
     if not db_path:
         raise ValueError("telegram_message_id is required")
@@ -228,7 +165,7 @@ def _resolve_reply_messages(
     messages: list[OutboundMessage] = []
     if args.telegram_reaction is not None:
         if args.channel != "telegram":
-            raise ValueError("telegram reactions require --channel telegram")
+            raise ValueError("telegram reactions require channel telegram")
         emoji = args.telegram_reaction.strip()
         if not emoji:
             raise ValueError("telegram_reaction must not be empty")
@@ -305,10 +242,9 @@ def _message_event_id(
 
 def main() -> int:
     args = _parse_args()
-    config = _load_config(args.config, os.environ)
+    config = _load_config(None, os.environ)
 
     handler_egress_url = _resolve_str(
-        args.handler_egress_url,
         config.get("handler_egress_url"),
         default_value=DEFAULT_HANDLER_EGRESS_URL,
         setting_name="handler_egress_url",

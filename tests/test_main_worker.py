@@ -111,7 +111,6 @@ class MainWorkerTests(unittest.TestCase):
 
     def test_resolve_non_negative_int_accepts_zero(self) -> None:
         resolved = _resolve_non_negative_int(
-            None,
             0,
             default_value=9465,
             setting_name="activity_port",
@@ -124,7 +123,6 @@ class MainWorkerTests(unittest.TestCase):
             ValueError, "config activity_port must be a non-negative integer"
         ):
             _resolve_non_negative_int(
-                None,
                 -1,
                 default_value=9465,
                 setting_name="activity_port",

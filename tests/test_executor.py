@@ -114,10 +114,10 @@ class CodexExecutorTests(unittest.TestCase):
                 args=["codex"], returncode=0, stdout="{}", stderr=""
             )
             with patch(
-                "app.worker.executor.codex.subprocess.run", return_value=completed
+                "app.worker.executor.codex._run_streaming", return_value=completed
             ) as run_mock:
                 CodexExecutor(command=("codex",), history_store=store).execute(current)
-            payload = json.loads(run_mock.call_args.kwargs["input"])
+            payload = json.loads(run_mock.call_args.kwargs["payload"])
             self.assertEqual(payload["task"]["content"], "do that")
             self.assertEqual(
                 [turn["content"] for turn in payload["recent_history"]],
@@ -145,11 +145,11 @@ class CodexExecutorTests(unittest.TestCase):
             dedupe_key="telegram:9",
         )
         with patch(
-            "app.worker.executor.codex.subprocess.run", return_value=completed
+            "app.worker.executor.codex._run_streaming", return_value=completed
         ) as run_mock:
             CodexExecutor(command=("codex",)).execute(envelope)
 
-        payload = json.loads(run_mock.call_args.kwargs["input"])
+        payload = json.loads(run_mock.call_args.kwargs["payload"])
         self.assertEqual(payload["history_contract"]["anchor"]["message_id"], 2400)
         self.assertIn(
             "app.main_history", payload["history_contract"]["retrieve_command"]
@@ -162,7 +162,7 @@ class CodexExecutorTests(unittest.TestCase):
             stdout='{"status":"ok"}',
             stderr="operator log",
         )
-        with patch("app.worker.executor.codex.subprocess.run", return_value=completed):
+        with patch("app.worker.executor.codex._run_streaming", return_value=completed):
             result = CodexExecutor(command=("codex",)).execute(_envelope())
 
         self.assertEqual(result.errors, [])
@@ -171,7 +171,7 @@ class CodexExecutorTests(unittest.TestCase):
 
     def test_execute_returns_timeout_error(self) -> None:
         with patch(
-            "app.worker.executor.codex.subprocess.run",
+            "app.worker.executor.codex._run_streaming",
             side_effect=subprocess.TimeoutExpired(cmd=["codex"], timeout=1),
         ):
             result = CodexExecutor(command=("codex",), timeout_seconds=1).execute(
@@ -187,7 +187,7 @@ class CodexExecutorTests(unittest.TestCase):
             stdout="",
             stderr="boom",
         )
-        with patch("app.worker.executor.codex.subprocess.run", return_value=completed):
+        with patch("app.worker.executor.codex._run_streaming", return_value=completed):
             result = CodexExecutor(command=("codex",)).execute(_envelope())
 
         self.assertEqual(result.errors, ["executor_exit_nonzero:7:boom"])
@@ -200,7 +200,7 @@ class CodexExecutorTests(unittest.TestCase):
             stderr="",
         )
         with patch(
-            "app.worker.executor.codex.subprocess.run",
+            "app.worker.executor.codex._run_streaming",
             return_value=completed,
         ) as run_mock:
             executor = CodexExecutor(
@@ -212,7 +212,7 @@ class CodexExecutorTests(unittest.TestCase):
             )
             executor.execute(_envelope())
 
-        payload = json.loads(run_mock.call_args.kwargs["input"])
+        payload = json.loads(run_mock.call_args.kwargs["payload"])
         self.assertEqual(payload["schema_version"], "1.0")
         self.assertEqual(payload["task"]["task_id"], "task:evt_1")
         self.assertEqual(payload["task"]["reply_channel"]["type"], "email")
@@ -243,7 +243,7 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertIn(
             str(Path(__file__).resolve().parents[1]), executor_env["PYTHONPATH"]
         )
-        self.assertEqual(run_mock.call_args.kwargs["timeout"], 123)
+        self.assertEqual(run_mock.call_args.kwargs["timeout_seconds"], 123)
 
 
 if __name__ == "__main__":

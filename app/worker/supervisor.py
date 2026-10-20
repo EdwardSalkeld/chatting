@@ -14,7 +14,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import shlex
 import socket
 import sqlite3
 import subprocess
@@ -25,7 +24,6 @@ from dataclasses import replace
 
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
-from app.worker.executor import CodexExecutor
 from app.worker.executor.app_server import AppServerExecutor
 from app.worker.executor.conversation import ConversationExecutor
 
@@ -80,30 +78,22 @@ class Supervisor:
         self.settings = settings
         self.store = SQLiteStateStore(settings["db_path"])
         self.monitor = WorkerActivityMonitor(store=self.store)
-        self.executor = _build_executor(
-            argparse.Namespace(**settings["args"]), settings["config"]
+        legacy = replace(
+            _build_executor(settings["config"], settings["config_path"]),
+            history_store=self.store,
         )
-        if isinstance(self.executor, CodexExecutor):
-            self.executor = replace(self.executor, history_store=self.store)
-            config = settings["config"]
-            command = config.get("app_server_command", "codex app-server")
-            directory = config.get("app_server_dir", f"{settings['db_path']}.sessions")
-            if not isinstance(command, str) or not shlex.split(command):
-                raise ValueError("app_server_command must be a nonempty command")
-            if not isinstance(directory, str) or not Path(directory).is_absolute():
-                raise ValueError("app_server_dir must be absolute")
-            self.executor = ConversationExecutor(
-                legacy=self.executor,
-                persistent=AppServerExecutor(
-                    command=tuple(shlex.split(command)),
-                    cwd=self.executor.cwd,
-                    workspace_root=self.executor.workspace_root,
-                    history_store=self.store,
-                    env=self.executor.env,
-                    session_root=directory,
-                ),
-                store=self.store,
-            )
+        self.executor = ConversationExecutor(
+            legacy=legacy,
+            persistent=AppServerExecutor(
+                command=("codex", "app-server"),
+                cwd=legacy.cwd,
+                workspace_root=legacy.workspace_root,
+                history_store=self.store,
+                env=legacy.env,
+                session_root=f"{settings['db_path']}.sessions",
+            ),
+            store=self.store,
+        )
         self.lock = Lock()
         self.state = "idle"
         self.task_id: str | None = None
@@ -217,7 +207,7 @@ class SupervisorPool:
                 "supervisor directory must be private to the worker user"
             )
         if len(os.fsencode(self.directory / "supervisor-9999.sock")) > 103:
-            raise SupervisorError("supervisor_dir is too long for Unix sockets")
+            raise SupervisorError("supervisor directory is too long for Unix sockets")
         existing = {
             int(path.stem.split("-")[1])
             for path in self.directory.glob("supervisor-*.lock")

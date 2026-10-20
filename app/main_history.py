@@ -53,11 +53,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     config = _load_config(args.config, os.environ)
-    db_path = _resolve_str(
-        args.db_path,
-        config.get("db_path"),
-        default_value="",
-        setting_name="db_path",
+    db_path = (
+        args.db_path
+        or _resolve_str(config.get("db_path"), default_value="", setting_name="db_path")
     ).strip()
     if not db_path:
         raise ValueError(
