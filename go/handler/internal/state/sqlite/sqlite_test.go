@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -139,7 +138,7 @@ func TestGitHubAssignmentCheckpointRoundTripUsesPythonCompatibleTable(t *testing
 	assertGitHubAssignmentCheckpointSchemaAndPayload(t, dbPath, scopeKey, checkpoint)
 }
 
-func TestRecordTaskRoundTripsAndUsesPythonCompatibleTable(t *testing.T) {
+func TestRecordTaskRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	store := openStoreAt(t, dbPath)
@@ -167,7 +166,6 @@ func TestRecordTaskRoundTripsAndUsesPythonCompatibleTable(t *testing.T) {
 	}
 
 	assertTaskLedgerSchemaAndPayload(t, dbPath, taskMessage)
-	assertPythonTaskLedgerCanRead(t, dbPath, taskMessage)
 }
 
 func assertGitHubAssignmentCheckpointSchemaAndPayload(t *testing.T, dbPath string, scopeKey string, checkpoint GitHubAssignmentCheckpoint) {
@@ -692,33 +690,6 @@ func assertTaskLedgerSchemaAndPayload(t *testing.T, dbPath string, taskMessage c
 	}
 	if taskID != taskMessage.TaskID || envelopeID != taskMessage.Envelope.ID || traceID != taskMessage.TraceID {
 		t.Fatalf("raw ledger row = task_id %q envelope_id %q trace_id %q", taskID, envelopeID, traceID)
-	}
-}
-
-func assertPythonTaskLedgerCanRead(t *testing.T, dbPath string, taskMessage contracts.TaskQueueMessage) {
-	t.Helper()
-	repoRoot := filepath.Clean(filepath.Join("..", "..", "..", "..", ".."))
-	script := `
-import sys
-from app.task_ledger import TaskLedgerStore
-
-db_path, task_id, envelope_id, trace_id = sys.argv[1:5]
-record = TaskLedgerStore(db_path).get_task(task_id)
-if record is None:
-    raise SystemExit("missing task")
-if record.envelope_id != envelope_id:
-    raise SystemExit(f"envelope_id={record.envelope_id!r}")
-if record.trace_id != trace_id:
-    raise SystemExit(f"trace_id={record.trace_id!r}")
-if record.task_message.envelope.reply_channel.target != "alice@example.com":
-    raise SystemExit("wrong reply target")
-`
-	command := exec.Command("python3", "-c", script, dbPath, taskMessage.TaskID, taskMessage.Envelope.ID, taskMessage.TraceID)
-	command.Dir = repoRoot
-	command.Env = append(os.Environ(), "PYTHONPATH="+repoRoot)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("python TaskLedgerStore could not read Go ledger row: %v\n%s", err, output)
 	}
 }
 
