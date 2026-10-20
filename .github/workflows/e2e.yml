@@ -59,7 +59,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go/handler/go.mod
-          cache-dependency-path: go/handler/go.mod
+          cache-dependency-path: go/handler/go.sum
 
       - name: Build Go handler test binary
         run: |

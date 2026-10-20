@@ -198,7 +198,7 @@ class WorkItemRoutingTests(unittest.TestCase):
         self.assertEqual(store.get_work_model_tier(work_item_id="item_existing"), "low")
 
     def test_assigned_lane_uses_persistent_workspace_directory(self):
-        workspace_root = Path(self.tmp.name) / "workspaces"
+        workspace_root = Path(self.tmp.name).resolve() / "workspaces"
         executor = CodexExecutor(cwd=self.tmp.name, workspace_root=str(workspace_root))
         first = task(1, "email", "alice@example.com")
         first_lane = self.stage(first)

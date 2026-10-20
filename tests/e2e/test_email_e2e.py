@@ -12,7 +12,7 @@ import unittest
 from email.message import EmailMessage
 from pathlib import Path
 
-from tests.e2e.handler_selector import message_handler_command
+from tests.e2e.handler_command import message_handler_command
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -125,6 +125,7 @@ class EmailE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(worker_db),
+                        "workspace_root": str(Path(worker_db).parent / "workspaces"),
                         "bbmb_address": bbmb_address,
                         "max_attempts": 2,
                         "poll_timeout_seconds": 2,
