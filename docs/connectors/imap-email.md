@@ -11,7 +11,8 @@ Replies go out over SMTP.
 - `imap_password_env` (default `CHATTING_IMAP_PASSWORD`)
 - `imap_mailbox` (default `INBOX`)
 - `imap_search` (default `UNSEEN`)
-- `smtp_host`, `smtp_port` (default `465`, implicit TLS), `smtp_username`, `smtp_from`
+- `smtp_host`, `smtp_port` (default `465`), `smtp_username`, `smtp_from`
+- `smtp_starttls` (default `false`: implicit TLS; `true` upgrades a plain connection, as on port 587)
 - `smtp_password_env` (default `CHATTING_SMTP_PASSWORD`)
 - `context_refs`
 

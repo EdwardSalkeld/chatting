@@ -45,6 +45,7 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"smtp_username": "bot@example.com",
 		"smtp_password_env": "SMTP_PASSWORD",
 		"smtp_from": "replies@example.com",
+		"smtp_starttls": true,
 		"smtp_use_ssl": false,
 		"telegram_enabled": true,
 		"telegram_bot_token_env": "TELEGRAM_TOKEN",
@@ -120,6 +121,9 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if config.SMTPFrom != "replies@example.com" {
 		t.Fatalf("SMTPFrom = %q", config.SMTPFrom)
+	}
+	if !config.SMTPStartTLS {
+		t.Fatal("SMTPStartTLS = false")
 	}
 	if config.SMTPUseSSL {
 		t.Fatal("SMTPUseSSL = true")
@@ -260,6 +264,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name:    "blank telegram token env",
 			raw:     `{"telegram_bot_token_env": ""}`,
 			message: "config telegram_bot_token_env must be a non-empty string",
+		},
+		{
+			name:    "smtp starttls wrong type",
+			raw:     `{"smtp_starttls": "yes"}`,
+			message: "config smtp_starttls must be a boolean",
 		},
 		{
 			name:    "invalid github repository selector",

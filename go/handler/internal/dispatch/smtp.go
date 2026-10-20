@@ -23,10 +23,12 @@ type SMTPConfig struct {
 	Username    string
 	Password    string
 	UseSSL      bool
+	StartTLS    bool
 	Timeout     time.Duration
 }
 
 type SMTPClient interface {
+	StartTLS(config *tls.Config) error
 	Auth(auth smtp.Auth) error
 	Mail(from string) error
 	Rcpt(to string) error
@@ -80,6 +82,12 @@ func (sender *SMTPEmailSender) Send(ctx context.Context, target string, body str
 	defer client.Close()
 
 	host := sender.config.Host
+	if sender.config.StartTLS {
+		tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			return err
+		}
+	}
 	if sender.config.Username != "" && sender.config.Password != "" {
 		if err := client.Auth(smtp.PlainAuth("", sender.config.Username, sender.config.Password, host)); err != nil {
 			return err

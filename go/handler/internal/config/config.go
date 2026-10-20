@@ -47,6 +47,7 @@ var allowedKeys = map[string]bool{
 	"smtp_username":                  true,
 	"smtp_password_env":              true,
 	"smtp_from":                      true,
+	"smtp_starttls":                  true,
 	"smtp_use_ssl":                   true,
 
 	"telegram_enabled":              true,
@@ -87,6 +88,7 @@ type Config struct {
 	SMTPUsername                string
 	SMTPPasswordEnv             string
 	SMTPFrom                    string
+	SMTPStartTLS                bool
 	SMTPUseSSL                  bool
 
 	TelegramEnabled            bool
@@ -126,6 +128,7 @@ func Defaults() Config {
 		SMTPUsername:                "",
 		SMTPPasswordEnv:             "CHATTING_SMTP_PASSWORD",
 		SMTPFrom:                    "",
+		SMTPStartTLS:                false,
 		SMTPUseSSL:                  true,
 
 		TelegramEnabled:            false,
@@ -320,6 +323,15 @@ func Load(raw []byte) (Config, error) {
 		config.SMTPFrom, err = decodeNonEmptyString(rawValue, "smtp_from")
 		if err != nil {
 			return Config{}, err
+		}
+	}
+	if rawValue, ok := payload["smtp_starttls"]; ok && !isNull(rawValue) {
+		config.SMTPStartTLS, err = decodeBool(rawValue, "smtp_starttls")
+		if err != nil {
+			return Config{}, err
+		}
+		if _, ok := payload["smtp_use_ssl"]; !ok {
+			config.SMTPUseSSL = !config.SMTPStartTLS
 		}
 	}
 	if rawValue, ok := payload["smtp_use_ssl"]; ok && !isNull(rawValue) {

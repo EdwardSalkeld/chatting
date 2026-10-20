@@ -362,6 +362,7 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.E
 			Username:    config.SMTPUsername,
 			Password:    password,
 			UseSSL:      config.SMTPUseSSL,
+			StartTLS:    config.SMTPStartTLS,
 			Timeout:     10 * time.Second,
 		})
 		if err != nil {
