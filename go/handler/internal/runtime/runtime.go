@@ -26,17 +26,8 @@ type IngressState interface {
 	Seen(ctx context.Context, source string, dedupeKey string) (bool, error)
 	MarkSeen(ctx context.Context, source string, dedupeKey string) error
 	RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error
-}
-
-type TaskRouter interface {
 	AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
-}
-
-type TelegramAttachmentIngressState interface {
 	RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error)
-}
-
-type TelegramAttachmentCleanupState interface {
 	CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error
 }
 
@@ -59,51 +50,29 @@ type Runner struct {
 	sleep        func(context.Context, time.Duration) error
 }
 
-type Option func(*Runner)
-
-func WithIngress(state IngressState, connectors ...Connector) Option {
-	return func(runner *Runner) {
-		runner.ingressState = state
-		runner.connectors = append(runner.connectors, connectors...)
-	}
-}
-
-func WithNow(now func() time.Time) Option {
-	return func(runner *Runner) {
-		if now != nil {
-			runner.now = now
-		}
-	}
-}
-
-func WithMetrics(recorder *metrics.Recorder) Option {
-	return func(runner *Runner) {
-		runner.metrics = recorder
-	}
-}
-
-func NewRunner(config handlerconfig.Config, broker Broker, options ...Option) (*Runner, error) {
+// NewRunner builds the ingress loop. state may be nil only when there are no
+// connectors; recorder may be nil to skip metrics.
+func NewRunner(config handlerconfig.Config, broker Broker, state IngressState, connectors []Connector, recorder *metrics.Recorder) (*Runner, error) {
 	if broker == nil {
 		return nil, errors.New("broker is required")
 	}
-	runner := &Runner{
-		config: config,
-		broker: broker,
-		now:    func() time.Time { return time.Now().UTC() },
-		sleep:  sleep,
-	}
-	for _, option := range options {
-		option(runner)
-	}
-	if len(runner.connectors) > 0 && runner.ingressState == nil {
+	if len(connectors) > 0 && state == nil {
 		return nil, errors.New("ingress state is required when connectors are configured")
 	}
-	for _, connector := range runner.connectors {
+	for _, connector := range connectors {
 		if connector == nil {
 			return nil, errors.New("connector is required")
 		}
 	}
-	return runner, nil
+	return &Runner{
+		config:       config,
+		broker:       broker,
+		ingressState: state,
+		connectors:   connectors,
+		metrics:      recorder,
+		now:          func() time.Time { return time.Now().UTC() },
+		sleep:        sleep,
+	}, nil
 }
 
 func (runner *Runner) Run(ctx context.Context) error {
@@ -153,15 +122,11 @@ func isGracefulContextStop(ctx context.Context, err error) bool {
 }
 
 func (runner *Runner) cleanupTelegramAttachments(ctx context.Context) error {
-	if !runner.config.TelegramEnabled {
-		return nil
-	}
-	cleanupState, ok := runner.ingressState.(TelegramAttachmentCleanupState)
-	if !ok {
+	if !runner.config.TelegramEnabled || runner.ingressState == nil {
 		return nil
 	}
 	now := runner.now()
-	return cleanupState.CleanupTelegramAttachmentsForRuntime(
+	return runner.ingressState.CleanupTelegramAttachmentsForRuntime(
 		ctx,
 		runner.config.TelegramAttachmentDir,
 		now,
@@ -195,17 +160,15 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 				"trace:"+envelope.ID,
 				runner.now(),
 			)
-			if router, ok := runner.ingressState.(TaskRouter); ok {
-				taskMessage, err = router.AssignTask(ctx, taskMessage)
-				if err != nil {
-					return published, err
-				}
+			taskMessage, err = runner.ingressState.AssignTask(ctx, taskMessage)
+			if err != nil {
+				return published, err
 			}
 			if err := runner.ingressState.RecordTask(ctx, taskMessage); err != nil {
 				return published, err
 			}
-			if attachmentState, ok := runner.ingressState.(TelegramAttachmentIngressState); ok && envelope.ReplyChannel.Type == "telegram" && len(envelope.Attachments) > 0 {
-				if _, err := attachmentState.RecordTelegramTaskAttachments(ctx, taskMessage, runner.config.TelegramAttachmentDir); err != nil {
+			if envelope.ReplyChannel.Type == "telegram" && len(envelope.Attachments) > 0 {
+				if _, err := runner.ingressState.RecordTelegramTaskAttachments(ctx, taskMessage, runner.config.TelegramAttachmentDir); err != nil {
 					return published, err
 				}
 			}

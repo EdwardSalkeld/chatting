@@ -3,6 +3,8 @@ package github
 import (
 	"testing"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 type testCheckpointEvent struct {
@@ -42,8 +44,8 @@ func TestCheckpointScopeKeyDefaultsValidateRequiredInputs(t *testing.T) {
 }
 
 func TestSelectEventsAfterCheckpointSortsDedupesAndFiltersBoundary(t *testing.T) {
-	first := mustCheckpointTime(t, "2026-05-30T12:00:00Z")
-	second := mustCheckpointTime(t, "2026-05-30T12:01:00Z")
+	first := testutil.MustTime(t, "2026-05-30T12:00:00Z")
+	second := testutil.MustTime(t, "2026-05-30T12:01:00Z")
 	events := []testCheckpointEvent{
 		{id: "evt-3", createdAt: second},
 		{id: "evt-1", createdAt: first},
@@ -62,8 +64,8 @@ func TestSelectEventsAfterCheckpointSortsDedupesAndFiltersBoundary(t *testing.T)
 }
 
 func TestSelectEventsAfterCheckpointReturnsOrderedEventsWithoutCheckpoint(t *testing.T) {
-	first := mustCheckpointTime(t, "2026-05-30T12:00:00Z")
-	second := mustCheckpointTime(t, "2026-05-30T12:01:00Z")
+	first := testutil.MustTime(t, "2026-05-30T12:00:00Z")
+	second := testutil.MustTime(t, "2026-05-30T12:01:00Z")
 	events := []testCheckpointEvent{
 		{id: "evt-3", createdAt: second},
 		{id: "evt-1", createdAt: first},
@@ -74,13 +76,4 @@ func TestSelectEventsAfterCheckpointReturnsOrderedEventsWithoutCheckpoint(t *tes
 	if len(selected) != 2 || selected[0].id != "evt-1" || selected[1].id != "evt-3" {
 		t.Fatalf("selected = %#v", selected)
 	}
-}
-
-func mustCheckpointTime(t *testing.T, value string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

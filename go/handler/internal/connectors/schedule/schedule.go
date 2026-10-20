@@ -111,7 +111,7 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 			continue
 		}
 		nextRunAt := state.nextRunAt
-		eventID := "cron:" + job.JobName + ":" + pythonUTCISO(nextRunAt)
+		eventID := "cron:" + job.JobName + ":" + contracts.PythonUTCISO(nextRunAt)
 		replyChannel := contracts.ReplyChannel{Type: "log", Target: job.JobName}
 		if job.ReplyChannelType != "" {
 			replyChannel = contracts.ReplyChannel{
@@ -213,8 +213,4 @@ func nextDueTime(job Job, now time.Time) time.Time {
 func matches(job Job, candidate time.Time) bool {
 	before := candidate.Add(-time.Minute)
 	return job.schedule.Next(before).Equal(candidate)
-}
-
-func pythonUTCISO(value time.Time) string {
-	return strings.TrimSuffix(value.UTC().Format(time.RFC3339Nano), "Z") + "+00:00"
 }

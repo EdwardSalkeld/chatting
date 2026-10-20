@@ -87,43 +87,45 @@ func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr
 	return 0
 }
 
-func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner, error) {
+func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runner, err error) {
 	adapter, err := bbmb.NewAdapter(config.BBMBAddress)
 	if err != nil {
 		return nil, err
 	}
+	var closers []closer
+	defer func() {
+		if err != nil {
+			closeAll(closers)
+		}
+	}()
 	store, err := sqlitestate.Open(ctx, config.DBPath)
 	if err != nil {
 		return nil, err
 	}
+	closers = append(closers, store)
 	personal, err := newPersonalInbox(config, adapter)
 	if err != nil {
-		_ = store.Close()
 		return nil, err
 	}
-	setupComplete := false
-	defer func() {
-		if !setupComplete && personal != nil {
-			_ = personal.Store.Close()
-		}
-	}()
+	if personal != nil {
+		closers = append(closers, personal.Store)
+	}
 	dispatcher, emailSender, err := buildDispatcher(config)
 	if err != nil {
-		_ = store.Close()
 		return nil, err
 	}
 	errorEmailRecipient := resolveErrorEmailRecipient(config)
-	egressOptions := []egress.Option{
-		egress.WithAllowedChannels(config.AllowedEgressChannels),
-		egress.WithCompletionHook(func(ctx context.Context, message contracts.EgressQueueMessage) error {
+	engine, err := egress.New(store, dispatcher, egress.Config{
+		AllowedChannels: config.AllowedEgressChannels,
+		OnCompletion: func(ctx context.Context, message contracts.EgressQueueMessage) error {
 			if !config.TelegramEnabled {
 				return nil
 			}
 			eligibleAfter := time.Now().UTC().Add(telegramAttachmentCleanupGrace)
 			_, err := store.MarkTelegramTaskAttachmentsEligible(ctx, message.TaskID, eligibleAfter)
 			return err
-		}),
-		egress.WithDropHook(func(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+		},
+		OnDrop: func(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) {
 			// The engine already logs a loud line for every error-class drop; this hook
 			// is only the operator alert. Correctable attachment validation failures
 			// are returned synchronously to the executor and should not produce one
@@ -132,22 +134,15 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			if shouldNotifyEgressDrop(reasonCode) {
 				sendEgressDispatchErrorEmail(ctx, emailSender, errorEmailRecipient, message, reasonCode)
 			}
-		}),
-	}
-	engine, err := egress.New(
-		egress.NewSQLiteState(store),
-		dispatcher,
-		egressOptions...,
-	)
+		},
+	})
 	if err != nil {
-		_ = store.Close()
 		return nil, err
 	}
 	metricRecorder := metrics.New(time.Time{}, nil)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
 	scheduleConnector, err := schedule.NewFromSource(schedule.NewStoreSource(store), nil)
 	if err != nil {
-		_ = store.Close()
 		return nil, err
 	}
 	connectors = append(connectors, scheduleConnector)
@@ -158,14 +153,12 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		metricRecorder,
 	)
 	if err != nil {
-		_ = store.Close()
 		return nil, err
 	}
 	connectors = append(connectors, reminderConnector)
 	if config.IMAPHost != "" {
 		password := os.Getenv(config.IMAPPasswordEnv)
 		if password == "" {
-			_ = store.Close()
 			return nil, fmt.Errorf("missing IMAP password env var: %s", config.IMAPPasswordEnv)
 		}
 		connector, err := imap.New(imap.Config{
@@ -179,7 +172,6 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			UseSSL:          config.IMAPUseSSL,
 		})
 		if err != nil {
-			_ = store.Close()
 			return nil, err
 		}
 		connectors = append(connectors, connector)
@@ -187,7 +179,6 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	if config.TelegramEnabled {
 		token := os.Getenv(config.TelegramBotTokenEnv)
 		if token == "" {
-			_ = store.Close()
 			return nil, fmt.Errorf("missing Telegram bot token env var: %s", config.TelegramBotTokenEnv)
 		}
 		telegramContextRefs := config.TelegramContextRefs
@@ -202,44 +193,28 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			AllowedChannelIDs:  config.TelegramAllowedChannelIDs,
 			ContextRefs:        telegramContextRefs,
 			AttachmentRootDir:  config.TelegramAttachmentDir,
-			ObserveChat: func(ctx context.Context, observation telegram.ChatObservation) error {
-				return store.RecordTelegramChat(ctx, sqlitestate.TelegramChatObservation{
-					ChatID:      observation.ChatID,
-					ChatType:    observation.ChatType,
-					Title:       observation.Title,
-					Username:    observation.Username,
-					UpdateID:    observation.UpdateID,
-					UpdateKind:  observation.UpdateKind,
-					MessageDate: observation.MessageDate,
-					RetrievedAt: observation.RetrievedAt,
-				})
-			},
+			ObserveChat:        store.RecordTelegramChat,
 		})
 		if err != nil {
-			_ = store.Close()
 			return nil, err
 		}
 		connectors = append(connectors, connector)
 	}
 	if len(config.GitHubRepositories) > 0 {
-		assigneeLogin := config.GitHubAssigneeLogin
-		checkpointStore := githubCheckpointStore{store: store}
 		assignmentConnector, err := githubconnector.NewIssueAssignmentConnector(githubconnector.IssueAssignmentConfig{
 			RepositoryPatterns: config.GitHubRepositories,
-			AssigneeLogin:      assigneeLogin,
-			CheckpointStore:    checkpointStore,
+			AssigneeLogin:      config.GitHubAssigneeLogin,
+			CheckpointStore:    store,
 		})
 		if err != nil {
-			_ = store.Close()
 			return nil, err
 		}
 		reviewConnector, err := githubconnector.NewPullRequestReviewConnector(githubconnector.PullRequestReviewConfig{
 			RepositoryPatterns: config.GitHubRepositories,
-			AuthorLogin:        assigneeLogin,
-			CheckpointStore:    checkpointStore,
+			AuthorLogin:        config.GitHubAssigneeLogin,
+			CheckpointStore:    store,
 		})
 		if err != nil {
-			_ = store.Close()
 			return nil, err
 		}
 		connectors = append(connectors, assignmentConnector, reviewConnector)
@@ -258,9 +233,9 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		}
 	})
 	if err != nil {
-		_ = store.Close()
 		return nil, err
 	}
+	closers = append(closers, metricsServer)
 	// A dedicated loopback server for synchronous egress submits from the worker
 	// reply script. Kept off the metrics mux on purpose: metrics may bind
 	// 0.0.0.0 for scraping, but sending messages to the world must stay
@@ -274,75 +249,14 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		}
 	})
 	if err != nil {
-		_ = metricsServer.Close()
-		_ = store.Close()
 		return nil, err
 	}
-	runner, err := handlerruntime.NewRunner(config, adapter, handlerruntime.WithIngress(handlerIngressState{store: store}, connectors...), handlerruntime.WithMetrics(metricRecorder))
+	closers = append(closers, egressServer)
+	runner, err := handlerruntime.NewRunner(config, adapter, store, connectors, metricRecorder)
 	if err != nil {
-		_ = egressServer.Close()
-		_ = metricsServer.Close()
-		_ = store.Close()
 		return nil, err
 	}
-	closers := []closer{egressServer, metricsServer, store}
-	if personal != nil {
-		closers = append(closers, personal.Store)
-	}
-	setupComplete = true
 	return &closingRunner{runner: runner, personal: personal, closers: closers}, nil
-}
-
-type githubCheckpointStore struct {
-	store *sqlitestate.Store
-}
-
-type handlerIngressState struct {
-	store *sqlitestate.Store
-}
-
-var _ handlerruntime.TaskRouter = handlerIngressState{}
-
-func (state handlerIngressState) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
-	return state.store.Seen(ctx, source, dedupeKey)
-}
-
-func (state handlerIngressState) MarkSeen(ctx context.Context, source string, dedupeKey string) error {
-	return state.store.MarkSeen(ctx, source, dedupeKey)
-}
-
-func (state handlerIngressState) RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error {
-	return state.store.RecordTask(ctx, taskMessage)
-}
-
-func (state handlerIngressState) AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
-	return state.store.AssignTask(ctx, taskMessage)
-}
-
-func (state handlerIngressState) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {
-	return state.store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRootDir)
-}
-
-func (state handlerIngressState) CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error {
-	return state.store.CleanupTelegramAttachmentsForRuntime(ctx, attachmentRootDir, notAfter, maxAgeCutoff)
-}
-
-func (store githubCheckpointStore) GetGitHubCheckpoint(ctx context.Context, scopeKey string) (*githubconnector.AssignmentCheckpoint, error) {
-	checkpoint, err := store.store.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
-	if err != nil || checkpoint == nil {
-		return nil, err
-	}
-	return &githubconnector.AssignmentCheckpoint{
-		EventCreatedAt: checkpoint.EventCreatedAt,
-		EventID:        checkpoint.EventID,
-	}, nil
-}
-
-func (store githubCheckpointStore) SetGitHubCheckpoint(ctx context.Context, scopeKey string, checkpoint githubconnector.AssignmentCheckpoint) error {
-	return store.store.SetGitHubAssignmentCheckpoint(ctx, scopeKey, sqlitestate.GitHubAssignmentCheckpoint{
-		EventCreatedAt: checkpoint.EventCreatedAt,
-		EventID:        checkpoint.EventID,
-	})
 }
 
 func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.EmailSender, error) {
@@ -443,6 +357,14 @@ type closer interface {
 	Close() error
 }
 
+// closeAll closes in reverse order of acquisition, so servers stop before the
+// stores they read from.
+func closeAll(closers []closer) {
+	for i := len(closers) - 1; i >= 0; i-- {
+		_ = closers[i].Close()
+	}
+}
+
 type closingRunner struct {
 	runner   runner
 	personal *personalinbox.Service
@@ -461,9 +383,7 @@ func (runner *closingRunner) Run(ctx context.Context) error {
 	defer func() {
 		cancel()
 		<-stopped
-		for _, closer := range runner.closers {
-			_ = closer.Close()
-		}
+		closeAll(runner.closers)
 	}()
 	return runner.runner.Run(ctx)
 }

@@ -11,6 +11,7 @@ from typing import Callable
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.state import SQLiteStateStore
+from app.timefmt import format_utc
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_ACTIVITY_HOST = "0.0.0.0"
@@ -89,7 +90,7 @@ class WorkerActivityMonitor:
             "envelope_id": envelope.id,
             "source": envelope.source,
             "attempt": attempt,
-            "started_at": _isoformat(occurred_at),
+            "started_at": format_utc(occurred_at),
             "pid": None,
             "phase": "executor_running",
             "work_item_id": (
@@ -205,9 +206,6 @@ class WorkerActivityMonitor:
                 "body": egress_message.message.body,
                 "event_id": egress_message.event_id,
                 "event_kind": egress_message.event_kind,
-                "event_count": egress_message.event_count,
-                "event_index": egress_message.event_index,
-                "message_type": egress_message.message_type,
                 "publish_source": publish_source,
                 "sequence": egress_message.sequence,
             },
@@ -231,54 +229,6 @@ class WorkerActivityMonitor:
             "recent_activity": activity,
             "history_limit": self._history_limit,
             "history_truncated": len(activity) >= self._history_limit,
-            "include_internal": include_internal,
-        }
-
-    def list_runs_snapshot(
-        self, *, include_internal: bool = False
-    ) -> dict[str, object]:
-        current_executor = self._current_executor()
-        runs = []
-        for run in self._store.list_recent_runs(
-            limit=self._history_limit,
-            include_internal=include_internal,
-        ):
-            run_summary = self._build_run_summary(
-                run_id=run.run_id,
-                include_internal=include_internal,
-            )
-            if run_summary is not None:
-                runs.append(run_summary)
-        return {
-            "current_executor": current_executor,
-            "active_executors": self._current_executors(),
-            "queue": self._store.inbox_queue_summary(),
-            "current_run": self._build_current_run_summary(
-                current_executor=current_executor,
-                include_internal=include_internal,
-            ),
-            "runs": runs,
-            "history_limit": self._history_limit,
-            "history_truncated": len(runs) >= self._history_limit,
-            "include_internal": include_internal,
-        }
-
-    def get_run_snapshot(
-        self,
-        *,
-        run_id: str,
-        include_internal: bool = False,
-    ) -> dict[str, object] | None:
-        current_executor = self._current_executor()
-        run_summary = self._build_run_summary(
-            run_id=run_id,
-            include_internal=include_internal,
-        )
-        if run_summary is None:
-            return None
-        return {
-            "current_executor": current_executor,
-            "run": run_summary,
             "include_internal": include_internal,
         }
 
@@ -352,7 +302,7 @@ class WorkerActivityMonitor:
             "work_item_id": run.work_item_id,
             "status": run.result_status,
             "source": run.source,
-            "started_at": _isoformat(run.created_at),
+            "started_at": format_utc(run.created_at),
             "duration_ms": run.latency_ms,
             "attempt_count": detail.get("attempt_count"),
             "reason_codes": detail.get("reason_codes", []),
@@ -412,87 +362,6 @@ class WorkerActivityMonitor:
             "events": events,
         }
 
-    def _build_run_summary(
-        self,
-        *,
-        run_id: str,
-        include_internal: bool,
-    ) -> dict[str, object] | None:
-        run = self._store.get_run(run_id=run_id)
-        if run is None:
-            return None
-        audit_event = self._store.get_audit_event_for_run(run_id=run_id)
-        if audit_event is None:
-            return None
-        detail = audit_event.detail if isinstance(audit_event.detail, dict) else {}
-        task_id = detail.get("task_id")
-        if not isinstance(task_id, str) or not task_id:
-            return None
-        activity = self._store.list_worker_activity_for_run(
-            run_id=run_id,
-            task_id=task_id,
-            envelope_id=run.envelope_id,
-            include_internal=include_internal,
-        )
-        user_message = ""
-        reply_parts: list[str] = []
-        actor = None
-        reply_target = None
-        for item in activity:
-            item_detail = item.get("detail")
-            detail_map = item_detail if isinstance(item_detail, dict) else {}
-            phase = str(item.get("phase", ""))
-            if not user_message and phase == "task_received":
-                content = detail_map.get("content")
-                if isinstance(content, str):
-                    user_message = _extract_current_message(content)
-            if phase.startswith("egress_"):
-                body = detail_map.get("body")
-                channel = detail_map.get("channel")
-                if (
-                    isinstance(body, str)
-                    and body.strip()
-                    and channel not in {"internal", "log"}
-                ):
-                    reply_parts.append(body.strip())
-            if actor is None and isinstance(detail_map.get("actor"), str):
-                actor = detail_map.get("actor")
-            if reply_target is None and isinstance(detail_map.get("reply_target"), str):
-                reply_target = detail_map.get("reply_target")
-        if not user_message:
-            # Sources without the context-wrapped prompt (e.g. email) carry the
-            # message directly; fall back to the first message text.
-            for item in activity:
-                message = _message_text(item)
-                if message:
-                    user_message = _extract_current_message(message)
-                    break
-        reply = "\n\n".join(reply_parts)
-        last_event = activity[-1] if activity else None
-        return {
-            "run_id": run.run_id,
-            "work_item_id": run.work_item_id,
-            "task_id": task_id,
-            "envelope_id": run.envelope_id,
-            "source": run.source,
-            "workflow": run.workflow,
-            "result_status": run.result_status,
-            "latency_ms": run.latency_ms,
-            "created_at": _isoformat(run.created_at),
-            "attempt_count": detail.get("attempt_count"),
-            "reason_codes": detail.get("reason_codes", []),
-            "preview": user_message,
-            "reply": reply,
-            "actor": actor,
-            "reply_target": reply_target,
-            "event_count": len(activity),
-            "latest_phase": last_event.get("phase")
-            if isinstance(last_event, dict)
-            else None,
-            "events": activity,
-            "audit_detail": detail,
-        }
-
     def _append(
         self,
         *,
@@ -538,10 +407,6 @@ def start_worker_activity_server(
     return WorkerActivityServer(server=server, thread=thread)
 
 
-def _isoformat(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 _CURRENT_MESSAGE_MARKER = "Current user message:"
 _CURRENT_MESSAGE_FROM_MARKER = "Current message from "
 
@@ -563,14 +428,3 @@ def _extract_current_message(content: str | None) -> str:
     if _CURRENT_MESSAGE_MARKER in content:
         return content.split(_CURRENT_MESSAGE_MARKER, 1)[1].strip()
     return content.strip()
-
-
-def _message_text(item: dict[str, object]) -> str | None:
-    detail = item.get("detail")
-    if not isinstance(detail, dict):
-        return None
-    for key in ("content", "body"):
-        value = detail.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None

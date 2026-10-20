@@ -21,7 +21,7 @@ class ContractFixtureTests(unittest.TestCase):
 
         parsed = TaskQueueMessage.from_dict(payload)
 
-        self.assertEqual(parsed.message_type, "chatting.task.v1")
+        self.assertEqual(parsed.to_dict()["message_type"], "chatting.task.v1")
         self.assertEqual(parsed.task_id, "task:email:fixture:1")
         self.assertEqual(parsed.envelope.id, "email:fixture:1")
         self.assertEqual(parsed.to_dict(), payload)
@@ -31,7 +31,7 @@ class ContractFixtureTests(unittest.TestCase):
 
         parsed = EgressQueueMessage.from_dict(payload)
 
-        self.assertEqual(parsed.message_type, "chatting.egress.v2")
+        self.assertEqual(parsed.to_dict()["message_type"], "chatting.egress.v2")
         self.assertEqual(parsed.event_kind, "message")
         self.assertEqual(parsed.sequence, 0)
         self.assertEqual(parsed.to_dict(), payload)
@@ -41,7 +41,7 @@ class ContractFixtureTests(unittest.TestCase):
 
         parsed = EgressQueueMessage.from_dict(payload)
 
-        self.assertEqual(parsed.message_type, "chatting.egress.v2")
+        self.assertEqual(parsed.to_dict()["message_type"], "chatting.egress.v2")
         self.assertEqual(parsed.event_kind, "incremental")
         self.assertIsNone(parsed.sequence)
         self.assertNotIn("sequence", parsed.to_dict())

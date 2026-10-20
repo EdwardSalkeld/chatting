@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-
-from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.models import OutboundMessage, TaskEnvelope
+from app.models import TaskEnvelope
 
 INTERNAL_SOURCE = "internal"
 INTERNAL_REPLY_CHANNEL_TYPE = "internal"
@@ -21,73 +17,9 @@ def is_internal_heartbeat_envelope(envelope: TaskEnvelope) -> bool:
     )
 
 
-def build_internal_heartbeat_egress(
-    *,
-    task_message: TaskQueueMessage,
-    worker_received_at: datetime,
-) -> EgressQueueMessage:
-    current_time = _ensure_utc(worker_received_at)
-    ping_emitted_at = task_message.emitted_at.astimezone(timezone.utc)
-    body = json.dumps(
-        {
-            "kind": "heartbeat_pong",
-            "ping_emitted_at": ping_emitted_at.isoformat().replace("+00:00", "Z"),
-            "worker_received_at": current_time.isoformat().replace("+00:00", "Z"),
-        },
-        sort_keys=True,
-    )
-    return EgressQueueMessage(
-        task_id=task_message.task_id,
-        envelope_id=task_message.envelope.id,
-        trace_id=task_message.trace_id,
-        event_index=0,
-        event_count=2,
-        message=OutboundMessage(channel="log", target=INTERNAL_HEARTBEAT_TARGET, body=body),
-        emitted_at=current_time,
-        event_id=f"evt:{task_message.task_id}:0:message:internal-heartbeat",
-        sequence=0,
-        event_kind="message",
-        message_type="chatting.egress.v2",
-    )
-
-
-def build_internal_completion_egress(
-    *,
-    task_message: TaskQueueMessage,
-    sequence: int,
-    emitted_at: datetime,
-) -> EgressQueueMessage:
-    current_time = _ensure_utc(emitted_at)
-    return EgressQueueMessage(
-        task_id=task_message.task_id,
-        envelope_id=task_message.envelope.id,
-        trace_id=task_message.trace_id,
-        event_index=sequence,
-        event_count=sequence + 1,
-        message=OutboundMessage(
-            channel=INTERNAL_REPLY_CHANNEL_TYPE,
-            target="task",
-            body="internal heartbeat completed",
-        ),
-        emitted_at=current_time,
-        event_id=f"evt:{task_message.task_id}:{sequence}:completion:internal-heartbeat",
-        sequence=sequence,
-        event_kind="completion",
-        message_type="chatting.egress.v2",
-    )
-
-
-def _ensure_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        raise ValueError("datetime must be timezone-aware")
-    return value.astimezone(timezone.utc)
-
-
 __all__ = [
     "INTERNAL_HEARTBEAT_TARGET",
     "INTERNAL_REPLY_CHANNEL_TYPE",
     "INTERNAL_SOURCE",
-    "build_internal_completion_egress",
-    "build_internal_heartbeat_egress",
     "is_internal_heartbeat_envelope",
 ]

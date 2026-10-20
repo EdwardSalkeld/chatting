@@ -14,6 +14,7 @@ from app.models import (
     SCHEMA_VERSION,
     TaskEnvelope,
 )
+from app.timefmt import ensure_utc, format_utc, parse_utc
 
 SourceType = Literal["cron", "email", "im", "webhook", "internal", "reminder"]
 
@@ -33,23 +34,10 @@ def _optional_non_empty_string(value: object, *, field_name: str) -> str | None:
     return _require_non_empty_string(value, field_name=field_name)
 
 
-def _require_positive_int(value: object, *, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ValueError(f"{field_name} must be a positive integer")
-    return value
-
-
 def _parse_utc_datetime(value: object, *, field_name: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be an RFC3339 string")
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError(f"{field_name} must be timezone-aware")
-    return parsed.astimezone(timezone.utc)
-
-
-def _serialize_utc_datetime(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return parse_utc(value, field_name=field_name)
 
 
 def _task_id_for_envelope(envelope: TaskEnvelope) -> str:
@@ -110,14 +98,11 @@ class TaskQueueMessage:
     task_id: str
     emitted_at: datetime
     schema_version: str = SCHEMA_VERSION
-    message_type: str = _TASK_MESSAGE_TYPE
     work_item_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"unsupported_schema_version:{self.schema_version}")
-        if self.message_type != _TASK_MESSAGE_TYPE:
-            raise ValueError("message_type must be chatting.task.v1")
         _require_non_empty_string(self.trace_id, field_name="trace_id")
         _require_non_empty_string(self.task_id, field_name="task_id")
         if self.emitted_at.tzinfo is None:
@@ -126,10 +111,10 @@ class TaskQueueMessage:
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "schema_version": self.schema_version,
-            "message_type": self.message_type,
+            "message_type": _TASK_MESSAGE_TYPE,
             "trace_id": self.trace_id,
             "task_id": self.task_id,
-            "emitted_at": _serialize_utc_datetime(self.emitted_at),
+            "emitted_at": format_utc(self.emitted_at),
             "envelope": self.envelope.to_dict(),
         }
         if self.work_item_id is not None:
@@ -263,27 +248,21 @@ class EgressQueueMessage:
     task_id: str
     envelope_id: str
     trace_id: str
-    event_index: int
-    event_count: int
     message: OutboundMessage
     emitted_at: datetime
-    event_id: str | None = None
+    event_id: str
     sequence: int | None = None
     event_kind: str = "message"
     schema_version: str = SCHEMA_VERSION
-    message_type: str = _EGRESS_MESSAGE_TYPE_V2
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"unsupported_schema_version:{self.schema_version}")
-        if self.message_type != _EGRESS_MESSAGE_TYPE_V2:
-            raise ValueError("message_type must be chatting.egress.v2")
         _require_non_empty_string(self.task_id, field_name="task_id")
         _require_non_empty_string(self.envelope_id, field_name="envelope_id")
         _require_non_empty_string(self.trace_id, field_name="trace_id")
         if self.emitted_at.tzinfo is None:
             raise ValueError("emitted_at must be timezone-aware")
-        _require_positive_int(self.event_count, field_name="event_count")
         _require_non_empty_string(self.event_id, field_name="event_id")
         if self.event_kind not in {"message", "completion", "incremental"}:
             raise ValueError("event_kind must be message, completion, or incremental")
@@ -292,21 +271,19 @@ class EgressQueueMessage:
                 raise ValueError(
                     "sequence is required for message and completion events"
                 )
-            object.__setattr__(self, "event_index", 0)
             return
         _parse_sequence(self.sequence)
-        object.__setattr__(self, "event_index", self.sequence)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "schema_version": self.schema_version,
-            "message_type": self.message_type,
+            "message_type": _EGRESS_MESSAGE_TYPE_V2,
             "task_id": self.task_id,
             "envelope_id": self.envelope_id,
             "trace_id": self.trace_id,
             "event_id": self.event_id,
             "event_kind": self.event_kind,
-            "emitted_at": _serialize_utc_datetime(self.emitted_at),
+            "emitted_at": format_utc(self.emitted_at),
             "message": self.message.to_dict(),
         }
         if self.sequence is not None:
@@ -348,8 +325,6 @@ class EgressQueueMessage:
             trace_id=_require_non_empty_string(
                 payload.get("trace_id"), field_name="trace_id"
             ),
-            event_index=sequence if sequence is not None else 0,
-            event_count=1,
             message=OutboundMessage(
                 channel=_require_non_empty_string(
                     message_payload.get("channel"), field_name="message.channel"
@@ -376,8 +351,36 @@ class EgressQueueMessage:
                 payload.get("schema_version", SCHEMA_VERSION),
                 field_name="schema_version",
             ),
-            message_type=message_type,
         )
+
+
+def build_task_egress(
+    task_message: TaskQueueMessage,
+    *,
+    sequence: int,
+    event_kind: Literal["message", "completion"],
+    event_suffix: str,
+    body: str,
+    emitted_at: datetime,
+    channel: str | None = None,
+    target: str | None = None,
+) -> EgressQueueMessage:
+    """Build a worker-originated event, addressed to the task's reply channel by default."""
+    reply_channel = task_message.envelope.reply_channel
+    return EgressQueueMessage(
+        task_id=task_message.task_id,
+        envelope_id=task_message.envelope.id,
+        trace_id=task_message.trace_id,
+        message=OutboundMessage(
+            channel=channel or reply_channel.type,
+            target=target or reply_channel.target,
+            body=body,
+        ),
+        emitted_at=ensure_utc(emitted_at),
+        event_id=f"evt:{task_message.task_id}:{sequence}:{event_kind}:{event_suffix}",
+        sequence=sequence,
+        event_kind=event_kind,
+    )
 
 
 def _parse_message_attachment(value: object) -> AttachmentRef | None:
@@ -398,4 +401,5 @@ def _parse_message_attachment(value: object) -> AttachmentRef | None:
 __all__ = [
     "TaskQueueMessage",
     "EgressQueueMessage",
+    "build_task_egress",
 ]

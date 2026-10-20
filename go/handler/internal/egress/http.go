@@ -3,9 +3,9 @@ package egress
 import (
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
-	"strconv"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/httpserver"
 )
 
 // EgressRoutePath is the path the synchronous egress-submit endpoint listens on.
@@ -78,51 +78,16 @@ func writeSubmitJSON(writer http.ResponseWriter, status int, payload submitRespo
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
-// Server owns the dedicated loopback HTTP server for synchronous egress submits.
-type Server struct {
-	server *http.Server
-	done   chan struct{}
-	addr   string
-}
-
 // StartHTTPServer binds a loopback-only HTTP server exposing the egress-submit
 // endpoint. It is intentionally separate from the metrics server: the metrics
 // bind may be 0.0.0.0 (so Prometheus can scrape), but the ability to send
 // messages to the outside world must stay reachable only from the local host,
 // matching BBMB's loopback posture.
-func StartHTTPServer(host string, port int, engine *Engine, onResult func(Result), registerExtra func(*http.ServeMux)) (*Server, error) {
+func StartHTTPServer(host string, port int, engine *Engine, onResult func(Result), registerExtra func(*http.ServeMux)) (*httpserver.Server, error) {
 	mux := http.NewServeMux()
 	RegisterHTTPRoutes(mux, engine, onResult)
 	if registerExtra != nil {
 		registerExtra(mux)
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-	if err != nil {
-		return nil, err
-	}
-	server := &http.Server{Handler: mux}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			return
-		}
-	}()
-	return &Server{server: server, done: done, addr: listener.Addr().String()}, nil
-}
-
-func (server *Server) Addr() string {
-	if server == nil {
-		return ""
-	}
-	return server.addr
-}
-
-func (server *Server) Close() error {
-	if server == nil || server.server == nil {
-		return nil
-	}
-	err := server.server.Close()
-	<-server.done
-	return err
+	return httpserver.Start(host, port, mux)
 }

@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -60,10 +58,7 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		}
 	}
 	if itemID == "" {
-		itemID, err = newWorkID("item_")
-		if err != nil {
-			return task, err
-		}
+		itemID = randomID("item_", 16)
 		reply, err := json.Marshal(task.Envelope.ReplyChannel)
 		if err != nil {
 			return task, err
@@ -134,12 +129,4 @@ func (store *Store) applyPreferredReply(ctx context.Context, task contracts.Task
 		}
 	}
 	return task, nil
-}
-
-func newWorkID(prefix string) (string, error) {
-	buffer := make([]byte, 16)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", fmt.Errorf("generate work ID: %w", err)
-	}
-	return prefix + hex.EncodeToString(buffer), nil
 }

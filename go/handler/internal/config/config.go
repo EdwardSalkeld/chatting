@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 	"io"
 	"math"
 	"os"
@@ -13,6 +12,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 )
 
 const (
@@ -22,47 +24,6 @@ const (
 	DefaultMetricsPort         = 9464
 	DefaultEgressHTTPPort      = 9467
 )
-
-var allowedKeys = map[string]bool{
-	"personal_inbox":                 true,
-	"bbmb_address":                   true,
-	"db_path":                        true,
-	"max_loops":                      true,
-	"poll_interval_seconds":          true,
-	"metrics_host":                   true,
-	"metrics_port":                   true,
-	"egress_http_port":               true,
-	"egress_attachment_allowed_dirs": true,
-	"allowed_egress_channels":        true,
-	"context_refs":                   true,
-	"imap_host":                      true,
-	"imap_port":                      true,
-	"imap_username":                  true,
-	"imap_password_env":              true,
-	"imap_mailbox":                   true,
-	"imap_search":                    true,
-	"imap_use_ssl":                   true,
-	"smtp_host":                      true,
-	"smtp_port":                      true,
-	"smtp_username":                  true,
-	"smtp_password_env":              true,
-	"smtp_from":                      true,
-	"smtp_starttls":                  true,
-	"smtp_use_ssl":                   true,
-
-	"telegram_enabled":              true,
-	"telegram_bot_token_env":        true,
-	"telegram_api_base_url":         true,
-	"telegram_poll_timeout_seconds": true,
-	"telegram_allowed_chat_ids":     true,
-	"telegram_allowed_channel_ids":  true,
-
-	"telegram_attachment_dir": true,
-	"telegram_context_refs":   true,
-
-	"github_repositories":   true,
-	"github_assignee_login": true,
-}
 
 type Config struct {
 	PersonalInbox               *personalinbox.Config
@@ -173,9 +134,15 @@ func Load(raw []byte) (Config, error) {
 		return Config{}, err
 	}
 
+	config := Defaults()
+	fields := config.fields(payload)
+	known := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		known[field.key] = true
+	}
 	unknownKeys := make([]string, 0)
 	for key := range payload {
-		if !allowedKeys[key] {
+		if !known[key] {
 			unknownKeys = append(unknownKeys, key)
 		}
 	}
@@ -184,219 +151,12 @@ func Load(raw []byte) (Config, error) {
 		return Config{}, errors.New("config contains unknown keys: " + strings.Join(unknownKeys, ", "))
 	}
 
-	config := Defaults()
-	if value, ok := payload["personal_inbox"]; ok {
-		parsed, err := personalinbox.Decode(value)
-		if err != nil {
-			return Config{}, fmt.Errorf("personal_inbox: %w", err)
+	for _, field := range fields {
+		rawValue, ok := payload[field.key]
+		if !ok || (isNull(rawValue) && !field.keepNull) {
+			continue
 		}
-		config.PersonalInbox = parsed
-	}
-	var err error
-	if rawValue, ok := payload["bbmb_address"]; ok && !isNull(rawValue) {
-		config.BBMBAddress, err = decodeNonEmptyString(rawValue, "bbmb_address")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["db_path"]; ok && !isNull(rawValue) {
-		config.DBPath, err = decodeNonEmptyString(rawValue, "db_path")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["max_loops"]; ok && !isNull(rawValue) {
-		config.MaxLoops, err = decodePositiveInt(rawValue, "max_loops")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["poll_interval_seconds"]; ok && !isNull(rawValue) {
-		config.PollIntervalSeconds, err = decodePositiveFloat(rawValue, "poll_interval_seconds")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["metrics_host"]; ok && !isNull(rawValue) {
-		config.MetricsHost, err = decodeNonEmptyString(rawValue, "metrics_host")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["metrics_port"]; ok && !isNull(rawValue) {
-		config.MetricsPort, err = decodePositiveInt(rawValue, "metrics_port")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["egress_http_port"]; ok && !isNull(rawValue) {
-		config.EgressHTTPPort, err = decodePositiveInt(rawValue, "egress_http_port")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["egress_attachment_allowed_dirs"]; ok && !isNull(rawValue) {
-		config.EgressAttachmentAllowedDirs, err = decodeStringList(rawValue, "egress_attachment_allowed_dirs")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["allowed_egress_channels"]; ok && !isNull(rawValue) {
-		config.AllowedEgressChannels, err = decodeAllowedEgressChannels(rawValue)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["context_refs"]; ok && !isNull(rawValue) {
-		config.ContextRefs, err = decodeStringList(rawValue, "context_refs")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_host"]; ok && !isNull(rawValue) {
-		config.IMAPHost, err = decodeNonEmptyString(rawValue, "imap_host")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_port"]; ok && !isNull(rawValue) {
-		config.IMAPPort, err = decodePositiveInt(rawValue, "imap_port")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_username"]; ok && !isNull(rawValue) {
-		config.IMAPUsername, err = decodeNonEmptyString(rawValue, "imap_username")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_password_env"]; ok && !isNull(rawValue) {
-		config.IMAPPasswordEnv, err = decodeNonEmptyString(rawValue, "imap_password_env")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_mailbox"]; ok && !isNull(rawValue) {
-		config.IMAPMailbox, err = decodeNonEmptyString(rawValue, "imap_mailbox")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_search"]; ok && !isNull(rawValue) {
-		config.IMAPSearch, err = decodeNonEmptyString(rawValue, "imap_search")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["imap_use_ssl"]; ok && !isNull(rawValue) {
-		config.IMAPUseSSL, err = decodeBool(rawValue, "imap_use_ssl")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["smtp_host"]; ok && !isNull(rawValue) {
-		config.SMTPHost, err = decodeNonEmptyString(rawValue, "smtp_host")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["smtp_port"]; ok && !isNull(rawValue) {
-		config.SMTPPort, err = decodePositiveInt(rawValue, "smtp_port")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["smtp_username"]; ok && !isNull(rawValue) {
-		config.SMTPUsername, err = decodeNonEmptyString(rawValue, "smtp_username")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["smtp_password_env"]; ok && !isNull(rawValue) {
-		config.SMTPPasswordEnv, err = decodeNonEmptyString(rawValue, "smtp_password_env")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["smtp_from"]; ok && !isNull(rawValue) {
-		config.SMTPFrom, err = decodeNonEmptyString(rawValue, "smtp_from")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["smtp_starttls"]; ok && !isNull(rawValue) {
-		config.SMTPStartTLS, err = decodeBool(rawValue, "smtp_starttls")
-		if err != nil {
-			return Config{}, err
-		}
-		if _, ok := payload["smtp_use_ssl"]; !ok {
-			config.SMTPUseSSL = !config.SMTPStartTLS
-		}
-	}
-	if rawValue, ok := payload["smtp_use_ssl"]; ok && !isNull(rawValue) {
-		config.SMTPUseSSL, err = decodeBool(rawValue, "smtp_use_ssl")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_enabled"]; ok && !isNull(rawValue) {
-		config.TelegramEnabled, err = decodeBool(rawValue, "telegram_enabled")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_bot_token_env"]; ok && !isNull(rawValue) {
-		config.TelegramBotTokenEnv, err = decodeNonEmptyString(rawValue, "telegram_bot_token_env")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_api_base_url"]; ok && !isNull(rawValue) {
-		config.TelegramAPIBaseURL, err = decodeNonEmptyString(rawValue, "telegram_api_base_url")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_poll_timeout_seconds"]; ok && !isNull(rawValue) {
-		config.TelegramPollTimeoutSeconds, err = decodePositiveInt(rawValue, "telegram_poll_timeout_seconds")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_allowed_chat_ids"]; ok && !isNull(rawValue) {
-		config.TelegramAllowedChatIDs, err = decodeStringList(rawValue, "telegram_allowed_chat_ids")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_allowed_channel_ids"]; ok && !isNull(rawValue) {
-		config.TelegramAllowedChannelIDs, err = decodeStringList(rawValue, "telegram_allowed_channel_ids")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_attachment_dir"]; ok && !isNull(rawValue) {
-		config.TelegramAttachmentDir, err = decodeNonEmptyString(rawValue, "telegram_attachment_dir")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_context_refs"]; ok && !isNull(rawValue) {
-		config.TelegramContextRefs, err = decodeStringList(rawValue, "telegram_context_refs")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["github_repositories"]; ok && !isNull(rawValue) {
-		config.GitHubRepositories, err = decodeGitHubRepositories(rawValue)
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["github_assignee_login"]; ok && !isNull(rawValue) {
-		config.GitHubAssigneeLogin, err = decodeNonEmptyString(rawValue, "github_assignee_login")
-		if err != nil {
+		if err := field.decode(rawValue); err != nil {
 			return Config{}, err
 		}
 	}
@@ -423,6 +183,88 @@ func Load(raw []byte) (Config, error) {
 		}
 	}
 	return config, nil
+}
+
+type field struct {
+	key    string
+	decode func(json.RawMessage) error
+	// keepNull hands an explicit null to decode instead of treating it as missing.
+	keepNull bool
+}
+
+func bind[T any](dst *T, key string, decode func(json.RawMessage, string) (T, error)) field {
+	return field{key: key, decode: func(raw json.RawMessage) error {
+		value, err := decode(raw, key)
+		if err != nil {
+			return err
+		}
+		*dst = value
+		return nil
+	}}
+}
+
+func str(dst *string, key string) field       { return bind(dst, key, decodeNonEmptyString) }
+func posInt(dst *int, key string) field       { return bind(dst, key, decodePositiveInt) }
+func posFloat(dst *float64, key string) field { return bind(dst, key, decodePositiveFloat) }
+func boolean(dst *bool, key string) field     { return bind(dst, key, decodeBool) }
+func list(dst *[]string, key string) field    { return bind(dst, key, decodeStringList) }
+
+// fields lists every accepted key in the order it is decoded, which is also
+// the order validation errors are reported in.
+func (c *Config) fields(payload map[string]json.RawMessage) []field {
+	return []field{
+		{key: "personal_inbox", keepNull: true, decode: func(raw json.RawMessage) error {
+			parsed, err := personalinbox.Decode(raw)
+			if err != nil {
+				return fmt.Errorf("personal_inbox: %w", err)
+			}
+			c.PersonalInbox = parsed
+			return nil
+		}},
+		str(&c.BBMBAddress, "bbmb_address"),
+		str(&c.DBPath, "db_path"),
+		posInt(&c.MaxLoops, "max_loops"),
+		posFloat(&c.PollIntervalSeconds, "poll_interval_seconds"),
+		str(&c.MetricsHost, "metrics_host"),
+		posInt(&c.MetricsPort, "metrics_port"),
+		posInt(&c.EgressHTTPPort, "egress_http_port"),
+		list(&c.EgressAttachmentAllowedDirs, "egress_attachment_allowed_dirs"),
+		bind(&c.AllowedEgressChannels, "allowed_egress_channels", decodeAllowedEgressChannels),
+		list(&c.ContextRefs, "context_refs"),
+		str(&c.IMAPHost, "imap_host"),
+		posInt(&c.IMAPPort, "imap_port"),
+		str(&c.IMAPUsername, "imap_username"),
+		str(&c.IMAPPasswordEnv, "imap_password_env"),
+		str(&c.IMAPMailbox, "imap_mailbox"),
+		str(&c.IMAPSearch, "imap_search"),
+		boolean(&c.IMAPUseSSL, "imap_use_ssl"),
+		str(&c.SMTPHost, "smtp_host"),
+		posInt(&c.SMTPPort, "smtp_port"),
+		str(&c.SMTPUsername, "smtp_username"),
+		str(&c.SMTPPasswordEnv, "smtp_password_env"),
+		str(&c.SMTPFrom, "smtp_from"),
+		{key: "smtp_starttls", decode: func(raw json.RawMessage) error {
+			if err := boolean(&c.SMTPStartTLS, "smtp_starttls").decode(raw); err != nil {
+				return err
+			}
+			// Presence of the key, even as null, means the SSL choice was explicit.
+			if _, ok := payload["smtp_use_ssl"]; !ok {
+				c.SMTPUseSSL = !c.SMTPStartTLS
+			}
+			return nil
+		}},
+		boolean(&c.SMTPUseSSL, "smtp_use_ssl"),
+		boolean(&c.TelegramEnabled, "telegram_enabled"),
+		str(&c.TelegramBotTokenEnv, "telegram_bot_token_env"),
+		str(&c.TelegramAPIBaseURL, "telegram_api_base_url"),
+		posInt(&c.TelegramPollTimeoutSeconds, "telegram_poll_timeout_seconds"),
+		list(&c.TelegramAllowedChatIDs, "telegram_allowed_chat_ids"),
+		list(&c.TelegramAllowedChannelIDs, "telegram_allowed_channel_ids"),
+		str(&c.TelegramAttachmentDir, "telegram_attachment_dir"),
+		list(&c.TelegramContextRefs, "telegram_context_refs"),
+		bind(&c.GitHubRepositories, "github_repositories", decodeGitHubRepositories),
+		str(&c.GitHubAssigneeLogin, "github_assignee_login"),
+	}
 }
 
 func isNull(raw json.RawMessage) bool {
@@ -467,8 +309,8 @@ func decodePositiveFloat(raw json.RawMessage, name string) (float64, error) {
 	return parsed, nil
 }
 
-func decodeAllowedEgressChannels(raw json.RawMessage) ([]string, error) {
-	values, err := decodeStringList(raw, "allowed_egress_channels")
+func decodeAllowedEgressChannels(raw json.RawMessage, name string) ([]string, error) {
+	values, err := decodeStringList(raw, name)
 	if err != nil {
 		return nil, err
 	}
@@ -478,17 +320,17 @@ func decodeAllowedEgressChannels(raw json.RawMessage) ([]string, error) {
 	return values, nil
 }
 
-func decodeGitHubRepositories(raw json.RawMessage) ([]string, error) {
-	values, err := decodeStringList(raw, "github_repositories")
+func decodeGitHubRepositories(raw json.RawMessage, name string) ([]string, error) {
+	values, err := decodeStringList(raw, name)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]string, 0, len(values))
 	seen := map[string]bool{}
 	for _, value := range values {
-		owner, name, err := parseGitHubRepositoryPattern(value)
+		owner, name, err := github.ParseRepositoryPattern(value)
 		if err != nil {
-			return nil, err
+			return nil, errors.New("github_repositories entries must be owner/repo or owner/*")
 		}
 		normalized := owner + "/" + name
 		if seen[normalized] {
@@ -498,17 +340,6 @@ func decodeGitHubRepositories(raw json.RawMessage) ([]string, error) {
 		result = append(result, normalized)
 	}
 	return result, nil
-}
-
-func parseGitHubRepositoryPattern(value string) (string, string, error) {
-	parts := strings.SplitN(strings.TrimSpace(value), "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", errors.New("github_repositories entries must be owner/repo or owner/*")
-	}
-	if parts[1] != "*" && strings.Contains(parts[1], "*") {
-		return "", "", errors.New("github_repositories entries must be owner/repo or owner/*")
-	}
-	return parts[0], parts[1], nil
 }
 
 func decodeStringList(raw json.RawMessage, name string) ([]string, error) {

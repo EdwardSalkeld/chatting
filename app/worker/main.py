@@ -136,31 +136,23 @@ def _resolve_optional_str(config_value: object, *, setting_name: str) -> str | N
     return _resolve_str(config_value, default_value="", setting_name=setting_name)
 
 
-def _resolve_positive_int(
-    config_value: object, *, default_value: int, setting_name: str
+def worker_db_path(config: dict[str, object]) -> str | None:
+    """Return the worker database path for the CLIs executors run, if configured."""
+    return _resolve_optional_str(config.get("db_path"), setting_name="db_path")
+
+
+def _resolve_int(
+    config_value: object, *, default_value: int, setting_name: str, minimum: int = 1
 ) -> int:
     if config_value is None:
         return default_value
     if (
         not isinstance(config_value, int)
         or isinstance(config_value, bool)
-        or config_value <= 0
+        or config_value < minimum
     ):
-        raise ValueError(f"config {setting_name} must be a positive integer")
-    return config_value
-
-
-def _resolve_non_negative_int(
-    config_value: object, *, default_value: int, setting_name: str
-) -> int:
-    if config_value is None:
-        return default_value
-    if (
-        not isinstance(config_value, int)
-        or isinstance(config_value, bool)
-        or config_value < 0
-    ):
-        raise ValueError(f"config {setting_name} must be a non-negative integer")
+        bound = "positive" if minimum > 0 else "non-negative"
+        raise ValueError(f"config {setting_name} must be a {bound} integer")
     return config_value
 
 
@@ -232,14 +224,14 @@ def main() -> int:
         default_value=DEFAULT_HANDLER_EGRESS_URL,
         setting_name="handler_egress_url",
     )
-    max_attempts = _resolve_positive_int(
+    max_attempts = _resolve_int(
         config.get("max_attempts"), default_value=2, setting_name="max_attempts"
     )
     # Tests use max_loops to stop the worker; production runs forever.
-    max_loops = _resolve_positive_int(
+    max_loops = _resolve_int(
         config.get("max_loops"), default_value=0, setting_name="max_loops"
     )
-    poll_timeout_seconds = _resolve_positive_int(
+    poll_timeout_seconds = _resolve_int(
         config.get("poll_timeout_seconds"),
         default_value=20,
         setting_name="poll_timeout_seconds",
@@ -247,16 +239,17 @@ def main() -> int:
     sleep_seconds = _resolve_positive_float(
         config.get("sleep_seconds"), default_value=1.0, setting_name="sleep_seconds"
     )
-    executor_pool_size = _resolve_positive_int(
+    executor_pool_size = _resolve_int(
         config.get("executor_pool_size"),
         default_value=2,
         setting_name="executor_pool_size",
     )
     # Tests set 0 so parallel workers do not clash on the default port.
-    activity_port = _resolve_non_negative_int(
+    activity_port = _resolve_int(
         config.get("activity_port"),
         default_value=DEFAULT_ACTIVITY_PORT,
         setting_name="activity_port",
+        minimum=0,
     )
 
     # A restart may reclaim old leases only after the previous coordinator is
@@ -468,8 +461,7 @@ def _deliver_egress_event(
     reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
 
     if status_code in (200, 202):
-        if egress_message.event_id is not None:
-            store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
+        store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
         activity_monitor.record_egress(
             egress_message=egress_message,
             publish_source=publish_source,
@@ -487,8 +479,7 @@ def _deliver_egress_event(
             egress_message.message.channel,
             reason or "unknown",
         )
-        if egress_message.event_id is not None:
-            store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
+        store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
         return False
 
     # Handler unreachable or server error: leave the row pending for replay.

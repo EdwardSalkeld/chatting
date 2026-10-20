@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,12 +97,8 @@ func (store *Store) CreateReminder(ctx context.Context, input ReminderInput) (Re
 		}
 		return *existing, true, nil
 	}
-	reminderID, err := generateReminderID()
-	if err != nil {
-		return ReminderRecord{}, false, err
-	}
 	now := time.Now().UTC()
-	record := reminderRecordFromInput(reminderID, 1, input, fingerprint, now)
+	record := reminderRecordFromInput(randomID("rem_", 8), 1, input, fingerprint, now)
 	if err := store.insertReminderRow(ctx, store.db, record); err != nil {
 		// A concurrent retry can win the unique idempotency-key insert.
 		if existing, lookupErr := store.GetReminderByIdempotencyKey(ctx, input.IdempotencyKey); lookupErr == nil && existing != nil {
@@ -171,30 +165,16 @@ func (store *Store) GetReminderByIdempotencyKey(ctx context.Context, key string)
 	if strings.TrimSpace(key) == "" {
 		return nil, errors.New("idempotency_key is required")
 	}
-	record, err := scanReminderRecord(store.db.QueryRowContext(ctx, reminderSelectColumns+`
-		FROM reminders WHERE idempotency_key = ?`, key))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &record, nil
+	return optional(scanReminderRecord(store.db.QueryRowContext(ctx, reminderSelectColumns+`
+		FROM reminders WHERE idempotency_key = ?`, key)))
 }
 
 func (store *Store) GetLatestReminder(ctx context.Context, reminderID string) (*ReminderRecord, error) {
 	if strings.TrimSpace(reminderID) == "" {
 		return nil, errors.New("reminder_id is required")
 	}
-	record, err := scanReminderRecord(store.db.QueryRowContext(ctx, reminderSelectColumns+`
-		FROM reminders WHERE reminder_id = ? ORDER BY revision DESC LIMIT 1`, reminderID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &record, nil
+	return optional(scanReminderRecord(store.db.QueryRowContext(ctx, reminderSelectColumns+`
+		FROM reminders WHERE reminder_id = ? ORDER BY revision DESC LIMIT 1`, reminderID)))
 }
 
 func (store *Store) GetReminderHistory(ctx context.Context, reminderID string) ([]ReminderRecord, error) {
@@ -207,7 +187,7 @@ func (store *Store) GetReminderHistory(ctx context.Context, reminderID string) (
 		return nil, err
 	}
 	defer rows.Close()
-	return scanReminderRecords(rows)
+	return scanAll(rows, scanReminderRecord)
 }
 
 func (store *Store) ListReminders(ctx context.Context, status string) ([]ReminderRecord, error) {
@@ -223,7 +203,7 @@ func (store *Store) ListReminders(ctx context.Context, status string) ([]Reminde
 		return nil, err
 	}
 	defer rows.Close()
-	return scanReminderRecords(rows)
+	return scanAll(rows, scanReminderRecord)
 }
 
 func (store *Store) ListDueReminders(ctx context.Context, now time.Time) ([]ReminderRecord, error) {
@@ -235,7 +215,7 @@ func (store *Store) ListDueReminders(ctx context.Context, now time.Time) ([]Remi
 		return nil, err
 	}
 	defer rows.Close()
-	return scanReminderRecords(rows)
+	return scanAll(rows, scanReminderRecord)
 }
 
 func (store *Store) CancelReminder(ctx context.Context, reminderID string) (bool, error) {
@@ -340,19 +320,7 @@ func (store *Store) insertReminderRow(ctx context.Context, exec scheduleExecer, 
 	return err
 }
 
-func scanReminderRecords(rows *sql.Rows) ([]ReminderRecord, error) {
-	records := []ReminderRecord{}
-	for rows.Next() {
-		record, err := scanReminderRecord(rows)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, record)
-	}
-	return records, rows.Err()
-}
-
-func scanReminderRecord(scanner scheduleScanner) (ReminderRecord, error) {
+func scanReminderRecord(scanner rowScanner) (ReminderRecord, error) {
 	record := ReminderRecord{}
 	var runAt, contextRefs, promptContext, metadata, createdAt, updatedAt string
 	var firedAt, cancelledAt sql.NullString
@@ -398,14 +366,6 @@ func scanReminderRecord(scanner scheduleScanner) (ReminderRecord, error) {
 		record.CancelledAt = &parsed
 	}
 	return record, nil
-}
-
-func generateReminderID() (string, error) {
-	buffer := make([]byte, 8)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", err
-	}
-	return "rem_" + hex.EncodeToString(buffer), nil
 }
 
 func ValidateReminderStatus(status string) error {

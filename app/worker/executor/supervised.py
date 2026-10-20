@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from app.models import ExecutionResult, PromptContext, TaskEnvelope
+from app.models import ExecutionResult, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.worker.executor.base import Executor
 
@@ -102,12 +102,9 @@ def _build_supervised_recovery_envelope(
     prompt_context = original_envelope.prompt_context
     return replace(
         original_envelope,
-        prompt_context=PromptContext(
-            global_instructions=list(prompt_context.global_instructions),
-            source_instructions=list(prompt_context.source_instructions),
-            reply_channel_instructions=list(prompt_context.reply_channel_instructions),
-            task_instructions=list(prompt_context.task_instructions)
-            + [recovery_instruction],
+        prompt_context=replace(
+            prompt_context,
+            task_instructions=[*prompt_context.task_instructions, recovery_instruction],
         ),
     )
 

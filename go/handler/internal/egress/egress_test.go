@@ -9,12 +9,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestHandleRawDropsInvalidPayload(t *testing.T) {
@@ -97,9 +97,9 @@ func TestHandleAllowsFinalChannelWhenEnvelopeReplyChannelAllowed(t *testing.T) {
 
 func TestHandleAllowsInternalHeartbeatLogPongWhenLogDisallowed(t *testing.T) {
 	task := contracts.NewTaskQueueMessage(
-		heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z")),
+		heartbeat.BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z")),
 		"trace:internal-heartbeat:1",
-		mustTime(t, "2026-03-09T12:00:01Z"),
+		testutil.MustTime(t, "2026-03-09T12:00:01Z"),
 	)
 	state := newFakeState()
 	state.addTask(task)
@@ -241,10 +241,9 @@ func TestHandleDropsAndNotifiesOnUnsequencedDispatchFailure(t *testing.T) {
 	dispatcher := &recordingDispatcher{err: dispatch.MessageDispatchError{ReasonCode: reason}}
 	var notified []string
 	engine := newTestEngineWithState(t, state, dispatcher,
-		WithAllowedChannels([]string{"email"}),
-		WithDropHook(func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+		func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
 			notified = append(notified, message.EventID+"|"+reasonCode)
-		}),
+		},
 	)
 
 	result, err := engine.Handle(context.Background(), testEgressMessage(t, task, nil, "evt:incremental:1", "incremental"))
@@ -285,10 +284,9 @@ func TestSurfacedDropsFireHookAndLogLoudly(t *testing.T) {
 				message = testEgressMessage(t, task, nil, "evt:completion", "completion")
 			}
 			engine := newTestEngineWithState(t, state, &recordingDispatcher{},
-				WithAllowedChannels([]string{"email"}),
-				WithDropHook(func(_ context.Context, m contracts.EgressQueueMessage, reasonCode string) {
+				func(_ context.Context, m contracts.EgressQueueMessage, reasonCode string) {
 					notified = append(notified, reasonCode)
-				}),
+				},
 			)
 
 			logged := captureLog(t, func() {
@@ -317,8 +315,7 @@ func TestCompletedTaskDropDoesNotFireHook(t *testing.T) {
 	state.completed[task.TaskID] = task.Envelope.ID
 	fired := false
 	engine := newTestEngineWithState(t, state, &recordingDispatcher{},
-		WithAllowedChannels([]string{"email"}),
-		WithDropHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { fired = true }),
+		func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { fired = true },
 	)
 
 	logged := captureLog(t, func() {
@@ -350,8 +347,7 @@ func TestFlushDropsAndContinuesOnStagedDisallowedChannel(t *testing.T) {
 	dispatcher := &recordingDispatcher{}
 	notified := 0
 	engine := newTestEngineWithState(t, state, dispatcher,
-		WithAllowedChannels([]string{"email"}),
-		WithDropHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ }),
+		func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ },
 	)
 
 	// Simulate an event staged under a looser config (e.g. before a restart with a
@@ -399,8 +395,7 @@ func TestFlushDropsAndContinuesOnSequencedDispatchFailure(t *testing.T) {
 	dispatcher := &recordingDispatcher{err: dispatch.MessageDispatchError{ReasonCode: "telegram_send_failed description=Bad Request: chat not found"}}
 	notified := 0
 	engine := newTestEngineWithState(t, state, dispatcher,
-		WithAllowedChannels([]string{"email"}),
-		WithDropHook(func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ }),
+		func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ },
 	)
 	first := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
 	first.Message.Body = stringPtr("first")
@@ -432,7 +427,7 @@ func TestSQLiteBackedEnginePersistsStagingAndDedupe(t *testing.T) {
 		t.Fatal(err)
 	}
 	dispatcher := &recordingDispatcher{}
-	engine := newTestEngineWithState(t, NewSQLiteState(store), dispatcher)
+	engine := newTestEngineWithState(t, store, dispatcher, nil)
 	second := testEgressMessage(t, task, intPtr(1), "evt:1", "message")
 	second.Message.Body = stringPtr("second")
 	first := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
@@ -595,15 +590,12 @@ func newTestEngine(t *testing.T, state *fakeState, dispatcher *recordingDispatch
 	if dispatcher == nil {
 		dispatcher = &recordingDispatcher{}
 	}
-	return newTestEngineWithState(t, state, dispatcher)
+	return newTestEngineWithState(t, state, dispatcher, nil)
 }
 
-func newTestEngineWithState(t *testing.T, state State, dispatcher *recordingDispatcher, options ...Option) *Engine {
+func newTestEngineWithState(t *testing.T, state State, dispatcher *recordingDispatcher, onDrop func(context.Context, contracts.EgressQueueMessage, string)) *Engine {
 	t.Helper()
-	if len(options) == 0 {
-		options = []Option{WithAllowedChannels([]string{"email"})}
-	}
-	engine, err := New(state, dispatcher, options...)
+	engine, err := New(state, dispatcher, Config{AllowedChannels: []string{"email"}, OnDrop: onDrop})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +609,7 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            "email:1",
 		Source:        "email",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-06T11:00:00Z")),
+		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-03-06T11:00:00Z")),
 		Actor:         &actor,
 		Content:       "hello from egress tests",
 		ReplyChannel: contracts.ReplyChannel{
@@ -625,7 +617,7 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 			Target: "alice@example.com",
 		},
 		DedupeKey: "email:1",
-	}, "trace:email:1", mustTime(t, "2026-03-06T11:00:01Z"))
+	}, "trace:email:1", testutil.MustTime(t, "2026-03-06T11:00:01Z"))
 }
 
 func telegramTaskMessage(t *testing.T) contracts.TaskQueueMessage {
@@ -635,7 +627,7 @@ func telegramTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            "telegram:1",
 		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-06T11:00:00Z")),
+		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-03-06T11:00:00Z")),
 		Actor:         &actor,
 		Content:       "hello from telegram",
 		ReplyChannel: contracts.ReplyChannel{
@@ -643,7 +635,7 @@ func telegramTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 			Target: "12345",
 		},
 		DedupeKey: "telegram:1",
-	}, "trace:telegram:1", mustTime(t, "2026-03-06T11:00:01Z"))
+	}, "trace:telegram:1", testutil.MustTime(t, "2026-03-06T11:00:01Z"))
 }
 
 func testEgressMessage(t *testing.T, task contracts.TaskQueueMessage, sequence *int, eventID string, eventKind string) contracts.EgressQueueMessage {
@@ -657,7 +649,7 @@ func testEgressMessage(t *testing.T, task contracts.TaskQueueMessage, sequence *
 		TraceID:       task.TraceID,
 		EventID:       eventID,
 		EventKind:     eventKind,
-		EmittedAt:     contracts.NewTimestamp(mustTime(t, "2026-03-06T12:00:00Z")),
+		EmittedAt:     contracts.NewTimestamp(testutil.MustTime(t, "2026-03-06T12:00:00Z")),
 		Message: contracts.OutboundMessage{
 			Channel: "email",
 			Target:  "alice@example.com",
@@ -688,13 +680,4 @@ func intPtr(value int) *int {
 
 func stringPtr(value string) *string {
 	return &value
-}
-
-func mustTime(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

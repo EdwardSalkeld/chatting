@@ -84,14 +84,11 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 task_id="task:email:1",
                 envelope_id="email:1",
                 trace_id="trace:email:1",
-                event_index=0,
-                event_count=1,
                 message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
                 event_kind="message",
-                message_type="chatting.egress.v2",
             )
 
             store.queue_egress_outbox_event(message)

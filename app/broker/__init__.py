@@ -11,6 +11,7 @@ from app.broker.constants import (
 from app.broker.messages import (
     EgressQueueMessage,
     TaskQueueMessage,
+    build_task_egress,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "TASK_QUEUE_NAME",
     "EgressQueueMessage",
     "TaskQueueMessage",
+    "build_task_egress",
 ]

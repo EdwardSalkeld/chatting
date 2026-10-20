@@ -3,7 +3,6 @@ package heartbeat
 import (
 	"context"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -41,7 +40,7 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 
 func BuildEnvelope(sequence int, now time.Time) contracts.TaskEnvelope {
 	currentTime := now.UTC()
-	heartbeatID := "internal-heartbeat:" + pythonUTCISO(currentTime) + ":" + strconv.Itoa(sequence)
+	heartbeatID := "internal-heartbeat:" + contracts.PythonUTCISO(currentTime) + ":" + strconv.Itoa(sequence)
 	actor := "message-handler"
 	return contracts.TaskEnvelope{
 		SchemaVersion: contracts.SchemaVersion,
@@ -70,8 +69,4 @@ func IsLogPong(message contracts.OutboundMessage, envelope contracts.TaskEnvelop
 	return IsEnvelope(envelope) &&
 		message.Channel == "log" &&
 		message.Target == InternalHeartbeatTarget
-}
-
-func pythonUTCISO(value time.Time) string {
-	return strings.TrimSuffix(value.Format(time.RFC3339Nano), "Z") + "+00:00"
 }

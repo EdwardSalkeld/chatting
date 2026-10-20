@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.models import OutboundMessage, TaskEnvelope, UsageReport, UsageWindow
+from app.models import TaskEnvelope, UsageReport, UsageWindow
+from app.timefmt import ensure_utc
 
 USAGE_COMMAND = "/usage"
 
@@ -23,7 +23,7 @@ def is_usage_command_envelope(envelope: TaskEnvelope) -> bool:
 
 def format_usage_report(report: UsageReport, *, now: datetime) -> str:
     """Render a usage snapshot as plain text for a chat reply."""
-    current_time = _ensure_utc(now)
+    current_time = ensure_utc(now)
     if report.errors or report.observed_at is None:
         return (
             "No usage snapshot available yet. The backend only publishes limits "
@@ -71,32 +71,6 @@ def format_usage_report(report: UsageReport, *, now: datetime) -> str:
     lines.append("")
     lines.append(_format_credits(report))
     return "\n".join(lines)
-
-
-def build_usage_egress(
-    *,
-    task_message: TaskQueueMessage,
-    body: str,
-    emitted_at: datetime,
-) -> EgressQueueMessage:
-    current_time = _ensure_utc(emitted_at)
-    return EgressQueueMessage(
-        task_id=task_message.task_id,
-        envelope_id=task_message.envelope.id,
-        trace_id=task_message.trace_id,
-        event_index=0,
-        event_count=2,
-        message=OutboundMessage(
-            channel=task_message.envelope.reply_channel.type,
-            target=task_message.envelope.reply_channel.target,
-            body=body,
-        ),
-        emitted_at=current_time,
-        event_id=f"evt:{task_message.task_id}:0:message:usage-command",
-        sequence=0,
-        event_kind="message",
-        message_type="chatting.egress.v2",
-    )
 
 
 def _format_credits(report: UsageReport) -> str:
@@ -156,15 +130,8 @@ def _format_instant(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%d %b %H:%M UTC")
 
 
-def _ensure_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        raise ValueError("datetime must be timezone-aware")
-    return value.astimezone(timezone.utc)
-
-
 __all__ = [
     "USAGE_COMMAND",
-    "build_usage_egress",
     "format_usage_report",
     "is_usage_command_envelope",
 ]

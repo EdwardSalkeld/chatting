@@ -10,6 +10,11 @@ from app.broker import TaskQueueMessage
 from app.main_history import main
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
+from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
+
+
+def _worker_config(config_path: Path):
+    return patch.dict("os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)})
 
 
 class MainHistoryCliTests(unittest.TestCase):
@@ -46,6 +51,7 @@ class MainHistoryCliTests(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 patch("sys.stdout", stdout),
+                _worker_config(config_path),
                 patch(
                     "sys.argv",
                     [
@@ -60,8 +66,6 @@ class MainHistoryCliTests(unittest.TestCase):
                         "1",
                         "--after",
                         "1",
-                        "--config",
-                        str(config_path),
                     ],
                 ),
             ):
@@ -106,9 +110,14 @@ class MainHistoryCliTests(unittest.TestCase):
                 store.stage_inbox_task(
                     TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:{number}")
                 )
+            config_path = Path(tmpdir) / "worker.json"
+            config_path.write_text(
+                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
+            )
             stdout = io.StringIO()
             with (
                 patch("sys.stdout", stdout),
+                _worker_config(config_path),
                 patch(
                     "sys.argv",
                     [
@@ -125,8 +134,6 @@ class MainHistoryCliTests(unittest.TestCase):
                         "alice",
                         "--since",
                         "2026-08-16T11:11:00Z",
-                        "--db-path",
-                        str(db_path),
                     ],
                 ),
             ):

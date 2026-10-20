@@ -11,21 +11,12 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
+	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
-type TaskRecord struct {
-	TaskID      string
-	EnvelopeID  string
-	TraceID     string
-	TaskMessage contracts.TaskQueueMessage
-}
+type TaskRecord = sqlitestate.TaskLedgerRecord
 
-type StagedRecord struct {
-	TaskID        string
-	EventID       string
-	Sequence      int
-	EgressMessage contracts.EgressQueueMessage
-}
+type StagedRecord = sqlitestate.StagedEgressRecord
 
 type State interface {
 	GetTask(ctx context.Context, taskID string) (*TaskRecord, error)
@@ -60,50 +51,37 @@ type Engine struct {
 	onDrop          func(context.Context, contracts.EgressQueueMessage, string)
 }
 
-type Option func(*Engine)
-
-func WithAllowedChannels(channels []string) Option {
-	return func(engine *Engine) {
-		engine.allowedChannels = make(map[string]bool, len(channels))
-		for _, channel := range channels {
-			engine.allowedChannels[channel] = true
-		}
-	}
+type Config struct {
+	AllowedChannels []string
+	// OnCompletion runs once a task's completion event has been applied.
+	OnCompletion func(context.Context, contracts.EgressQueueMessage) error
+	// OnDrop is invoked whenever the engine drops an egress message for an
+	// error-class reason (bad payload, unknown task, disallowed channel, dispatch
+	// failure). Dropping is treated as an operational error, so the engine always
+	// logs a loud line; the hook is responsible for the operator alert (email). It
+	// is NOT called for idempotency drops (a late/duplicate event after task
+	// completion).
+	OnDrop func(context.Context, contracts.EgressQueueMessage, string)
 }
 
-func WithCompletionHook(hook func(context.Context, contracts.EgressQueueMessage) error) Option {
-	return func(engine *Engine) {
-		engine.onCompletion = hook
-	}
-}
-
-// WithDropHook registers a callback invoked whenever the engine drops an egress
-// message for an error-class reason (bad payload, unknown task, disallowed channel,
-// dispatch failure). Dropping is treated as an operational error, so the engine always
-// logs a loud line; the hook is responsible for the operator alert (email). It is NOT
-// called for idempotency drops (a late/duplicate event after task completion).
-func WithDropHook(hook func(context.Context, contracts.EgressQueueMessage, string)) Option {
-	return func(engine *Engine) {
-		engine.onDrop = hook
-	}
-}
-
-func New(state State, dispatcher Dispatcher, options ...Option) (*Engine, error) {
+func New(state State, dispatcher Dispatcher, config Config) (*Engine, error) {
 	if state == nil {
 		return nil, errors.New("state is required")
 	}
 	if dispatcher == nil {
 		return nil, errors.New("dispatcher is required")
 	}
-	engine := &Engine{
+	allowedChannels := make(map[string]bool, len(config.AllowedChannels))
+	for _, channel := range config.AllowedChannels {
+		allowedChannels[channel] = true
+	}
+	return &Engine{
 		state:           state,
 		dispatcher:      dispatcher,
-		allowedChannels: map[string]bool{},
-	}
-	for _, option := range options {
-		option(engine)
-	}
-	return engine, nil
+		allowedChannels: allowedChannels,
+		onCompletion:    config.OnCompletion,
+		onDrop:          config.OnDrop,
+	}, nil
 }
 
 type Result struct {

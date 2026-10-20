@@ -9,28 +9,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
-from app.broker import EgressQueueMessage, TaskQueueMessage
+from app.broker import EgressQueueMessage, TaskQueueMessage, build_task_egress
 from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
 from app.internal_heartbeat import (
-    build_internal_completion_egress,
-    build_internal_heartbeat_egress,
+    INTERNAL_HEARTBEAT_TARGET,
+    INTERNAL_REPLY_CHANNEL_TYPE,
     is_internal_heartbeat_envelope,
 )
-from app.usage_command import (
-    build_usage_egress,
-    format_usage_report,
-    is_usage_command_envelope,
-)
-from app.internal_notices import (
-    build_internal_telegram_channel_not_enabled_egress,
-    is_internal_telegram_channel_not_enabled_envelope,
-)
-from app.models import (
-    AuditEvent,
-    OutboundMessage,
-    PromptContext,
-    RunRecord,
-)
+from app.usage_command import format_usage_report, is_usage_command_envelope
+from app.internal_notices import is_internal_telegram_channel_not_enabled_envelope
+from app.models import AuditEvent, RunRecord
+from app.timefmt import format_utc
 from app.model_command import MODELS, parse_model_command
 from app.worker.model_router import choose_model
 from app.state import SQLiteStateStore
@@ -130,36 +119,21 @@ def process_task_message(
         model_decision = choose_model(store=store, envelope=envelope)
         model_tier = model_decision.tier
     escalation_reason: str | None = None
+    supervised = not explicit_finish and _should_run_supervised_recovery(task_message)
 
     for attempt in range(1, max_attempts + 1):
         attempt_count = attempt
 
         try:
-            active_executor: Executor = executor_impl
-            if assignment is not None:
-                active_executor = executor_impl.for_workspace(
-                    work_item_id=assignment.work_item_id,
-                )
-            model_selector = getattr(active_executor, "for_model", None)
-            if callable(model_selector):
-                active_executor = cast(Executor, model_selector(model_tier))
-            output_callback_setter = getattr(
-                active_executor, "with_output_callback", None
+            active_executor = _executor_chain(
+                executor_impl,
+                store=store,
+                task_message=task_message,
+                activity_monitor=activity_monitor,
+                work_item_id=assignment.work_item_id if assignment else None,
+                model_tier=model_tier,
+                supervised=supervised,
             )
-            if callable(output_callback_setter):
-                active_executor = cast(
-                    Executor,
-                    output_callback_setter(
-                        lambda stream, content: activity_monitor.record_executor_output(
-                            task_message=task_message, stream=stream, content=content
-                        )
-                    ),
-                )
-            if not explicit_finish and _should_run_supervised_recovery(task_message):
-                active_executor = SupervisedReplyRecoveryExecutor(
-                    inner=active_executor,
-                    store=store,
-                )
             executor_launch_count += 1
             activity_monitor.record_executor_started(
                 task_message=task_message,
@@ -179,49 +153,24 @@ def process_task_message(
                 model_tier = "high"
                 if isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                     executor_launch_count = active_executor.last_launch_count
-                sol_executor = executor_impl
-                if assignment is not None:
-                    sol_executor = sol_executor.for_workspace(
-                        work_item_id=assignment.work_item_id
-                    )
-                model_selector = getattr(sol_executor, "for_model", None)
-                if callable(model_selector):
-                    sol_executor = cast(Executor, model_selector("high"))
-                output_callback_setter = getattr(
-                    sol_executor, "with_output_callback", None
+                sol_executor = _executor_chain(
+                    executor_impl,
+                    store=store,
+                    task_message=task_message,
+                    activity_monitor=activity_monitor,
+                    work_item_id=assignment.work_item_id if assignment else None,
+                    model_tier="high",
+                    supervised=supervised,
                 )
-                if callable(output_callback_setter):
-                    sol_executor = cast(
-                        Executor,
-                        output_callback_setter(
-                            lambda stream, content: (
-                                activity_monitor.record_executor_output(
-                                    task_message=task_message,
-                                    stream=stream,
-                                    content=content,
-                                )
-                            )
-                        ),
-                    )
-                if not explicit_finish and _should_run_supervised_recovery(
-                    task_message
-                ):
-                    sol_executor = SupervisedReplyRecoveryExecutor(
-                        inner=sol_executor, store=store
-                    )
                 context = envelope.prompt_context
                 sol_envelope = replace(
                     envelope,
-                    prompt_context=PromptContext(
-                        global_instructions=list(context.global_instructions),
-                        source_instructions=list(context.source_instructions),
-                        reply_channel_instructions=list(
-                            context.reply_channel_instructions
-                        ),
-                        task_instructions=list(context.task_instructions)
-                        + [
+                    prompt_context=replace(
+                        context,
+                        task_instructions=[
+                            *context.task_instructions,
                             "Luna requested a task-only handoff to Sol. Its findings: "
-                            + escalation_reason
+                            + escalation_reason,
                         ],
                     ),
                 )
@@ -261,7 +210,6 @@ def process_task_message(
 
             egress_messages = _build_completion_egress_messages(
                 task_message=task_message,
-                starting_sequence=0,
                 visible_error_body=_build_visible_error_body(
                     task_message=task_message,
                     reason_codes=reason_codes,
@@ -283,7 +231,6 @@ def process_task_message(
                 result_status = "dead_letter"
                 egress_messages = _build_completion_egress_messages(
                     task_message=task_message,
-                    starting_sequence=0,
                     visible_error_body=_build_visible_error_body(
                         task_message=task_message,
                         reason_codes=reason_codes,
@@ -405,44 +352,28 @@ def build_coalesced_task_result(
 ) -> WorkerProcessResult:
     """Record a queued turn as completed by the parent's delivered reply."""
     created_at = datetime.now(timezone.utc)
-    run_record = RunRecord(
-        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
-        envelope_id=task_message.envelope.id,
-        source=task_message.envelope.source,
-        workflow="default",
-        latency_ms=max(
-            int((created_at - task_message.emitted_at).total_seconds() * 1000), 0
-        ),
-        result_status="success",
+    result = _finish_local_task(
+        store=store,
+        task_message=task_message,
         created_at=created_at,
-    )
-    run_record = _with_work_item(store, task_message, run_record)
-    store.append_run(run_record)
-    store.append_audit_event(
-        AuditEvent(
-            run_id=run_record.run_id,
-            envelope_id=run_record.envelope_id,
-            source=run_record.source,
-            workflow=run_record.workflow,
-            result_status=run_record.result_status,
-            detail={
-                "trace_id": task_message.trace_id,
-                "task_id": task_message.task_id,
-                "reason_codes": ["coalesced_into_conversation"],
-                "attempt_count": 0,
-                "executor_launch_count": 0,
-                "coalesced_into_task_id": parent_task_id,
-                "coalesced_into_run_id": parent_run_id,
-                "egress_message_count": 1,
-            },
-            created_at=created_at,
-        )
+        latency_ms=_latency_since_emitted(task_message, created_at),
+        reason_code="coalesced_into_conversation",
+        detail={
+            "trace_id": task_message.trace_id,
+            "attempt_count": 0,
+            "executor_launch_count": 0,
+            "coalesced_into_task_id": parent_task_id,
+            "coalesced_into_run_id": parent_run_id,
+            "egress_message_count": 1,
+        },
+        egress_messages=_build_completion_egress_messages(task_message=task_message),
+        attempt_count=0,
     )
     store.append_worker_activity(
         occurred_at=created_at,
         task_id=task_message.task_id,
         envelope_id=task_message.envelope.id,
-        run_id=run_record.run_id,
+        run_id=result.run_record.run_id,
         source=task_message.envelope.source,
         workflow="default",
         phase="task_coalesced",
@@ -454,18 +385,7 @@ def build_coalesced_task_result(
         },
         is_internal=False,
     )
-    egress_messages = _build_completion_egress_messages(
-        task_message=task_message,
-        starting_sequence=0,
-    )
-    return WorkerProcessResult(
-        run_record=run_record,
-        egress_messages=egress_messages,
-        dead_lettered=False,
-        attempt_count=0,
-        reason_codes=["coalesced_into_conversation"],
-        error_summary=None,
-    )
+    return result
 
 
 def build_recovered_delivered_task_result(
@@ -473,46 +393,20 @@ def build_recovered_delivered_task_result(
 ) -> WorkerProcessResult:
     """Finish a reply-delivered inbox group after a worker restart."""
     created_at = datetime.now(timezone.utc)
-    run_record = RunRecord(
-        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
-        envelope_id=task_message.envelope.id,
-        source=task_message.envelope.source,
-        workflow="default",
-        latency_ms=max(
-            int((created_at - task_message.emitted_at).total_seconds() * 1000), 0
-        ),
-        result_status="success",
+    return _finish_local_task(
+        store=store,
+        task_message=task_message,
         created_at=created_at,
-    )
-    run_record = _with_work_item(store, task_message, run_record)
-    store.append_run(run_record)
-    store.append_audit_event(
-        AuditEvent(
-            run_id=run_record.run_id,
-            envelope_id=run_record.envelope_id,
-            source=run_record.source,
-            workflow=run_record.workflow,
-            result_status=run_record.result_status,
-            detail={
-                "trace_id": task_message.trace_id,
-                "task_id": task_message.task_id,
-                "reason_codes": ["reply_delivered_before_worker_restart"],
-                "attempt_count": 0,
-                "executor_launch_count": 0,
-                "egress_message_count": 1,
-            },
-            created_at=created_at,
-        )
-    )
-    return WorkerProcessResult(
-        run_record=run_record,
-        egress_messages=_build_completion_egress_messages(
-            task_message=task_message, starting_sequence=0
-        ),
-        dead_lettered=False,
+        latency_ms=_latency_since_emitted(task_message, created_at),
+        reason_code="reply_delivered_before_worker_restart",
+        detail={
+            "trace_id": task_message.trace_id,
+            "attempt_count": 0,
+            "executor_launch_count": 0,
+            "egress_message_count": 1,
+        },
+        egress_messages=_build_completion_egress_messages(task_message=task_message),
         attempt_count=0,
-        reason_codes=["reply_delivered_before_worker_restart"],
-        error_summary=None,
     )
 
 
@@ -522,62 +416,34 @@ def _process_internal_heartbeat(
     task_message: TaskQueueMessage,
 ) -> WorkerProcessResult:
     worker_received_at = datetime.now(timezone.utc)
-    visible_egress_message = build_internal_heartbeat_egress(
+    pong = {
+        "kind": "heartbeat_pong",
+        "ping_emitted_at": format_utc(task_message.emitted_at),
+        "worker_received_at": format_utc(worker_received_at),
+    }
+    return _finish_local_task(
+        store=store,
         task_message=task_message,
-        worker_received_at=worker_received_at,
-    )
-    completion_egress_message = build_internal_completion_egress(
-        task_message=task_message,
-        sequence=1,
-        emitted_at=worker_received_at,
-    )
-    ping_emitted_at = task_message.emitted_at.astimezone(timezone.utc)
-    run_record = RunRecord(
-        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
-        envelope_id=task_message.envelope.id,
-        source=task_message.envelope.source,
-        workflow="default",
-        latency_ms=max(
-            int((worker_received_at - ping_emitted_at).total_seconds() * 1000), 0
-        ),
-        result_status="success",
         created_at=worker_received_at,
-    )
-    run_record = _with_work_item(store, task_message, run_record)
-    store.append_run(run_record)
-    store.append_audit_event(
-        AuditEvent(
-            run_id=run_record.run_id,
-            envelope_id=run_record.envelope_id,
-            source=run_record.source,
-            workflow=run_record.workflow,
-            result_status=run_record.result_status,
-            detail={
-                "trace_id": task_message.trace_id,
-                "task_id": task_message.task_id,
-                "reason_codes": ["internal_heartbeat"],
-                "attempt_count": 1,
-                "max_attempts": 1,
-                "last_error": None,
-                "last_error_stage": None,
-                "execution_result": {
-                    "errors": [],
-                },
-                "incremental_reply_send_requested_count": 0,
-                "incremental_reply_send_published_count": 0,
-                "egress_message_count": 2,
-                "heartbeat": json.loads(visible_egress_message.message.body or "{}"),
-            },
-            created_at=run_record.created_at,
-        )
-    )
-    return WorkerProcessResult(
-        run_record=run_record,
-        egress_messages=[visible_egress_message, completion_egress_message],
-        dead_lettered=False,
-        attempt_count=1,
-        reason_codes=["internal_heartbeat"],
-        error_summary=None,
+        latency_ms=_latency_since_emitted(task_message, worker_received_at),
+        reason_code="internal_heartbeat",
+        detail={
+            **_local_execution_detail(task_message),
+            "heartbeat": pong,
+        },
+        egress_messages=[
+            build_task_egress(
+                task_message,
+                sequence=0,
+                event_kind="message",
+                event_suffix="internal-heartbeat",
+                body=json.dumps(pong, sort_keys=True),
+                emitted_at=worker_received_at,
+                channel="log",
+                target=INTERNAL_HEARTBEAT_TARGET,
+            ),
+            _internal_completion(task_message, emitted_at=worker_received_at),
+        ],
     )
 
 
@@ -587,61 +453,29 @@ def _process_internal_telegram_channel_not_enabled_notice(
     task_message: TaskQueueMessage,
 ) -> WorkerProcessResult:
     emitted_at = datetime.now(timezone.utc)
-    visible_egress_message = build_internal_telegram_channel_not_enabled_egress(
+    return _finish_local_task(
+        store=store,
         task_message=task_message,
-        emitted_at=emitted_at,
-    )
-    completion_egress_message = build_internal_completion_egress(
-        task_message=task_message,
-        sequence=1,
-        emitted_at=emitted_at,
-    )
-    run_record = RunRecord(
-        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
-        envelope_id=task_message.envelope.id,
-        source=task_message.envelope.source,
-        workflow="default",
-        latency_ms=0,
-        result_status="success",
         created_at=emitted_at,
-    )
-    run_record = _with_work_item(store, task_message, run_record)
-    store.append_run(run_record)
-    store.append_audit_event(
-        AuditEvent(
-            run_id=run_record.run_id,
-            envelope_id=run_record.envelope_id,
-            source=run_record.source,
-            workflow=run_record.workflow,
-            result_status=run_record.result_status,
-            detail={
-                "trace_id": task_message.trace_id,
-                "task_id": task_message.task_id,
-                "reason_codes": ["internal_notice"],
-                "attempt_count": 1,
-                "max_attempts": 1,
-                "last_error": None,
-                "last_error_stage": None,
-                "execution_result": {
-                    "errors": [],
-                },
-                "incremental_reply_send_requested_count": 0,
-                "incremental_reply_send_published_count": 0,
-                "egress_message_count": 2,
-                "internal_notice": (
-                    task_message.envelope.reply_channel.metadata.get("internal_notice")
-                ),
-            },
-            created_at=run_record.created_at,
-        )
-    )
-    return WorkerProcessResult(
-        run_record=run_record,
-        egress_messages=[visible_egress_message, completion_egress_message],
-        dead_lettered=False,
-        attempt_count=1,
-        reason_codes=["internal_notice"],
-        error_summary=None,
+        latency_ms=0,
+        reason_code="internal_notice",
+        detail={
+            **_local_execution_detail(task_message),
+            "internal_notice": (
+                task_message.envelope.reply_channel.metadata.get("internal_notice")
+            ),
+        },
+        egress_messages=[
+            build_task_egress(
+                task_message,
+                sequence=0,
+                event_kind="message",
+                event_suffix="telegram-channel-not-enabled",
+                body=task_message.envelope.content,
+                emitted_at=emitted_at,
+            ),
+            _internal_completion(task_message, emitted_at=emitted_at),
+        ],
     )
 
 
@@ -697,55 +531,30 @@ def _process_work_item_command(
             "Changes apply to the next task."
         )
     emitted_at = datetime.now(timezone.utc)
-    visible = build_usage_egress(
-        task_message=task_message, body=body, emitted_at=emitted_at
-    )
-    visible = replace(
-        visible, event_id=f"evt:{task_message.task_id}:0:message:{command_kind}"
-    )
-    completion = build_internal_completion_egress(
-        task_message=task_message, sequence=1, emitted_at=emitted_at
-    )
-    record = _with_work_item(
-        store,
-        task_message,
-        RunRecord(
-            run_id=f"run:{task_message.task_id}:{time.time_ns()}",
-            envelope_id=task_message.envelope.id,
-            source=task_message.envelope.source,
-            workflow="default",
-            latency_ms=0,
-            result_status="success",
-            created_at=emitted_at,
-        ),
-    )
-    store.append_run(record)
-    store.append_audit_event(
-        AuditEvent(
-            run_id=record.run_id,
-            envelope_id=record.envelope_id,
-            source=record.source,
-            workflow=record.workflow,
-            result_status=record.result_status,
-            detail={
-                "task_id": task_message.task_id,
-                "reason_codes": [command_kind],
-                "model_tier": current,
-                "explicit_finish": store.get_work_explicit_finish(
-                    work_item_id=assignment.work_item_id
-                ),
-                "command": action,
-            },
-            created_at=emitted_at,
-        )
-    )
-    return WorkerProcessResult(
-        run_record=record,
-        egress_messages=[visible, completion],
-        dead_lettered=False,
-        attempt_count=1,
-        reason_codes=[command_kind],
-        error_summary=None,
+    return _finish_local_task(
+        store=store,
+        task_message=task_message,
+        created_at=emitted_at,
+        latency_ms=0,
+        reason_code=command_kind,
+        detail={
+            "model_tier": current,
+            "explicit_finish": store.get_work_explicit_finish(
+                work_item_id=assignment.work_item_id
+            ),
+            "command": action,
+        },
+        egress_messages=[
+            build_task_egress(
+                task_message,
+                sequence=0,
+                event_kind="message",
+                event_suffix=command_kind,
+                body=body,
+                emitted_at=emitted_at,
+            ),
+            _internal_completion(task_message, emitted_at=emitted_at),
+        ],
     )
 
 
@@ -757,29 +566,56 @@ def _process_usage_command(
 ) -> WorkerProcessResult:
     emitted_at = datetime.now(timezone.utc)
     report = cast(UsageReporter, executor_impl).usage_report()
-    body = format_usage_report(report, now=emitted_at)
-    visible_egress_message = build_usage_egress(
+    return _finish_local_task(
+        store=store,
         task_message=task_message,
-        body=body,
-        emitted_at=emitted_at,
-    )
-    completion_egress_message = build_internal_completion_egress(
-        task_message=task_message,
-        sequence=1,
-        emitted_at=emitted_at,
-    )
-    run_record = RunRecord(
-        run_id=f"run:{task_message.task_id}:{time.time_ns()}",
-        envelope_id=task_message.envelope.id,
-        source=task_message.envelope.source,
-        workflow="default",
-        latency_ms=0,
-        result_status="success",
         created_at=emitted_at,
+        latency_ms=0,
+        reason_code="usage_command",
+        detail={
+            **_local_execution_detail(task_message),
+            "usage_report": report.to_dict(),
+        },
+        egress_messages=[
+            build_task_egress(
+                task_message,
+                sequence=0,
+                event_kind="message",
+                event_suffix="usage-command",
+                body=format_usage_report(report, now=emitted_at),
+                emitted_at=emitted_at,
+            ),
+            _internal_completion(task_message, emitted_at=emitted_at),
+        ],
     )
-    run_record = _with_work_item(store, task_message, run_record)
-    store.append_run(run_record)
 
+
+def _finish_local_task(
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+    created_at: datetime,
+    latency_ms: int,
+    reason_code: str,
+    detail: dict[str, object],
+    egress_messages: list[EgressQueueMessage],
+    attempt_count: int = 1,
+) -> WorkerProcessResult:
+    """Record a successful run for a task the worker settles without an executor."""
+    run_record = _with_work_item(
+        store,
+        task_message,
+        RunRecord(
+            run_id=f"run:{task_message.task_id}:{time.time_ns()}",
+            envelope_id=task_message.envelope.id,
+            source=task_message.envelope.source,
+            workflow="default",
+            latency_ms=latency_ms,
+            result_status="success",
+            created_at=created_at,
+        ),
+    )
+    store.append_run(run_record)
     store.append_audit_event(
         AuditEvent(
             run_id=run_record.run_id,
@@ -788,32 +624,70 @@ def _process_usage_command(
             workflow=run_record.workflow,
             result_status=run_record.result_status,
             detail={
-                "trace_id": task_message.trace_id,
                 "task_id": task_message.task_id,
-                "reason_codes": ["usage_command"],
-                "attempt_count": 1,
-                "max_attempts": 1,
-                "last_error": None,
-                "last_error_stage": None,
-                "execution_result": {
-                    "errors": [],
-                },
-                "incremental_reply_send_requested_count": 0,
-                "incremental_reply_send_published_count": 0,
-                "egress_message_count": 2,
-                "usage_report": report.to_dict(),
+                "reason_codes": [reason_code],
+                **detail,
             },
-            created_at=run_record.created_at,
+            created_at=created_at,
         )
     )
     return WorkerProcessResult(
         run_record=run_record,
-        egress_messages=[visible_egress_message, completion_egress_message],
+        egress_messages=egress_messages,
         dead_lettered=False,
-        attempt_count=1,
-        reason_codes=["usage_command"],
+        attempt_count=attempt_count,
+        reason_codes=[reason_code],
         error_summary=None,
     )
+
+
+def _local_execution_detail(task_message: TaskQueueMessage) -> dict[str, object]:
+    return {
+        "trace_id": task_message.trace_id,
+        "attempt_count": 1,
+        "max_attempts": 1,
+        "last_error": None,
+        "last_error_stage": None,
+        "execution_result": {"errors": []},
+        "incremental_reply_send_requested_count": 0,
+        "incremental_reply_send_published_count": 0,
+        "egress_message_count": 2,
+    }
+
+
+def _latency_since_emitted(task_message: TaskQueueMessage, now: datetime) -> int:
+    return max(int((now - task_message.emitted_at).total_seconds() * 1000), 0)
+
+
+def _executor_chain(
+    executor_impl: Executor,
+    *,
+    store: SQLiteStateStore,
+    task_message: TaskQueueMessage,
+    activity_monitor: WorkerActivityMonitor,
+    work_item_id: str | None,
+    model_tier: str,
+    supervised: bool,
+) -> Executor:
+    executor = executor_impl
+    if work_item_id is not None:
+        executor = executor.for_workspace(work_item_id=work_item_id)
+    model_selector = getattr(executor, "for_model", None)
+    if callable(model_selector):
+        executor = cast(Executor, model_selector(model_tier))
+    output_callback_setter = getattr(executor, "with_output_callback", None)
+    if callable(output_callback_setter):
+        executor = cast(
+            Executor,
+            output_callback_setter(
+                lambda stream, content: activity_monitor.record_executor_output(
+                    task_message=task_message, stream=stream, content=content
+                )
+            ),
+        )
+    if supervised:
+        executor = SupervisedReplyRecoveryExecutor(inner=executor, store=store)
+    return executor
 
 
 def _with_work_item(
@@ -826,98 +700,49 @@ def _with_work_item(
 def _build_completion_egress_messages(
     *,
     task_message: TaskQueueMessage,
-    starting_sequence: int,
     visible_error_body: str | None = None,
 ) -> list[EgressQueueMessage]:
     emitted_at = datetime.now(timezone.utc)
     messages: list[EgressQueueMessage] = []
-    completion_sequence = starting_sequence
-    event_count = 1
-
     if visible_error_body is not None:
-        event_count = 2
         messages.append(
-            _build_visible_error_egress(
-                task_message=task_message,
-                sequence=starting_sequence,
-                event_count=event_count,
-                emitted_at=emitted_at,
+            build_task_egress(
+                task_message,
+                sequence=0,
+                event_kind="message",
+                event_suffix="worker-failed",
                 body=visible_error_body,
+                emitted_at=emitted_at,
             )
         )
-        completion_sequence += 1
-
     messages.append(
-        _build_completion_egress(
-            task_message=task_message,
-            sequence=completion_sequence,
-            event_count=event_count,
+        build_task_egress(
+            task_message,
+            sequence=len(messages),
+            event_kind="completion",
+            event_suffix="internal",
+            body="Worker completed; task closure is internal-only.",
             emitted_at=emitted_at,
+            channel=INTERNAL_REPLY_CHANNEL_TYPE,
+            target="task",
         )
     )
     return messages
 
 
-def _build_visible_error_egress(
-    *,
-    task_message: TaskQueueMessage,
-    sequence: int,
-    event_count: int,
-    emitted_at: datetime,
-    body: str,
+def _internal_completion(
+    task_message: TaskQueueMessage, *, emitted_at: datetime
 ) -> EgressQueueMessage:
-    return EgressQueueMessage(
-        task_id=task_message.task_id,
-        envelope_id=task_message.envelope.id,
-        trace_id=task_message.trace_id,
-        event_index=sequence,
-        event_count=event_count,
-        message=OutboundMessage(
-            channel=task_message.envelope.reply_channel.type,
-            target=task_message.envelope.reply_channel.target,
-            body=body,
-        ),
-        emitted_at=emitted_at,
-        event_id=_event_id_for_sequence(
-            task_id=task_message.task_id,
-            sequence=sequence,
-            event_kind="message",
-            dedupe_key="worker-failed",
-        ),
-        sequence=sequence,
-        event_kind="message",
-        message_type="chatting.egress.v2",
-    )
-
-
-def _build_completion_egress(
-    *,
-    task_message: TaskQueueMessage,
-    sequence: int,
-    event_count: int,
-    emitted_at: datetime,
-) -> EgressQueueMessage:
-    return EgressQueueMessage(
-        task_id=task_message.task_id,
-        envelope_id=task_message.envelope.id,
-        trace_id=task_message.trace_id,
-        event_index=sequence,
-        event_count=event_count,
-        message=OutboundMessage(
-            channel="internal",
-            target="task",
-            body="Worker completed; task closure is internal-only.",
-        ),
-        emitted_at=emitted_at,
-        event_id=_event_id_for_sequence(
-            task_id=task_message.task_id,
-            sequence=sequence,
-            event_kind="completion",
-            dedupe_key="internal",
-        ),
-        sequence=sequence,
+    """Close a task the worker answered itself, after its one visible message."""
+    return build_task_egress(
+        task_message,
+        sequence=1,
         event_kind="completion",
-        message_type="chatting.egress.v2",
+        event_suffix="internal-heartbeat",
+        body="internal heartbeat completed",
+        emitted_at=emitted_at,
+        channel=INTERNAL_REPLY_CHANNEL_TYPE,
+        target="task",
     )
 
 
@@ -1019,18 +844,6 @@ def _looks_like_credit_exhaustion(error: str) -> bool:
             "usage limit",
         )
     )
-
-
-def _event_id_for_sequence(
-    *,
-    task_id: str,
-    sequence: int,
-    event_kind: str,
-    dedupe_key: str | None,
-) -> str:
-    if dedupe_key is None:
-        return f"evt:{task_id}:{sequence}:{event_kind}"
-    return f"evt:{task_id}:{sequence}:{event_kind}:{dedupe_key}"
 
 
 __all__ = [
