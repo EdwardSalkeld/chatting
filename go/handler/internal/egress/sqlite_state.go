@@ -68,7 +68,3 @@ func (state *SQLiteState) GetStagedEventBySequence(ctx context.Context, taskID s
 func (state *SQLiteState) MarkStagedEventDispatched(ctx context.Context, taskID string, eventID string, sequence int) error {
 	return state.store.MarkStagedEventDispatched(ctx, taskID, eventID, sequence)
 }
-
-func (state *SQLiteState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
-	return state.store.AppendConversationTurn(ctx, channel, target, role, content, sender, runID)
-}

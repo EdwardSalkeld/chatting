@@ -50,7 +50,6 @@ type Config struct {
 	AllowedChatIDs     []string
 	AllowedChannelIDs  []string
 	ContextRefs        []string
-	PromptContext      contracts.PromptContext
 	AttachmentRootDir  string
 	RequestTimeout     time.Duration
 	HTTPClient         HTTPClient
@@ -62,7 +61,6 @@ type Connector struct {
 	config            Config
 	client            HTTPClient
 	now               func() time.Time
-	prompt            *contracts.PromptContext
 	allowedChatIDs    map[string]bool
 	allowedChannelIDs map[string]bool
 	nextOffset        *int64
@@ -89,16 +87,10 @@ func New(config Config) (*Connector, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	var prompt *contracts.PromptContext
-	if config.PromptContext.HasContent() {
-		copy := config.PromptContext
-		prompt = &copy
-	}
 	return &Connector{
 		config:            config,
 		client:            client,
 		now:               now,
-		prompt:            prompt,
 		allowedChatIDs:    stringSet(config.AllowedChatIDs),
 		allowedChannelIDs: stringSet(config.AllowedChannelIDs),
 	}, nil
@@ -335,7 +327,6 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 		Content:       content,
 		Attachments:   attachments,
 		ContextRefs:   append([]string{}, connector.config.ContextRefs...),
-		PromptContext: connector.prompt,
 		ReplyChannel: contracts.ReplyChannel{
 			Type:     "telegram",
 			Target:   chatID,

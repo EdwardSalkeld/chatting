@@ -7,129 +7,18 @@ import (
 	"time"
 )
 
-func TestLoadJobsJSONAcceptsPythonSupportedKeys(t *testing.T) {
-	jobs, err := LoadJobsJSON([]byte(`[
-		{
-			"job_name": "daily-note",
-			"content": "Write the daily note",
-			"cron": "5 7 * * *",
-			"timezone": "Europe/London",
-			"context_refs": ["repo:/workspace/chatting"],
-			"prompt_context": ["Keep it terse."],
-			"reply_channel_type": "telegram",
-			"reply_channel_target": "8605042448"
-		}
-	]`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) != 1 {
-		t.Fatalf("jobs = %#v", jobs)
-	}
-	job := jobs[0]
-	if job.JobName != "daily-note" {
-		t.Fatalf("JobName = %q", job.JobName)
-	}
-	if job.Content != "Write the daily note" {
-		t.Fatalf("Content = %q", job.Content)
-	}
-	if job.TimezoneName != "Europe/London" {
-		t.Fatalf("TimezoneName = %q", job.TimezoneName)
-	}
-	if got := strings.Join(job.ContextRefs, ","); got != "repo:/workspace/chatting" {
-		t.Fatalf("ContextRefs = %#v", job.ContextRefs)
-	}
-	if got := strings.Join(job.PromptContext, ","); got != "Keep it terse." {
-		t.Fatalf("PromptContext = %#v", job.PromptContext)
-	}
-	if job.ReplyChannelType != "telegram" || job.ReplyChannelTarget != "8605042448" {
-		t.Fatalf("reply channel = %#v", job)
-	}
-}
-
-func TestLoadJobsJSONRejectsUnknownKeys(t *testing.T) {
-	_, err := LoadJobsJSON([]byte(`[
-		{
-			"job_name": "daily-note",
-			"content": "Write the daily note",
-			"cron": "5 7 * * *",
-			"surprise": true
-		}
-	]`))
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "schedule job at index 0 contains unknown keys: surprise") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestLoadJobsJSONRejectsInvalidValues(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		message string
-	}{
-		{
-			name:    "missing content",
-			raw:     `[{"job_name": "daily-note", "cron": "5 7 * * *"}]`,
-			message: "schedule job at index 0 is missing required keys: content",
-		},
-		{
-			name:    "blank cron",
-			raw:     `[{"job_name": "daily-note", "content": "Write", "cron": "  "}]`,
-			message: "schedule job at index 0 cron must be a non-empty string",
-		},
-		{
-			name:    "six field cron",
-			raw:     `[{"job_name": "daily-note", "content": "Write", "cron": "0 5 7 * * *"}]`,
-			message: "schedule job at index 0 cron must contain exactly 5 fields",
-		},
-		{
-			name:    "invalid timezone",
-			raw:     `[{"job_name": "daily-note", "content": "Write", "cron": "5 7 * * *", "timezone": "Mars/Base"}]`,
-			message: "schedule job at index 0 invalid timezone: Mars/Base",
-		},
-		{
-			name:    "bad context refs",
-			raw:     `[{"job_name": "daily-note", "content": "Write", "cron": "5 7 * * *", "context_refs": [""]}]`,
-			message: "schedule job at index 0 context_refs must be a list of non-empty strings",
-		},
-		{
-			name:    "partial reply channel",
-			raw:     `[{"job_name": "daily-note", "content": "Write", "cron": "5 7 * * *", "reply_channel_type": "log"}]`,
-			message: "schedule job at index 0 reply_channel_type and reply_channel_target must be provided together",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := LoadJobsJSON([]byte(tt.raw))
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), tt.message) {
-				t.Fatalf("error = %v, want %q", err, tt.message)
-			}
-		})
-	}
-}
-
-func TestPollEmitsDueJobWithPromptContextAndRefs(t *testing.T) {
+func TestPollEmitsDueJobWithTaskInstructionsAndRefs(t *testing.T) {
 	now := mustTime(t, "2026-03-09T12:34:56Z")
-	connector, err := New(
-		[]Job{
-			{
-				JobName:       "daily-note",
-				Content:       "Write the daily note",
-				Cron:          "34 12 * * *",
-				ContextRefs:   []string{"repo:/workspace/chatting"},
-				PromptContext: []string{"Keep it terse."},
-			},
+	connector, err := NewFromSource(&fakeSource{scheduled: []Scheduled{{
+		ScheduleID: "sched_daily",
+		Job: Job{
+			JobName:       "daily-note",
+			Content:       "Write the daily note",
+			Cron:          "34 12 * * *",
+			ContextRefs:   []string{"repo:/workspace/chatting"},
+			PromptContext: []string{"Keep it terse."},
 		},
-		[]string{"Global guidance."},
-		[]string{"Scheduled task guidance."},
-		func() time.Time { return now },
-	)
+	}}}, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,12 +56,6 @@ func TestPollEmitsDueJobWithPromptContextAndRefs(t *testing.T) {
 	if envelope.PromptContext == nil {
 		t.Fatal("PromptContext = nil")
 	}
-	if got := strings.Join(envelope.PromptContext.GlobalInstructions, ","); got != "Global guidance." {
-		t.Fatalf("GlobalInstructions = %#v", envelope.PromptContext.GlobalInstructions)
-	}
-	if got := strings.Join(envelope.PromptContext.SourceInstructions, ","); got != "Scheduled task guidance." {
-		t.Fatalf("SourceInstructions = %#v", envelope.PromptContext.SourceInstructions)
-	}
 	if got := strings.Join(envelope.PromptContext.TaskInstructions, ","); got != "Keep it terse." {
 		t.Fatalf("TaskInstructions = %#v", envelope.PromptContext.TaskInstructions)
 	}
@@ -187,21 +70,17 @@ func TestPollEmitsDueJobWithPromptContextAndRefs(t *testing.T) {
 }
 
 func TestPollUsesConfiguredTimezoneAndReplyChannel(t *testing.T) {
-	connector, err := New(
-		[]Job{
-			{
-				JobName:            "morning",
-				Content:            "Morning note",
-				Cron:               "5 7 * * *",
-				TimezoneName:       "Europe/London",
-				ReplyChannelType:   "telegram",
-				ReplyChannelTarget: "8605042448",
-			},
+	connector, err := NewFromSource(&fakeSource{scheduled: []Scheduled{{
+		ScheduleID: "sched_morning",
+		Job: Job{
+			JobName:            "morning",
+			Content:            "Morning note",
+			Cron:               "5 7 * * *",
+			TimezoneName:       "Europe/London",
+			ReplyChannelType:   "telegram",
+			ReplyChannelTarget: "8605042448",
 		},
-		nil,
-		nil,
-		func() time.Time { return mustTime(t, "2026-07-01T06:05:30Z") },
-	)
+	}}}, func() time.Time { return mustTime(t, "2026-07-01T06:05:30Z") })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +121,7 @@ func TestPollFromSourceFiresDueScheduleOnce(t *testing.T) {
 			},
 		},
 	}}
-	connector, err := NewFromSource(source, nil, nil, func() time.Time { return now })
+	connector, err := NewFromSource(source, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +158,7 @@ func TestPollFromSourceStopsRemovedSchedule(t *testing.T) {
 			},
 		},
 	}}
-	connector, err := NewFromSource(source, nil, nil, func() time.Time { return now })
+	connector, err := NewFromSource(source, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +193,7 @@ func TestPollFromSourceRecomputesOnCronChange(t *testing.T) {
 		},
 	}
 	source := &fakeSource{scheduled: []Scheduled{job}}
-	connector, err := NewFromSource(source, nil, nil, func() time.Time { return now })
+	connector, err := NewFromSource(source, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}

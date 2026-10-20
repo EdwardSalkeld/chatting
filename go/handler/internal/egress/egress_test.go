@@ -153,62 +153,6 @@ func TestHandleDispatchesUnsequencedIncrementalAndDedupesReplay(t *testing.T) {
 	}
 }
 
-func TestHandlePersistsTelegramAssistantTurnAfterDispatch(t *testing.T) {
-	task := telegramTaskMessage(t)
-	state := newFakeState()
-	state.addTask(task)
-	dispatcher := &recordingDispatcher{
-		result: &contracts.OutboundMessage{
-			Channel: "telegram",
-			Target:  "12345",
-			Body:    stringPtr("reply-1"),
-		},
-	}
-	engine := newTestEngineWithState(t, state, dispatcher, WithAllowedChannels([]string{"telegram"}))
-	message := testEgressMessage(t, task, nil, "evt:incremental:1", "incremental")
-	message.Message.Channel = "telegram"
-	message.Message.Target = "12345"
-
-	result, err := engine.Handle(context.Background(), message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusDispatched {
-		t.Fatalf("result = %#v", result)
-	}
-	if got, want := state.turns["12345"], []conversationTurnRecord{{Role: "assistant", Content: "reply-1", RunID: task.TaskID}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("turns = %#v, want %#v", got, want)
-	}
-}
-
-func TestHandlePersistsTelegramAttachmentOnlyDispatchAsAssistantTurn(t *testing.T) {
-	task := telegramTaskMessage(t)
-	state := newFakeState()
-	state.addTask(task)
-	dispatchName := "menu.pdf"
-	dispatcher := &recordingDispatcher{
-		result: &contracts.OutboundMessage{
-			Channel: "telegram",
-			Target:  "12345",
-			Attachment: &contracts.AttachmentRef{
-				URI:  "file:///tmp/menu.pdf",
-				Name: &dispatchName,
-			},
-		},
-	}
-	engine := newTestEngineWithState(t, state, dispatcher, WithAllowedChannels([]string{"telegram"}))
-	message := testEgressMessage(t, task, nil, "evt:incremental:1", "incremental")
-	message.Message.Channel = "telegram"
-	message.Message.Target = "12345"
-
-	if _, err := engine.Handle(context.Background(), message); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := state.turns["12345"], []conversationTurnRecord{{Role: "assistant", Content: "[Attachment sent: menu.pdf]", RunID: task.TaskID}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("turns = %#v, want %#v", got, want)
-	}
-}
-
 func TestHandleStagesAndFlushesSequencedEventsInOrder(t *testing.T) {
 	task := testTaskMessage(t)
 	state := newFakeState()
@@ -530,13 +474,6 @@ type fakeState struct {
 	dispatched map[string]map[string]bool
 	staged     map[string]map[int]StagedRecord
 	expected   map[string]int
-	turns      map[string][]conversationTurnRecord
-}
-
-type conversationTurnRecord struct {
-	Role    string
-	Content string
-	RunID   string
 }
 
 func newFakeState() *fakeState {
@@ -546,7 +483,6 @@ func newFakeState() *fakeState {
 		dispatched: map[string]map[string]bool{},
 		staged:     map[string]map[int]StagedRecord{},
 		expected:   map[string]int{},
-		turns:      map[string][]conversationTurnRecord{},
 	}
 }
 
@@ -621,18 +557,6 @@ func (state *fakeState) MarkStagedEventDispatched(_ context.Context, taskID stri
 	if state.expected[taskID] <= sequence {
 		state.expected[taskID] = sequence + 1
 	}
-	return nil
-}
-
-func (state *fakeState) AppendConversationTurn(_ context.Context, channel string, target string, role string, content string, _ string, runID string) error {
-	if channel != "telegram" {
-		return nil
-	}
-	state.turns[target] = append(state.turns[target], conversationTurnRecord{
-		Role:    role,
-		Content: content,
-		RunID:   runID,
-	})
 	return nil
 }
 

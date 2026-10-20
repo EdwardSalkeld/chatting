@@ -54,7 +54,6 @@ type Config struct {
 	Mailbox         string
 	SearchCriterion string
 	ContextRefs     []string
-	PromptContext   contracts.PromptContext
 	UseSSL          bool
 	Now             func() time.Time
 	ClientFactory   ClientFactory
@@ -64,7 +63,6 @@ type Connector struct {
 	config        Config
 	clientFactory ClientFactory
 	now           func() time.Time
-	prompt        *contracts.PromptContext
 	attachmentDir string
 }
 
@@ -95,11 +93,6 @@ func New(config Config) (*Connector, error) {
 	if factory == nil {
 		factory = DialClient
 	}
-	var prompt *contracts.PromptContext
-	if config.PromptContext.HasContent() {
-		copy := config.PromptContext
-		prompt = &copy
-	}
 	config.Host = strings.TrimSpace(config.Host)
 	config.Username = strings.TrimSpace(config.Username)
 	config.Mailbox = strings.TrimSpace(config.Mailbox)
@@ -108,7 +101,6 @@ func New(config Config) (*Connector, error) {
 		config:        config,
 		clientFactory: factory,
 		now:           now,
-		prompt:        prompt,
 		attachmentDir: filepath.Join(os.TempDir(), "chatting-email-attachments"),
 	}, nil
 }
@@ -197,7 +189,6 @@ func (connector *Connector) toEnvelope(uid string, raw []byte) (contracts.TaskEn
 		Content:       "Subject: " + subject + "\n\n" + body,
 		Attachments:   attachments,
 		ContextRefs:   append([]string{}, connector.config.ContextRefs...),
-		PromptContext: connector.prompt,
 		ReplyChannel:  contracts.ReplyChannel{Type: "email", Target: target, Metadata: metadata},
 		DedupeKey:     eventID,
 	}, nil

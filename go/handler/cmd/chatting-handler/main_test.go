@@ -12,8 +12,6 @@ import (
 	"time"
 
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 )
 
@@ -21,7 +19,7 @@ func TestRunPrintsVersion(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := run([]string{"--version"}, &stdout, &stderr, nil)
+	status := runWithFactory(context.Background(), []string{"--version"}, &stdout, &stderr, newRuntimeRunner)
 
 	if status != 0 {
 		t.Fatalf("status = %d", status)
@@ -32,6 +30,29 @@ func TestRunPrintsVersion(t *testing.T) {
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
+}
+
+func TestRunRequiresConfigFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := runWithFactory(context.Background(), nil, &stdout, &stderr, newRuntimeRunner)
+
+	if status != 2 {
+		t.Fatalf("status = %d", status)
+	}
+	if !strings.Contains(stderr.String(), "config path must not be empty") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func writeMinimalConfig(t *testing.T) string {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "handler.json")
+	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return configPath
 }
 
 func TestShouldNotifyEgressDrop(t *testing.T) {
@@ -60,7 +81,7 @@ func TestRunParsesConfigFlagBeforeBootstrapExit(t *testing.T) {
 	var stderr bytes.Buffer
 	factory := &fakeRunnerFactory{}
 
-	status := runWithFactory(context.Background(), []string{"--config", configPath}, &stdout, &stderr, nil, factory.newRunner)
+	status := runWithFactory(context.Background(), []string{"--config", configPath}, &stdout, &stderr, factory.newRunner)
 
 	if status != 0 {
 		t.Fatalf("status = %d", status)
@@ -85,7 +106,7 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := run([]string{"--config", configPath}, &stdout, &stderr, nil)
+	status := runWithFactory(context.Background(), []string{"--config", configPath}, &stdout, &stderr, newRuntimeRunner)
 
 	if status != 2 {
 		t.Fatalf("status = %d", status)
@@ -98,39 +119,12 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestRunUsesConfigPathFromEnvironment(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "handler.json")
-	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db", "max_loops": 1}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	factory := &fakeRunnerFactory{}
-
-	status := runWithFactory(
-		context.Background(),
-		nil,
-		&stdout,
-		&stderr,
-		map[string]string{handlerconfig.MessageHandlerConfigPathEnvVar: configPath},
-		factory.newRunner,
-	)
-
-	if status != 0 {
-		t.Fatalf("status = %d", status)
-	}
-	if stderr.String() != "" {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
 func TestRunReportsRuntimeSetupError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	factory := &fakeRunnerFactory{err: errors.New("boom")}
 
-	status := runWithFactory(context.Background(), nil, &stdout, &stderr, nil, factory.newRunner)
+	status := runWithFactory(context.Background(), []string{"--config", writeMinimalConfig(t)}, &stdout, &stderr, factory.newRunner)
 
 	if status != 2 {
 		t.Fatalf("status = %d", status)
@@ -145,34 +139,13 @@ func TestRunReportsRuntimeError(t *testing.T) {
 	var stderr bytes.Buffer
 	factory := &fakeRunnerFactory{runner: &fakeRunner{err: errors.New("failed")}}
 
-	status := runWithFactory(context.Background(), nil, &stdout, &stderr, nil, factory.newRunner)
+	status := runWithFactory(context.Background(), []string{"--config", writeMinimalConfig(t)}, &stdout, &stderr, factory.newRunner)
 
 	if status != 1 {
 		t.Fatalf("status = %d", status)
 	}
 	if !strings.Contains(stderr.String(), "runtime error: failed") {
 		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
-func TestUnsupportedDispatcherAcceptsInternalHeartbeatLogPong(t *testing.T) {
-	body := `{"kind":"heartbeat_pong"}`
-	message := contracts.OutboundMessage{
-		Channel: "log",
-		Target:  "heartbeat",
-		Body:    &body,
-	}
-
-	dispatched, err := unsupportedDispatcher{}.Dispatch(
-		context.Background(),
-		message,
-		heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z")),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dispatched == nil || dispatched.Channel != "log" || dispatched.Target != "heartbeat" {
-		t.Fatalf("dispatched = %#v", dispatched)
 	}
 }
 

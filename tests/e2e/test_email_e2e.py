@@ -102,7 +102,6 @@ class EmailE2ETests(unittest.TestCase):
                         "db_path": str(handler_db),
                         "bbmb_address": bbmb_address,
                         "poll_interval_seconds": 0.5,
-                        "poll_timeout_seconds": 2,
                         "max_loops": 200,
                         "allowed_egress_channels": ["email", "log"],
                         "egress_http_port": egress_http_port,
@@ -114,7 +113,6 @@ class EmailE2ETests(unittest.TestCase):
                         "smtp_host": "127.0.0.1",
                         "smtp_port": 3025,
                         "smtp_from": "bot@chatting.local",
-                        "smtp_starttls": False,
                         "smtp_use_ssl": False,
                     }
                 ),

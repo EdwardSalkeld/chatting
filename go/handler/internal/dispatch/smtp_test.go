@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"crypto/tls"
 	"io"
 	"net/mail"
 	"net/smtp"
@@ -56,34 +55,6 @@ func TestSMTPEmailSenderSendsRenderedMessage(t *testing.T) {
 	}
 }
 
-func TestSMTPEmailSenderUsesStartTLSAndAuth(t *testing.T) {
-	client := &fakeSMTPClient{}
-	sender, err := NewSMTPEmailSenderForTest(SMTPConfig{
-		Host:        "smtp.example.com",
-		Port:        587,
-		FromAddress: "bot@example.com",
-		Username:    "bot@example.com",
-		Password:    "secret",
-		StartTLS:    true,
-	}, func(_ context.Context, _ SMTPConfig) (SMTPClient, error) {
-		return client, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := sender.Send(context.Background(), "alice@example.com", "Done.", nil); err != nil {
-		t.Fatal(err)
-	}
-
-	if !client.startTLS {
-		t.Fatal("starttls was not called")
-	}
-	if !client.auth {
-		t.Fatal("auth was not called")
-	}
-}
-
 func TestNewSMTPEmailSenderValidatesConfig(t *testing.T) {
 	_, err := NewSMTPEmailSender(SMTPConfig{Host: "smtp.example.com", Port: 25})
 	if err == nil || !strings.Contains(err.Error(), "smtp from address is required") {
@@ -95,15 +66,9 @@ type fakeSMTPClient struct {
 	from       string
 	recipients []string
 	data       string
-	startTLS   bool
 	auth       bool
 	quit       bool
 	closed     bool
-}
-
-func (client *fakeSMTPClient) StartTLS(_ *tls.Config) error {
-	client.startTLS = true
-	return nil
 }
 
 func (client *fakeSMTPClient) Auth(_ smtp.Auth) error {

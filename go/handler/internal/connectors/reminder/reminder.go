@@ -38,7 +38,6 @@ type pendingReminder struct {
 
 type Connector struct {
 	store               SourceStore
-	globalPromptContext []string
 	sourcePromptContext []string
 	now                 NowFunc
 	mu                  sync.Mutex
@@ -51,7 +50,7 @@ type Metrics interface {
 	RecordReminderFired()
 }
 
-func New(store SourceStore, globalPromptContext []string, sourcePromptContext []string, now NowFunc, metricRecorders ...Metrics) (*Connector, error) {
+func New(store SourceStore, sourcePromptContext []string, now NowFunc, metricRecorders ...Metrics) (*Connector, error) {
 	if store == nil {
 		return nil, errors.New("reminder store is required")
 	}
@@ -59,7 +58,7 @@ func New(store SourceStore, globalPromptContext []string, sourcePromptContext []
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	connector := &Connector{
-		store: store, globalPromptContext: append([]string{}, globalPromptContext...),
+		store:               store,
 		sourcePromptContext: append([]string{}, sourcePromptContext...), now: now,
 		pending: map[string]pendingReminder{},
 	}
@@ -101,7 +100,6 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 			Attachments:   []contracts.AttachmentRef{},
 			ContextRefs:   append([]string{}, record.ContextRefs...),
 			PromptContext: &contracts.PromptContext{
-				GlobalInstructions: append([]string{}, connector.globalPromptContext...),
 				SourceInstructions: append([]string{}, connector.sourcePromptContext...),
 				TaskInstructions:   append([]string{}, record.PromptContext...),
 			},

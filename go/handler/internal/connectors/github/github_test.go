@@ -259,7 +259,7 @@ exit 1
 	originalPath := os.Getenv("PATH")
 	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
 
-	payload, err := DefaultGraphQLRunner(context.Background(), ViewerLoginQuery, map[string]any{})
+	payload, err := DefaultGraphQLRunner(context.Background(), "query { viewer { login } }", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

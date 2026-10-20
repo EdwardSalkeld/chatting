@@ -30,7 +30,7 @@ func TestPollEmitsStableEnvelopeAndAckMarksFired(t *testing.T) {
 		ContextRefs: []string{"repo:/workspace"}, PromptContext: []string{"Be concise."},
 		ReplyChannel: contracts.ReplyChannel{Type: "telegram", Target: "-123", Metadata: map[string]any{"message_id": 4}},
 	}}}
-	connector, err := New(store, []string{"global"}, []string{"reminder source"}, func() time.Time { return now })
+	connector, err := New(store, []string{"reminder source"}, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestPollEmitsStableEnvelopeAndAckMarksFired(t *testing.T) {
 	if envelope.ReceivedAt.Time != now || envelope.ReplyChannel.Target != "-123" {
 		t.Fatalf("envelope=%+v", envelope)
 	}
-	if got := envelope.PromptContext.AssembledInstructions(); len(got) != 3 {
+	if got := envelope.PromptContext.AssembledInstructions(); len(got) != 2 {
 		t.Fatalf("prompt context=%v", got)
 	}
 
@@ -67,7 +67,7 @@ func TestPollEmitsStableEnvelopeAndAckMarksFired(t *testing.T) {
 }
 
 func TestAckRejectsUnknownEnvelope(t *testing.T) {
-	connector, err := New(&fakeStore{}, nil, nil, nil)
+	connector, err := New(&fakeStore{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
