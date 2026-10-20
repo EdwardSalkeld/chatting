@@ -51,6 +51,13 @@ the lower of its reported confidence and the probability of the category it
 chose. The handler compares it with `confidence_threshold` to distinguish a
 decision from an unsettled reading.
 
+Classification uses the first 2,000 body characters, together with the sender,
+subject, date and completeness flag. The per-message summariser sees the same
+excerpt that Jev screened; the daily digest already uses at most 2,000 body
+characters per email. The handler can retain a longer body for its record, but
+it is not sent to Jev. Deliberate excerpting does not itself force Review.
+This applies to future processing; saved decisions are not reclassified.
+
 The handler rejects unknown result fields: the model cannot supply a target,
 folder, team, shell command, attachment path, or arbitrary mailbox operation.
 No sending, deleting or arbitrary JMAP method is exposed — the only mailbox
@@ -151,8 +158,8 @@ using its existing login. There is no second provider and no second credential.
 Codex is an agent and its shell tool cannot be disabled — `tools.shell=false`
 is accepted and then ignored. Two things stand in front of it:
 
-1. **Jev screens every email first.** One of its questions asks whether the
-   email contains text addressed to an automated system: instructions to ignore
+1. **Jev screens the email excerpt first.** One of its questions asks whether the
+   excerpt contains text addressed to an automated system: instructions to ignore
    previous instructions, to run a command, to reveal a file or credential, or
    to change how the mail is handled. Anything but a confident "no" is withheld
    from Codex entirely and surfaced to the owner as a review alert instead.
@@ -294,8 +301,14 @@ adds descriptive text; only Jev decides the route.
 
 Each classification carries a `trace`: the category and confidence Jev gave,
 whether it judged an action, a deadline or an injection attempt, whether a
-summary was bought, and a `reason`: `accepted`, `confidence_below_threshold`, `triage_unavailable` or
-`injection_suspected`. Alongside it each
+summary was bought, and a `reason`: `accepted`, `confidence_below_threshold`,
+`injection_suspected`, or a triage failure reason. These distinguish
+`triage_input_too_large`, `triage_request_rejected`, `triage_rate_limited`,
+`triage_invalid_response` and `triage_unavailable`. Failed calls also record
+`triage_error` and `triage_http_status` (zero without an HTTP response).
+Worker warnings contain only this fixed error kind and HTTP status, never
+provider response text or email content. Legacy failures without these fields
+retain `triage_unavailable`. Alongside it each
 message records `body_html`, `body_chars` and `body_truncated`.
 
 That is enough to answer "why is this in review" from the record, without

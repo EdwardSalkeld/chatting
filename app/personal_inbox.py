@@ -7,11 +7,13 @@ provider can return a tool invocation that this worker will execute.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
 import subprocess
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,10 @@ RESULTS_QUEUE = "chatting.personal-inbox.results.v1"
 DEAD_QUEUE = "chatting.personal-inbox.invalid.v1"
 MESSAGE_ID = re.compile(r"[A-Za-z0-9_-]+")
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+LOGGER = logging.getLogger(__name__)
+# Classify the opening excerpt, not whole newsletters or their tracking URLs.
+# The summariser must receive the same screened text, never the unseen tail.
+MAIL_EXCERPT_CHARS = 2000
 # Summaries run through the locally logged-in Codex CLI, so there is no second
 # provider and no second key. Codex is an agent and its shell tool cannot be
 # disabled, so two things stand in front of it. Jev screens every email for text
@@ -432,22 +438,49 @@ def summarize(mail: dict[str, Any], model: str) -> dict[str, str]:
     return value
 
 
+def triage_failure(error: Exception) -> tuple[str, int]:
+    """Return a safe diagnostic; never log provider bodies, mail or credentials."""
+    if isinstance(error, urllib.error.HTTPError):
+        status = error.code
+        if status == 400:
+            try:
+                payload = json.loads(error.read(4096))
+                if payload.get("detail", {}).get("error_type") == "max_tokens_exceeded":
+                    return "input_too_large", status
+            except (OSError, ValueError, AttributeError, TypeError):
+                pass
+        if status == 429:
+            return "rate_limited", status
+        if 400 <= status < 500 and status != 408:
+            return "request_rejected", status
+        return "unavailable", status
+    if isinstance(error, (ValueError, KeyError, TypeError)):
+        return "invalid_response", 0
+    return "unavailable", 0
+
+
 def classify(
     task: dict[str, Any], *, jev_key: str, summary_model: str
 ) -> dict[str, Any]:
-    mail = validate_task(task)
+    original = validate_task(task)
+    mail = {**original, "body": original["body"][:MAIL_EXCERPT_CHARS]}
+    failure, http_status = "", 0
     try:
         category, confidence, requires_action, has_deadline, suspicious = jev_triage(
             mail, jev_key
         )
         triage_failed = False
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError) as error:
         # Losing Jev fails closed like a suspected injection does, but it is
         # not one, and a trace that says otherwise sends whoever reads it
         # looking for an attack that never happened.
         category, confidence = "review", 0.0
         requires_action = has_deadline = suspicious = False
         triage_failed = True
+        failure, http_status = triage_failure(error)
+        LOGGER.warning(
+            "personal_inbox_triage_failed kind=%s http_status=%d", failure, http_status
+        )
     trace = {
         "jev_category": category,
         "jev_confidence": confidence,
@@ -457,6 +490,8 @@ def classify(
         "triage_failed": triage_failed,
         "summarised": False,
     }
+    if triage_failed:
+        trace.update(triage_error=failure, triage_http_status=http_status)
 
     def result(category, confidence, summary):
         return {
@@ -474,11 +509,18 @@ def classify(
     # It still reaches its owner, who can read the original themselves. Losing
     # Jev fails closed for the same reason.
     if suspicious or triage_failed:
-        reason = (
-            "it contains instructions aimed at an automated system"
-            if suspicious
-            else "the classifier was unavailable"
-        )
+        if suspicious:
+            reason = "it contains instructions aimed at an automated system"
+        else:
+            reason = {
+                "input_too_large": "the email excerpt exceeded the classifier's input limit",
+                "request_rejected": "the classifier rejected the request",
+                "rate_limited": "the classifier rate limit was reached",
+                "invalid_response": "the classifier returned an invalid response",
+                "unavailable": "the classifier was unavailable",
+            }[failure]
+            if http_status:
+                reason += f" (HTTP {http_status})"
         return result(
             category,
             confidence,
