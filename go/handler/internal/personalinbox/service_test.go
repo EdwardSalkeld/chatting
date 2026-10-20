@@ -933,6 +933,10 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 		reason string
 	}{
 		{"classifier unavailable", &Trace{TriageFailed: true}, "triage_unavailable"},
+		{"input too large", &Trace{TriageFailed: true, TriageError: "input_too_large", TriageHTTPStatus: 400}, "triage_input_too_large"},
+		{"request rejected", &Trace{TriageFailed: true, TriageError: "request_rejected", TriageHTTPStatus: 422}, "triage_request_rejected"},
+		{"rate limited", &Trace{TriageFailed: true, TriageError: "rate_limited", TriageHTTPStatus: 429}, "triage_rate_limited"},
+		{"invalid response", &Trace{TriageFailed: true, TriageError: "invalid_response"}, "triage_invalid_response"},
 		{"mail aimed at the machine", &Trace{Suspicious: true}, "injection_suspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -941,6 +945,9 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 				Classification{Category: "review", Summary: "x", Confidence: .99, Trace: test.trace}).Classification
 			if got.Trace.Reason != test.reason {
 				t.Fatalf("reason %q, want %q", got.Trace.Reason, test.reason)
+			}
+			if got.Trace.TriageHTTPStatus != test.trace.TriageHTTPStatus {
+				t.Fatalf("HTTP status was lost: %+v", got.Trace)
 			}
 		})
 	}

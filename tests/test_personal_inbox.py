@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import sqlite3
 import os
@@ -7,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +17,7 @@ from app.personal_inbox import (
     DEAD_QUEUE,
     YES_NO,
     JEV_ENDPOINT,
+    MAIL_EXCERPT_CHARS,
     TASKS_QUEUE,
     RESULTS_QUEUE,
     CATEGORY_RESULT,
@@ -140,6 +143,23 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertIn("aimed at", result["classification"]["summary"])
         post.codex.assert_not_called()
 
+    def test_only_the_opening_excerpt_reaches_either_model(self):
+        # A long Unicode newsletter must stay bounded without changing the
+        # stored task or leaking the unscreened tail into the summary call.
+        task = mail_task()
+        task["mail"]["body"] = (
+            "é" * MAIL_EXCERPT_CHARS
+            + ("UNSCREENED TAIL" * 4000)[: 60000 - MAIL_EXCERPT_CHARS]
+        )
+        original = copy.deepcopy(task)
+        result, post = self.classify_with([jev_answer(), summary_answer()], task)
+        expected = {**task["mail"], "body": "é" * MAIL_EXCERPT_CHARS}
+        self.assertEqual(post.call_args.args[2]["state"], expected)
+        self.assertEqual(post.codex.call_args.args[1], expected)
+        self.assertEqual(task, original)
+        self.assertEqual(result["classification"]["category"], "order")
+        self.assertEqual(post.call_count, 1)
+
     def test_unsure_about_injection_also_withholds_the_mail(self):
         answer = jev_answer("news")
         answer["answers"]["prompt_injection"] = choice_answer("no", YES_NO, 0.5)
@@ -165,7 +185,15 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertTrue(c["trace"]["summarised"])
 
     def test_losing_jev_fails_closed_without_crying_injection(self):
-        for answer in [TimeoutError(), {}, jev_answer(confidence=float("nan"))]:
+        for answer, kind, wording in [
+            (TimeoutError(), "unavailable", "unavailable"),
+            ({}, "invalid_response", "invalid response"),
+            (
+                jev_answer(confidence=float("nan")),
+                "invalid_response",
+                "invalid response",
+            ),
+        ]:
             with self.subTest(answer=answer):
                 result, post = self.classify_with([answer])
                 c = result["classification"]
@@ -175,7 +203,51 @@ class PersonalInboxTests(unittest.TestCase):
                 # outage from an attack.
                 self.assertTrue(c["trace"]["triage_failed"])
                 self.assertFalse(c["trace"]["suspicious"])
-                self.assertIn("unavailable", c["summary"])
+                self.assertEqual(c["trace"]["triage_error"], kind)
+                self.assertIn(wording, c["summary"])
+
+    def test_http_rejections_are_not_reported_as_outages_or_leaked_to_logs(self):
+        for status, body, kind, wording in [
+            (
+                400,
+                b'{"detail":{"error_type":"max_tokens_exceeded"}}',
+                "input_too_large",
+                "input limit",
+            ),
+            (
+                400,
+                b'{"detail":"PRIVATE provider diagnostic"}',
+                "request_rejected",
+                "rejected the request",
+            ),
+            (
+                422,
+                b"PRIVATE malformed response",
+                "request_rejected",
+                "rejected the request",
+            ),
+            (429, b"PRIVATE rate limit diagnostic", "rate_limited", "rate limit"),
+            (503, b"PRIVATE service diagnostic", "unavailable", "unavailable"),
+        ]:
+            with self.subTest(status=status, kind=kind):
+                error = urllib.error.HTTPError(
+                    JEV_ENDPOINT,
+                    status,
+                    "PRIVATE exception reason",
+                    None,
+                    io.BytesIO(body),
+                )
+                with self.assertLogs("app.personal_inbox", level="WARNING") as logs:
+                    result, post = self.classify_with([error])
+                c = result["classification"]
+                self.assertEqual(c["category"], "review")
+                self.assertEqual(c["trace"]["triage_error"], kind)
+                self.assertEqual(c["trace"]["triage_http_status"], status)
+                self.assertIn(wording, c["summary"])
+                self.assertIn(f"HTTP {status}", c["summary"])
+                self.assertNotIn("PRIVATE", c["summary"] + " ".join(logs.output))
+                self.assertIn(f"kind={kind} http_status={status}", logs.output[0])
+                post.codex.assert_not_called()
 
     def test_a_real_injection_says_so(self):
         result, post = self.classify_with([jev_answer("news", injection="yes")])

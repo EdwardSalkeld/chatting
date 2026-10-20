@@ -77,14 +77,16 @@ type Classification struct {
 
 // Trace records Jev's decision and whether a summary was available.
 type Trace struct {
-	Reason         string  `json:"reason,omitempty"`
-	JevCategory    string  `json:"jev_category,omitempty"`
-	JevConfidence  float64 `json:"jev_confidence,omitempty"`
-	RequiresAction bool    `json:"requires_action,omitempty"`
-	HasDeadline    bool    `json:"has_deadline,omitempty"`
-	Suspicious     bool    `json:"suspicious,omitempty"`
-	TriageFailed   bool    `json:"triage_failed,omitempty"`
-	Summarised     bool    `json:"summarised,omitempty"`
+	Reason           string  `json:"reason,omitempty"`
+	JevCategory      string  `json:"jev_category,omitempty"`
+	JevConfidence    float64 `json:"jev_confidence,omitempty"`
+	RequiresAction   bool    `json:"requires_action,omitempty"`
+	HasDeadline      bool    `json:"has_deadline,omitempty"`
+	Suspicious       bool    `json:"suspicious,omitempty"`
+	TriageFailed     bool    `json:"triage_failed,omitempty"`
+	TriageError      string  `json:"triage_error,omitempty"`
+	TriageHTTPStatus int     `json:"triage_http_status,omitempty"`
+	Summarised       bool    `json:"summarised,omitempty"`
 }
 
 func (value Classification) Validate() error {
@@ -430,6 +432,10 @@ func (service *Service) classificationResult(ctx context.Context, raw []byte) (b
 	switch {
 	case classification.Trace.TriageFailed:
 		classification.Category, classification.Trace.Reason = "review", "triage_unavailable"
+		switch classification.Trace.TriageError {
+		case "input_too_large", "request_rejected", "rate_limited", "invalid_response":
+			classification.Trace.Reason = "triage_" + classification.Trace.TriageError
+		}
 	case classification.Confidence < service.Config.Threshold():
 		classification.Category, classification.Trace.Reason = "review", "confidence_below_threshold"
 	case classification.Trace.Suspicious:
