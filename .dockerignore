@@ -1,9 +1,0 @@
-.git
-.venv
-__pycache__
-plans
-docs
-*.pyc
-*.db
-configs/*.local.*
-configs/*.env
