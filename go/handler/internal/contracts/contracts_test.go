@@ -8,7 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestTaskQueueMessageRoundTrip(t *testing.T) {
@@ -36,7 +37,7 @@ func TestTaskQueueMessageRoundTrip(t *testing.T) {
 			Metadata: map[string]any{"thread_id": "abc"},
 		},
 		DedupeKey: "email:1",
-	}, "trace:email:1", mustTime(t, "2026-03-06T11:00:01Z"))
+	}, "trace:email:1", testutil.MustTime(t, "2026-03-06T11:00:01Z"))
 
 	raw, err := json.Marshal(message)
 	if err != nil {
@@ -244,14 +245,5 @@ func readFixture(t *testing.T, name string) []byte {
 
 func mustTimestamp(t *testing.T, raw string) Timestamp {
 	t.Helper()
-	return NewTimestamp(mustTime(t, raw))
-}
-
-func mustTime(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
+	return NewTimestamp(testutil.MustTime(t, raw))
 }

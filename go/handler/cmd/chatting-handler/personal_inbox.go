@@ -19,10 +19,8 @@ func newPersonalInbox(config handlerconfig.Config, broker *bbmb.Adapter) (*perso
 	if config.PersonalInbox == nil || !config.PersonalInbox.Enabled {
 		return nil, nil
 	}
+	// Already validated by personalinbox.Decode when the config was loaded.
 	personal := *config.PersonalInbox
-	if err := personal.Validate(); err != nil {
-		return nil, err
-	}
 	mainPath, _ := filepath.Abs(config.DBPath)
 	personalPath, _ := filepath.Abs(personal.DBPath)
 	if mainPath == personalPath {

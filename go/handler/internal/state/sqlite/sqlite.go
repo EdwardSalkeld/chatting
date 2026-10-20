@@ -67,18 +67,6 @@ type TelegramChatObservation struct {
 	RetrievedAt time.Time
 }
 
-type TelegramChatRecord struct {
-	ChatID          string
-	ChatType        *string
-	Title           *string
-	Username        *string
-	FirstSeenAt     time.Time
-	LastRetrievedAt time.Time
-	LastMessageAt   *time.Time
-	LastUpdateID    int64
-	LastUpdateKind  string
-}
-
 type TelegramAttachmentRecord struct {
 	AttachmentPath   string
 	AttachmentURI    string
@@ -319,33 +307,8 @@ func (store *Store) initialize(ctx context.Context) error {
 }
 
 func (store *Store) ensureColumn(ctx context.Context, table string, column string, columnType string) error {
-	rows, err := store.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			cid          int
-			name         string
-			colType      string
-			notNull      int
-			defaultValue sql.NullString
-			primaryKey   int
-		)
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		if name == column {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// Close before the ALTER: an open result set can hold a read lock that
-	// blocks the write on some SQLite drivers.
-	if err := rows.Close(); err != nil {
+	present, err := exists(store.db.QueryRowContext(ctx, `SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column))
+	if err != nil || present {
 		return err
 	}
 	_, err = store.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+columnType)
@@ -438,27 +401,20 @@ func (store *Store) ListActiveSchedules(ctx context.Context) ([]ScheduleRecord, 
 		return nil, err
 	}
 	defer rows.Close()
-	return scanScheduleRecords(rows)
+	return scanAll(rows, scanScheduleRecord)
 }
 
 func (store *Store) GetActiveSchedule(ctx context.Context, scheduleID string) (*ScheduleRecord, error) {
 	if strings.TrimSpace(scheduleID) == "" {
 		return nil, errors.New("schedule_id is required")
 	}
-	record, err := scanScheduleRecord(store.db.QueryRowContext(
+	return optional(scanScheduleRecord(store.db.QueryRowContext(
 		ctx,
 		scheduleSelectColumns+`
 		FROM schedules
 		WHERE schedule_id = ? AND status = 'active'`,
 		scheduleID,
-	))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &record, nil
+	)))
 }
 
 func (store *Store) GetScheduleHistory(ctx context.Context, scheduleID string) ([]ScheduleRecord, error) {
@@ -477,15 +433,11 @@ func (store *Store) GetScheduleHistory(ctx context.Context, scheduleID string) (
 		return nil, err
 	}
 	defer rows.Close()
-	return scanScheduleRecords(rows)
+	return scanAll(rows, scanScheduleRecord)
 }
 
 func (store *Store) CreateSchedule(ctx context.Context, input ScheduleInput) (ScheduleRecord, error) {
-	scheduleID, err := generateScheduleID()
-	if err != nil {
-		return ScheduleRecord{}, err
-	}
-	record := scheduleRecordFromInput(scheduleID, 1, input, time.Now())
+	record := scheduleRecordFromInput(randomID("sched_", 8), 1, input, time.Now())
 	if err := store.insertScheduleRow(ctx, store.db, record); err != nil {
 		return ScheduleRecord{}, err
 	}
@@ -621,7 +573,7 @@ type scheduleExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-type scheduleScanner interface {
+type rowScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -659,19 +611,7 @@ func scheduleRecordFromInput(scheduleID string, version int, input ScheduleInput
 	}
 }
 
-func scanScheduleRecords(rows *sql.Rows) ([]ScheduleRecord, error) {
-	records := []ScheduleRecord{}
-	for rows.Next() {
-		record, err := scanScheduleRecord(rows)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, record)
-	}
-	return records, rows.Err()
-}
-
-func scanScheduleRecord(scanner scheduleScanner) (ScheduleRecord, error) {
+func scanScheduleRecord(scanner rowScanner) (ScheduleRecord, error) {
 	record := ScheduleRecord{}
 	var contextRefs, promptContext, createdAt string
 	var supersededAt sql.NullString
@@ -716,14 +656,6 @@ func scanScheduleRecord(scanner scheduleScanner) (ScheduleRecord, error) {
 		record.SupersededAt = &parsed
 	}
 	return record, nil
-}
-
-func generateScheduleID() (string, error) {
-	buffer := make([]byte, 8)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", err
-	}
-	return "sched_" + hex.EncodeToString(buffer), nil
 }
 
 func encodeStringList(values []string) (string, error) {
@@ -844,29 +776,6 @@ func (store *Store) MarkTelegramTaskAttachmentsEligible(ctx context.Context, tas
 	return int(rows), nil
 }
 
-func (store *Store) ListTelegramAttachmentRecords(ctx context.Context) ([]TelegramAttachmentRecord, error) {
-	rows, err := store.db.QueryContext(
-		ctx,
-		`SELECT
-			attachment_path,
-			attachment_uri,
-			task_id,
-			envelope_id,
-			created_at,
-			eligible_after,
-			deleted_at,
-			cleanup_attempts,
-			last_cleanup_error
-		FROM telegram_attachment_ledger
-		ORDER BY created_at ASC, attachment_path ASC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanTelegramAttachmentRecords(rows)
-}
-
 func (store *Store) CleanupTelegramAttachments(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) (TelegramAttachmentCleanupResult, error) {
 	rootDir, err := filepath.Abs(defaultTelegramAttachmentRoot(attachmentRootDir))
 	if err != nil {
@@ -874,16 +783,7 @@ func (store *Store) CleanupTelegramAttachments(ctx context.Context, attachmentRo
 	}
 	rows, err := store.db.QueryContext(
 		ctx,
-		`SELECT
-			attachment_path,
-			attachment_uri,
-			task_id,
-			envelope_id,
-			created_at,
-			eligible_after,
-			deleted_at,
-			cleanup_attempts,
-			last_cleanup_error
+		telegramAttachmentSelectColumns+`
 		FROM telegram_attachment_ledger
 		WHERE deleted_at IS NULL
 		  AND (
@@ -897,7 +797,7 @@ func (store *Store) CleanupTelegramAttachments(ctx context.Context, attachmentRo
 	if err != nil {
 		return TelegramAttachmentCleanupResult{}, err
 	}
-	candidates, err := scanTelegramAttachmentRecords(rows)
+	candidates, err := scanAll(rows, scanTelegramAttachmentRecord)
 	if closeErr := rows.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
@@ -1003,69 +903,6 @@ func (store *Store) RecordTelegramChat(ctx context.Context, observation Telegram
 	return err
 }
 
-func (store *Store) ListTelegramChats(ctx context.Context) ([]TelegramChatRecord, error) {
-	rows, err := store.db.QueryContext(
-		ctx,
-		`SELECT
-			chat_id,
-			chat_type,
-			title,
-			username,
-			first_seen_at,
-			last_retrieved_at,
-			last_message_at,
-			last_update_id,
-			last_update_kind
-		FROM telegram_chat_registry
-		ORDER BY last_retrieved_at DESC, chat_id ASC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	records := []TelegramChatRecord{}
-	for rows.Next() {
-		var chatType, title, username, lastMessageAt sql.NullString
-		var firstSeenAt, lastRetrievedAt string
-		record := TelegramChatRecord{}
-		if err := rows.Scan(
-			&record.ChatID,
-			&chatType,
-			&title,
-			&username,
-			&firstSeenAt,
-			&lastRetrievedAt,
-			&lastMessageAt,
-			&record.LastUpdateID,
-			&record.LastUpdateKind,
-		); err != nil {
-			return nil, err
-		}
-		record.ChatType = nullStringPointer(chatType)
-		record.Title = nullStringPointer(title)
-		record.Username = nullStringPointer(username)
-		parsedFirstSeenAt, err := parseTimestamp(firstSeenAt)
-		if err != nil {
-			return nil, err
-		}
-		record.FirstSeenAt = parsedFirstSeenAt
-		parsedLastRetrievedAt, err := parseTimestamp(lastRetrievedAt)
-		if err != nil {
-			return nil, err
-		}
-		record.LastRetrievedAt = parsedLastRetrievedAt
-		if lastMessageAt.Valid {
-			parsedLastMessageAt, err := parseTimestamp(lastMessageAt.String)
-			if err != nil {
-				return nil, err
-			}
-			record.LastMessageAt = &parsedLastMessageAt
-		}
-		records = append(records, record)
-	}
-	return records, rows.Err()
-}
-
 func (store *Store) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {
 	if strings.TrimSpace(source) == "" {
 		return false, errors.New("source is required")
@@ -1073,20 +910,12 @@ func (store *Store) Seen(ctx context.Context, source string, dedupeKey string) (
 	if strings.TrimSpace(dedupeKey) == "" {
 		return false, errors.New("dedupe_key is required")
 	}
-	var found int
-	err := store.db.QueryRowContext(
+	return exists(store.db.QueryRowContext(
 		ctx,
 		`SELECT 1 FROM idempotency_keys WHERE source = ? AND dedupe_key = ?`,
 		source,
 		dedupeKey,
-	).Scan(&found)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return false, err
+	))
 }
 
 func (store *Store) MarkSeen(ctx context.Context, source string, dedupeKey string) error {
@@ -1291,20 +1120,12 @@ func (store *Store) HasDispatchedEventID(ctx context.Context, taskID string, eve
 	if strings.TrimSpace(eventID) == "" {
 		return false, errors.New("event_id is required")
 	}
-	var found int
-	err := store.db.QueryRowContext(
+	return exists(store.db.QueryRowContext(
 		ctx,
 		`SELECT 1 FROM dispatched_event_ids WHERE task_id = ? AND event_id = ?`,
 		taskID,
 		eventID,
-	).Scan(&found)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return false, err
+	))
 }
 
 func (store *Store) StageEgressEvent(ctx context.Context, egressMessage contracts.EgressQueueMessage) error {
@@ -1459,6 +1280,47 @@ func rollbackUnlessCommitted(tx *sql.Tx) {
 	_ = tx.Rollback()
 }
 
+func scanAll[T any](rows *sql.Rows, scan func(rowScanner) (T, error)) ([]T, error) {
+	records := []T{}
+	for rows.Next() {
+		record, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+// optional reports a missing row as a nil record rather than an error.
+func optional[T any](record T, err error) (*T, error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+// exists runs a SELECT 1 lookup.
+func exists(row *sql.Row) (bool, error) {
+	var found int
+	err := row.Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// randomID returns prefix followed by n random bytes in hex. crypto/rand.Read
+// cannot fail since Go 1.24, so there is no error to return.
+func randomID(prefix string, n int) string {
+	buffer := make([]byte, n)
+	_, _ = rand.Read(buffer)
+	return prefix + hex.EncodeToString(buffer)
+}
+
 func formatTimestamp(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
@@ -1492,48 +1354,55 @@ func nullStringPointer(value sql.NullString) *string {
 	return &value.String
 }
 
-func scanTelegramAttachmentRecords(rows *sql.Rows) ([]TelegramAttachmentRecord, error) {
-	records := []TelegramAttachmentRecord{}
-	for rows.Next() {
-		var createdAt string
-		var eligibleAfter, deletedAt, lastCleanupError sql.NullString
-		record := TelegramAttachmentRecord{}
-		if err := rows.Scan(
-			&record.AttachmentPath,
-			&record.AttachmentURI,
-			&record.TaskID,
-			&record.EnvelopeID,
-			&createdAt,
-			&eligibleAfter,
-			&deletedAt,
-			&record.CleanupAttempts,
-			&lastCleanupError,
-		); err != nil {
-			return nil, err
-		}
-		parsedCreatedAt, err := parseTimestamp(createdAt)
-		if err != nil {
-			return nil, err
-		}
-		record.CreatedAt = parsedCreatedAt
-		if eligibleAfter.Valid {
-			parsed, err := parseTimestamp(eligibleAfter.String)
-			if err != nil {
-				return nil, err
-			}
-			record.EligibleAfter = &parsed
-		}
-		if deletedAt.Valid {
-			parsed, err := parseTimestamp(deletedAt.String)
-			if err != nil {
-				return nil, err
-			}
-			record.DeletedAt = &parsed
-		}
-		record.LastCleanupError = nullStringPointer(lastCleanupError)
-		records = append(records, record)
+const telegramAttachmentSelectColumns = `SELECT
+			attachment_path,
+			attachment_uri,
+			task_id,
+			envelope_id,
+			created_at,
+			eligible_after,
+			deleted_at,
+			cleanup_attempts,
+			last_cleanup_error`
+
+func scanTelegramAttachmentRecord(scanner rowScanner) (TelegramAttachmentRecord, error) {
+	var createdAt string
+	var eligibleAfter, deletedAt, lastCleanupError sql.NullString
+	record := TelegramAttachmentRecord{}
+	if err := scanner.Scan(
+		&record.AttachmentPath,
+		&record.AttachmentURI,
+		&record.TaskID,
+		&record.EnvelopeID,
+		&createdAt,
+		&eligibleAfter,
+		&deletedAt,
+		&record.CleanupAttempts,
+		&lastCleanupError,
+	); err != nil {
+		return TelegramAttachmentRecord{}, err
 	}
-	return records, rows.Err()
+	parsedCreatedAt, err := parseTimestamp(createdAt)
+	if err != nil {
+		return TelegramAttachmentRecord{}, err
+	}
+	record.CreatedAt = parsedCreatedAt
+	if eligibleAfter.Valid {
+		parsed, err := parseTimestamp(eligibleAfter.String)
+		if err != nil {
+			return TelegramAttachmentRecord{}, err
+		}
+		record.EligibleAfter = &parsed
+	}
+	if deletedAt.Valid {
+		parsed, err := parseTimestamp(deletedAt.String)
+		if err != nil {
+			return TelegramAttachmentRecord{}, err
+		}
+		record.DeletedAt = &parsed
+	}
+	record.LastCleanupError = nullStringPointer(lastCleanupError)
+	return record, nil
 }
 
 func trackedTelegramAttachmentPath(rawURI string, rootDir string) (string, bool) {

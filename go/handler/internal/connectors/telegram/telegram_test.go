@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T) {
@@ -56,7 +58,7 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 			observed = append(observed, observation)
 			return nil
 		},
-		Now: func() time.Time { return mustTime(t, "2026-05-21T06:40:00Z") },
+		Now: func() time.Time { return testutil.MustTime(t, "2026-05-21T06:40:00Z") },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +216,7 @@ func TestPollBuildsInternalNoticeForDisallowedChannelPost(t *testing.T) {
 			observed = append(observed, observation)
 			return nil
 		},
-		Now: func() time.Time { return mustTime(t, "2026-05-21T06:40:00Z") },
+		Now: func() time.Time { return testutil.MustTime(t, "2026-05-21T06:40:00Z") },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +278,7 @@ func TestPollBuildsInternalNoticeForDisallowedGroupMessage(t *testing.T) {
 			observed = append(observed, observation)
 			return nil
 		},
-		Now: func() time.Time { return mustTime(t, "2026-05-21T06:40:00Z") },
+		Now: func() time.Time { return testutil.MustTime(t, "2026-05-21T06:40:00Z") },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -625,13 +627,4 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func mustTime(t *testing.T, value string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

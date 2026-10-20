@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
 const Source = "im"
@@ -26,16 +27,7 @@ const telegramChannelNotEnabledNotice = "telegram_channel_not_enabled"
 const telegramGroupNotEnabledNotice = "telegram_group_not_enabled"
 const telegramBotDownloadLimitBytes int64 = 20 * 1024 * 1024
 
-type ChatObservation struct {
-	ChatID      string
-	ChatType    *string
-	Title       *string
-	Username    *string
-	UpdateID    int64
-	UpdateKind  string
-	MessageDate *time.Time
-	RetrievedAt time.Time
-}
+type ChatObservation = sqlitestate.TelegramChatObservation
 
 type ObserveChatFunc func(context.Context, ChatObservation) error
 

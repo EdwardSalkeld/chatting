@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestPollEmitsInternalHeartbeatWithUniqueIDs(t *testing.T) {
-	now := mustTime(t, "2026-03-09T12:00:00Z")
+	now := testutil.MustTime(t, "2026-03-09T12:00:00Z")
 	connector := New(func() time.Time { return now })
 
 	first, err := connector.Poll(context.Background())
@@ -45,7 +46,7 @@ func TestPollEmitsInternalHeartbeatWithUniqueIDs(t *testing.T) {
 }
 
 func TestIsLogPongRecognizesOnlyInternalHeartbeatLogTarget(t *testing.T) {
-	envelope := BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	envelope := BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
 	body := "{}"
 
 	if !IsLogPong(testMessage("log", "heartbeat", body), envelope) {
@@ -62,13 +63,4 @@ func TestIsLogPongRecognizesOnlyInternalHeartbeatLogTarget(t *testing.T) {
 
 func testMessage(channel string, target string, body string) contracts.OutboundMessage {
 	return contracts.OutboundMessage{Channel: channel, Target: target, Body: &body}
-}
-
-func mustTime(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

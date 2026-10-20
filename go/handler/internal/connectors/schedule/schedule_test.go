@@ -5,10 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestPollEmitsDueJobWithTaskInstructionsAndRefs(t *testing.T) {
-	now := mustTime(t, "2026-03-09T12:34:56Z")
+	now := testutil.MustTime(t, "2026-03-09T12:34:56Z")
 	connector, err := NewFromSource(&fakeSource{scheduled: []Scheduled{{
 		ScheduleID: "sched_daily",
 		Job: Job{
@@ -80,7 +82,7 @@ func TestPollUsesConfiguredTimezoneAndReplyChannel(t *testing.T) {
 			ReplyChannelType:   "telegram",
 			ReplyChannelTarget: "8605042448",
 		},
-	}}}, func() time.Time { return mustTime(t, "2026-07-01T06:05:30Z") })
+	}}}, func() time.Time { return testutil.MustTime(t, "2026-07-01T06:05:30Z") })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +112,7 @@ func (source *fakeSource) ActiveSchedules(context.Context) ([]Scheduled, error) 
 }
 
 func TestPollFromSourceFiresDueScheduleOnce(t *testing.T) {
-	now := mustTime(t, "2026-03-09T12:34:56Z")
+	now := testutil.MustTime(t, "2026-03-09T12:34:56Z")
 	source := &fakeSource{scheduled: []Scheduled{
 		{
 			ScheduleID: "sched_a",
@@ -147,7 +149,7 @@ func TestPollFromSourceFiresDueScheduleOnce(t *testing.T) {
 }
 
 func TestPollFromSourceStopsRemovedSchedule(t *testing.T) {
-	now := mustTime(t, "2026-03-09T12:34:56Z")
+	now := testutil.MustTime(t, "2026-03-09T12:34:56Z")
 	source := &fakeSource{scheduled: []Scheduled{
 		{
 			ScheduleID: "sched_a",
@@ -169,7 +171,7 @@ func TestPollFromSourceStopsRemovedSchedule(t *testing.T) {
 
 	// Remove the schedule and advance to the next due window; it must not fire.
 	source.scheduled = nil
-	now = mustTime(t, "2026-03-10T12:34:56Z")
+	now = testutil.MustTime(t, "2026-03-10T12:34:56Z")
 	envelopes, err := connector.Poll(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +185,7 @@ func TestPollFromSourceStopsRemovedSchedule(t *testing.T) {
 }
 
 func TestPollFromSourceRecomputesOnCronChange(t *testing.T) {
-	now := mustTime(t, "2026-03-09T11:00:00Z")
+	now := testutil.MustTime(t, "2026-03-09T11:00:00Z")
 	job := Scheduled{
 		ScheduleID: "sched_a",
 		Job: Job{
@@ -206,12 +208,12 @@ func TestPollFromSourceRecomputesOnCronChange(t *testing.T) {
 	job.Job.Cron = "0 13 * * *"
 	source.scheduled = []Scheduled{job}
 
-	now = mustTime(t, "2026-03-09T12:00:00Z")
+	now = testutil.MustTime(t, "2026-03-09T12:00:00Z")
 	if envelopes, err := connector.Poll(context.Background()); err != nil || len(envelopes) != 0 {
 		t.Fatalf("must not fire at the old cron time after a cron change: %#v err = %v", envelopes, err)
 	}
 
-	now = mustTime(t, "2026-03-09T13:00:00Z")
+	now = testutil.MustTime(t, "2026-03-09T13:00:00Z")
 	envelopes, err := connector.Poll(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -222,13 +224,4 @@ func TestPollFromSourceRecomputesOnCronChange(t *testing.T) {
 	if envelopes[0].ID != "cron:daily-note:2026-03-09T13:00:00+00:00" {
 		t.Fatalf("ID = %q", envelopes[0].ID)
 	}
-}
-
-func mustTime(t *testing.T, value string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

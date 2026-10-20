@@ -23,6 +23,15 @@ var validSources = map[string]bool{
 	"reminder": true,
 }
 
+// TimestampLayout is the wire format for timestamps: UTC to whole seconds.
+const TimestampLayout = "2006-01-02T15:04:05Z"
+
+// PythonUTCISO formats value in UTC with a "+00:00" offset rather than "Z",
+// matching IDs the Python side builds with isoformat().
+func PythonUTCISO(value time.Time) string {
+	return strings.TrimSuffix(value.UTC().Format(time.RFC3339Nano), "Z") + "+00:00"
+}
+
 type Timestamp struct {
 	time.Time
 }
@@ -35,7 +44,7 @@ func (value Timestamp) MarshalJSON() ([]byte, error) {
 	if value.Time.IsZero() {
 		return nil, errors.New("timestamp is required")
 	}
-	return json.Marshal(value.UTC().Format("2006-01-02T15:04:05Z"))
+	return json.Marshal(value.UTC().Format(TimestampLayout))
 }
 
 func (value *Timestamp) UnmarshalJSON(raw []byte) error {

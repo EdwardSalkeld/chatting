@@ -6,15 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
-	clock := &fakeClock{
-		now: mustTime(t, "2026-03-09T12:00:10Z"),
-	}
-	recorder := New(mustTime(t, "2026-03-09T12:00:00Z"), clock)
+	now := testutil.MustTime(t, "2026-03-09T12:00:10Z")
+	recorder := New(testutil.MustTime(t, "2026-03-09T12:00:00Z"), func() time.Time { return now })
 
-	recorder.RecordLoop(2, mustTime(t, "2026-03-09T12:00:04Z"))
+	recorder.RecordLoop(2, testutil.MustTime(t, "2026-03-09T12:00:04Z"))
 	recorder.RecordEgressResult("dispatched", "")
 	recorder.RecordEgressResult("completed", "")
 	recorder.RecordEgressResult("deduped", "")
@@ -27,6 +27,9 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 	recorder.RecordReminderFired()
 
 	snapshot := recorder.Snapshot()
+	if snapshot["uptime_seconds"] != 10 {
+		t.Fatalf("uptime_seconds = %v", snapshot["uptime_seconds"])
+	}
 	if snapshot["loops_total"] != 1 {
 		t.Fatalf("loops_total = %v", snapshot["loops_total"])
 	}
@@ -69,8 +72,8 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 }
 
 func TestMetricsServerServesMetricsAnd404sOtherPaths(t *testing.T) {
-	recorder := New(mustTime(t, "2026-03-09T12:00:00Z"), &fakeClock{now: mustTime(t, "2026-03-09T12:00:01Z")})
-	recorder.RecordLoop(1, mustTime(t, "2026-03-09T12:00:01Z"))
+	recorder := New(testutil.MustTime(t, "2026-03-09T12:00:00Z"), nil)
+	recorder.RecordLoop(1, testutil.MustTime(t, "2026-03-09T12:00:01Z"))
 
 	server, err := StartServer(recorder, "127.0.0.1", 0)
 	if err != nil {
@@ -105,25 +108,4 @@ func TestMetricsServerServesMetricsAnd404sOtherPaths(t *testing.T) {
 	if notFound.StatusCode != http.StatusNotFound {
 		t.Fatalf("not found status = %d", notFound.StatusCode)
 	}
-}
-
-type fakeClock struct {
-	now time.Time
-}
-
-func (clock *fakeClock) Now() time.Time {
-	return clock.now
-}
-
-func (clock *fakeClock) Since(start time.Time) time.Duration {
-	return clock.now.Sub(start)
-}
-
-func mustTime(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

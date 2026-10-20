@@ -5,12 +5,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
-type AssignmentCheckpoint struct {
-	EventCreatedAt time.Time
-	EventID        string
-}
+type AssignmentCheckpoint = sqlitestate.GitHubAssignmentCheckpoint
 
 type CheckpointedEvent interface {
 	CheckpointEventID() string

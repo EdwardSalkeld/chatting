@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 	_ "modernc.org/sqlite"
 )
 
@@ -51,9 +51,9 @@ func TestDedupeKeysAreScopedBySource(t *testing.T) {
 func TestTelegramChatRegistryUpsertsObservedMetadata(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	firstSeenAt := mustTime(t, "2026-05-21T06:40:00Z")
-	firstMessageAt := mustTime(t, "2026-05-21T06:39:30Z")
-	updatedAt := mustTime(t, "2026-05-21T06:45:00Z")
+	firstSeenAt := testutil.MustTime(t, "2026-05-21T06:40:00Z")
+	firstMessageAt := testutil.MustTime(t, "2026-05-21T06:39:30Z")
+	updatedAt := testutil.MustTime(t, "2026-05-21T06:45:00Z")
 	chatType := "supergroup"
 	title := "Build Tests"
 	username := "build_tests"
@@ -79,28 +79,36 @@ func TestTelegramChatRegistryUpsertsObservedMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	records, err := store.ListTelegramChats(ctx)
-	if err != nil {
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_chat_registry`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("records = %#v", records)
+	if count != 1 {
+		t.Fatalf("chat rows = %d", count)
 	}
-	record := records[0]
-	if record.ChatID != "-100123" || derefString(record.ChatType) != "supergroup" || derefString(record.Title) != "Build Tests" || derefString(record.Username) != "build_tests" {
-		t.Fatalf("record metadata = %#v", record)
+	var chatTypeValue, titleValue, usernameValue, lastMessageAt sql.NullString
+	var firstSeen, lastRetrieved, lastUpdateKind string
+	var lastUpdateID int64
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT chat_type, title, username, first_seen_at, last_retrieved_at, last_message_at, last_update_id, last_update_kind
+		FROM telegram_chat_registry WHERE chat_id = ?`, "-100123",
+	).Scan(&chatTypeValue, &titleValue, &usernameValue, &firstSeen, &lastRetrieved, &lastMessageAt, &lastUpdateID, &lastUpdateKind); err != nil {
+		t.Fatal(err)
 	}
-	if !record.FirstSeenAt.Equal(firstSeenAt) {
-		t.Fatalf("FirstSeenAt = %s", record.FirstSeenAt)
+	if chatTypeValue.String != "supergroup" || titleValue.String != "Build Tests" || usernameValue.String != "build_tests" {
+		t.Fatalf("metadata = %v %v %v", chatTypeValue, titleValue, usernameValue)
 	}
-	if !record.LastRetrievedAt.Equal(updatedAt) {
-		t.Fatalf("LastRetrievedAt = %s", record.LastRetrievedAt)
+	if firstSeen != formatTimestamp(firstSeenAt) {
+		t.Fatalf("first_seen_at = %s", firstSeen)
 	}
-	if record.LastMessageAt == nil || !record.LastMessageAt.Equal(firstMessageAt) {
-		t.Fatalf("LastMessageAt = %#v", record.LastMessageAt)
+	if lastRetrieved != formatTimestamp(updatedAt) {
+		t.Fatalf("last_retrieved_at = %s", lastRetrieved)
 	}
-	if record.LastUpdateID != 1002 || record.LastUpdateKind != "my_chat_member" {
-		t.Fatalf("last update = %#v", record)
+	if lastMessageAt.String != formatTimestamp(firstMessageAt) {
+		t.Fatalf("last_message_at = %v", lastMessageAt)
+	}
+	if lastUpdateID != 1002 || lastUpdateKind != "my_chat_member" {
+		t.Fatalf("last update = %d %s", lastUpdateID, lastUpdateKind)
 	}
 }
 
@@ -110,7 +118,7 @@ func TestGitHubAssignmentCheckpointRoundTripUsesPythonCompatibleTable(t *testing
 	store := openStoreAt(t, dbPath)
 	scopeKey := "assignments:billyacachofa:EdwardSalkeld/chatting"
 	checkpoint := GitHubAssignmentCheckpoint{
-		EventCreatedAt: mustTime(t, "2026-05-30T12:34:56.123456789Z"),
+		EventCreatedAt: testutil.MustTime(t, "2026-05-30T12:34:56.123456789Z"),
 		EventID:        "AE_lADOB9Rs6s4A9fxGzwAAAAAB",
 	}
 
@@ -387,7 +395,7 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            "telegram:1",
 		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-05-30T12:00:00Z")),
+		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
 		Content:       "[photo attached]",
 		Attachments: []contracts.AttachmentRef{
 			{URI: fileURIForTest(attachmentPath), Name: &name},
@@ -400,7 +408,7 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 			Target: "12345",
 		},
 		DedupeKey: "telegram:1",
-	}, "trace:telegram:1", mustTime(t, "2026-05-30T12:00:01Z"))
+	}, "trace:telegram:1", testutil.MustTime(t, "2026-05-30T12:00:01Z"))
 
 	tracked, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot)
 	if err != nil {
@@ -409,7 +417,7 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 	if tracked != 1 {
 		t.Fatalf("tracked = %d", tracked)
 	}
-	eligibleAfter := mustTime(t, "2026-05-30T12:10:00Z")
+	eligibleAfter := testutil.MustTime(t, "2026-05-30T12:10:00Z")
 	eligible, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, eligibleAfter)
 	if err != nil {
 		t.Fatal(err)
@@ -417,10 +425,7 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 	if eligible != 1 {
 		t.Fatalf("eligible = %d", eligible)
 	}
-	records, err := store.ListTelegramAttachmentRecords(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	records := listTelegramAttachments(t, store)
 	if len(records) != 1 {
 		t.Fatalf("records = %#v", records)
 	}
@@ -431,8 +436,8 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 	result, err := store.CleanupTelegramAttachments(
 		ctx,
 		attachmentRoot,
-		mustTime(t, "2026-05-30T12:11:00Z"),
-		mustTime(t, "2026-01-01T00:00:00Z"),
+		testutil.MustTime(t, "2026-05-30T12:11:00Z"),
+		testutil.MustTime(t, "2026-01-01T00:00:00Z"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -443,10 +448,7 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 	if _, err := os.Stat(attachmentPath); !os.IsNotExist(err) {
 		t.Fatalf("attachment still exists or unexpected stat error: %v", err)
 	}
-	records, err = store.ListTelegramAttachmentRecords(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	records = listTelegramAttachments(t, store)
 	if records[0].DeletedAt == nil {
 		t.Fatalf("deleted_at not marked: %#v", records[0])
 	}
@@ -462,7 +464,7 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            "telegram:missing",
 		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-05-30T12:00:00Z")),
+		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
 		Content:       "[photo attached]",
 		Attachments: []contracts.AttachmentRef{{
 			URI:  fileURIForTest(missingPath),
@@ -474,18 +476,18 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 			Target: "12345",
 		},
 		DedupeKey: "telegram:missing",
-	}, "trace:telegram:missing", mustTime(t, "2026-05-30T12:00:01Z"))
+	}, "trace:telegram:missing", testutil.MustTime(t, "2026-05-30T12:00:01Z"))
 	if _, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, mustTime(t, "2026-05-30T12:01:00Z")); err != nil {
+	if _, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, testutil.MustTime(t, "2026-05-30T12:01:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	result, err := store.CleanupTelegramAttachments(
 		ctx,
 		attachmentRoot,
-		mustTime(t, "2026-05-30T12:02:00Z"),
-		mustTime(t, "2026-01-01T00:00:00Z"),
+		testutil.MustTime(t, "2026-05-30T12:02:00Z"),
+		testutil.MustTime(t, "2026-01-01T00:00:00Z"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -516,8 +518,8 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 		fileURIForTest(outsidePath),
 		"task:telegram:outside",
 		"telegram:outside",
-		formatTimestamp(mustTime(t, "2026-05-30T12:00:00Z")),
-		formatTimestamp(mustTime(t, "2026-05-30T12:01:00Z")),
+		formatTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
+		formatTimestamp(testutil.MustTime(t, "2026-05-30T12:01:00Z")),
 		nil,
 		0,
 		nil,
@@ -528,8 +530,8 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 	result, err = store.CleanupTelegramAttachments(
 		ctx,
 		attachmentRoot,
-		mustTime(t, "2026-05-30T12:02:00Z"),
-		mustTime(t, "2026-01-01T00:00:00Z"),
+		testutil.MustTime(t, "2026-05-30T12:02:00Z"),
+		testutil.MustTime(t, "2026-01-01T00:00:00Z"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -537,10 +539,7 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 	if result.FailedCount != 1 {
 		t.Fatalf("cleanup result = %#v", result)
 	}
-	records, err := store.ListTelegramAttachmentRecords(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	records := listTelegramAttachments(t, store)
 	var outsideRecord *TelegramAttachmentRecord
 	for index := range records {
 		if records[index].AttachmentPath == outsidePath {
@@ -550,6 +549,22 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 	if outsideRecord == nil || outsideRecord.CleanupAttempts != 1 || derefString(outsideRecord.LastCleanupError) != "attachment_path_outside_root" {
 		t.Fatalf("outside record = %#v", outsideRecord)
 	}
+}
+
+func listTelegramAttachments(t *testing.T, store *Store) []TelegramAttachmentRecord {
+	t.Helper()
+	rows, err := store.db.QueryContext(context.Background(), telegramAttachmentSelectColumns+`
+		FROM telegram_attachment_ledger
+		ORDER BY created_at ASC, attachment_path ASC`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	records, err := scanAll(rows, scanTelegramAttachmentRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return records
 }
 
 func openTestStore(t *testing.T) *Store {
@@ -579,7 +594,7 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            "email:1",
 		Source:        "email",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-06T11:00:00Z")),
+		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-03-06T11:00:00Z")),
 		Actor:         &actor,
 		Content:       "hello from sqlite state",
 		Attachments: []contracts.AttachmentRef{{
@@ -597,7 +612,7 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 			Metadata: map[string]any{"thread_id": "thread-1"},
 		},
 		DedupeKey: "email:1",
-	}, "trace:email:1", mustTime(t, "2026-03-06T11:00:01Z"))
+	}, "trace:email:1", testutil.MustTime(t, "2026-03-06T11:00:01Z"))
 }
 
 func testEgressMessage(
@@ -617,7 +632,7 @@ func testEgressMessage(
 		TraceID:       taskMessage.TraceID,
 		EventID:       eventID,
 		EventKind:     eventKind,
-		EmittedAt:     contracts.NewTimestamp(mustTime(t, "2026-03-06T12:00:00Z")),
+		EmittedAt:     contracts.NewTimestamp(testutil.MustTime(t, "2026-03-06T12:00:00Z")),
 		Message: contracts.OutboundMessage{
 			Channel: "email",
 			Target:  "alice@example.com",
@@ -691,13 +706,4 @@ func assertTaskLedgerSchemaAndPayload(t *testing.T, dbPath string, taskMessage c
 	if taskID != taskMessage.TaskID || envelopeID != taskMessage.Envelope.ID || traceID != taskMessage.TraceID {
 		t.Fatalf("raw ledger row = task_id %q envelope_id %q trace_id %q", taskID, envelopeID, traceID)
 	}
-}
-
-func mustTime(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

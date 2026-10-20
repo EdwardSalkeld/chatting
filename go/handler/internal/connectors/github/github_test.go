@@ -7,7 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 type memoryCheckpointStore struct {
@@ -18,7 +19,7 @@ func newMemoryCheckpointStore() *memoryCheckpointStore {
 	return &memoryCheckpointStore{checkpoints: map[string]AssignmentCheckpoint{}}
 }
 
-func (store *memoryCheckpointStore) GetGitHubCheckpoint(_ context.Context, scopeKey string) (*AssignmentCheckpoint, error) {
+func (store *memoryCheckpointStore) GetGitHubAssignmentCheckpoint(_ context.Context, scopeKey string) (*AssignmentCheckpoint, error) {
 	checkpoint, ok := store.checkpoints[scopeKey]
 	if !ok {
 		return nil, nil
@@ -26,7 +27,7 @@ func (store *memoryCheckpointStore) GetGitHubCheckpoint(_ context.Context, scope
 	return &checkpoint, nil
 }
 
-func (store *memoryCheckpointStore) SetGitHubCheckpoint(_ context.Context, scopeKey string, checkpoint AssignmentCheckpoint) error {
+func (store *memoryCheckpointStore) SetGitHubAssignmentCheckpoint(_ context.Context, scopeKey string, checkpoint AssignmentCheckpoint) error {
 	store.checkpoints[scopeKey] = checkpoint
 	return nil
 }
@@ -441,8 +442,8 @@ func reviewPayload(eventID string) map[string]any {
 }
 
 func TestSelectEventsAfterCheckpointUsesUTCBoundary(t *testing.T) {
-	first := mustTime(t, "2026-03-07T10:47:35Z")
-	second := mustTime(t, "2026-03-07T10:48:35Z")
+	first := testutil.MustTime(t, "2026-03-07T10:47:35Z")
+	second := testutil.MustTime(t, "2026-03-07T10:48:35Z")
 	events := []IssueAssignmentEvent{
 		{EventID: "AE_2", EventCreatedAt: second},
 		{EventID: "AE_1", EventCreatedAt: first},
@@ -454,13 +455,4 @@ func TestSelectEventsAfterCheckpointUsesUTCBoundary(t *testing.T) {
 	if len(selected) != 1 || selected[0].EventID != "AE_2" {
 		t.Fatalf("selected = %#v", selected)
 	}
-}
-
-func mustTime(t *testing.T, value string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
 }

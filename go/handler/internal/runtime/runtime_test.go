@@ -11,6 +11,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
 func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
@@ -18,7 +19,7 @@ func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 1
 	config.PollIntervalSeconds = 100
-	runner, err := NewRunner(config, broker)
+	runner, err := NewRunner(config, broker, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,18 +38,15 @@ func TestRunPublishesInternalHeartbeatTask(t *testing.T) {
 	state := newFakeIngressState()
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 1
-	runner, err := NewRunner(
-		config,
-		broker,
-		WithIngress(state, heartbeat.New(func() time.Time {
-			return mustTime(t, "2026-03-09T12:00:00Z")
-		})),
-		WithNow(func() time.Time {
-			return mustTime(t, "2026-03-09T12:00:01Z")
-		}),
-	)
+	connector := heartbeat.New(func() time.Time {
+		return testutil.MustTime(t, "2026-03-09T12:00:00Z")
+	})
+	runner, err := NewRunner(config, broker, state, []Connector{connector}, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	runner.now = func() time.Time {
+		return testutil.MustTime(t, "2026-03-09T12:00:01Z")
 	}
 
 	if err := runner.Run(context.Background()); err != nil {
@@ -88,15 +86,11 @@ func TestPublishIngressSkipsSeenEnvelope(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
 	connector := heartbeat.New(func() time.Time {
-		return mustTime(t, "2026-03-09T12:00:00Z")
+		return testutil.MustTime(t, "2026-03-09T12:00:00Z")
 	})
-	envelope := heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	envelope := heartbeat.BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
 	state.seen[envelope.Source] = map[string]bool{envelope.DedupeKey: true}
-	runner, err := NewRunner(
-		handlerconfig.Defaults(),
-		broker,
-		WithIngress(state, connector),
-	)
+	runner, err := NewRunner(handlerconfig.Defaults(), broker, state, []Connector{connector}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +111,9 @@ func TestPublishIngressSkipsSeenEnvelope(t *testing.T) {
 func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
-	envelope := heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	envelope := heartbeat.BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
 	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
-	runner, err := NewRunner(
-		handlerconfig.Defaults(),
-		broker,
-		WithIngress(state, connector),
-	)
+	runner, err := NewRunner(handlerconfig.Defaults(), broker, state, []Connector{connector}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +134,10 @@ func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
 func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
-	envelope := heartbeat.BuildEnvelope(1, mustTime(t, "2026-03-09T12:00:00Z"))
+	envelope := heartbeat.BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
 	state.seen[envelope.Source] = map[string]bool{envelope.DedupeKey: true}
 	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
-	runner, err := NewRunner(
-		handlerconfig.Defaults(),
-		broker,
-		WithIngress(state, connector),
-	)
+	runner, err := NewRunner(handlerconfig.Defaults(), broker, state, []Connector{connector}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +162,7 @@ func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 	broker := &fakeBroker{}
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 0
-	runner, err := NewRunner(config, broker)
+	runner, err := NewRunner(config, broker, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +183,7 @@ func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 	config.MaxLoops = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	connector := &fakeCancelingConnector{onPoll: cancel}
-	runner, err := NewRunner(
-		config,
-		broker,
-		WithIngress(newFakeIngressState(), connector),
-	)
+	runner, err := NewRunner(config, broker, newFakeIngressState(), []Connector{connector}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,20 +195,16 @@ func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 
 func TestRunRecordsLoopMetrics(t *testing.T) {
 	broker := &fakeBroker{}
-	recorder := metrics.New(mustTime(t, "2026-03-09T12:00:00Z"), &fakeMetricsClock{now: mustTime(t, "2026-03-09T12:00:03Z")})
+	recorder := metrics.New(testutil.MustTime(t, "2026-03-09T12:00:00Z"), nil)
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 1
 	config.PollIntervalSeconds = 100
-	runner, err := NewRunner(
-		config,
-		broker,
-		WithMetrics(recorder),
-		WithNow(func() time.Time {
-			return mustTime(t, "2026-03-09T12:00:02Z")
-		}),
-	)
+	runner, err := NewRunner(config, broker, nil, nil, recorder)
 	if err != nil {
 		t.Fatal(err)
+	}
+	runner.now = func() time.Time {
+		return testutil.MustTime(t, "2026-03-09T12:00:02Z")
 	}
 
 	if err := runner.Run(context.Background()); err != nil {
@@ -237,7 +215,7 @@ func TestRunRecordsLoopMetrics(t *testing.T) {
 	if snapshot["loops_total"] != 1 {
 		t.Fatalf("loops_total = %v", snapshot["loops_total"])
 	}
-	if snapshot["last_loop_completed_timestamp_seconds"] != float64(mustTime(t, "2026-03-09T12:00:02Z").Unix()) {
+	if snapshot["last_loop_completed_timestamp_seconds"] != float64(testutil.MustTime(t, "2026-03-09T12:00:02Z").Unix()) {
 		t.Fatalf("last_loop_completed_timestamp_seconds = %v", snapshot["last_loop_completed_timestamp_seconds"])
 	}
 }
@@ -291,13 +269,16 @@ func (state *fakeIngressState) RecordTask(ctx context.Context, taskMessage contr
 	return nil
 }
 
-func mustTime(t *testing.T, raw string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
+func (state *fakeIngressState) AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
+	return taskMessage, nil
+}
+
+func (state *fakeIngressState) RecordTelegramTaskAttachments(ctx context.Context, taskMessage contracts.TaskQueueMessage, attachmentRootDir string) (int, error) {
+	return 0, nil
+}
+
+func (state *fakeIngressState) CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error {
+	return nil
 }
 
 type fakeAckingConnector struct {
@@ -323,16 +304,4 @@ func (connector *fakeCancelingConnector) Poll(ctx context.Context) ([]contracts.
 		connector.onPoll()
 	}
 	return nil, context.Canceled
-}
-
-type fakeMetricsClock struct {
-	now time.Time
-}
-
-func (clock *fakeMetricsClock) Now() time.Time {
-	return clock.now
-}
-
-func (clock *fakeMetricsClock) Since(start time.Time) time.Duration {
-	return clock.now.Sub(start)
 }

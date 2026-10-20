@@ -139,9 +139,10 @@ query (
 
 type GraphQLRunner func(ctx context.Context, query string, variables map[string]any) (map[string]any, error)
 
+// CheckpointStore is satisfied by the handler's SQLite store.
 type CheckpointStore interface {
-	GetGitHubCheckpoint(ctx context.Context, scopeKey string) (*AssignmentCheckpoint, error)
-	SetGitHubCheckpoint(ctx context.Context, scopeKey string, checkpoint AssignmentCheckpoint) error
+	GetGitHubAssignmentCheckpoint(ctx context.Context, scopeKey string) (*AssignmentCheckpoint, error)
+	SetGitHubAssignmentCheckpoint(ctx context.Context, scopeKey string, checkpoint AssignmentCheckpoint) error
 }
 
 type IssueAssignmentEvent struct {
@@ -290,16 +291,28 @@ func (event PullRequestReviewEvent) ToTaskEnvelope(contextRefs []string) contrac
 	}
 }
 
-type IssueAssignmentConnector struct {
+type taskEvent interface {
+	CheckpointedEvent
+	ToTaskEnvelope(contextRefs []string) contracts.TaskEnvelope
+}
+
+// EventConnector polls one GitHub event stream across the configured
+// repositories. The checkpoint for a batch is only saved on the following
+// poll, once the runtime has had the chance to publish that batch.
+type EventConnector[E taskEvent] struct {
+	stream             string
+	login              string
 	repositoryPatterns []string
-	assigneeLogin      string
 	contextRefs        []string
 	checkpointStore    CheckpointStore
-	maxIssues          int
-	maxTimelineEvents  int
 	graphqlRunner      GraphQLRunner
+	fetch              func(ctx context.Context, owner string, name string, login string, runner GraphQLRunner) ([]E, error)
 	pendingCheckpoint  *AssignmentCheckpoint
 }
+
+type IssueAssignmentConnector = EventConnector[IssueAssignmentEvent]
+
+type PullRequestReviewConnector = EventConnector[PullRequestReviewEvent]
 
 type IssueAssignmentConfig struct {
 	RepositoryPatterns []string
@@ -312,103 +325,13 @@ type IssueAssignmentConfig struct {
 }
 
 func NewIssueAssignmentConnector(config IssueAssignmentConfig) (*IssueAssignmentConnector, error) {
-	if len(config.RepositoryPatterns) == 0 {
-		return nil, errors.New("repository_patterns are required")
-	}
-	if strings.TrimSpace(config.AssigneeLogin) == "" {
-		return nil, errors.New("assignee_login is required")
-	}
-	if config.CheckpointStore == nil {
-		return nil, errors.New("checkpoint_store is required")
-	}
-	if config.MaxIssues <= 0 {
-		config.MaxIssues = 25
-	}
-	if config.MaxTimelineEvents <= 0 {
-		config.MaxTimelineEvents = 10
-	}
-	runner := config.GraphQLRunner
-	if runner == nil {
-		runner = DefaultGraphQLRunner
-	}
-	return &IssueAssignmentConnector{
-		repositoryPatterns: append([]string{}, config.RepositoryPatterns...),
-		assigneeLogin:      strings.TrimSpace(config.AssigneeLogin),
-		contextRefs:        append([]string{}, config.ContextRefs...),
-		checkpointStore:    config.CheckpointStore,
-		maxIssues:          config.MaxIssues,
-		maxTimelineEvents:  config.MaxTimelineEvents,
-		graphqlRunner:      runner,
-	}, nil
-}
-
-func (connector *IssueAssignmentConnector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
-	if err := connector.flushPendingCheckpoint(ctx); err != nil {
-		return nil, err
-	}
-	scopeKey, err := CheckpointScopeKey(connector.repositoryPatterns, connector.assigneeLogin, IssueAssignmentsStream)
-	if err != nil {
-		return nil, err
-	}
-	checkpoint, err := connector.checkpointStore.GetGitHubCheckpoint(ctx, scopeKey)
-	if err != nil {
-		return nil, err
-	}
-	repositories, err := ExpandRepositoryPatterns(ctx, connector.repositoryPatterns, connector.graphqlRunner)
-	if err != nil {
-		return nil, err
-	}
-	events := []IssueAssignmentEvent{}
-	for _, repository := range repositories {
-		owner, name, err := ParseRepoSlug(repository)
-		if err != nil {
-			continue
-		}
-		repositoryEvents, err := FetchAssignmentEventsForRepository(ctx, owner, name, connector.assigneeLogin, connector.maxIssues, connector.maxTimelineEvents, connector.graphqlRunner)
-		if err != nil {
-			continue
-		}
-		events = append(events, repositoryEvents...)
-	}
-	newEvents := SelectEventsAfterCheckpoint(events, checkpoint)
-	if len(newEvents) > 0 {
-		latest := newEvents[len(newEvents)-1]
-		connector.pendingCheckpoint = &AssignmentCheckpoint{
-			EventCreatedAt: latest.EventCreatedAt,
-			EventID:        latest.EventID,
-		}
-	}
-	envelopes := make([]contracts.TaskEnvelope, 0, len(newEvents))
-	for _, event := range newEvents {
-		envelopes = append(envelopes, event.ToTaskEnvelope(connector.contextRefs))
-	}
-	return envelopes, nil
-}
-
-func (connector *IssueAssignmentConnector) flushPendingCheckpoint(ctx context.Context) error {
-	if connector.pendingCheckpoint == nil {
-		return nil
-	}
-	scopeKey, err := CheckpointScopeKey(connector.repositoryPatterns, connector.assigneeLogin, IssueAssignmentsStream)
-	if err != nil {
-		return err
-	}
-	if err := connector.checkpointStore.SetGitHubCheckpoint(ctx, scopeKey, *connector.pendingCheckpoint); err != nil {
-		return err
-	}
-	connector.pendingCheckpoint = nil
-	return nil
-}
-
-type PullRequestReviewConnector struct {
-	repositoryPatterns []string
-	authorLogin        string
-	contextRefs        []string
-	checkpointStore    CheckpointStore
-	maxPullRequests    int
-	maxReviews         int
-	graphqlRunner      GraphQLRunner
-	pendingCheckpoint  *AssignmentCheckpoint
+	maxIssues := positiveOrDefault(config.MaxIssues, 25)
+	maxTimelineEvents := positiveOrDefault(config.MaxTimelineEvents, 10)
+	return newEventConnector(IssueAssignmentsStream, config.RepositoryPatterns, config.AssigneeLogin, "assignee_login",
+		config.ContextRefs, config.CheckpointStore, config.GraphQLRunner,
+		func(ctx context.Context, owner string, name string, login string, runner GraphQLRunner) ([]IssueAssignmentEvent, error) {
+			return FetchAssignmentEventsForRepository(ctx, owner, name, login, maxIssues, maxTimelineEvents, runner)
+		})
 }
 
 type PullRequestReviewConfig struct {
@@ -422,45 +345,64 @@ type PullRequestReviewConfig struct {
 }
 
 func NewPullRequestReviewConnector(config PullRequestReviewConfig) (*PullRequestReviewConnector, error) {
-	if len(config.RepositoryPatterns) == 0 {
+	maxPullRequests := positiveOrDefault(config.MaxPullRequests, 25)
+	maxReviews := positiveOrDefault(config.MaxReviews, 10)
+	return newEventConnector(PullRequestReviewsStream, config.RepositoryPatterns, config.AuthorLogin, "author_login",
+		config.ContextRefs, config.CheckpointStore, config.GraphQLRunner,
+		func(ctx context.Context, owner string, name string, login string, runner GraphQLRunner) ([]PullRequestReviewEvent, error) {
+			return FetchPullRequestReviewEventsForRepository(ctx, owner, name, login, maxPullRequests, maxReviews, runner)
+		})
+}
+
+func positiveOrDefault(value int, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func newEventConnector[E taskEvent](
+	stream string,
+	repositoryPatterns []string,
+	login string,
+	loginField string,
+	contextRefs []string,
+	checkpointStore CheckpointStore,
+	runner GraphQLRunner,
+	fetch func(ctx context.Context, owner string, name string, login string, runner GraphQLRunner) ([]E, error),
+) (*EventConnector[E], error) {
+	if len(repositoryPatterns) == 0 {
 		return nil, errors.New("repository_patterns are required")
 	}
-	if strings.TrimSpace(config.AuthorLogin) == "" {
-		return nil, errors.New("author_login is required")
+	if strings.TrimSpace(login) == "" {
+		return nil, errors.New(loginField + " is required")
 	}
-	if config.CheckpointStore == nil {
+	if checkpointStore == nil {
 		return nil, errors.New("checkpoint_store is required")
 	}
-	if config.MaxPullRequests <= 0 {
-		config.MaxPullRequests = 25
-	}
-	if config.MaxReviews <= 0 {
-		config.MaxReviews = 10
-	}
-	runner := config.GraphQLRunner
 	if runner == nil {
 		runner = DefaultGraphQLRunner
 	}
-	return &PullRequestReviewConnector{
-		repositoryPatterns: append([]string{}, config.RepositoryPatterns...),
-		authorLogin:        strings.TrimSpace(config.AuthorLogin),
-		contextRefs:        append([]string{}, config.ContextRefs...),
-		checkpointStore:    config.CheckpointStore,
-		maxPullRequests:    config.MaxPullRequests,
-		maxReviews:         config.MaxReviews,
+	return &EventConnector[E]{
+		stream:             stream,
+		login:              strings.TrimSpace(login),
+		repositoryPatterns: append([]string{}, repositoryPatterns...),
+		contextRefs:        append([]string{}, contextRefs...),
+		checkpointStore:    checkpointStore,
 		graphqlRunner:      runner,
+		fetch:              fetch,
 	}, nil
 }
 
-func (connector *PullRequestReviewConnector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
+func (connector *EventConnector[E]) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
 	if err := connector.flushPendingCheckpoint(ctx); err != nil {
 		return nil, err
 	}
-	scopeKey, err := CheckpointScopeKey(connector.repositoryPatterns, connector.authorLogin, PullRequestReviewsStream)
+	scopeKey, err := CheckpointScopeKey(connector.repositoryPatterns, connector.login, connector.stream)
 	if err != nil {
 		return nil, err
 	}
-	checkpoint, err := connector.checkpointStore.GetGitHubCheckpoint(ctx, scopeKey)
+	checkpoint, err := connector.checkpointStore.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
 	if err != nil {
 		return nil, err
 	}
@@ -468,13 +410,13 @@ func (connector *PullRequestReviewConnector) Poll(ctx context.Context) ([]contra
 	if err != nil {
 		return nil, err
 	}
-	events := []PullRequestReviewEvent{}
+	events := []E{}
 	for _, repository := range repositories {
 		owner, name, err := ParseRepoSlug(repository)
 		if err != nil {
 			continue
 		}
-		repositoryEvents, err := FetchPullRequestReviewEventsForRepository(ctx, owner, name, connector.authorLogin, connector.maxPullRequests, connector.maxReviews, connector.graphqlRunner)
+		repositoryEvents, err := connector.fetch(ctx, owner, name, connector.login, connector.graphqlRunner)
 		if err != nil {
 			continue
 		}
@@ -484,8 +426,8 @@ func (connector *PullRequestReviewConnector) Poll(ctx context.Context) ([]contra
 	if len(newEvents) > 0 {
 		latest := newEvents[len(newEvents)-1]
 		connector.pendingCheckpoint = &AssignmentCheckpoint{
-			EventCreatedAt: latest.EventCreatedAt,
-			EventID:        latest.EventID,
+			EventCreatedAt: latest.CheckpointEventCreatedAt(),
+			EventID:        latest.CheckpointEventID(),
 		}
 	}
 	envelopes := make([]contracts.TaskEnvelope, 0, len(newEvents))
@@ -495,15 +437,15 @@ func (connector *PullRequestReviewConnector) Poll(ctx context.Context) ([]contra
 	return envelopes, nil
 }
 
-func (connector *PullRequestReviewConnector) flushPendingCheckpoint(ctx context.Context) error {
+func (connector *EventConnector[E]) flushPendingCheckpoint(ctx context.Context) error {
 	if connector.pendingCheckpoint == nil {
 		return nil
 	}
-	scopeKey, err := CheckpointScopeKey(connector.repositoryPatterns, connector.authorLogin, PullRequestReviewsStream)
+	scopeKey, err := CheckpointScopeKey(connector.repositoryPatterns, connector.login, connector.stream)
 	if err != nil {
 		return err
 	}
-	if err := connector.checkpointStore.SetGitHubCheckpoint(ctx, scopeKey, *connector.pendingCheckpoint); err != nil {
+	if err := connector.checkpointStore.SetGitHubAssignmentCheckpoint(ctx, scopeKey, *connector.pendingCheckpoint); err != nil {
 		return err
 	}
 	connector.pendingCheckpoint = nil
@@ -552,7 +494,7 @@ func ExpandRepositoryPatterns(ctx context.Context, repositoryPatterns []string, 
 	expanded := []string{}
 	seen := map[string]bool{}
 	for _, pattern := range repositoryPatterns {
-		owner, repo, err := parseRepositoryPattern(pattern)
+		owner, repo, err := ParseRepositoryPattern(pattern)
 		if err != nil {
 			return nil, err
 		}
@@ -882,7 +824,8 @@ func ParseRepoSlug(value string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-func parseRepositoryPattern(value string) (string, string, error) {
+// ParseRepositoryPattern splits an owner/repo or owner/* selector.
+func ParseRepositoryPattern(value string) (string, string, error) {
 	parts := strings.SplitN(strings.TrimSpace(value), "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", errors.New("repository selector must be owner/repo or owner/*")
@@ -1056,5 +999,5 @@ func parseEventTime(value string) (time.Time, error) {
 }
 
 func formatEventTime(value time.Time) string {
-	return value.UTC().Format("2006-01-02T15:04:05Z")
+	return value.UTC().Format(contracts.TimestampLayout)
 }
