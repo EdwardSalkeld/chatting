@@ -16,7 +16,6 @@ from app.main_reply import (
 )
 from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
-from app.task_ledger import TaskLedgerStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
 
 
@@ -606,14 +605,14 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(len(submit.calls), 2)
         self.assertEqual(submit.calls[1][1]["message"]["channel"], "telegram")
 
-    def test_reaction_via_spec_file_using_task_ledger_message_id(self) -> None:
+    def test_reaction_via_spec_file_uses_inbound_message_id_from_worker_inbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"
             config_path.write_text(
                 json.dumps({"db_path": str(db_path)}), encoding="utf-8"
             )
-            ledger = TaskLedgerStore(str(db_path))
+            store = SQLiteStateStore(str(db_path))
             envelope = TaskEnvelope(
                 id="telegram:53",
                 source="im",
@@ -629,7 +628,7 @@ class MainReplyCliTests(unittest.TestCase):
                 ),
                 dedupe_key="telegram:53",
             )
-            ledger.record_task(
+            store.stage_inbox_task(
                 TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53")
             )
 

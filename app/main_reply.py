@@ -14,7 +14,6 @@ from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
-from app.task_ledger import TaskLedgerStore
 from app.telegram_text import normalize_telegram_outbound_text
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
 
@@ -146,11 +145,11 @@ def _resolve_telegram_message_id(
     if not db_path:
         raise ValueError("telegram_message_id is required")
 
-    ledger_record = TaskLedgerStore(db_path).get_task(task_id)
-    if ledger_record is None:
+    inbox_task = SQLiteStateStore(db_path).get_inbox_task(task_id=task_id)
+    if inbox_task is None:
         raise ValueError("telegram_message_id is required")
 
-    message_id = ledger_record.task_message.envelope.reply_channel.metadata.get(
+    message_id = inbox_task.task_message.envelope.reply_channel.metadata.get(
         "message_id"
     )
     if isinstance(message_id, int) and message_id > 0:
