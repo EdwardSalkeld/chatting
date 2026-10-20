@@ -6,30 +6,11 @@ import json
 from datetime import datetime, timezone
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.models import OutboundMessage, ReplyChannel, TaskEnvelope
+from app.models import OutboundMessage, TaskEnvelope
 
 INTERNAL_SOURCE = "internal"
 INTERNAL_REPLY_CHANNEL_TYPE = "internal"
 INTERNAL_HEARTBEAT_TARGET = "heartbeat"
-
-
-def build_internal_heartbeat_envelope(*, sequence: int, now: datetime) -> TaskEnvelope:
-    current_time = _ensure_utc(now)
-    heartbeat_id = f"internal-heartbeat:{current_time.isoformat()}:{sequence}"
-    return TaskEnvelope(
-        id=heartbeat_id,
-        source=INTERNAL_SOURCE,
-        received_at=current_time,
-        actor="message-handler",
-        content="internal heartbeat ping",
-        attachments=[],
-        context_refs=[],
-        reply_channel=ReplyChannel(
-            type=INTERNAL_REPLY_CHANNEL_TYPE,
-            target=INTERNAL_HEARTBEAT_TARGET,
-        ),
-        dedupe_key=heartbeat_id,
-    )
 
 
 def is_internal_heartbeat_envelope(envelope: TaskEnvelope) -> bool:
@@ -108,6 +89,5 @@ __all__ = [
     "INTERNAL_SOURCE",
     "build_internal_completion_egress",
     "build_internal_heartbeat_egress",
-    "build_internal_heartbeat_envelope",
     "is_internal_heartbeat_envelope",
 ]

@@ -1,4 +1,4 @@
-"""SQLite-backed state store for idempotency and run history."""
+"""SQLite-backed state store for the worker inbox and run history."""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from app.state import work_items
 from app.models import (
     AttachmentRef,
     AuditEvent,
-    DeadLetterRecord,
-    PromptContext,
     ReplyChannel,
     RunRecord,
     TaskEnvelope,
@@ -49,7 +47,7 @@ class TelegramHistoryTurn:
 
 
 class SQLiteStateStore:
-    """Persist dedupe keys and run records in SQLite."""
+    """Persist worker inbox, run records and activity in SQLite."""
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
@@ -66,7 +64,6 @@ class SQLiteStateStore:
             # Managers, supervisors and the activity API use separate
             # connections. Readers must not block a supervisor's lease commit.
             connection.execute("PRAGMA journal_mode=WAL")
-            self._initialize_idempotency_table(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_records (
@@ -109,40 +106,6 @@ class SQLiteStateStore:
                     created_at TEXT NOT NULL,
                     replayed_run_id TEXT,
                     schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS conversation_turns (
-                    turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    channel TEXT NOT NULL,
-                    target TEXT NOT NULL,
-                    topic_id INTEGER,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    run_id TEXT,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS dispatched_events (
-                    run_id TEXT NOT NULL,
-                    event_index INTEGER NOT NULL,
-                    dispatched_at TEXT NOT NULL,
-                    PRIMARY KEY (run_id, event_index)
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS dispatched_event_ids (
-                    task_id TEXT NOT NULL,
-                    event_id TEXT NOT NULL,
-                    dispatched_at TEXT NOT NULL,
-                    PRIMARY KEY (task_id, event_id)
                 )
                 """
             )
@@ -273,12 +236,9 @@ class SQLiteStateStore:
                 "audit_events",
                 "dead_letters",
                 "worker_activity_events",
-                "conversation_turns",
                 "egress_outbox",
                 "worker_telegram_history",
                 "worker_inbox",
-                "dispatched_events",
-                "dispatched_event_ids",
             ):
                 columns = {
                     row[1] for row in connection.execute(f"PRAGMA table_info({table})")
@@ -813,20 +773,6 @@ class SQLiteStateStore:
             )
             connection.commit()
 
-    def release_active_inbox_task(self, *, task_id: str) -> None:
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE worker_inbox
-                SET state = CASE WHEN state = 'active' THEN 'pending' ELSE state END,
-                    lease_owner = NULL, updated_at = ?
-                WHERE task_id = ? AND lease_owner IS NOT NULL
-                """,
-                (now, task_id),
-            )
-            connection.commit()
-
     def claim_conversation_followups(self, *, parent_task_id: str) -> list[InboxTask]:
         """Attach all currently pending Telegram turns in the parent's conversation."""
         from app.model_command import parse_model_command
@@ -1040,60 +986,6 @@ class SQLiteStateStore:
                 "SELECT * FROM worker_inbox WHERE task_id = ?", (task_id,)
             ).fetchone()
         return None if row is None else _inbox_task_from_row(row)
-
-    def _initialize_idempotency_table(self, connection: sqlite3.Connection) -> None:
-        idempotency_columns = connection.execute(
-            "PRAGMA table_info(idempotency_keys)"
-        ).fetchall()
-        if not idempotency_columns:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS idempotency_keys (
-                    source TEXT NOT NULL,
-                    dedupe_key TEXT NOT NULL,
-                    seen_at TEXT NOT NULL,
-                    PRIMARY KEY (source, dedupe_key)
-                )
-                """
-            )
-            return
-
-        column_names = {row["name"] for row in idempotency_columns}
-        if column_names == {"source", "dedupe_key", "seen_at"}:
-            return
-
-        raise ValueError(
-            "unsupported idempotency_keys schema; expected columns "
-            "{source, dedupe_key, seen_at}"
-        )
-
-    def seen(self, source: str, dedupe_key: str) -> bool:
-        if not source:
-            raise ValueError("source is required")
-        if not dedupe_key:
-            raise ValueError("dedupe_key is required")
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT 1 FROM idempotency_keys WHERE source = ? AND dedupe_key = ?",
-                (source, dedupe_key),
-            ).fetchone()
-        return row is not None
-
-    def mark_seen(self, source: str, dedupe_key: str) -> None:
-        if not source:
-            raise ValueError("source is required")
-        if not dedupe_key:
-            raise ValueError("dedupe_key is required")
-        seen_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO idempotency_keys (source, dedupe_key, seen_at)
-                VALUES (?, ?, ?)
-                """,
-                (source, dedupe_key, seen_at),
-            )
-            connection.commit()
 
     def append_run(self, record: RunRecord) -> None:
         payload = record.to_dict()
@@ -1425,190 +1317,6 @@ class SQLiteStateStore:
                 raise RuntimeError("failed to retrieve dead letter ID after insert")
             return cursor.lastrowid
 
-    def list_dead_letters(self, *, status: str | None = None) -> list[DeadLetterRecord]:
-        with closing(self._connect()) as connection:
-            if status is None:
-                rows = connection.execute(
-                    "SELECT * FROM dead_letters ORDER BY dead_letter_id ASC"
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """
-                    SELECT * FROM dead_letters
-                    WHERE status = ?
-                    ORDER BY dead_letter_id ASC
-                    """,
-                    (status,),
-                ).fetchall()
-
-        return [
-            DeadLetterRecord(
-                dead_letter_id=row["dead_letter_id"],
-                run_id=row["run_id"],
-                envelope=_task_envelope_from_dict(json.loads(row["envelope_json"])),
-                reason_codes=json.loads(row["reason_codes_json"]),
-                last_error=row["last_error"],
-                attempt_count=row["attempt_count"],
-                status=row["status"],
-                created_at=_parse_rfc3339_utc(row["created_at"]),
-                replayed_run_id=row["replayed_run_id"],
-                schema_version=row["schema_version"],
-            )
-            for row in rows
-        ]
-
-    def mark_dead_letter_replayed(
-        self, dead_letter_id: int, replayed_run_id: str
-    ) -> None:
-        if dead_letter_id <= 0:
-            raise ValueError("dead_letter_id must be positive")
-        if not replayed_run_id:
-            raise ValueError("replayed_run_id is required")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE dead_letters
-                SET status = ?, replayed_run_id = ?
-                WHERE dead_letter_id = ?
-                """,
-                ("replayed", replayed_run_id, dead_letter_id),
-            )
-            connection.commit()
-
-    def append_conversation_turn(
-        self,
-        *,
-        channel: str,
-        target: str,
-        role: str,
-        content: str,
-        run_id: str | None = None,
-    ) -> None:
-        if not channel:
-            raise ValueError("channel is required")
-        if not target:
-            raise ValueError("target is required")
-        if role not in {"user", "assistant"}:
-            raise ValueError("role must be user or assistant")
-        if not content.strip():
-            raise ValueError("content is required")
-        if run_id is not None and not run_id:
-            raise ValueError("run_id must not be empty")
-
-        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT INTO conversation_turns (
-                    channel,
-                    target,
-                    role,
-                    content,
-                    run_id,
-                    created_at,
-                    work_item_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?,
-                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
-                """,
-                (channel, target, role, content, run_id, created_at, run_id),
-            )
-            connection.commit()
-
-    def list_recent_conversation_turns(
-        self,
-        *,
-        channel: str,
-        target: str,
-        limit: int,
-    ) -> list[tuple[str, str]]:
-        if not channel:
-            raise ValueError("channel is required")
-        if not target:
-            raise ValueError("target is required")
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT role, content
-                FROM conversation_turns
-                WHERE channel = ? AND target = ?
-                ORDER BY turn_id DESC
-                LIMIT ?
-                """,
-                (channel, target, limit),
-            ).fetchall()
-        return [(row["role"], row["content"]) for row in reversed(rows)]
-
-    def mark_dispatched_event(self, *, run_id: str, event_index: int) -> None:
-        if not run_id:
-            raise ValueError("run_id is required")
-        if event_index < 0:
-            raise ValueError("event_index must be non-negative")
-        dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO dispatched_events
-                    (run_id, event_index, dispatched_at, work_item_id)
-                VALUES (?, ?, ?,
-                    (SELECT work_item_id FROM run_records WHERE run_id = ?))
-                """,
-                (run_id, event_index, dispatched_at, run_id),
-            )
-            connection.commit()
-
-    def list_dispatched_event_indices(self, *, run_id: str) -> list[int]:
-        if not run_id:
-            raise ValueError("run_id is required")
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT event_index
-                FROM dispatched_events
-                WHERE run_id = ?
-                ORDER BY event_index ASC
-                """,
-                (run_id,),
-            ).fetchall()
-        return [int(row["event_index"]) for row in rows]
-
-    def mark_dispatched_event_id(self, *, task_id: str, event_id: str) -> None:
-        if not task_id:
-            raise ValueError("task_id is required")
-        if not event_id:
-            raise ValueError("event_id is required")
-        dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO dispatched_event_ids
-                    (task_id, event_id, dispatched_at, work_item_id)
-                VALUES (?, ?, ?,
-                    (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
-                """,
-                (task_id, event_id, dispatched_at, task_id),
-            )
-            connection.commit()
-
-    def has_dispatched_event_id(self, *, task_id: str, event_id: str) -> bool:
-        if not task_id:
-            raise ValueError("task_id is required")
-        if not event_id:
-            raise ValueError("event_id is required")
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                """
-                SELECT 1
-                FROM dispatched_event_ids
-                WHERE task_id = ? AND event_id = ?
-                """,
-                (task_id, event_id),
-            ).fetchone()
-        return row is not None
-
     def queue_egress_outbox_event(self, message: EgressQueueMessage) -> None:
         if message.event_id is None:
             raise ValueError("event_id is required")
@@ -1643,21 +1351,6 @@ class SQLiteStateStore:
                     now,
                     message.task_id,
                 ),
-            )
-            connection.commit()
-
-    def mark_egress_outbox_event_published(self, *, event_id: str) -> None:
-        if not event_id:
-            raise ValueError("event_id is required")
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                UPDATE egress_outbox
-                SET publish_state = ?, updated_at = ?
-                WHERE event_id = ?
-                """,
-                ("published_unacked", now, event_id),
             )
             connection.commit()
 
@@ -1750,11 +1443,6 @@ class SQLiteStateStore:
                 ),
             )
             connection.commit()
-
-    def count_task_main_reply_egress_events(self, *, task_id: str) -> int:
-        if not task_id:
-            raise ValueError("task_id is required")
-        return self._count_main_reply_egress_events(task_ids=[task_id])
 
     def count_conversation_bundle_main_reply_egress_events(
         self, *, parent_task_id: str
@@ -2037,74 +1725,6 @@ def _inbox_task_from_row(
             )
         ),
     )
-
-
-def _task_envelope_from_dict(payload: dict[str, object]) -> TaskEnvelope:
-    reply_channel = payload.get("reply_channel")
-    if not isinstance(reply_channel, dict):
-        raise ValueError("invalid dead letter envelope payload")
-    raw_context_refs = payload.get("context_refs", [])
-    if not isinstance(raw_context_refs, list):
-        raise ValueError("invalid dead letter envelope payload")
-    raw_attachments = payload.get("attachments", [])
-    if not isinstance(raw_attachments, list):
-        raise ValueError("invalid dead letter envelope payload")
-    raw_prompt_context = payload.get("prompt_context", {})
-    if not isinstance(raw_prompt_context, dict):
-        raise ValueError("invalid dead letter envelope payload")
-    context_refs = [str(value) for value in raw_context_refs]
-    attachments: list[AttachmentRef] = []
-    for raw_attachment in raw_attachments:
-        if not isinstance(raw_attachment, dict):
-            raise ValueError("invalid dead letter envelope payload")
-        uri = raw_attachment.get("uri")
-        if not isinstance(uri, str) or not uri.strip():
-            raise ValueError("invalid dead letter envelope payload")
-        name = raw_attachment.get("name")
-        if name is not None and not isinstance(name, str):
-            raise ValueError("invalid dead letter envelope payload")
-        attachments.append(AttachmentRef(uri=uri, name=name))
-    return TaskEnvelope(
-        id=str(payload["id"]),
-        source=cast(
-            Literal["cron", "email", "im", "webhook", "internal", "reminder"],
-            str(payload["source"]),
-        ),
-        received_at=_parse_rfc3339_utc(str(payload["received_at"])),
-        actor=str(payload["actor"]) if isinstance(payload.get("actor"), str) else None,
-        content=str(payload["content"]),
-        attachments=attachments,
-        context_refs=context_refs,
-        reply_channel=ReplyChannel(
-            type=str(reply_channel["type"]),
-            target=str(reply_channel["target"]),
-            metadata=dict(reply_channel.get("metadata", {}))
-            if isinstance(reply_channel.get("metadata"), dict)
-            else {},
-        ),
-        dedupe_key=str(payload["dedupe_key"]),
-        prompt_context=PromptContext(
-            global_instructions=_string_list_from_payload(
-                raw_prompt_context.get("global_instructions", [])
-            ),
-            source_instructions=_string_list_from_payload(
-                raw_prompt_context.get("source_instructions", [])
-            ),
-            reply_channel_instructions=_string_list_from_payload(
-                raw_prompt_context.get("reply_channel_instructions", [])
-            ),
-            task_instructions=_string_list_from_payload(
-                raw_prompt_context.get("task_instructions", [])
-            ),
-        ),
-        schema_version=str(payload.get("schema_version", "1.0")),
-    )
-
-
-def _string_list_from_payload(value: object) -> list[str]:
-    if not isinstance(value, list):
-        raise ValueError("invalid dead letter envelope payload")
-    return [str(item) for item in value]
 
 
 def _json_safe_dict(value: dict[str, object]) -> dict[str, object]:

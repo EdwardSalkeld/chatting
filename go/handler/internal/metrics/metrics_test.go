@@ -15,7 +15,6 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 	recorder := New(mustTime(t, "2026-03-09T12:00:00Z"), clock)
 
 	recorder.RecordLoop(2, mustTime(t, "2026-03-09T12:00:04Z"))
-	recorder.RecordEgressLoop(mustTime(t, "2026-03-09T12:00:05Z"))
 	recorder.RecordEgressResult("dispatched", "")
 	recorder.RecordEgressResult("completed", "")
 	recorder.RecordEgressResult("deduped", "")

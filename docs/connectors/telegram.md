@@ -13,11 +13,8 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_api_base_url` (default `https://api.telegram.org`)
 - `telegram_poll_timeout_seconds` (default `20`)
 - `telegram_attachment_dir` (optional local directory for downloaded photo and document attachments; defaults to a temp-dir path if omitted)
-- `telegram_attachment_cleanup_grace_seconds` (default `604800`, or 7 days)
-- `telegram_attachment_max_age_seconds` (default `2592000`, or 30 days)
 - `telegram_allowed_chat_ids` (optional list)
 - `telegram_allowed_channel_ids` (optional list, required to ingest `channel_post`)
-- `telegram_prompt_context` (optional list)
 - `telegram_context_refs` (optional list; falls back to `context_refs`)
 
 ## Output mapping
@@ -36,10 +33,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 
 ## Notes
 
-- Prompt guidance reaches the worker separately from `context_refs`. The assembled order is:
-  `global_prompt_context`, then `telegram_prompt_context`, then the task content itself.
-- The handler still records conversation turns but passes the original message to the worker without adding its stored history.
-- The worker supplies up to 30 earlier turns from its own Telegram history to each executor run. It records inbound and successfully delivered outbound turns by chat, topic, and message ID, including reply anchors and attachments. This history starts when worker recording began; handler-only older turns are not copied into it.
+- The worker supplies up to 30 earlier turns from its own Telegram history to each executor run. It records inbound and successfully delivered outbound turns by chat, topic, and message ID, including reply anchors and attachments.
 - The executor can search older worker turns by words, sender, and date using `app.main_history --query`, then retrieve turns around a returned message ID using `--around-message-id`. Both commands are scoped to the task's chat and topic.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
@@ -54,7 +48,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - Offset is advanced as `highest_update_id + 1` each poll.
 - The message handler tracks downloaded Telegram attachments in its SQLite DB and only makes them cleanup-eligible after the task reaches terminal completion.
 - Cleanup uses a hybrid policy:
-  terminal tasks wait for `telegram_attachment_cleanup_grace_seconds`, while orphaned/dead-lettered attachments are reclaimed once they exceed `telegram_attachment_max_age_seconds`.
+  terminal tasks wait 7 days, while orphaned/dead-lettered attachments are reclaimed after 30 days.
 - Cleanup runs in the message-handler loop and logs tracked, eligible, deleted, missing, and failed attachment cleanup events.
 - `telegram_attachment_dir` must be readable by the worker, which runs as a different user, so the executor can open downloaded files.
 

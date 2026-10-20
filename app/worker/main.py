@@ -21,7 +21,6 @@ from app.broker import (
 )
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.worker.activity import (
-    DEFAULT_ACTIVITY_HISTORY_LIMIT,
     DEFAULT_ACTIVITY_HOST,
     DEFAULT_ACTIVITY_PORT,
     WorkerActivityMonitor,
@@ -45,24 +44,18 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
     {
         "activity_port",
         "bbmb_address",
-        "claude_command",
         "codex_command",
         "codex_working_dir",
         "workspace_root",
         "db_path",
-        "activity_history_limit",
         "handler_egress_url",
         "max_attempts",
         "max_loops",
         "poll_timeout_seconds",
         "sleep_seconds",
         "executor_pool_size",
-        "supervisor_dir",
-        "app_server_command",
-        "app_server_dir",
     }
 )
-BBMB_PICKUP_WAIT_SECONDS = 10
 
 
 def _log_worker_processed(*, task_id: str, result) -> None:
@@ -98,86 +91,9 @@ def _configure_logging() -> None:
     )
 
 
-def _positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be a positive integer")
-    return parsed
-
-
-def _non_negative_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
-    return parsed
-
-
-def _positive_float(value: str) -> float:
-    parsed = float(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be positive")
-    return parsed
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the chatting worker process.")
     parser.add_argument("--config", help="Path to JSON config file.")
-    parser.add_argument("--db-path", help="Path to worker SQLite state DB.")
-    parser.add_argument("--bbmb-address", help="BBMB broker address host:port.")
-    parser.add_argument(
-        "--supervisor-dir",
-        help="Private directory for supervisor sockets and slot locks.",
-    )
-    parser.add_argument(
-        "--handler-egress-url",
-        help="Handler synchronous egress endpoint URL (default the worker config's handler_egress_url).",
-    )
-    parser.add_argument(
-        "--max-attempts",
-        type=_positive_int,
-        help="Maximum execution attempts per task.",
-    )
-    parser.add_argument(
-        "--max-loops", type=_positive_int, help="Optional loop limit for smoke tests."
-    )
-    parser.add_argument(
-        "--executor-pool-size",
-        type=_positive_int,
-        help="Maximum concurrent executor tasks (default 2).",
-    )
-    parser.add_argument(
-        "--poll-timeout-seconds",
-        type=_positive_int,
-        help="Queue pickup timeout seconds.",
-    )
-    parser.add_argument(
-        "--sleep-seconds",
-        type=_positive_float,
-        help="Sleep duration after empty pickup.",
-    )
-    parser.add_argument(
-        "--codex-command", help="Executor command to launch for Codex runs."
-    )
-    parser.add_argument(
-        "--claude-command", help="Executor command to launch for Claude runs."
-    )
-    parser.add_argument(
-        "--activity-history-limit",
-        type=_positive_int,
-        help="Maximum recent worker activity events to show in the UI.",
-    )
-    parser.add_argument(
-        "--activity-port",
-        type=_non_negative_int,
-        help="Worker activity HTTP port. Use 0 to pick an ephemeral port.",
-    )
-    parser.add_argument(
-        "--codex-working-dir",
-        help="Working directory used only for launching executor subprocesses.",
-    )
-    parser.add_argument(
-        "--workspace-root", help="Root for persistent lane directories."
-    )
     return parser.parse_args()
 
 
@@ -205,16 +121,8 @@ def _load_config(
 
 
 def _resolve_str(
-    cli_value: str | None,
-    config_value: object,
-    *,
-    default_value: str,
-    setting_name: str,
+    config_value: object, *, default_value: str, setting_name: str
 ) -> str:
-    if cli_value is not None:
-        if not cli_value.strip():
-            raise ValueError(f"{setting_name} must not be empty")
-        return cli_value
     if config_value is None:
         return default_value
     if not isinstance(config_value, str) or not config_value.strip():
@@ -222,29 +130,15 @@ def _resolve_str(
     return config_value
 
 
-def _resolve_optional_str(
-    cli_value: str | None, config_value: object, *, setting_name: str
-) -> str | None:
-    if cli_value is not None:
-        if not cli_value.strip():
-            raise ValueError(f"{setting_name} must not be empty")
-        return cli_value
+def _resolve_optional_str(config_value: object, *, setting_name: str) -> str | None:
     if config_value is None:
         return None
-    if not isinstance(config_value, str) or not config_value.strip():
-        raise ValueError(f"config {setting_name} must be a non-empty string")
-    return config_value
+    return _resolve_str(config_value, default_value="", setting_name=setting_name)
 
 
 def _resolve_positive_int(
-    cli_value: int | None,
-    config_value: object,
-    *,
-    default_value: int,
-    setting_name: str,
+    config_value: object, *, default_value: int, setting_name: str
 ) -> int:
-    if cli_value is not None:
-        return cli_value
     if config_value is None:
         return default_value
     if (
@@ -257,14 +151,8 @@ def _resolve_positive_int(
 
 
 def _resolve_non_negative_int(
-    cli_value: int | None,
-    config_value: object,
-    *,
-    default_value: int,
-    setting_name: str,
+    config_value: object, *, default_value: int, setting_name: str
 ) -> int:
-    if cli_value is not None:
-        return cli_value
     if config_value is None:
         return default_value
     if (
@@ -277,14 +165,8 @@ def _resolve_non_negative_int(
 
 
 def _resolve_positive_float(
-    cli_value: float | None,
-    config_value: object,
-    *,
-    default_value: float,
-    setting_name: str,
+    config_value: object, *, default_value: float, setting_name: str
 ) -> float:
-    if cli_value is not None:
-        return cli_value
     candidate = default_value if config_value is None else config_value
     if isinstance(candidate, bool) or not isinstance(candidate, (int, float)):
         raise ValueError(f"config {setting_name} must be numeric")
@@ -294,58 +176,29 @@ def _resolve_positive_float(
     return parsed
 
 
-def _resolve_bool(
-    cli_value: bool, config_value: object, *, default_value: bool, setting_name: str
-) -> bool:
-    if cli_value:
-        return True
-    if config_value is None:
-        return default_value
-    if not isinstance(config_value, bool):
-        raise ValueError(f"config {setting_name} must be a boolean")
-    return config_value
-
-
-def _build_executor(args: argparse.Namespace, config: dict[str, object]) -> Executor:
+def _build_executor(config: dict[str, object], config_path: str | None) -> CodexExecutor:
     codex_working_dir = _resolve_optional_str(
-        args.codex_working_dir,
-        config.get("codex_working_dir"),
-        setting_name="codex_working_dir",
+        config.get("codex_working_dir"), setting_name="codex_working_dir"
     )
     workspace_root = _resolve_optional_str(
-        args.workspace_root, config.get("workspace_root"), setting_name="workspace_root"
+        config.get("workspace_root"), setting_name="workspace_root"
     )
     if workspace_root is not None and not Path(workspace_root).is_absolute():
         raise ValueError("workspace_root must be absolute")
-
-    # Prefer codex_command if set, fall back to claude_command
-    codex_raw = _resolve_optional_str(
-        args.codex_command,
+    command_line = _resolve_str(
         config.get("codex_command"),
+        default_value="codex exec --json",
         setting_name="codex_command",
     )
-    claude_raw = _resolve_optional_str(
-        getattr(args, "claude_command", None),
-        config.get("claude_command"),
-        setting_name="claude_command",
-    )
-
-    if codex_raw:
-        command = tuple(shlex.split(codex_raw))
-    elif claude_raw:
-        command = tuple(shlex.split(claude_raw))
-    else:
-        command = ("codex", "exec", "--json")
-
+    command = tuple(shlex.split(command_line))
     if not command:
-        raise ValueError("codex_command or claude_command must be configured")
+        raise ValueError("codex_command must be configured")
 
-    executor_env = _build_executor_env(args.config, os.environ)
     return CodexExecutor(
         command=command,
         cwd=codex_working_dir,
         workspace_root=workspace_root,
-        env=executor_env,
+        env=_build_executor_env(config_path, os.environ),
     )
 
 
@@ -365,61 +218,42 @@ def main() -> int:
     config = _load_config(args.config, os.environ)
 
     db_path = _resolve_str(
-        args.db_path,
         config.get("db_path"),
         default_value=str(Path(tempfile.gettempdir()) / "chatting-worker-state.db"),
         setting_name="db_path",
     )
     bbmb_address = _resolve_str(
-        args.bbmb_address,
         config.get("bbmb_address"),
         default_value="127.0.0.1:9876",
         setting_name="bbmb_address",
     )
     handler_egress_url = _resolve_str(
-        args.handler_egress_url,
         config.get("handler_egress_url"),
         default_value=DEFAULT_HANDLER_EGRESS_URL,
         setting_name="handler_egress_url",
     )
     max_attempts = _resolve_positive_int(
-        args.max_attempts,
-        config.get("max_attempts"),
-        default_value=2,
-        setting_name="max_attempts",
+        config.get("max_attempts"), default_value=2, setting_name="max_attempts"
     )
+    # Tests use max_loops to stop the worker; production runs forever.
     max_loops = _resolve_positive_int(
-        args.max_loops,
-        config.get("max_loops"),
-        default_value=0,
-        setting_name="max_loops",
+        config.get("max_loops"), default_value=0, setting_name="max_loops"
     )
     poll_timeout_seconds = _resolve_positive_int(
-        args.poll_timeout_seconds,
         config.get("poll_timeout_seconds"),
         default_value=20,
         setting_name="poll_timeout_seconds",
     )
     sleep_seconds = _resolve_positive_float(
-        args.sleep_seconds,
-        config.get("sleep_seconds"),
-        default_value=1.0,
-        setting_name="sleep_seconds",
+        config.get("sleep_seconds"), default_value=1.0, setting_name="sleep_seconds"
     )
     executor_pool_size = _resolve_positive_int(
-        args.executor_pool_size,
         config.get("executor_pool_size"),
         default_value=2,
         setting_name="executor_pool_size",
     )
-    activity_history_limit = _resolve_positive_int(
-        args.activity_history_limit,
-        config.get("activity_history_limit"),
-        default_value=DEFAULT_ACTIVITY_HISTORY_LIMIT,
-        setting_name="activity_history_limit",
-    )
+    # Tests set 0 so parallel workers do not clash on the default port.
     activity_port = _resolve_non_negative_int(
-        args.activity_port,
         config.get("activity_port"),
         default_value=DEFAULT_ACTIVITY_PORT,
         setting_name="activity_port",
@@ -437,18 +271,12 @@ def main() -> int:
         raise RuntimeError("another worker already owns this database") from exc
 
     store = SQLiteStateStore(db_path)
-    supervisor_dir = _resolve_str(
-        args.supervisor_dir,
-        config.get("supervisor_dir"),
-        default_value=f"{Path(db_path).resolve()}.supervisors",
-        setting_name="supervisor_dir",
-    )
     supervisors = SupervisorPool(
-        directory=Path(supervisor_dir),
+        directory=Path(f"{Path(db_path).resolve()}.supervisors"),
         size=executor_pool_size,
         settings={
             "db_path": str(Path(db_path).resolve()),
-            "args": vars(args),
+            "config_path": args.config,
             "config": config,
             "max_attempts": max_attempts,
             "handler_egress_url": handler_egress_url,
@@ -461,10 +289,7 @@ def main() -> int:
             if status["task_id"] is not None
         )
     )
-    activity_monitor = WorkerActivityMonitor(
-        store=store,
-        history_limit=activity_history_limit,
-    )
+    activity_monitor = WorkerActivityMonitor(store=store)
     activity_server: WorkerActivityServer = start_worker_activity_server(
         host=DEFAULT_ACTIVITY_HOST,
         port=activity_port,

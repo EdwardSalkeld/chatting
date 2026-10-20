@@ -25,7 +25,7 @@ Its inspection endpoint is described below.
 | `review` | Immediate Telegram to the action destination, labelled `review`; no Linear issue | Nothing, by default |
 
 Action mail always stays in the inbox, unread by this workflow, until you
-archive it yourself. A `folders.action` entry is ignored.
+archive it yourself; configuring a folder for it fails startup.
 
 Other filing is driven by the `folders` map. A category with no entry, or an
 empty one, is left where it is. `review` is deliberately configured that way:
@@ -220,9 +220,10 @@ and only mail that needs acting on buys a summary.
 
 ## Configuration
 
-The `personal_inbox` object in the handler config enables the workflow;
-[the example](../../configs/personal-inbox.handler.example.json) lists its
-keys. Defaults are disabled, dry-run, no backfill and no folders. Folders in
+The `personal_inbox` object in the handler config enables the workflow. Its
+keys are defined in
+[`personalinbox/config.go`](../../go/handler/internal/personalinbox/config.go),
+and lab's `chatting-config.nix` shows the deployed values. Defaults are disabled, dry-run, no backfill and no folders. Folders in
 the `folders` map must exist before startup.
 
 The handler alone receives:

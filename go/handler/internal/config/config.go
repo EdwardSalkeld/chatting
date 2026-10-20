@@ -16,14 +16,11 @@ import (
 )
 
 const (
-	MessageHandlerConfigPathEnvVar = "CHATTING_MESSAGE_HANDLER_CONFIG_PATH"
-	DefaultBBMBAddress             = "127.0.0.1:9876"
-	DefaultPollIntervalSeconds     = 30.0
-	DefaultPollTimeoutSeconds      = 2
-	DefaultMetricsHost             = "127.0.0.1"
-	DefaultMetricsPort             = 9464
-	DefaultEgressHTTPHost          = "127.0.0.1"
-	DefaultEgressHTTPPort          = 9467
+	DefaultBBMBAddress         = "127.0.0.1:9876"
+	DefaultPollIntervalSeconds = 30.0
+	DefaultMetricsHost         = "127.0.0.1"
+	DefaultMetricsPort         = 9464
+	DefaultEgressHTTPPort      = 9467
 )
 
 var allowedKeys = map[string]bool{
@@ -32,18 +29,12 @@ var allowedKeys = map[string]bool{
 	"db_path":                        true,
 	"max_loops":                      true,
 	"poll_interval_seconds":          true,
-	"poll_timeout_seconds":           true,
 	"metrics_host":                   true,
 	"metrics_port":                   true,
-	"egress_http_host":               true,
 	"egress_http_port":               true,
 	"egress_attachment_allowed_dirs": true,
 	"allowed_egress_channels":        true,
-	"global_prompt_context":          true,
-	"cron_prompt_context":            true,
-	"email_prompt_context":           true,
 	"context_refs":                   true,
-	"schedule_file":                  true,
 	"imap_host":                      true,
 	"imap_port":                      true,
 	"imap_username":                  true,
@@ -66,17 +57,11 @@ var allowedKeys = map[string]bool{
 	"telegram_allowed_chat_ids":     true,
 	"telegram_allowed_channel_ids":  true,
 
-	"telegram_attachment_dir":                   true,
-	"telegram_attachment_cleanup_grace_seconds": true,
-	"telegram_attachment_max_age_seconds":       true,
-	"telegram_prompt_context":                   true,
-	"telegram_context_refs":                     true,
+	"telegram_attachment_dir": true,
+	"telegram_context_refs":   true,
 
-	"github_repositories":        true,
-	"github_assignee_login":      true,
-	"github_context_refs":        true,
-	"github_max_issues":          true,
-	"github_max_timeline_events": true,
+	"github_repositories":   true,
+	"github_assignee_login": true,
 }
 
 type Config struct {
@@ -85,18 +70,12 @@ type Config struct {
 	DBPath                      string
 	MaxLoops                    int
 	PollIntervalSeconds         float64
-	PollTimeoutSeconds          int
 	MetricsHost                 string
 	MetricsPort                 int
-	EgressHTTPHost              string
 	EgressHTTPPort              int
 	EgressAttachmentAllowedDirs []string
 	AllowedEgressChannels       []string
-	GlobalPromptContext         []string
-	CronPromptContext           []string
-	EmailPromptContext          []string
 	ContextRefs                 []string
-	ScheduleFile                string
 	IMAPHost                    string
 	IMAPPort                    int
 	IMAPUsername                string
@@ -111,25 +90,18 @@ type Config struct {
 	SMTPFrom                    string
 	SMTPStartTLS                bool
 	SMTPUseSSL                  bool
-	ErrorEmailTo                string
 
-	TelegramEnabled                       bool
-	TelegramBotTokenEnv                   string
-	TelegramAPIBaseURL                    string
-	TelegramPollTimeoutSeconds            int
-	TelegramAllowedChatIDs                []string
-	TelegramAllowedChannelIDs             []string
-	TelegramAttachmentDir                 string
-	TelegramAttachmentCleanupGraceSeconds int
-	TelegramAttachmentMaxAgeSeconds       int
-	TelegramPromptContext                 []string
-	TelegramContextRefs                   []string
+	TelegramEnabled            bool
+	TelegramBotTokenEnv        string
+	TelegramAPIBaseURL         string
+	TelegramPollTimeoutSeconds int
+	TelegramAllowedChatIDs     []string
+	TelegramAllowedChannelIDs  []string
+	TelegramAttachmentDir      string
+	TelegramContextRefs        []string
 
-	GitHubRepositories      []string
-	GitHubAssigneeLogin     string
-	GitHubContextRefs       []string
-	GitHubMaxIssues         int
-	GitHubMaxTimelineEvents int
+	GitHubRepositories  []string
+	GitHubAssigneeLogin string
 }
 
 func Defaults() Config {
@@ -138,18 +110,12 @@ func Defaults() Config {
 		DBPath:                      filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
 		MaxLoops:                    0,
 		PollIntervalSeconds:         DefaultPollIntervalSeconds,
-		PollTimeoutSeconds:          DefaultPollTimeoutSeconds,
 		MetricsHost:                 DefaultMetricsHost,
 		MetricsPort:                 DefaultMetricsPort,
-		EgressHTTPHost:              DefaultEgressHTTPHost,
 		EgressHTTPPort:              DefaultEgressHTTPPort,
 		EgressAttachmentAllowedDirs: []string{},
 		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
-		GlobalPromptContext:         []string{},
-		CronPromptContext:           []string{},
-		EmailPromptContext:          []string{},
 		ContextRefs:                 []string{},
-		ScheduleFile:                "",
 		IMAPHost:                    "",
 		IMAPPort:                    993,
 		IMAPUsername:                "",
@@ -164,25 +130,18 @@ func Defaults() Config {
 		SMTPFrom:                    "",
 		SMTPStartTLS:                false,
 		SMTPUseSSL:                  true,
-		ErrorEmailTo:                "",
 
-		TelegramEnabled:                       false,
-		TelegramBotTokenEnv:                   "CHATTING_TELEGRAM_BOT_TOKEN",
-		TelegramAPIBaseURL:                    "https://api.telegram.org",
-		TelegramPollTimeoutSeconds:            20,
-		TelegramAllowedChatIDs:                []string{},
-		TelegramAllowedChannelIDs:             []string{},
-		TelegramAttachmentDir:                 "",
-		TelegramAttachmentCleanupGraceSeconds: 604800,
-		TelegramAttachmentMaxAgeSeconds:       2592000,
-		TelegramPromptContext:                 []string{},
-		TelegramContextRefs:                   []string{},
+		TelegramEnabled:            false,
+		TelegramBotTokenEnv:        "CHATTING_TELEGRAM_BOT_TOKEN",
+		TelegramAPIBaseURL:         "https://api.telegram.org",
+		TelegramPollTimeoutSeconds: 20,
+		TelegramAllowedChatIDs:     []string{},
+		TelegramAllowedChannelIDs:  []string{},
+		TelegramAttachmentDir:      "",
+		TelegramContextRefs:        []string{},
 
-		GitHubRepositories:      []string{},
-		GitHubAssigneeLogin:     "",
-		GitHubContextRefs:       []string{},
-		GitHubMaxIssues:         25,
-		GitHubMaxTimelineEvents: 10,
+		GitHubRepositories:  []string{},
+		GitHubAssigneeLogin: "",
 	}
 }
 
@@ -195,22 +154,6 @@ func LoadFile(path string) (Config, error) {
 		return Config{}, err
 	}
 	return Load(raw)
-}
-
-func LoadFromEnv(configPath string, environ map[string]string) (Config, error) {
-	path := configPath
-	if path == "" && environ != nil {
-		if raw, ok := environ[MessageHandlerConfigPathEnvVar]; ok {
-			if strings.TrimSpace(raw) == "" {
-				return Config{}, fmt.Errorf("%s must not be empty", MessageHandlerConfigPathEnvVar)
-			}
-			path = raw
-		}
-	}
-	if path == "" {
-		return Defaults(), nil
-	}
-	return LoadFile(path)
 }
 
 func Load(raw []byte) (Config, error) {
@@ -274,12 +217,6 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if rawValue, ok := payload["poll_timeout_seconds"]; ok && !isNull(rawValue) {
-		config.PollTimeoutSeconds, err = decodePositiveInt(rawValue, "poll_timeout_seconds")
-		if err != nil {
-			return Config{}, err
-		}
-	}
 	if rawValue, ok := payload["metrics_host"]; ok && !isNull(rawValue) {
 		config.MetricsHost, err = decodeNonEmptyString(rawValue, "metrics_host")
 		if err != nil {
@@ -288,12 +225,6 @@ func Load(raw []byte) (Config, error) {
 	}
 	if rawValue, ok := payload["metrics_port"]; ok && !isNull(rawValue) {
 		config.MetricsPort, err = decodePositiveInt(rawValue, "metrics_port")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["egress_http_host"]; ok && !isNull(rawValue) {
-		config.EgressHTTPHost, err = decodeNonEmptyString(rawValue, "egress_http_host")
 		if err != nil {
 			return Config{}, err
 		}
@@ -316,32 +247,8 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if rawValue, ok := payload["global_prompt_context"]; ok && !isNull(rawValue) {
-		config.GlobalPromptContext, err = decodeStringList(rawValue, "global_prompt_context")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["cron_prompt_context"]; ok && !isNull(rawValue) {
-		config.CronPromptContext, err = decodeStringList(rawValue, "cron_prompt_context")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["email_prompt_context"]; ok && !isNull(rawValue) {
-		config.EmailPromptContext, err = decodeStringList(rawValue, "email_prompt_context")
-		if err != nil {
-			return Config{}, err
-		}
-	}
 	if rawValue, ok := payload["context_refs"]; ok && !isNull(rawValue) {
 		config.ContextRefs, err = decodeStringList(rawValue, "context_refs")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["schedule_file"]; ok && !isNull(rawValue) {
-		config.ScheduleFile, err = decodeNonEmptyString(rawValue, "schedule_file")
 		if err != nil {
 			return Config{}, err
 		}
@@ -427,12 +334,6 @@ func Load(raw []byte) (Config, error) {
 			config.SMTPUseSSL = !config.SMTPStartTLS
 		}
 	}
-	if rawValue, ok := payload["error_email_to"]; ok && !isNull(rawValue) {
-		config.ErrorEmailTo, err = decodeNonEmptyString(rawValue, "error_email_to")
-		if err != nil {
-			return Config{}, err
-		}
-	}
 	if rawValue, ok := payload["smtp_use_ssl"]; ok && !isNull(rawValue) {
 		config.SMTPUseSSL, err = decodeBool(rawValue, "smtp_use_ssl")
 		if err != nil {
@@ -481,24 +382,6 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if rawValue, ok := payload["telegram_attachment_cleanup_grace_seconds"]; ok && !isNull(rawValue) {
-		config.TelegramAttachmentCleanupGraceSeconds, err = decodePositiveInt(rawValue, "telegram_attachment_cleanup_grace_seconds")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_attachment_max_age_seconds"]; ok && !isNull(rawValue) {
-		config.TelegramAttachmentMaxAgeSeconds, err = decodePositiveInt(rawValue, "telegram_attachment_max_age_seconds")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["telegram_prompt_context"]; ok && !isNull(rawValue) {
-		config.TelegramPromptContext, err = decodeStringList(rawValue, "telegram_prompt_context")
-		if err != nil {
-			return Config{}, err
-		}
-	}
 	if rawValue, ok := payload["telegram_context_refs"]; ok && !isNull(rawValue) {
 		config.TelegramContextRefs, err = decodeStringList(rawValue, "telegram_context_refs")
 		if err != nil {
@@ -517,24 +400,6 @@ func Load(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if rawValue, ok := payload["github_context_refs"]; ok && !isNull(rawValue) {
-		config.GitHubContextRefs, err = decodeStringList(rawValue, "github_context_refs")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["github_max_issues"]; ok && !isNull(rawValue) {
-		config.GitHubMaxIssues, err = decodePositiveInt(rawValue, "github_max_issues")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	if rawValue, ok := payload["github_max_timeline_events"]; ok && !isNull(rawValue) {
-		config.GitHubMaxTimelineEvents, err = decodePositiveInt(rawValue, "github_max_timeline_events")
-		if err != nil {
-			return Config{}, err
-		}
-	}
 	if config.IMAPHost != "" {
 		if config.IMAPUsername == "" {
 			return Config{}, errors.New("imap_username is required when imap_host is set")
@@ -542,6 +407,9 @@ func Load(raw []byte) (Config, error) {
 		if config.IMAPPasswordEnv == "" {
 			return Config{}, errors.New("imap_password_env is required when imap_host is set")
 		}
+	}
+	if len(config.GitHubRepositories) > 0 && config.GitHubAssigneeLogin == "" {
+		return Config{}, errors.New("github_assignee_login is required when github_repositories is set")
 	}
 	if config.SMTPHost != "" {
 		if config.SMTPFrom == "" {

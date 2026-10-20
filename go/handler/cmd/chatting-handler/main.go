@@ -35,7 +35,11 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
 
-const version = "go-handler-bootstrap"
+const (
+	version = "go-handler-bootstrap"
+	// Completed tasks keep their Telegram attachments this long before cleanup.
+	telegramAttachmentCleanupGrace = 7 * 24 * time.Hour
+)
 
 var ghLookPath = exec.LookPath
 
@@ -48,14 +52,10 @@ type runnerFactory func(ctx context.Context, config handlerconfig.Config) (runne
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(runWithFactory(ctx, os.Args[1:], os.Stdout, os.Stderr, currentEnv(), newRuntimeRunner))
+	os.Exit(runWithFactory(ctx, os.Args[1:], os.Stdout, os.Stderr, newRuntimeRunner))
 }
 
-func run(args []string, stdout io.Writer, stderr io.Writer, environ map[string]string) int {
-	return runWithFactory(context.Background(), args, stdout, stderr, environ, newRuntimeRunner)
-}
-
-func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, environ map[string]string, newRunner runnerFactory) int {
+func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, newRunner runnerFactory) int {
 	flags := flag.NewFlagSet("chatting-handler", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	showVersion := flags.Bool("version", false, "print version and exit")
@@ -69,7 +69,7 @@ func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr
 		return 0
 	}
 
-	config, err := handlerconfig.LoadFromEnv(*configPath, environ)
+	config, err := handlerconfig.LoadFile(*configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "config error: %v\n", err)
 		return 2
@@ -85,17 +85,6 @@ func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr
 		return 1
 	}
 	return 0
-}
-
-func currentEnv() map[string]string {
-	result := make(map[string]string)
-	for _, entry := range os.Environ() {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			result[key] = value
-		}
-	}
-	return result
 }
 
 func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner, error) {
@@ -130,7 +119,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			if !config.TelegramEnabled {
 				return nil
 			}
-			eligibleAfter := time.Now().UTC().Add(time.Duration(config.TelegramAttachmentCleanupGraceSeconds) * time.Second)
+			eligibleAfter := time.Now().UTC().Add(telegramAttachmentCleanupGrace)
 			_, err := store.MarkTelegramTaskAttachmentsEligible(ctx, message.TaskID, eligibleAfter)
 			return err
 		}),
@@ -156,12 +145,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	}
 	metricRecorder := metrics.New(time.Time{}, nil)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
-	scheduleConnector, err := schedule.NewFromSource(
-		schedule.NewStoreSource(store),
-		config.GlobalPromptContext,
-		config.CronPromptContext,
-		nil,
-	)
+	scheduleConnector, err := schedule.NewFromSource(schedule.NewStoreSource(store), nil)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -169,7 +153,6 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	connectors = append(connectors, scheduleConnector)
 	reminderConnector, err := reminderconnector.New(
 		reminderconnector.NewStoreSource(store),
-		config.GlobalPromptContext,
 		[]string{"This task was created as a one-off reminder. Carry out the stored prompt at the requested time and reply through the supplied channel."},
 		nil,
 		metricRecorder,
@@ -193,11 +176,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			Mailbox:         config.IMAPMailbox,
 			SearchCriterion: config.IMAPSearch,
 			ContextRefs:     config.ContextRefs,
-			PromptContext: contracts.PromptContext{
-				GlobalInstructions:       config.GlobalPromptContext,
-				ReplyChannelInstructions: config.EmailPromptContext,
-			},
-			UseSSL: config.IMAPUseSSL,
+			UseSSL:          config.IMAPUseSSL,
 		})
 		if err != nil {
 			_ = store.Close()
@@ -223,10 +202,6 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 			AllowedChannelIDs:  config.TelegramAllowedChannelIDs,
 			ContextRefs:        telegramContextRefs,
 			AttachmentRootDir:  config.TelegramAttachmentDir,
-			PromptContext: contracts.PromptContext{
-				GlobalInstructions:       config.GlobalPromptContext,
-				ReplyChannelInstructions: config.TelegramPromptContext,
-			},
 			ObserveChat: func(ctx context.Context, observation telegram.ChatObservation) error {
 				return store.RecordTelegramChat(ctx, sqlitestate.TelegramChatObservation{
 					ChatID:      observation.ChatID,
@@ -248,21 +223,11 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	}
 	if len(config.GitHubRepositories) > 0 {
 		assigneeLogin := config.GitHubAssigneeLogin
-		if strings.TrimSpace(assigneeLogin) == "" {
-			assigneeLogin, err = githubconnector.FetchAuthenticatedViewerLogin(ctx, nil)
-			if err != nil {
-				_ = store.Close()
-				return nil, fmt.Errorf("github_assignee_login is required when github_repositories is configured unless it can be derived from authenticated gh user")
-			}
-		}
 		checkpointStore := githubCheckpointStore{store: store}
 		assignmentConnector, err := githubconnector.NewIssueAssignmentConnector(githubconnector.IssueAssignmentConfig{
 			RepositoryPatterns: config.GitHubRepositories,
 			AssigneeLogin:      assigneeLogin,
-			ContextRefs:        config.GitHubContextRefs,
 			CheckpointStore:    checkpointStore,
-			MaxIssues:          config.GitHubMaxIssues,
-			MaxTimelineEvents:  config.GitHubMaxTimelineEvents,
 		})
 		if err != nil {
 			_ = store.Close()
@@ -271,10 +236,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		reviewConnector, err := githubconnector.NewPullRequestReviewConnector(githubconnector.PullRequestReviewConfig{
 			RepositoryPatterns: config.GitHubRepositories,
 			AuthorLogin:        assigneeLogin,
-			ContextRefs:        config.GitHubContextRefs,
 			CheckpointStore:    checkpointStore,
-			MaxPullRequests:    config.GitHubMaxIssues,
-			MaxReviews:         config.GitHubMaxTimelineEvents,
 		})
 		if err != nil {
 			_ = store.Close()
@@ -303,7 +265,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 	// reply script. Kept off the metrics mux on purpose: metrics may bind
 	// 0.0.0.0 for scraping, but sending messages to the world must stay
 	// loopback-only, like BBMB.
-	egressServer, err := egress.StartHTTPServer(config.EgressHTTPHost, config.EgressHTTPPort, engine, func(result egress.Result) {
+	egressServer, err := egress.StartHTTPServer("127.0.0.1", config.EgressHTTPPort, engine, func(result egress.Result) {
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
 	}, func(mux *http.ServeMux) {
 		workitems.RegisterRoutes(mux, store)
@@ -316,16 +278,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (runner,
 		_ = store.Close()
 		return nil, err
 	}
-	// Egress no longer flows through BBMB: the worker submits every egress
-	// message to the loopback endpoint above. The runner's egress handler is
-	// retained only for the (now unused in prod) DrainEgress path and its tests.
-	runner, err := handlerruntime.NewRunner(config, adapter, egressHandlerFunc(func(ctx context.Context, raw []byte) error {
-		result, err := engine.HandleRaw(ctx, raw)
-		if err == nil {
-			metricRecorder.RecordEgressResult(result.Status, result.Reason)
-		}
-		return err
-	}), handlerruntime.WithIngress(handlerIngressState{store: store}, connectors...), handlerruntime.WithMetrics(metricRecorder))
+	runner, err := handlerruntime.NewRunner(config, adapter, handlerruntime.WithIngress(handlerIngressState{store: store}, connectors...), handlerruntime.WithMetrics(metricRecorder))
 	if err != nil {
 		_ = egressServer.Close()
 		_ = metricsServer.Close()
@@ -372,27 +325,6 @@ func (state handlerIngressState) RecordTelegramTaskAttachments(ctx context.Conte
 
 func (state handlerIngressState) CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error {
 	return state.store.CleanupTelegramAttachmentsForRuntime(ctx, attachmentRootDir, notAfter, maxAgeCutoff)
-}
-
-func (state handlerIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
-	return state.store.AppendConversationTurn(ctx, channel, target, role, content, sender, runID)
-}
-
-func (state handlerIngressState) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]handlerruntime.ConversationTurn, error) {
-	turns, err := state.store.ListRecentConversationTurns(ctx, channel, target, limit)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]handlerruntime.ConversationTurn, 0, len(turns))
-	for _, turn := range turns {
-		result = append(result, handlerruntime.ConversationTurn{
-			Role:      turn.Role,
-			Content:   turn.Content,
-			Sender:    turn.Sender,
-			CreatedAt: turn.CreatedAt,
-		})
-	}
-	return result, nil
 }
 
 func (store githubCheckpointStore) GetGitHubCheckpoint(ctx context.Context, scopeKey string) (*githubconnector.AssignmentCheckpoint, error) {
@@ -461,7 +393,7 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.E
 }
 
 func resolveErrorEmailRecipient(config handlerconfig.Config) string {
-	for _, candidate := range []string{config.ErrorEmailTo, config.SMTPUsername, config.IMAPUsername} {
+	for _, candidate := range []string{config.SMTPUsername, config.IMAPUsername} {
 		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
 			return trimmed
 		}
@@ -505,18 +437,6 @@ func sendEgressDispatchErrorEmail(ctx context.Context, sender dispatch.EmailSend
 		log.Printf("egress_dispatch_error_email_failed task_id=%s event_id=%s reason=%s recipient=%s err=%v",
 			message.TaskID, message.EventID, reasonCode, recipient, err)
 	}
-}
-
-type egressHandlerFunc func(context.Context, []byte) error
-
-func (fn egressHandlerFunc) HandleRaw(ctx context.Context, raw []byte) error {
-	return fn(ctx, raw)
-}
-
-type unsupportedDispatcher struct{}
-
-func (unsupportedDispatcher) Dispatch(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error) {
-	return dispatch.Dispatcher{}.Dispatch(ctx, message, envelope)
 }
 
 type closer interface {

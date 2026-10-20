@@ -11,10 +11,10 @@ Replies go out over SMTP.
 - `imap_password_env` (default `CHATTING_IMAP_PASSWORD`)
 - `imap_mailbox` (default `INBOX`)
 - `imap_search` (default `UNSEEN`)
-- `smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_starttls`
+- `smtp_host`, `smtp_port` (default `465`), `smtp_username`, `smtp_from`
+- `smtp_starttls` (default `false`: implicit TLS; `true` upgrades a plain connection, as on port 587)
 - `smtp_password_env` (default `CHATTING_SMTP_PASSWORD`)
 - `context_refs`
-- `email_prompt_context` (email-specific prompt instructions)
 
 ## Output mapping
 
@@ -25,6 +25,5 @@ Replies go out over SMTP.
 - `reply_channel`: the sender address, otherwise `imap_username`, with
   `message_id`, `in_reply_to` and `references` in its metadata for threading
 
-Prompt guidance is assembled as `global_prompt_context`, then
-`email_prompt_context`, then the task content. A missing or invalid `Date`
+A missing or invalid `Date`
 header falls back to the time the message was polled.

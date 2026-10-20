@@ -26,7 +26,7 @@ Egress does not use BBMB. Both `app.main_reply` and the worker POST each `chatti
 payload to a synchronous handler endpoint and act on the result:
 
 - Endpoint: `POST {handler_egress_url}` (default `http://127.0.0.1:9467/egress`), served by a
-  dedicated loopback HTTP server (`egress_http_host`/`egress_http_port`). It is deliberately NOT on
+  dedicated loopback HTTP server (`egress_http_port`). It is deliberately NOT on
   the metrics mux, which may bind `0.0.0.0` for scraping — the ability to send messages externally
   must stay reachable only from the local host, matching BBMB's old posture.
 - The endpoint runs the same `egress.Engine` path the BBMB drain used (`HandleRaw → Result`), so
@@ -69,8 +69,6 @@ Tradeoffs / notes:
   endpoint goroutine) where the drain used to run inside the single loop. The handler DB is opened
   with `busy_timeout=5000` + WAL so a second writer waits for the lock instead of failing with
   `SQLITE_BUSY`.
-- `DrainEgress`, the `chatting.egress.v1` queue constant, and the `NewRunner` egress-handler
-  parameter are retained (dead in the live path, still unit-tested) pending a follow-up removal.
 
 ## Relationship to 0004
 

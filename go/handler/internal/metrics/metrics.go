@@ -32,7 +32,6 @@ type Recorder struct {
 	startedAt         time.Time
 	loopsTotal        int64
 	ingressPublished  int64
-	egressLoopsTotal  int64
 	egressReceived    int64
 	egressDispatched  int64
 	egressDeduped     int64
@@ -49,7 +48,6 @@ type Recorder struct {
 	reminderLate      int64
 	reminderFired     int64
 	lastLoopAt        time.Time
-	lastEgressLoopAt  time.Time
 }
 
 func New(startedAt time.Time, clock Clock) *Recorder {
@@ -72,13 +70,6 @@ func (recorder *Recorder) RecordLoop(ingressPublished int, completedAt time.Time
 	recorder.loopsTotal++
 	recorder.ingressPublished += int64(ingressPublished)
 	recorder.lastLoopAt = normalizeTime(completedAt)
-}
-
-func (recorder *Recorder) RecordEgressLoop(completedAt time.Time) {
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	recorder.egressLoopsTotal++
-	recorder.lastEgressLoopAt = normalizeTime(completedAt)
 }
 
 func (recorder *Recorder) RecordEgressResult(status string, reason string) {
@@ -168,8 +159,6 @@ func (recorder *Recorder) Snapshot() map[string]float64 {
 		"reminder_late_total":                               float64(recorder.reminderLate),
 		"reminder_fired_total":                              float64(recorder.reminderFired),
 		"last_loop_completed_timestamp_seconds":             unixTimestamp(recorder.lastLoopAt),
-		"egress_loops_total":                                float64(recorder.egressLoopsTotal),
-		"last_egress_loop_completed_timestamp_seconds":      unixTimestamp(recorder.lastEgressLoopAt),
 		"received_total":                                    float64(recorder.egressReceived),
 		"dispatched_total":                                  float64(recorder.egressDispatched),
 		"deduped_total":                                     float64(recorder.egressDeduped),
@@ -318,8 +307,6 @@ var definitions = []metricDefinition{
 	{"chatting_message_handler_reminder_late_total", "counter", "Reminder revisions first observed after their requested run time.", "reminder_late_total"},
 	{"chatting_message_handler_reminder_fired_total", "counter", "Reminder revisions marked fired after publish acknowledgement or handler dedupe.", "reminder_fired_total"},
 	{"chatting_message_handler_last_loop_completed_timestamp_seconds", "gauge", "Unix timestamp of the most recently completed loop.", "last_loop_completed_timestamp_seconds"},
-	{"chatting_message_handler_egress_loops_total", "counter", "Completed egress polling loops.", "egress_loops_total"},
-	{"chatting_message_handler_last_egress_loop_completed_timestamp_seconds", "gauge", "Unix timestamp of the most recently completed egress loop.", "last_egress_loop_completed_timestamp_seconds"},
 	{"chatting_message_handler_egress_received_total", "counter", "Egress messages received from the broker.", "received_total"},
 	{"chatting_message_handler_egress_dispatched_total", "counter", "Egress events applied by the message-handler.", "dispatched_total"},
 	{"chatting_message_handler_egress_deduped_total", "counter", "Egress messages skipped due to deduplication.", "deduped_total"},

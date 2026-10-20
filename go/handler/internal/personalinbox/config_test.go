@@ -37,6 +37,7 @@ func TestConfigRejectsUnknownCategoriesAndUnsafeValues(t *testing.T) {
 	cases := map[string]func(*Config){
 		"unknown folder category":  func(c *Config) { c.Folders = map[string]string{"spam": "Junk"} },
 		"unknown mark_read":        func(c *Config) { c.MarkRead = []string{"everything"} },
+		"action folder":            func(c *Config) { c.Folders = map[string]string{"action": "Triage/Actions"} },
 		"folder with newline":      func(c *Config) { c.Folders = map[string]string{"news": "News\r\nEXPUNGE"} },
 		"plaintext session url":    func(c *Config) { c.SessionURL = "http://api.example.com/jmap/session" },
 		"plaintext link template":  func(c *Config) { c.LinkTemplate = "http://mail.example.com/{email}" },

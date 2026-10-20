@@ -98,13 +98,6 @@ type TelegramAttachmentCleanupResult struct {
 	ReclaimedBytes int64
 }
 
-type ConversationTurn struct {
-	Role      string
-	Content   string
-	Sender    string
-	CreatedAt time.Time
-}
-
 type GitHubAssignmentCheckpoint struct {
 	EventCreatedAt time.Time
 	EventID        string
@@ -263,16 +256,6 @@ func (store *Store) initialize(ctx context.Context) error {
 			cleanup_attempts INTEGER NOT NULL,
 			last_cleanup_error TEXT
 		)`,
-		`CREATE TABLE IF NOT EXISTS conversation_turns (
-			turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			channel TEXT NOT NULL,
-			target TEXT NOT NULL,
-			role TEXT NOT NULL,
-			content TEXT NOT NULL,
-			sender TEXT,
-			run_id TEXT,
-			created_at TEXT NOT NULL
-		)`,
 		`CREATE TABLE IF NOT EXISTS github_assignment_checkpoints (
 			scope_key TEXT PRIMARY KEY,
 			event_created_at TEXT NOT NULL,
@@ -327,13 +310,7 @@ func (store *Store) initialize(ctx context.Context) error {
 			return err
 		}
 	}
-	// conversation_turns.sender was added after the table shipped. CREATE TABLE
-	// IF NOT EXISTS won't add a column to a pre-existing table, so migrate it in
-	// explicitly. Idempotent: only ALTER when the column is absent.
-	if err := store.ensureColumn(ctx, "conversation_turns", "sender", "TEXT"); err != nil {
-		return err
-	}
-	for _, table := range []string{"task_ledger", "completed_task_ledger", "dispatched_event_ids", "staged_egress_events", "conversation_turns", "telegram_attachment_ledger"} {
+	for _, table := range []string{"task_ledger", "completed_task_ledger", "dispatched_event_ids", "staged_egress_events", "telegram_attachment_ledger"} {
 		if err := store.ensureColumn(ctx, table, "work_item_id", "TEXT"); err != nil {
 			return err
 		}
@@ -1087,97 +1064,6 @@ func (store *Store) ListTelegramChats(ctx context.Context) ([]TelegramChatRecord
 		records = append(records, record)
 	}
 	return records, rows.Err()
-}
-
-func (store *Store) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
-	if strings.TrimSpace(channel) == "" {
-		return errors.New("channel is required")
-	}
-	if strings.TrimSpace(target) == "" {
-		return errors.New("target is required")
-	}
-	if role != "user" && role != "assistant" {
-		return errors.New("role must be user or assistant")
-	}
-	if strings.TrimSpace(content) == "" {
-		return errors.New("content is required")
-	}
-	if runID != "" && strings.TrimSpace(runID) == "" {
-		return errors.New("run_id must not be empty")
-	}
-	_, err := store.db.ExecContext(
-		ctx,
-		`INSERT INTO conversation_turns (
-			channel,
-			target,
-			role,
-			content,
-			sender,
-			run_id,
-			created_at,
-			work_item_id
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT work_item_id FROM task_assignments WHERE task_id = ?))`,
-		channel,
-		target,
-		role,
-		content,
-		nullIfEmpty(sender),
-		nullIfEmpty(runID),
-		formatTimestamp(time.Now()),
-		runID,
-	)
-	return err
-}
-
-func (store *Store) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error) {
-	if strings.TrimSpace(channel) == "" {
-		return nil, errors.New("channel is required")
-	}
-	if strings.TrimSpace(target) == "" {
-		return nil, errors.New("target is required")
-	}
-	if limit <= 0 {
-		return nil, errors.New("limit must be positive")
-	}
-	rows, err := store.db.QueryContext(
-		ctx,
-		`SELECT role, content, sender, created_at
-		FROM conversation_turns
-		WHERE channel = ? AND target = ?
-		ORDER BY turn_id DESC
-		LIMIT ?`,
-		channel,
-		target,
-		limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	reversed := make([]ConversationTurn, 0, limit)
-	for rows.Next() {
-		turn := ConversationTurn{}
-		var sender sql.NullString
-		var createdAt string
-		if err := rows.Scan(&turn.Role, &turn.Content, &sender, &createdAt); err != nil {
-			return nil, err
-		}
-		turn.Sender = sender.String
-		turn.CreatedAt, err = parseTimestamp(createdAt)
-		if err != nil {
-			return nil, err
-		}
-		reversed = append(reversed, turn)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	turns := make([]ConversationTurn, 0, len(reversed))
-	for index := len(reversed) - 1; index >= 0; index-- {
-		turns = append(turns, reversed[index])
-	}
-	return turns, nil
 }
 
 func (store *Store) Seen(ctx context.Context, source string, dedupeKey string) (bool, error) {

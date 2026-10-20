@@ -29,15 +29,10 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"db_path": "/tmp/handler.db",
 		"max_loops": 20,
 		"poll_interval_seconds": 0.5,
-		"poll_timeout_seconds": 3,
 		"metrics_host": "0.0.0.0",
 		"metrics_port": 9555,
 		"allowed_egress_channels": ["log", "email"],
-		"global_prompt_context": ["Keep replies terse."],
-		"cron_prompt_context": ["This is a scheduled automation task."],
-		"email_prompt_context": ["Use a clear subject."],
 		"context_refs": ["repo:/workspace/chatting"],
-		"schedule_file": "/tmp/schedule.json",
 		"imap_host": "imap.example.com",
 		"imap_port": 143,
 		"imap_username": "inbox@example.com",
@@ -59,15 +54,9 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"telegram_allowed_chat_ids": ["12345"],
 		"telegram_allowed_channel_ids": ["-100999"],
 		"telegram_attachment_dir": "/tmp/telegram-attachments",
-		"telegram_attachment_cleanup_grace_seconds": 30,
-		"telegram_attachment_max_age_seconds": 60,
-		"telegram_prompt_context": ["Telegram replies are visible in chat."],
 		"telegram_context_refs": ["repo:/workspace/telegram"],
 		"github_repositories": ["EdwardSalkeld/chatting", "EdwardSalkeld/*", "EdwardSalkeld/chatting"],
-		"github_assignee_login": "BillyAcachofa",
-		"github_context_refs": ["repo:/workspace/chatting"],
-		"github_max_issues": 12,
-		"github_max_timeline_events": 8
+		"github_assignee_login": "BillyAcachofa"
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -85,9 +74,6 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	if config.PollIntervalSeconds != 0.5 {
 		t.Fatalf("PollIntervalSeconds = %f", config.PollIntervalSeconds)
 	}
-	if config.PollTimeoutSeconds != 3 {
-		t.Fatalf("PollTimeoutSeconds = %d", config.PollTimeoutSeconds)
-	}
 	if config.MetricsHost != "0.0.0.0" {
 		t.Fatalf("MetricsHost = %q", config.MetricsHost)
 	}
@@ -97,20 +83,8 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	if !reflect.DeepEqual(config.AllowedEgressChannels, []string{"log", "email"}) {
 		t.Fatalf("AllowedEgressChannels = %#v", config.AllowedEgressChannels)
 	}
-	if !reflect.DeepEqual(config.GlobalPromptContext, []string{"Keep replies terse."}) {
-		t.Fatalf("GlobalPromptContext = %#v", config.GlobalPromptContext)
-	}
-	if !reflect.DeepEqual(config.CronPromptContext, []string{"This is a scheduled automation task."}) {
-		t.Fatalf("CronPromptContext = %#v", config.CronPromptContext)
-	}
-	if !reflect.DeepEqual(config.EmailPromptContext, []string{"Use a clear subject."}) {
-		t.Fatalf("EmailPromptContext = %#v", config.EmailPromptContext)
-	}
 	if !reflect.DeepEqual(config.ContextRefs, []string{"repo:/workspace/chatting"}) {
 		t.Fatalf("ContextRefs = %#v", config.ContextRefs)
-	}
-	if config.ScheduleFile != "/tmp/schedule.json" {
-		t.Fatalf("ScheduleFile = %q", config.ScheduleFile)
 	}
 	if config.IMAPHost != "imap.example.com" {
 		t.Fatalf("IMAPHost = %q", config.IMAPHost)
@@ -175,15 +149,6 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	if config.TelegramAttachmentDir != "/tmp/telegram-attachments" {
 		t.Fatalf("TelegramAttachmentDir = %q", config.TelegramAttachmentDir)
 	}
-	if config.TelegramAttachmentCleanupGraceSeconds != 30 {
-		t.Fatalf("TelegramAttachmentCleanupGraceSeconds = %d", config.TelegramAttachmentCleanupGraceSeconds)
-	}
-	if config.TelegramAttachmentMaxAgeSeconds != 60 {
-		t.Fatalf("TelegramAttachmentMaxAgeSeconds = %d", config.TelegramAttachmentMaxAgeSeconds)
-	}
-	if !reflect.DeepEqual(config.TelegramPromptContext, []string{"Telegram replies are visible in chat."}) {
-		t.Fatalf("TelegramPromptContext = %#v", config.TelegramPromptContext)
-	}
 	if !reflect.DeepEqual(config.TelegramContextRefs, []string{"repo:/workspace/telegram"}) {
 		t.Fatalf("TelegramContextRefs = %#v", config.TelegramContextRefs)
 	}
@@ -192,15 +157,6 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if config.GitHubAssigneeLogin != "BillyAcachofa" {
 		t.Fatalf("GitHubAssigneeLogin = %q", config.GitHubAssigneeLogin)
-	}
-	if !reflect.DeepEqual(config.GitHubContextRefs, []string{"repo:/workspace/chatting"}) {
-		t.Fatalf("GitHubContextRefs = %#v", config.GitHubContextRefs)
-	}
-	if config.GitHubMaxIssues != 12 {
-		t.Fatalf("GitHubMaxIssues = %d", config.GitHubMaxIssues)
-	}
-	if config.GitHubMaxTimelineEvents != 8 {
-		t.Fatalf("GitHubMaxTimelineEvents = %d", config.GitHubMaxTimelineEvents)
 	}
 }
 
@@ -255,11 +211,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			message: "config max_loops must be a positive integer",
 		},
 		{
-			name:    "fractional timeout",
-			raw:     `{"poll_timeout_seconds": 1.2}`,
-			message: "config poll_timeout_seconds must be a positive integer",
-		},
-		{
 			name:    "negative interval",
 			raw:     `{"poll_interval_seconds": -0.5}`,
 			message: "config poll_interval_seconds must be positive",
@@ -305,11 +256,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			message: "config smtp_port must be a positive integer",
 		},
 		{
-			name:    "smtp starttls wrong type",
-			raw:     `{"smtp_starttls": "yes"}`,
-			message: "config smtp_starttls must be a boolean",
-		},
-		{
 			name:    "telegram enabled wrong type",
 			raw:     `{"telegram_enabled": "yes"}`,
 			message: "config telegram_enabled must be a boolean",
@@ -320,14 +266,19 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			message: "config telegram_bot_token_env must be a non-empty string",
 		},
 		{
+			name:    "smtp starttls wrong type",
+			raw:     `{"smtp_starttls": "yes"}`,
+			message: "config smtp_starttls must be a boolean",
+		},
+		{
 			name:    "invalid github repository selector",
 			raw:     `{"github_repositories": ["EdwardSalkeld/chat*"]}`,
 			message: "github_repositories entries must be owner/repo or owner/*",
 		},
 		{
-			name:    "bad github max issues",
-			raw:     `{"github_max_issues": 0}`,
-			message: "config github_max_issues must be a positive integer",
+			name:    "github repositories without assignee",
+			raw:     `{"github_repositories": ["EdwardSalkeld/chatting"]}`,
+			message: "github_assignee_login is required when github_repositories is set",
 		},
 	}
 
@@ -344,26 +295,19 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestLoadFileAndEnvPath(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "handler.json")
+func TestLoadFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "handler.json")
 	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/from-file.db"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	config, err := LoadFromEnv("", map[string]string{MessageHandlerConfigPathEnvVar: configPath})
+	config, err := LoadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.DBPath != "/tmp/from-file.db" {
 		t.Fatalf("DBPath = %q", config.DBPath)
 	}
-
-	_, err = LoadFromEnv("", map[string]string{MessageHandlerConfigPathEnvVar: " "})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), MessageHandlerConfigPathEnvVar+" must not be empty") {
-		t.Fatalf("error = %v", err)
+	if _, err := LoadFile(" "); err == nil {
+		t.Fatal("expected error for a blank path")
 	}
 }

@@ -8,46 +8,6 @@ from app.broker import EgressQueueMessage
 from app.models import AttachmentRef, AuditEvent, OutboundMessage, ReplyChannel, RunRecord, TaskEnvelope
 from app.state.sqlite_store import SQLiteStateStore
 class SQLiteStateStoreTests(unittest.TestCase):
-    def test_seen_and_mark_seen_roundtrip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            self.assertFalse(store.seen("email", "provider-abc"))
-            store.mark_seen("email", "provider-abc")
-            self.assertTrue(store.seen("email", "provider-abc"))
-
-    def test_seen_scopes_dedupe_keys_by_source(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            store.mark_seen("email", "same-id")
-            self.assertTrue(store.seen("email", "same-id"))
-            self.assertFalse(store.seen("cron", "same-id"))
-
-    def test_initialization_rejects_legacy_idempotency_schema(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "state.db"
-            connection = sqlite3.connect(db_path)
-            connection.execute(
-                """
-                CREATE TABLE idempotency_keys (
-                    dedupe_key TEXT PRIMARY KEY,
-                    seen_at TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                "INSERT INTO idempotency_keys (dedupe_key, seen_at) VALUES (?, ?)",
-                ("legacy-key", "2026-02-27T16:00:00Z"),
-            )
-            connection.commit()
-            connection.close()
-
-            with self.assertRaisesRegex(ValueError, "unsupported idempotency_keys schema"):
-                SQLiteStateStore(str(db_path))
-
     def test_append_run_persists_and_lists_run_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
@@ -84,7 +44,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
 
             self.assertEqual(store.list_audit_events(), [event])
 
-    def test_append_dead_letter_persists_and_marks_replayed(self) -> None:
+    def test_append_dead_letter_persists_pending_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
             store = SQLiteStateStore(db_path)
@@ -107,93 +67,13 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 last_error="RuntimeError: boom",
                 attempt_count=2,
             )
-            pending = store.list_dead_letters(status="pending")
-            self.assertEqual(len(pending), 1)
-            self.assertEqual(pending[0].dead_letter_id, dead_letter_id)
-            self.assertEqual(pending[0].envelope.id, envelope.id)
-            self.assertEqual(pending[0].envelope.attachments, envelope.attachments)
-            self.assertEqual(pending[0].status, "pending")
-
-            store.mark_dead_letter_replayed(dead_letter_id, "run:email:dead-1:replay:1")
-            replayed = store.list_dead_letters(status="replayed")
-            self.assertEqual(len(replayed), 1)
-            self.assertEqual(replayed[0].dead_letter_id, dead_letter_id)
-            self.assertEqual(replayed[0].replayed_run_id, "run:email:dead-1:replay:1")
-
-    def test_conversation_turns_roundtrip_scoped_by_channel_and_target(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            store.append_conversation_turn(
-                channel="telegram",
-                target="chat-1",
-                role="user",
-                content="What country is Paris in?",
-                run_id="run:telegram:1",
-            )
-            store.append_conversation_turn(
-                channel="telegram",
-                target="chat-1",
-                role="assistant",
-                content="Paris is in France.",
-                run_id="run:telegram:1",
-            )
-            store.append_conversation_turn(
-                channel="telegram",
-                target="chat-2",
-                role="user",
-                content="Should not appear in chat-1 history.",
-                run_id="run:telegram:2",
-            )
-
-            turns = store.list_recent_conversation_turns(
-                channel="telegram",
-                target="chat-1",
-                limit=8,
-            )
+            with sqlite3.connect(db_path) as connection:
+                rows = connection.execute(
+                    "SELECT dead_letter_id, run_id, reason_codes_json, status FROM dead_letters"
+                ).fetchall()
             self.assertEqual(
-                turns,
-                [
-                    ("user", "What country is Paris in?"),
-                    ("assistant", "Paris is in France."),
-                ],
-            )
-
-    def test_dispatched_event_checkpoint_roundtrip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            store.mark_dispatched_event(run_id="run:telegram:1", event_index=1)
-            store.mark_dispatched_event(run_id="run:telegram:1", event_index=0)
-            store.mark_dispatched_event(run_id="run:telegram:1", event_index=1)
-
-            self.assertEqual(
-                store.list_dispatched_event_indices(run_id="run:telegram:1"),
-                [0, 1],
-            )
-            self.assertEqual(
-                store.list_dispatched_event_indices(run_id="run:telegram:other"),
-                [],
-            )
-
-    def test_dispatched_event_id_checkpoint_roundtrip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "state.db")
-            store = SQLiteStateStore(db_path)
-
-            self.assertFalse(
-                store.has_dispatched_event_id(task_id="task:telegram:1", event_id="evt:1")
-            )
-            store.mark_dispatched_event_id(task_id="task:telegram:1", event_id="evt:1")
-            store.mark_dispatched_event_id(task_id="task:telegram:1", event_id="evt:1")
-
-            self.assertTrue(
-                store.has_dispatched_event_id(task_id="task:telegram:1", event_id="evt:1")
-            )
-            self.assertFalse(
-                store.has_dispatched_event_id(task_id="task:telegram:1", event_id="evt:2")
+                rows,
+                [(dead_letter_id, "run:email:dead-1", '["retry_exhausted"]', "pending")],
             )
 
     def test_egress_outbox_roundtrip_and_replay_listing(self) -> None:
@@ -218,10 +98,6 @@ class SQLiteStateStoreTests(unittest.TestCase):
             replayable = store.list_replayable_egress_outbox_events()
             self.assertEqual(len(replayable), 1)
             self.assertEqual(replayable[0].event_id, "evt:task:email:1:0")
-
-            store.mark_egress_outbox_event_published(event_id="evt:task:email:1:0")
-            replayable = store.list_replayable_egress_outbox_events()
-            self.assertEqual(replayable, [])
 
             store.mark_egress_outbox_event_acked(event_id="evt:task:email:1:0")
             replayable = store.list_replayable_egress_outbox_events()

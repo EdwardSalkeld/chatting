@@ -6,7 +6,6 @@ from app.broker.bbmb_client import (
     PickedMessage,
 )
 from app.broker.constants import (
-    EGRESS_QUEUE_NAME,
     TASK_QUEUE_NAME,
 )
 from app.broker.messages import (
@@ -18,7 +17,6 @@ __all__ = [
     "BBMBQueueAdapter",
     "BrokerOperationError",
     "PickedMessage",
-    "EGRESS_QUEUE_NAME",
     "TASK_QUEUE_NAME",
     "EgressQueueMessage",
     "TaskQueueMessage",

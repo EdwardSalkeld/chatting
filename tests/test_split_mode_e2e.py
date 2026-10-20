@@ -205,7 +205,6 @@ class SplitModeE2ETests(unittest.TestCase):
                         "db_path": str(handler_db_path),
                         "bbmb_address": bbmb_address,
                         "poll_interval_seconds": 0.1,
-                        "poll_timeout_seconds": 1,
                         "metrics_port": handler_metrics_port,
                         "allowed_egress_channels": ["log"],
                         "egress_http_port": egress_http_port,
@@ -353,19 +352,14 @@ class SplitModeE2ETests(unittest.TestCase):
                 msg=f"missing successful worker run for expected envelope_id={expected_envelope_id!r}",
             )
 
-            handler_store = SQLiteStateStore(str(handler_db_path))
             expected_task_id = f"task:{expected_envelope_id}"
             expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
-            self.assertEqual(
-                handler_store.list_dispatched_event_indices(run_id=expected_task_id), []
-            )
-            self.assertTrue(
-                handler_store.has_dispatched_event_id(
-                    task_id=expected_task_id,
-                    event_id=expected_event_id,
-                )
-            )
             with sqlite3.connect(str(handler_db_path)) as connection:
+                dispatched = connection.execute(
+                    "SELECT 1 FROM dispatched_event_ids WHERE task_id = ? AND event_id = ?",
+                    (expected_task_id, expected_event_id),
+                ).fetchone()
+                self.assertIsNotNone(dispatched)
                 reminder_status, fired_at = connection.execute(
                     "SELECT status, fired_at FROM reminders WHERE reminder_id = ? AND revision = ?",
                     ("rem_ci_split_smoke", 1),

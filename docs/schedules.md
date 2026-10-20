@@ -41,5 +41,4 @@ Example request body:
 
 - `source`: `cron`
 - `id` / `dedupe_key`: `cron:<job_name>:<scheduled UTC time>`
-- Prompt guidance is assembled as `global_prompt_context`, then
-  `cron_prompt_context`, then the job's own `prompt_context`.
+- The job's `prompt_context` becomes the task's instructions.

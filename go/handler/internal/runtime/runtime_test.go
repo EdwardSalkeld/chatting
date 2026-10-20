@@ -3,13 +3,10 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -18,11 +15,10 @@ import (
 
 func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
 	broker := &fakeBroker{}
-	handler := &fakeEgressHandler{}
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 1
 	config.PollIntervalSeconds = 100
-	runner, err := NewRunner(config, broker, handler)
+	runner, err := NewRunner(config, broker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,100 +27,19 @@ func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Egress no longer flows over BBMB, so Run only ensures the task queue.
 	if got, want := broker.ensured, []string{TaskQueueName}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ensured = %#v, want %#v", got, want)
-	}
-	// No broker pickups: ingress is published from connectors and egress no
-	// longer drains a queue, so the loop never picks up from BBMB.
-	if len(broker.pickups) != 0 {
-		t.Fatalf("pickup calls = %#v", broker.pickups)
-	}
-	if len(handler.rawPayloads) != 0 {
-		t.Fatalf("handled payloads = %#v", handler.rawPayloads)
-	}
-}
-
-func TestDrainEgressHandlesAndAcksUntilEmpty(t *testing.T) {
-	broker := &fakeBroker{
-		picked: []*bbmb.PickedMessage{
-			{GUID: "guid-1", Payload: map[string]any{"message_type": "chatting.egress.v2", "task_id": "task:1"}},
-			{GUID: "guid-2", Payload: map[string]any{"message_type": "chatting.egress.v2", "task_id": "task:2"}},
-		},
-	}
-	handler := &fakeEgressHandler{}
-	config := handlerconfig.Defaults()
-	config.PollTimeoutSeconds = 7
-	runner, err := NewRunner(config, broker, handler)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	drained, err := runner.DrainEgress(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if drained != 2 {
-		t.Fatalf("drained = %d", drained)
-	}
-	if got, want := broker.pickups, []pickupCall{
-		{queue: EgressQueueName, timeoutSeconds: 7, waitSeconds: egressPickupWaitSeconds},
-		{queue: EgressQueueName, timeoutSeconds: 7, waitSeconds: egressDrainWaitSeconds},
-		{queue: EgressQueueName, timeoutSeconds: 7, waitSeconds: egressDrainWaitSeconds},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pickups = %#v, want %#v", got, want)
-	}
-	if got, want := broker.acks, []ackCall{
-		{queue: EgressQueueName, guid: "guid-1"},
-		{queue: EgressQueueName, guid: "guid-2"},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("acks = %#v, want %#v", got, want)
-	}
-	if len(handler.rawPayloads) != 2 {
-		t.Fatalf("handled payloads = %#v", handler.rawPayloads)
-	}
-	for index, raw := range handler.rawPayloads {
-		var decoded map[string]any
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			t.Fatalf("payload %d is invalid JSON: %v", index, err)
-		}
-	}
-}
-
-func TestDrainEgressDoesNotAckWhenHandlerFails(t *testing.T) {
-	expected := errors.New("egress failed")
-	broker := &fakeBroker{
-		picked: []*bbmb.PickedMessage{{GUID: "guid-1", Payload: map[string]any{"message_type": "chatting.egress.v2"}}},
-	}
-	handler := &fakeEgressHandler{err: expected}
-	runner, err := NewRunner(handlerconfig.Defaults(), broker, handler)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	drained, err := runner.DrainEgress(context.Background())
-	if !errors.Is(err, expected) {
-		t.Fatalf("err = %v, want %v", err, expected)
-	}
-	if drained != 0 {
-		t.Fatalf("drained = %d", drained)
-	}
-	if len(broker.acks) != 0 {
-		t.Fatalf("acks = %#v", broker.acks)
 	}
 }
 
 func TestRunPublishesInternalHeartbeatTask(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
-	handler := &fakeEgressHandler{}
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 1
 	runner, err := NewRunner(
 		config,
 		broker,
-		handler,
 		WithIngress(state, heartbeat.New(func() time.Time {
 			return mustTime(t, "2026-03-09T12:00:00Z")
 		})),
@@ -180,7 +95,6 @@ func TestPublishIngressSkipsSeenEnvelope(t *testing.T) {
 	runner, err := NewRunner(
 		handlerconfig.Defaults(),
 		broker,
-		&fakeEgressHandler{},
 		WithIngress(state, connector),
 	)
 	if err != nil {
@@ -208,7 +122,6 @@ func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
 	runner, err := NewRunner(
 		handlerconfig.Defaults(),
 		broker,
-		&fakeEgressHandler{},
 		WithIngress(state, connector),
 	)
 	if err != nil {
@@ -228,188 +141,6 @@ func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
 	}
 }
 
-func TestPublishIngressEnrichesTelegramEnvelopeWithRecentConversation(t *testing.T) {
-	broker := &fakeBroker{}
-	state := newFakeIngressState()
-	for index := 0; index < 35; index++ {
-		state.turns["12345"] = append(state.turns["12345"], ConversationTurn{
-			Role:      "user",
-			Content:   fmt.Sprintf("turn-%d", index),
-			CreatedAt: mustTime(t, fmt.Sprintf("2026-03-09T11:%02d:00Z", index%60)),
-		})
-	}
-	envelope := contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:100",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:00:00Z")),
-		Content:       "latest-turn",
-		ReplyChannel: contracts.ReplyChannel{
-			Type:   "telegram",
-			Target: "12345",
-		},
-		DedupeKey: "telegram:100",
-	}
-	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
-	runner, err := NewRunner(
-		handlerconfig.Defaults(),
-		broker,
-		&fakeEgressHandler{},
-		WithIngress(state, connector),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	published, err := runner.PublishIngress(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if published != 1 {
-		t.Fatalf("published = %d", published)
-	}
-	recorded := state.tasks["task:telegram:100"]
-	if recorded.Envelope.Content != "latest-turn" {
-		t.Fatalf("content = %q", recorded.Envelope.Content)
-	}
-	lastTurn := state.turns["12345"][len(state.turns["12345"])-1]
-	if lastTurn.Role != "user" || lastTurn.Content != "latest-turn" {
-		t.Fatalf("stored turn = %#v", lastTurn)
-	}
-}
-
-func TestPublishIngressAttributesTelegramSenderInConversation(t *testing.T) {
-	broker := &fakeBroker{}
-	state := newFakeIngressState()
-	state.turns["12345"] = []ConversationTurn{
-		{Role: "user", Content: "earlier", Sender: "@alice", CreatedAt: mustTime(t, "2026-03-09T11:58:00Z")},
-		{Role: "assistant", Content: "billy replied", CreatedAt: mustTime(t, "2026-03-09T11:59:00Z")},
-	}
-	envelope := contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:101",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:00:00Z")),
-		Content:       "latest-turn",
-		ReplyChannel: contracts.ReplyChannel{
-			Type:     "telegram",
-			Target:   "12345",
-			Metadata: map[string]any{"sender": "@bob (bot)"},
-		},
-		DedupeKey: "telegram:101",
-	}
-	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
-	runner, err := NewRunner(
-		handlerconfig.Defaults(),
-		broker,
-		&fakeEgressHandler{},
-		WithIngress(state, connector),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runner.PublishIngress(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	content := state.tasks["task:telegram:101"].Envelope.Content
-	if content != "latest-turn" {
-		t.Fatalf("content = %q", content)
-	}
-	lastTurn := state.turns["12345"][len(state.turns["12345"])-1]
-	if lastTurn.Sender != "@bob (bot)" {
-		t.Fatalf("stored turn sender = %q", lastTurn.Sender)
-	}
-}
-
-func TestPublishIngressKeepsInternalTelegramNoticesOutOfConversation(t *testing.T) {
-	state := newFakeIngressState()
-	state.turns["-5201675435"] = []ConversationTurn{{Role: "user", Content: "earlier message"}}
-	for _, noticeType := range []string{"telegram_group_not_enabled", "telegram_channel_not_enabled"} {
-		envelope := contracts.TaskEnvelope{
-			SchemaVersion: contracts.SchemaVersion,
-			ID:            "internal:" + noticeType,
-			Source:        "internal",
-			ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-10-02T10:38:27Z")),
-			Content:       "Not enabled in -5201675435.",
-			ReplyChannel: contracts.ReplyChannel{
-				Type:     "telegram",
-				Target:   "-5201675435",
-				Metadata: map[string]any{"internal_notice": noticeType},
-			},
-			DedupeKey: "internal:" + noticeType,
-		}
-		connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{envelope}}
-		runner, err := NewRunner(handlerconfig.Defaults(), &fakeBroker{}, &fakeEgressHandler{}, WithIngress(state, connector))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := runner.PublishIngress(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if got := state.tasks["task:"+envelope.ID].Envelope.Content; got != envelope.Content {
-			t.Fatalf("%s content = %q", noticeType, got)
-		}
-		if got := len(state.turns["-5201675435"]); got != 1 {
-			t.Fatalf("%s stored %d conversation turns, want 1", noticeType, got)
-		}
-	}
-}
-
-func TestPublishIngressIncludesStandaloneDocumentInLaterConversationHistory(t *testing.T) {
-	broker := &fakeBroker{}
-	state := newFakeIngressState()
-	documentEnvelope := contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:document",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:00:00Z")),
-		Content:       "[document attached: rota.pdf]",
-		Attachments:   []contracts.AttachmentRef{{URI: "file:///tmp/rota.pdf"}},
-		ReplyChannel: contracts.ReplyChannel{
-			Type:     "telegram",
-			Target:   "12345",
-			Metadata: map[string]any{"sender": "@alice"},
-		},
-		DedupeKey: "telegram:document",
-	}
-	messageEnvelope := contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:message",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(mustTime(t, "2026-03-09T12:01:00Z")),
-		Content:       "What does it say?",
-		ReplyChannel: contracts.ReplyChannel{
-			Type:     "telegram",
-			Target:   "12345",
-			Metadata: map[string]any{"sender": "@alice"},
-		},
-		DedupeKey: "telegram:message",
-	}
-	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{documentEnvelope, messageEnvelope}}
-	runner, err := NewRunner(
-		handlerconfig.Defaults(),
-		broker,
-		&fakeEgressHandler{},
-		WithIngress(state, connector),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := runner.PublishIngress(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	content := state.tasks["task:telegram:message"].Envelope.Content
-	if content != "What does it say?" {
-		t.Fatalf("content = %q", content)
-	}
-	if got := state.turns["12345"][0].Content; got != "[document attached: rota.pdf]" {
-		t.Fatalf("stored document turn = %q", got)
-	}
-}
-
 func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
@@ -419,7 +150,6 @@ func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	runner, err := NewRunner(
 		handlerconfig.Defaults(),
 		broker,
-		&fakeEgressHandler{},
 		WithIngress(state, connector),
 	)
 	if err != nil {
@@ -444,10 +174,9 @@ func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 
 func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 	broker := &fakeBroker{}
-	handler := &fakeEgressHandler{}
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 0
-	runner, err := NewRunner(config, broker, handler)
+	runner, err := NewRunner(config, broker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +193,6 @@ func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
 
 func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 	broker := &fakeBroker{}
-	handler := &fakeEgressHandler{}
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 0
 	ctx, cancel := context.WithCancel(context.Background())
@@ -472,7 +200,6 @@ func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 	runner, err := NewRunner(
 		config,
 		broker,
-		handler,
 		WithIngress(newFakeIngressState(), connector),
 	)
 	if err != nil {
@@ -484,13 +211,8 @@ func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 	}
 }
 
-func TestRunRecordsLoopAndEgressMetrics(t *testing.T) {
-	broker := &fakeBroker{
-		picked: []*bbmb.PickedMessage{
-			{GUID: "guid-1", Payload: map[string]any{"message_type": "chatting.egress.v2", "task_id": "task:1"}},
-		},
-	}
-	handler := &fakeEgressHandler{}
+func TestRunRecordsLoopMetrics(t *testing.T) {
+	broker := &fakeBroker{}
 	recorder := metrics.New(mustTime(t, "2026-03-09T12:00:00Z"), &fakeMetricsClock{now: mustTime(t, "2026-03-09T12:00:03Z")})
 	config := handlerconfig.Defaults()
 	config.MaxLoops = 1
@@ -498,7 +220,6 @@ func TestRunRecordsLoopAndEgressMetrics(t *testing.T) {
 	runner, err := NewRunner(
 		config,
 		broker,
-		handler,
 		WithMetrics(recorder),
 		WithNow(func() time.Time {
 			return mustTime(t, "2026-03-09T12:00:02Z")
@@ -516,22 +237,9 @@ func TestRunRecordsLoopAndEgressMetrics(t *testing.T) {
 	if snapshot["loops_total"] != 1 {
 		t.Fatalf("loops_total = %v", snapshot["loops_total"])
 	}
-	// egress_loops_total is no longer driven by Run: egress does not flow over
-	// BBMB, so the loop performs no egress drain.
 	if snapshot["last_loop_completed_timestamp_seconds"] != float64(mustTime(t, "2026-03-09T12:00:02Z").Unix()) {
 		t.Fatalf("last_loop_completed_timestamp_seconds = %v", snapshot["last_loop_completed_timestamp_seconds"])
 	}
-}
-
-type pickupCall struct {
-	queue          string
-	timeoutSeconds int
-	waitSeconds    int
-}
-
-type ackCall struct {
-	queue string
-	guid  string
 }
 
 type publishCall struct {
@@ -542,9 +250,6 @@ type publishCall struct {
 type fakeBroker struct {
 	ensured   []string
 	published []publishCall
-	picked    []*bbmb.PickedMessage
-	pickups   []pickupCall
-	acks      []ackCall
 }
 
 func (broker *fakeBroker) EnsureQueue(ctx context.Context, queueName string) error {
@@ -557,46 +262,15 @@ func (broker *fakeBroker) PublishJSON(ctx context.Context, queueName string, pay
 	return "guid-published", nil
 }
 
-func (broker *fakeBroker) PickupJSON(ctx context.Context, queueName string, timeoutSeconds int, waitSeconds int) (*bbmb.PickedMessage, error) {
-	broker.pickups = append(broker.pickups, pickupCall{
-		queue:          queueName,
-		timeoutSeconds: timeoutSeconds,
-		waitSeconds:    waitSeconds,
-	})
-	if len(broker.picked) == 0 {
-		return nil, nil
-	}
-	picked := broker.picked[0]
-	broker.picked = broker.picked[1:]
-	return picked, nil
-}
-
-func (broker *fakeBroker) Ack(ctx context.Context, queueName string, guid string) error {
-	broker.acks = append(broker.acks, ackCall{queue: queueName, guid: guid})
-	return nil
-}
-
-type fakeEgressHandler struct {
-	rawPayloads [][]byte
-	err         error
-}
-
-func (handler *fakeEgressHandler) HandleRaw(ctx context.Context, raw []byte) error {
-	handler.rawPayloads = append(handler.rawPayloads, raw)
-	return handler.err
-}
-
 type fakeIngressState struct {
 	seen  map[string]map[string]bool
 	tasks map[string]contracts.TaskQueueMessage
-	turns map[string][]ConversationTurn
 }
 
 func newFakeIngressState() *fakeIngressState {
 	return &fakeIngressState{
 		seen:  map[string]map[string]bool{},
 		tasks: map[string]contracts.TaskQueueMessage{},
-		turns: map[string][]ConversationTurn{},
 	}
 }
 
@@ -615,30 +289,6 @@ func (state *fakeIngressState) MarkSeen(ctx context.Context, source string, dedu
 func (state *fakeIngressState) RecordTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) error {
 	state.tasks[taskMessage.TaskID] = taskMessage
 	return nil
-}
-
-func (state *fakeIngressState) AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error {
-	if channel != "telegram" {
-		return nil
-	}
-	state.turns[target] = append(state.turns[target], ConversationTurn{
-		Role:      role,
-		Content:   content,
-		Sender:    sender,
-		CreatedAt: time.Now().UTC(),
-	})
-	return nil
-}
-
-func (state *fakeIngressState) ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error) {
-	if channel != "telegram" {
-		return nil, nil
-	}
-	turns := state.turns[target]
-	if len(turns) <= limit {
-		return append([]ConversationTurn{}, turns...), nil
-	}
-	return append([]ConversationTurn{}, turns[len(turns)-limit:]...), nil
 }
 
 func mustTime(t *testing.T, raw string) time.Time {

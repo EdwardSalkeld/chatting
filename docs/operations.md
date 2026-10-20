@@ -33,8 +33,7 @@ it can send messages to the outside world; keep it off the metrics listener.
 
 The worker's activity UI lists work items and their runs. Active runs stream
 through `/api/tasks/<task_id>/events`; raw activity JSON is at
-`/activity.json`. `activity_history_limit` sets how many recent runs a work
-item shows.
+`/activity.json`.
 
 The handler owns every integration secret and is the only process that sends
 anything externally. The worker reads no integration secrets. `gh` must be
@@ -57,7 +56,7 @@ reconnects to their Unix sockets, so running tasks and their follow-ups survive
 a manager restart. Supervisors retain completion status until the manager
 acknowledges it.
 
-`supervisor_dir` defaults to `<absolute db_path>.supervisors`. It must be a
+Supervisors live in `<absolute db_path>.supervisors`, which must be a
 private, persistent directory owned by the worker user, and short enough for
 Unix socket paths. Slot N uses `supervisor-N.sock`, a slot lock, a config
 snapshot and a log there. The manager discovers existing slots before

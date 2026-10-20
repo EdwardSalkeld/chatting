@@ -32,8 +32,8 @@ type Config struct {
 	Backfill   bool   `json:"backfill"`
 	DryRun     bool   `json:"dry_run"`
 	// Folders maps a category to the mailbox its mail is filed into. A missing
-	// or empty entry leaves that category in the inbox. Action mail always
-	// stays in the inbox until the owner archives it, even with a legacy entry.
+	// or empty entry leaves that category in the inbox. Action mail has no
+	// entry: it stays in the inbox until the owner archives it.
 	Folders map[string]string `json:"folders"`
 	// MarkRead lists the categories filed as already read. Action mail is
 	// never filed, so this setting cannot mark it read.
@@ -121,6 +121,9 @@ func (config Config) Validate() error {
 		if !slices.Contains(Categories, category) {
 			return errors.New("personal_inbox folders may only name known categories")
 		}
+		if category == "action" && strings.TrimSpace(folder) != "" {
+			return errors.New("personal_inbox action mail stays in the inbox and cannot have a folder")
+		}
 		if strings.TrimSpace(folder) != "" && !safeValue(folder) {
 			return errors.New("personal_inbox folder names must not contain control characters")
 		}
@@ -140,11 +143,7 @@ func (config Config) Validate() error {
 }
 
 // Folder is the mailbox a category is filed into, or "" to leave it in place.
-// Action mail is never filed automatically, including with older configs.
 func (config Config) Folder(category string) string {
-	if category == "action" {
-		return ""
-	}
 	return strings.TrimSpace(config.Folders[category])
 }
 

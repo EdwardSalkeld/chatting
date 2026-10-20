@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T) {
@@ -53,11 +51,7 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 		PollTimeoutSeconds: 12,
 		AllowedChatIDs:     []string{"12345"},
 		ContextRefs:        []string{"repo:/workspace/chatting"},
-		PromptContext: contracts.PromptContext{
-			GlobalInstructions:       []string{"global"},
-			ReplyChannelInstructions: []string{"telegram"},
-		},
-		HTTPClient: client,
+		HTTPClient:         client,
 		ObserveChat: func(ctx context.Context, observation ChatObservation) error {
 			observed = append(observed, observation)
 			return nil
@@ -106,9 +100,6 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 	}
 	if !reflect.DeepEqual(envelope.ContextRefs, []string{"repo:/workspace/chatting"}) {
 		t.Fatalf("context refs = %#v", envelope.ContextRefs)
-	}
-	if envelope.PromptContext == nil || !reflect.DeepEqual(envelope.PromptContext.AssembledInstructions(), []string{"global", "telegram"}) {
-		t.Fatalf("prompt context = %#v", envelope.PromptContext)
 	}
 	if len(observed) != 2 {
 		t.Fatalf("observed chats = %#v", observed)

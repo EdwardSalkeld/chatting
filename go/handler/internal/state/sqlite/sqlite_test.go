@@ -139,56 +139,6 @@ func TestGitHubAssignmentCheckpointRoundTripUsesPythonCompatibleTable(t *testing
 	assertGitHubAssignmentCheckpointSchemaAndPayload(t, dbPath, scopeKey, checkpoint)
 }
 
-func TestConversationTurnsRoundTripScopedByChannelAndTarget(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-
-	if err := store.AppendConversationTurn(ctx, "telegram", "12345", "user", "hello", "@alice", "task:1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AppendConversationTurn(ctx, "telegram", "12345", "assistant", "hi there", "", "task:1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AppendConversationTurn(ctx, "telegram", "67890", "user", "wrong chat", "@bob", "task:2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AppendConversationTurn(ctx, "email", "12345", "user", "wrong channel", "", "task:3"); err != nil {
-		t.Fatal(err)
-	}
-
-	turns, err := store.ListRecentConversationTurns(ctx, "telegram", "12345", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(turns) != 2 {
-		t.Fatalf("len(turns) = %d", len(turns))
-	}
-	if got, want := turns[0].Role, "user"; got != want {
-		t.Fatalf("turns[0].Role = %q, want %q", got, want)
-	}
-	if got, want := turns[0].Content, "hello"; got != want {
-		t.Fatalf("turns[0].Content = %q, want %q", got, want)
-	}
-	if got, want := turns[0].Sender, "@alice"; got != want {
-		t.Fatalf("turns[0].Sender = %q, want %q", got, want)
-	}
-	if turns[0].CreatedAt.IsZero() {
-		t.Fatal("turns[0].CreatedAt was zero")
-	}
-	if got, want := turns[1].Role, "assistant"; got != want {
-		t.Fatalf("turns[1].Role = %q, want %q", got, want)
-	}
-	if got, want := turns[1].Content, "hi there"; got != want {
-		t.Fatalf("turns[1].Content = %q, want %q", got, want)
-	}
-	if got, want := turns[1].Sender, ""; got != want {
-		t.Fatalf("turns[1].Sender = %q, want %q", got, want)
-	}
-	if turns[1].CreatedAt.IsZero() {
-		t.Fatal("turns[1].CreatedAt was zero")
-	}
-}
-
 func TestRecordTaskRoundTripsAndUsesPythonCompatibleTable(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "state.db")

@@ -4,32 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 )
 
 const (
-	TaskQueueName           = "chatting.tasks.v1"
-	EgressQueueName         = "chatting.egress.v1"
-	egressPickupWaitSeconds = 5
-	egressDrainWaitSeconds  = 0
+	TaskQueueName = "chatting.tasks.v1"
+	// Attachments a task never claimed are reclaimed after this long.
+	telegramAttachmentMaxAge = 30 * 24 * time.Hour
 )
 
 type Broker interface {
 	EnsureQueue(ctx context.Context, queueName string) error
 	PublishJSON(ctx context.Context, queueName string, payload map[string]any) (string, error)
-	PickupJSON(ctx context.Context, queueName string, timeoutSeconds int, waitSeconds int) (*bbmb.PickedMessage, error)
-	Ack(ctx context.Context, queueName string, guid string) error
-}
-
-type EgressHandler interface {
-	HandleRaw(ctx context.Context, raw []byte) error
 }
 
 type IngressState interface {
@@ -50,18 +40,6 @@ type TelegramAttachmentCleanupState interface {
 	CleanupTelegramAttachmentsForRuntime(ctx context.Context, attachmentRootDir string, notAfter time.Time, maxAgeCutoff time.Time) error
 }
 
-type ConversationTurn struct {
-	Role      string
-	Content   string
-	Sender    string
-	CreatedAt time.Time
-}
-
-type TelegramConversationState interface {
-	AppendConversationTurn(ctx context.Context, channel string, target string, role string, content string, sender string, runID string) error
-	ListRecentConversationTurns(ctx context.Context, channel string, target string, limit int) ([]ConversationTurn, error)
-}
-
 type Connector interface {
 	Poll(ctx context.Context) ([]contracts.TaskEnvelope, error)
 }
@@ -74,7 +52,6 @@ type AckingConnector interface {
 type Runner struct {
 	config       handlerconfig.Config
 	broker       Broker
-	egress       EgressHandler
 	ingressState IngressState
 	connectors   []Connector
 	metrics      *metrics.Recorder
@@ -105,17 +82,13 @@ func WithMetrics(recorder *metrics.Recorder) Option {
 	}
 }
 
-func NewRunner(config handlerconfig.Config, broker Broker, egress EgressHandler, options ...Option) (*Runner, error) {
+func NewRunner(config handlerconfig.Config, broker Broker, options ...Option) (*Runner, error) {
 	if broker == nil {
 		return nil, errors.New("broker is required")
-	}
-	if egress == nil {
-		return nil, errors.New("egress handler is required")
 	}
 	runner := &Runner{
 		config: config,
 		broker: broker,
-		egress: egress,
 		now:    func() time.Time { return time.Now().UTC() },
 		sleep:  sleep,
 	}
@@ -140,10 +113,6 @@ func (runner *Runner) Run(ctx context.Context) error {
 	if err := runner.broker.EnsureQueue(ctx, TaskQueueName); err != nil {
 		return err
 	}
-	// Egress no longer travels over BBMB: the worker submits each egress message
-	// straight to the handler's synchronous HTTP endpoint, so this loop only
-	// pumps ingress. DrainEgress and the egress queue remain for its tests but
-	// are no longer part of the live path.
 
 	loopCount := 0
 	for {
@@ -196,7 +165,7 @@ func (runner *Runner) cleanupTelegramAttachments(ctx context.Context) error {
 		ctx,
 		runner.config.TelegramAttachmentDir,
 		now,
-		now.Add(-time.Duration(runner.config.TelegramAttachmentMaxAgeSeconds)*time.Second),
+		now.Add(-telegramAttachmentMaxAge),
 	)
 }
 
@@ -226,13 +195,6 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 				"trace:"+envelope.ID,
 				runner.now(),
 			)
-			if conversationState, ok := runner.ingressState.(TelegramConversationState); ok {
-				enriched, err := prepareTelegramEnvelope(ctx, conversationState, taskMessage.TaskID, envelope)
-				if err != nil {
-					return published, err
-				}
-				taskMessage.Envelope = enriched
-			}
 			if router, ok := runner.ingressState.(TaskRouter); ok {
 				taskMessage, err = router.AssignTask(ctx, taskMessage)
 				if err != nil {
@@ -266,87 +228,12 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 	return published, nil
 }
 
-func prepareTelegramEnvelope(ctx context.Context, state TelegramConversationState, runID string, envelope contracts.TaskEnvelope) (contracts.TaskEnvelope, error) {
-	if envelope.ReplyChannel.Type != "telegram" {
-		return envelope, nil
-	}
-	// Deterministic handler notices use Content as the outbound reply body.
-	// They must not acquire prompt history or become conversation turns.
-	if envelope.Source == "internal" && envelope.ReplyChannel.Metadata["internal_notice"] != nil {
-		return envelope, nil
-	}
-	currentSender := telegramSenderLabel(envelope)
-	if err := state.AppendConversationTurn(ctx, "telegram", envelope.ReplyChannel.Target, "user", envelope.Content, currentSender, runID); err != nil {
-		return contracts.TaskEnvelope{}, err
-	}
-	return envelope, nil
-}
-
-// telegramSenderLabel derives a human-readable sender for the current inbound
-// message: the connector-provided reply_channel.metadata "sender" when present,
-// otherwise the display portion of the actor ("<id>:<username>" -> "<username>").
-func telegramSenderLabel(envelope contracts.TaskEnvelope) string {
-	if envelope.ReplyChannel.Metadata != nil {
-		if raw, ok := envelope.ReplyChannel.Metadata["sender"]; ok {
-			if label, ok := raw.(string); ok && strings.TrimSpace(label) != "" {
-				return strings.TrimSpace(label)
-			}
-		}
-	}
-	if envelope.Actor != nil {
-		actor := strings.TrimSpace(*envelope.Actor)
-		if index := strings.Index(actor, ":"); index != -1 {
-			if name := strings.TrimSpace(actor[index+1:]); name != "" {
-				return name
-			}
-		}
-		if actor != "" {
-			return actor
-		}
-	}
-	return ""
-}
-
 func ackEnvelope(ctx context.Context, connector Connector, envelopeID string) error {
 	acking, ok := connector.(AckingConnector)
 	if !ok {
 		return nil
 	}
 	return acking.AckEnvelope(ctx, envelopeID)
-}
-
-func (runner *Runner) DrainEgress(ctx context.Context) (int, error) {
-	drained := 0
-	waitSeconds := egressPickupWaitSeconds
-	for {
-		picked, err := runner.broker.PickupJSON(
-			ctx,
-			EgressQueueName,
-			runner.config.PollTimeoutSeconds,
-			waitSeconds,
-		)
-		if err != nil {
-			return drained, err
-		}
-		if picked == nil {
-			if runner.metrics != nil {
-				runner.metrics.RecordEgressLoop(runner.now())
-			}
-			return drained, nil
-		}
-		raw, err := json.Marshal(picked.Payload)
-		if err != nil {
-			return drained, fmt.Errorf("marshal egress payload guid=%s: %w", picked.GUID, err)
-		}
-		if err := runner.egress.HandleRaw(ctx, raw); err != nil {
-			return drained, err
-		}
-		if err := runner.broker.Ack(ctx, EgressQueueName, picked.GUID); err != nil {
-			return drained, err
-		}
-		drained++
-		waitSeconds = egressDrainWaitSeconds
-	}
 }
 
 func taskMessageMap(taskMessage contracts.TaskQueueMessage) (map[string]any, error) {

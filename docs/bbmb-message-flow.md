@@ -43,10 +43,8 @@ Egress does not flow over BBMB. Every egress message — the executor's visible 
 synchronous egress endpoint (`handler_egress_url`, default `http://127.0.0.1:9467/egress`), and the
 delivery outcome is returned in the HTTP status. The `chatting.egress.v2` payload contract is
 unchanged; only the transport moved from a queue to a request/response call so the sender learns
-whether the send landed. The `chatting.egress.v1` queue and the handler's `DrainEgress` loop are
-retired from the live path (the code is retained only for its tests, pending removal). The endpoint
-binds loopback only by default, independent of the metrics bind, since it can send messages to the
-outside world.
+whether the send landed. The endpoint always binds loopback, independent of the metrics bind,
+since it can send messages to the outside world.
 
 ## End-To-End Flow
 
@@ -63,7 +61,6 @@ Examples:
 
 `message-handler` then:
 - skips the envelope if `(source, dedupe_key)` has already been seen
-- records Telegram turns in its conversation history, without adding history to the envelope
 - assigns the task to a work item (one per Telegram chat and topic, a registered pull request's
   work item for GitHub events, otherwise a general work item)
 - wraps the envelope in a `TaskQueueMessage`
@@ -244,18 +241,14 @@ The deployed values are in lab's `nixos/hosts/magpie/chatting-config.nix`.
 - `poll_interval_seconds`: how often connectors are polled.
 - `allowed_egress_channels`: the main control over what the worker can cause externally. The
   heartbeat pong on `log` and internal completion events are the only exceptions.
-- `egress_http_host`, `egress_http_port`: the loopback egress endpoint.
+- `egress_http_port`: the loopback egress endpoint's port (default `9467`).
 - `egress_attachment_allowed_dirs`: the only directories an outbound attachment may come from.
 - `metrics_host`, `metrics_port`: the metrics/admin listener.
 - `context_refs`: default context refs for ingress tasks.
 - Connector settings are listed on each [connector page](connectors/README.md).
 
-Prompt guidance is inspectable in the task payload under `envelope.prompt_context`, assembled in
-this order before the task content:
-- `global_prompt_context`
-- source-specific defaults such as `cron_prompt_context`
-- reply-channel-specific defaults such as `email_prompt_context` or `telegram_prompt_context`
-- task-specific instructions such as a schedule's own `prompt_context`
+Prompt guidance is inspectable in the task payload under `envelope.prompt_context`. Schedules and
+reminders carry their own `prompt_context`; reminders also add a fixed source instruction.
 
 ### Worker
 
@@ -264,7 +257,7 @@ this order before the task content:
 - `sleep_seconds`: delay between empty polls.
 - `max_attempts`: retry budget before the task becomes a dead letter.
 - `codex_command`, `codex_working_dir`: shape the executor subprocess.
-- `workspace_root`, `executor_pool_size`, `supervisor_dir`: see [Operations](operations.md#worker).
+- `workspace_root`, `executor_pool_size`: see [Operations](operations.md#worker).
 - `handler_egress_url`: the handler's egress endpoint.
 
 ## Recommendations

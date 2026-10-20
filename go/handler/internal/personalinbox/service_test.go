@@ -161,7 +161,7 @@ func fixture(t *testing.T) (*Service, *fakeMail, *fakeBroker, *fakePerformer) {
 	performer := &fakePerformer{}
 	config := Config{Account: "main", Backfill: true, OrdersTarget: "orders", ActionTarget: "actions",
 		DigestTarget: "digest", DigestAt: "08:00", Timezone: "UTC", LinearTeam: "team", LinkTemplate: DefaultLinkTemplate,
-		Folders:  map[string]string{"news": "Triage/News", "order": "Triage/Orders", "action": "Triage/Actions"},
+		Folders:  map[string]string{"news": "Triage/News", "order": "Triage/Orders"},
 		MarkRead: []string{"news"}}
 	service := &Service{Config: config, Store: store, Broker: broker, Mail: mail,
 		Folders: &Resolver{Mail: mail}, Performer: performer,

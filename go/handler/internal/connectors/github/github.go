@@ -118,14 +118,6 @@ query (
 }
 `
 
-const ViewerLoginQuery = `
-query {
-  viewer {
-    login
-  }
-}
-`
-
 const OwnerRepositoriesQuery = `
 query (
   $owner: String!
@@ -551,28 +543,6 @@ func DefaultGraphQLRunner(ctx context.Context, query string, variables map[strin
 		return nil, errors.New("github_graphql_invalid_json")
 	}
 	return payload, nil
-}
-
-func FetchAuthenticatedViewerLogin(ctx context.Context, runner GraphQLRunner) (string, error) {
-	if runner == nil {
-		runner = DefaultGraphQLRunner
-	}
-	payload, err := runner(ctx, ViewerLoginQuery, map[string]any{})
-	if err != nil {
-		return "", err
-	}
-	if hasGraphQLErrors(payload) {
-		return "", fmt.Errorf("github_graphql_errors:%v", payload["errors"])
-	}
-	data, ok := payload["data"].(map[string]any)
-	if !ok {
-		return "", errors.New("github_graphql_missing_data")
-	}
-	viewer, ok := data["viewer"].(map[string]any)
-	if !ok {
-		return "", errors.New("github_graphql_invalid_viewer")
-	}
-	return requireString(viewer["login"], "viewer.login")
 }
 
 func ExpandRepositoryPatterns(ctx context.Context, repositoryPatterns []string, runner GraphQLRunner) ([]string, error) {

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func TestPollNormalizesMessagesToEnvelopes(t *testing.T) {
@@ -68,38 +66,6 @@ func TestPollNormalizesMessagesToEnvelopes(t *testing.T) {
 	}
 	if !fake.loggedOut {
 		t.Fatal("client was not logged out")
-	}
-}
-
-func TestPollAttachesPromptContext(t *testing.T) {
-	raw := buildRawEmail("alice@example.com", "Please summarize", "Body", "Sat, 28 Feb 2026 10:15:00 +0000")
-	fake := &fakeClient{messages: map[string][]byte{"101": []byte(raw)}}
-	connector, err := New(Config{
-		Host:     "imap.example.com",
-		Port:     993,
-		Username: "bot@example.com",
-		Password: "secret",
-		PromptContext: contracts.PromptContext{
-			GlobalInstructions:       []string{"Keep replies concise."},
-			ReplyChannelInstructions: []string{"Use a clear email subject line."},
-		},
-		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
-			return fake, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := envelopes[0].PromptContext.AssembledInstructions()
-	want := []string{"Keep replies concise.", "Use a clear email subject line."}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("instructions = %#v", got)
 	}
 }
 
