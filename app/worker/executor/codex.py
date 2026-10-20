@@ -276,6 +276,17 @@ class CodexExecutor:
         return None
 
 
+def _kill_process_group(pgid: int) -> None:
+    # SIGKILL reaches the group's members one at a time, so a parent waiting on
+    # app.main_finish could see it die and keep running before its own signal
+    # lands. Stopping everyone first means nothing runs again before the kill.
+    for sig in (signal.SIGSTOP, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+
+
 def _run_streaming(
     *,
     command: tuple[str, ...],
@@ -320,12 +331,9 @@ def _run_streaming(
             ):
                 if finish_session is not None:
                     if process.poll() is not None:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        _kill_process_group(process.pid)
                     elif not finish_session.requested and finish_session.poll():
-                        os.killpg(process.pid, signal.SIGKILL)
+                        _kill_process_group(process.pid)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout_seconds)
@@ -359,10 +367,7 @@ def _run_streaming(
         process.wait(timeout=max(remaining, 0.001))
     except BaseException:
         if finish_session is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            _kill_process_group(process.pid)
         else:
             process.kill()
         process.wait()
@@ -373,10 +378,7 @@ def _run_streaming(
         process.stdout.close()
         process.stderr.close()
         if finish_session is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            _kill_process_group(process.pid)
     return subprocess.CompletedProcess(
         command,
         process.returncode,
