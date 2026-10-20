@@ -60,8 +60,6 @@ class EgressQueueMessageTests(unittest.TestCase):
             task_id="task:email:1",
             envelope_id="email:1",
             trace_id="trace:email:1",
-            event_index=0,
-            event_count=2,
             message=OutboundMessage(
                 channel="email",
                 target="alice@example.com",
@@ -72,14 +70,11 @@ class EgressQueueMessageTests(unittest.TestCase):
             event_id="evt:task:email:1:0",
             sequence=0,
             event_kind="message",
-            message_type="chatting.egress.v2",
         )
 
         parsed = EgressQueueMessage.from_dict(message.to_dict())
 
         self.assertEqual(parsed.task_id, message.task_id)
-        self.assertEqual(parsed.event_index, 0)
-        self.assertEqual(parsed.event_count, 1)
         self.assertEqual(parsed.event_id, "evt:task:email:1:0")
         self.assertEqual(parsed.sequence, 0)
         self.assertEqual(parsed.event_kind, "message")
@@ -91,8 +86,6 @@ class EgressQueueMessageTests(unittest.TestCase):
             task_id="task:email:2",
             envelope_id="email:2",
             trace_id="trace:email:2",
-            event_index=0,
-            event_count=1,
             message=OutboundMessage(
                 channel="email", target="alice@example.com", body="hello"
             ),
@@ -100,7 +93,6 @@ class EgressQueueMessageTests(unittest.TestCase):
             event_id="evt:task:email:2:1",
             sequence=1,
             event_kind="incremental",
-            message_type="chatting.egress.v2",
         )
 
         parsed = EgressQueueMessage.from_dict(message.to_dict())
@@ -109,15 +101,12 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.event_id, "evt:task:email:2:1")
         self.assertEqual(parsed.sequence, 1)
         self.assertEqual(parsed.event_kind, "incremental")
-        self.assertEqual(parsed.event_index, 1)
 
     def test_egress_v2_attachment_message_round_trip(self) -> None:
         message = EgressQueueMessage(
             task_id="task:telegram:2",
             envelope_id="telegram:2",
             trace_id="trace:telegram:2",
-            event_index=0,
-            event_count=1,
             message=OutboundMessage(
                 channel="telegram",
                 target="12345",
@@ -128,7 +117,6 @@ class EgressQueueMessageTests(unittest.TestCase):
             event_id="evt:task:telegram:2:1",
             sequence=0,
             event_kind="message",
-            message_type="chatting.egress.v2",
         )
 
         parsed = EgressQueueMessage.from_dict(message.to_dict())
@@ -140,47 +128,22 @@ class EgressQueueMessageTests(unittest.TestCase):
         self.assertEqual(parsed.message.attachment.name, "menu.pdf")
 
     def test_egress_message_rejects_legacy_message_type(self) -> None:
+        payload = _egress_payload()
+        payload["message_type"] = "chatting.egress.v1"
         with self.assertRaises(ValueError):
-            EgressQueueMessage(
-                task_id="task:email:1",
-                envelope_id="email:1",
-                trace_id="trace:email:1",
-                event_index=0,
-                event_count=1,
-                message=OutboundMessage(
-                    channel="email", target="alice@example.com", body="hello"
-                ),
-                emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
-                event_id="evt:task:email:1:0",
-                sequence=0,
-                event_kind="message",
-                message_type="chatting.egress.v1",
-            )
+            EgressQueueMessage.from_dict(payload)
 
     def test_egress_v2_message_requires_event_id(self) -> None:
+        payload = _egress_payload()
+        del payload["event_id"]
         with self.assertRaises(ValueError):
-            EgressQueueMessage(
-                task_id="task:email:2",
-                envelope_id="email:2",
-                trace_id="trace:email:2",
-                event_index=0,
-                event_count=1,
-                message=OutboundMessage(
-                    channel="email", target="alice@example.com", body="hello"
-                ),
-                emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
-                sequence=0,
-                event_kind="message",
-                message_type="chatting.egress.v2",
-            )
+            EgressQueueMessage.from_dict(payload)
 
     def test_egress_v2_message_allows_missing_sequence(self) -> None:
         message = EgressQueueMessage(
             task_id="task:email:2",
             envelope_id="email:2",
             trace_id="trace:email:2",
-            event_index=0,
-            event_count=1,
             message=OutboundMessage(
                 channel="email", target="alice@example.com", body="hello"
             ),
@@ -188,7 +151,6 @@ class EgressQueueMessageTests(unittest.TestCase):
             event_id="evt:task:email:2:adhoc",
             sequence=None,
             event_kind="incremental",
-            message_type="chatting.egress.v2",
         )
 
         payload = message.to_dict()
@@ -203,8 +165,6 @@ class EgressQueueMessageTests(unittest.TestCase):
                 task_id="task:email:2",
                 envelope_id="email:2",
                 trace_id="trace:email:2",
-                event_index=0,
-                event_count=1,
                 message=OutboundMessage(
                     channel="email", target="alice@example.com", body="hello"
                 ),
@@ -212,7 +172,6 @@ class EgressQueueMessageTests(unittest.TestCase):
                 event_id="evt:task:email:2:message",
                 sequence=None,
                 event_kind="message",
-                message_type="chatting.egress.v2",
             )
 
     def test_egress_v2_completion_requires_sequence(self) -> None:
@@ -221,15 +180,27 @@ class EgressQueueMessageTests(unittest.TestCase):
                 task_id="task:email:2",
                 envelope_id="email:2",
                 trace_id="trace:email:2",
-                event_index=0,
-                event_count=1,
                 message=OutboundMessage(channel="internal", target="task", body="done"),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:2:completion",
                 sequence=None,
                 event_kind="completion",
-                message_type="chatting.egress.v2",
             )
+
+
+def _egress_payload() -> dict[str, object]:
+    return EgressQueueMessage(
+        task_id="task:email:1",
+        envelope_id="email:1",
+        trace_id="trace:email:1",
+        message=OutboundMessage(
+            channel="email", target="alice@example.com", body="hello"
+        ),
+        emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
+        event_id="evt:task:email:1:0",
+        sequence=0,
+        event_kind="message",
+    ).to_dict()
 
 
 if __name__ == "__main__":

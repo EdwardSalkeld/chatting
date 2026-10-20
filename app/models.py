@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, fields
+from datetime import datetime
 from typing import Any, Literal
+
+from app.timefmt import format_utc
 
 SOURCE_TYPES = ("cron", "email", "im", "webhook", "internal", "reminder")
 SCHEMA_VERSION = "1.0"
@@ -134,22 +136,10 @@ class PromptContext:
     task_instructions: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        _validate_string_list(
-            self.global_instructions,
-            field_name="prompt_context.global_instructions",
-        )
-        _validate_string_list(
-            self.source_instructions,
-            field_name="prompt_context.source_instructions",
-        )
-        _validate_string_list(
-            self.reply_channel_instructions,
-            field_name="prompt_context.reply_channel_instructions",
-        )
-        _validate_string_list(
-            self.task_instructions,
-            field_name="prompt_context.task_instructions",
-        )
+        for item in fields(self):
+            _validate_string_list(
+                getattr(self, item.name), field_name=f"prompt_context.{item.name}"
+            )
 
     def assembled_instructions(self) -> list[str]:
         return (
@@ -217,9 +207,7 @@ class TaskEnvelope:
             "schema_version": self.schema_version,
             "id": self.id,
             "source": self.source,
-            "received_at": self.received_at.astimezone(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "received_at": format_utc(self.received_at),
             "actor": self.actor,
             "content": self.content,
             "attachments": [
@@ -328,11 +316,7 @@ class UsageWindow:
             "window_minutes": self.window_minutes,
         }
         if self.resets_at is not None:
-            payload["resets_at"] = (
-                self.resets_at.astimezone(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
+            payload["resets_at"] = format_utc(self.resets_at)
         return payload
 
 
@@ -364,11 +348,7 @@ class UsageReport:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"errors": self.errors}
         if self.observed_at is not None:
-            payload["observed_at"] = (
-                self.observed_at.astimezone(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
+            payload["observed_at"] = format_utc(self.observed_at)
         for name in ("model", "plan_type", "limit_id", "credit_balance"):
             value = getattr(self, name)
             if value is not None:
@@ -420,9 +400,7 @@ class RunRecord:
             "workflow": self.workflow,
             "latency_ms": self.latency_ms,
             "result_status": self.result_status,
-            "created_at": self.created_at.astimezone(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "created_at": format_utc(self.created_at),
         }
         if self.work_item_id is not None:
             payload["work_item_id"] = self.work_item_id
@@ -462,9 +440,5 @@ class AuditEvent:
             "workflow": self.workflow,
             "result_status": self.result_status,
             "detail": self.detail,
-            "created_at": self.created_at.astimezone(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "created_at": format_utc(self.created_at),
         }
-
-

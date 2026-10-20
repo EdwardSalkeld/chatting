@@ -5,7 +5,8 @@ from __future__ import annotations
 import sqlite3
 import json
 import uuid
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Literal, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
 from app.state import work_items
+from app.timefmt import format_utc, parse_utc
 from app.models import (
     AttachmentRef,
     AuditEvent,
@@ -20,6 +22,129 @@ from app.models import (
     RunRecord,
     TaskEnvelope,
 )
+
+
+# Managers, supervisors and the activity API use separate connections, so WAL
+# keeps readers from blocking a supervisor's lease commit.
+_SCHEMA = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS run_records (
+    run_id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    result_status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    work_item_id TEXT
+);
+CREATE TABLE IF NOT EXISTS audit_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    envelope_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    result_status TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    work_item_id TEXT
+);
+CREATE TABLE IF NOT EXISTS dead_letters (
+    dead_letter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    last_error TEXT,
+    attempt_count INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    replayed_run_id TEXT,
+    schema_version TEXT NOT NULL,
+    work_item_id TEXT
+);
+CREATE TABLE IF NOT EXISTS egress_outbox (
+    event_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    publish_state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    work_item_id TEXT
+);
+CREATE TABLE IF NOT EXISTS worker_activity_events (
+    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT NOT NULL,
+    task_id TEXT,
+    envelope_id TEXT,
+    run_id TEXT,
+    source TEXT,
+    workflow TEXT,
+    phase TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    is_internal INTEGER NOT NULL DEFAULT 0,
+    work_item_id TEXT
+);
+CREATE TABLE IF NOT EXISTS conversation_routes (
+    route_type TEXT NOT NULL,
+    route_key TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (route_type, route_key),
+    UNIQUE (conversation_id)
+);
+CREATE TABLE IF NOT EXISTS conversation_executors (
+    conversation_id TEXT PRIMARY KEY,
+    backend TEXT NOT NULL CHECK (backend IN ('exec', 'app-server'))
+);
+CREATE TABLE IF NOT EXISTS worker_inbox (
+    task_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    task_payload_json TEXT NOT NULL,
+    broker_guid TEXT,
+    state TEXT NOT NULL,
+    parent_task_id TEXT,
+    staged_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    reply_delivered_at TEXT,
+    work_item_id TEXT,
+    lease_owner TEXT
+);
+CREATE INDEX IF NOT EXISTS worker_inbox_conversation_state
+    ON worker_inbox (conversation_id, state, staged_at);
+CREATE INDEX IF NOT EXISTS worker_inbox_work_item_state
+    ON worker_inbox (work_item_id, state, staged_at);
+CREATE TABLE IF NOT EXISTS worker_telegram_history (
+    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    reply_to_message_id INTEGER,
+    role TEXT NOT NULL,
+    sender TEXT,
+    content TEXT,
+    attachments_json TEXT NOT NULL,
+    task_id TEXT,
+    event_id TEXT,
+    occurred_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    topic_id INTEGER,
+    work_item_id TEXT,
+    UNIQUE (target, message_id)
+);
+CREATE INDEX IF NOT EXISTS worker_telegram_history_target_message
+    ON worker_telegram_history (target, message_id);
+CREATE INDEX IF NOT EXISTS worker_telegram_history_scope
+    ON worker_telegram_history (target, topic_id, message_id);
+CREATE INDEX IF NOT EXISTS run_records_work_item_created
+    ON run_records (work_item_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_run_id ON audit_events (run_id);
+CREATE INDEX IF NOT EXISTS worker_activity_task_id
+    ON worker_activity_events (task_id, activity_id);
+"""
 
 
 @dataclass(frozen=True)
@@ -58,236 +183,25 @@ class SQLiteStateStore:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """Commit on success, roll back on error, and always close."""
+        with closing(self._connect()) as connection, connection:
+            yield connection
+
     def _initialize(self) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as connection:
-            # Managers, supervisors and the activity API use separate
-            # connections. Readers must not block a supervisor's lease commit.
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS run_records (
-                    run_id TEXT PRIMARY KEY,
-                    envelope_id TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    workflow TEXT NOT NULL,
-                    latency_ms INTEGER NOT NULL,
-                    result_status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    envelope_id TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    workflow TEXT NOT NULL,
-                    result_status TEXT NOT NULL,
-                    detail_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS dead_letters (
-                    dead_letter_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    envelope_json TEXT NOT NULL,
-                    reason_codes_json TEXT NOT NULL,
-                    last_error TEXT,
-                    attempt_count INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    replayed_run_id TEXT,
-                    schema_version TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS egress_outbox (
-                    event_id TEXT PRIMARY KEY,
-                    task_id TEXT NOT NULL,
-                    sequence INTEGER NOT NULL,
-                    event_kind TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    publish_state TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS worker_activity_events (
-                    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    occurred_at TEXT NOT NULL,
-                    task_id TEXT,
-                    envelope_id TEXT,
-                    run_id TEXT,
-                    source TEXT,
-                    workflow TEXT,
-                    phase TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    detail_json TEXT NOT NULL,
-                    is_internal INTEGER NOT NULL DEFAULT 0
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS conversation_routes (
-                    route_type TEXT NOT NULL,
-                    route_key TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (route_type, route_key),
-                    UNIQUE (conversation_id)
-                )
-                """
-            )
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS conversation_executors (
-                    conversation_id TEXT PRIMARY KEY,
-                    backend TEXT NOT NULL CHECK (backend IN ('exec', 'app-server'))
-                )"""
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS worker_inbox (
-                    task_id TEXT PRIMARY KEY,
-                    conversation_id TEXT NOT NULL,
-                    task_payload_json TEXT NOT NULL,
-                    broker_guid TEXT,
-                    state TEXT NOT NULL,
-                    parent_task_id TEXT,
-                    staged_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    reply_delivered_at TEXT
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS worker_inbox_conversation_state
-                ON worker_inbox (conversation_id, state, staged_at)
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS worker_telegram_history (
-                    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    target TEXT NOT NULL,
-                    message_id INTEGER NOT NULL,
-                    reply_to_message_id INTEGER,
-                    role TEXT NOT NULL,
-                    sender TEXT,
-                    content TEXT,
-                    attachments_json TEXT NOT NULL,
-                    task_id TEXT,
-                    event_id TEXT,
-                    occurred_at TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE (target, message_id)
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS worker_telegram_history_target_message
-                ON worker_telegram_history (target, message_id)
-                """
-            )
-            history_columns = {
-                row[1]
-                for row in connection.execute(
-                    "PRAGMA table_info(worker_telegram_history)"
-                )
-            }
-            if "topic_id" not in history_columns:
-                connection.execute(
-                    "ALTER TABLE worker_telegram_history ADD COLUMN topic_id INTEGER"
-                )
-                # Preserve topic boundaries for turns already in the worker ledger.
-                # This reads worker inbox metadata only; handler history is untouched.
-                connection.execute(
-                    """UPDATE worker_telegram_history
-                    SET topic_id = (
-                        SELECT json_extract(task_payload_json,
-                            '$.envelope.reply_channel.metadata.message_thread_id')
-                        FROM worker_inbox
-                        WHERE worker_inbox.task_id = worker_telegram_history.task_id
-                    )"""
-                )
-            connection.execute(
-                """CREATE INDEX IF NOT EXISTS worker_telegram_history_scope
-                ON worker_telegram_history (target, topic_id, message_id)"""
-            )
+        with self._transaction() as connection:
+            connection.executescript(_SCHEMA)
             work_items.initialize(connection)
-            # Additive migration for databases created before lane identities.
-            for table in (
-                "run_records",
-                "audit_events",
-                "dead_letters",
-                "worker_activity_events",
-                "egress_outbox",
-                "worker_telegram_history",
-                "worker_inbox",
-            ):
-                columns = {
-                    row[1] for row in connection.execute(f"PRAGMA table_info({table})")
-                }
-                if "work_item_id" not in columns:
-                    connection.execute(
-                        f"ALTER TABLE {table} ADD COLUMN work_item_id TEXT"
-                    )
-            inbox_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(worker_inbox)")
-            }
-            if "lease_owner" not in inbox_columns:
-                connection.execute(
-                    "ALTER TABLE worker_inbox ADD COLUMN lease_owner TEXT"
-                )
-            connection.execute(
-                """
-                UPDATE worker_inbox SET work_item_id = COALESCE(
-                    (SELECT work_item_id FROM work_item_events
-                     WHERE work_item_events.task_id = worker_inbox.task_id),
-                    'item_legacy_general')
-                WHERE work_item_id IS NULL
-                """
-            )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS worker_inbox_work_item_state "
-                "ON worker_inbox (work_item_id, state, staged_at)"
-            )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS run_records_work_item_created "
-                "ON run_records (work_item_id, created_at DESC)"
-            )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS audit_events_run_id "
-                "ON audit_events (run_id)"
-            )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS worker_activity_task_id "
-                "ON worker_activity_events (task_id, activity_id)"
-            )
-            connection.commit()
 
     def stage_inbox_task(
         self, task_message: TaskQueueMessage, *, broker_guid: str | None = None
     ) -> bool:
         """Durably stage a broker task before its BBMB message is acknowledged."""
         route_type, route_key = _conversation_route(task_message)
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
@@ -336,7 +250,6 @@ class SQLiteStateStore:
                     (assignment.work_item_id, task_message.task_id),
                 )
             self._record_telegram_inbound(connection, task_message, created_at=now)
-            connection.commit()
         return cursor.rowcount > 0
 
     def get_work_assignment(self, *, task_id: str) -> work_items.WorkAssignment | None:
@@ -366,14 +279,13 @@ class SQLiteStateStore:
     def set_work_model_tier(self, *, work_item_id: str, tier: str) -> None:
         if tier not in ("high", "low", "auto"):
             raise ValueError("model tier must be high, low, or auto")
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             cursor = connection.execute(
                 "UPDATE work_items SET model_tier = ? WHERE work_item_id = ?",
                 (tier, work_item_id),
             )
             if cursor.rowcount != 1:
                 raise KeyError(work_item_id)
-            connection.commit()
 
     def get_conversation_executor(self, *, conversation_id: str) -> str:
         with closing(self._connect()) as connection:
@@ -386,7 +298,7 @@ class SQLiteStateStore:
     def set_conversation_executor(self, *, conversation_id: str, backend: str) -> None:
         if backend not in ("exec", "app-server"):
             raise ValueError("executor must be exec or app-server")
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             if (
                 connection.execute(
                     "SELECT 1 FROM conversation_routes WHERE conversation_id = ?",
@@ -400,7 +312,6 @@ class SQLiteStateStore:
                 "ON CONFLICT(conversation_id) DO UPDATE SET backend = excluded.backend",
                 (conversation_id, backend),
             )
-            connection.commit()
 
     def get_work_explicit_finish(self, *, work_item_id: str) -> bool:
         with closing(self._connect()) as connection:
@@ -415,14 +326,13 @@ class SQLiteStateStore:
     def set_work_explicit_finish(self, *, work_item_id: str, enabled: bool) -> None:
         if not isinstance(enabled, bool):
             raise ValueError("explicit_finish must be a boolean")
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             cursor = connection.execute(
                 "UPDATE work_items SET explicit_finish = ? WHERE work_item_id = ?",
                 (int(enabled), work_item_id),
             )
             if cursor.rowcount != 1:
                 raise KeyError(work_item_id)
-            connection.commit()
 
     def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
         with closing(self._connect()) as connection:
@@ -480,7 +390,7 @@ class SQLiteStateStore:
                 content or None,
                 _serialize_attachments(envelope.attachments),
                 task_message.task_id,
-                _serialize_rfc3339_utc(envelope.received_at),
+                format_utc(envelope.received_at),
                 created_at,
                 task_message.task_id,
             ),
@@ -511,8 +421,8 @@ class SQLiteStateStore:
         normalized_content = content.strip() if content is not None else ""
         if not normalized_content and not attachments:
             raise ValueError("content or attachment is required")
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO worker_telegram_history (
@@ -532,12 +442,11 @@ class SQLiteStateStore:
                     _serialize_attachments(attachments),
                     task_id,
                     event_id,
-                    _serialize_rfc3339_utc(occurred_at),
+                    format_utc(occurred_at),
                     now,
                     task_id,
                 ),
             )
-            connection.commit()
 
     def list_telegram_history_around(
         self,
@@ -637,7 +546,7 @@ class SQLiteStateStore:
                 if boundary.tzinfo is None:
                     raise ValueError("date filters must include a timezone")
                 clauses.append(f"occurred_at {operator} ?")
-                params.append(_serialize_rfc3339_utc(boundary))
+                params.append(format_utc(boundary))
         params.append(limit)
         with closing(self._connect()) as connection:
             rows = connection.execute(
@@ -650,9 +559,9 @@ class SQLiteStateStore:
 
     def claim_next_inbox_task(self) -> InboxTask | None:
         """Atomically lease the oldest runnable task, one per work item."""
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
+        now = format_utc(datetime.now(timezone.utc))
         lease_owner = uuid.uuid4().hex
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
@@ -688,7 +597,6 @@ class SQLiteStateStore:
                 """
             ).fetchone()
             if row is None:
-                connection.commit()
                 return None
             claimed_state = str(row["state"])
             connection.execute(
@@ -703,7 +611,6 @@ class SQLiteStateStore:
                     row["task_id"],
                 ),
             )
-            connection.commit()
         return _inbox_task_from_row(
             row, state="active" if claimed_state == "pending" else claimed_state
         )
@@ -727,8 +634,8 @@ class SQLiteStateStore:
 
     def recover_inbox_tasks(self, *, supervised_task_ids: tuple[str, ...] = ()) -> None:
         """Recover abandoned leases, leaving live supervisors and their bundles alone."""
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "CREATE TEMP TABLE supervised_tasks (task_id TEXT PRIMARY KEY)"
@@ -771,7 +678,6 @@ class SQLiteStateStore:
                 """,
                 (now,),
             )
-            connection.commit()
 
     def claim_conversation_followups(self, *, parent_task_id: str) -> list[InboxTask]:
         """Attach all currently pending Telegram turns in the parent's conversation."""
@@ -779,15 +685,14 @@ class SQLiteStateStore:
 
         if not parent_task_id:
             raise ValueError("parent_task_id is required")
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             parent = connection.execute(
                 "SELECT conversation_id, state FROM worker_inbox WHERE task_id = ?",
                 (parent_task_id,),
             ).fetchone()
             if parent is None or parent["state"] not in {"active", "attached"}:
-                connection.commit()
                 return []
             rows = connection.execute(
                 """
@@ -822,7 +727,6 @@ class SQLiteStateStore:
                         row, state="attached", parent_task_id=parent_task_id
                     )
                 )
-            connection.commit()
         return attached
 
     def has_unresolved_attached_followups(self, *, parent_task_id: str) -> bool:
@@ -851,8 +755,8 @@ class SQLiteStateStore:
         exits before it claims the staged row. Close that row immediately so a
         later worker restart records its completion instead of replaying it.
         """
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
@@ -904,20 +808,18 @@ class SQLiteStateStore:
                         """,
                         (now, now, bundle_parent_task_id),
                     )
-            connection.commit()
         return cursor.rowcount > 0
 
     def finish_inbox_task(self, *, parent_task_id: str) -> list[InboxTask]:
         """Complete a delivered bundle, or release unresolved children separately."""
-        now = _serialize_rfc3339_utc(datetime.now(timezone.utc))
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             parent = connection.execute(
                 "SELECT state FROM worker_inbox WHERE task_id = ?",
                 (parent_task_id,),
             ).fetchone()
             if parent is None:
-                connection.commit()
                 return []
             children = connection.execute(
                 """
@@ -952,7 +854,6 @@ class SQLiteStateStore:
                     """,
                     (now, parent_task_id),
                 )
-            connection.commit()
         if not delivered:
             return []
         return [_inbox_task_from_row(row, state="completed") for row in children]
@@ -989,7 +890,7 @@ class SQLiteStateStore:
 
     def append_run(self, record: RunRecord) -> None:
         payload = record.to_dict()
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO run_records (
@@ -1017,7 +918,6 @@ class SQLiteStateStore:
                     record.work_item_id,
                 ),
             )
-            connection.commit()
 
     def list_runs(self) -> list[RunRecord]:
         with closing(self._connect()) as connection:
@@ -1025,49 +925,7 @@ class SQLiteStateStore:
                 "SELECT * FROM run_records ORDER BY created_at ASC"
             ).fetchall()
 
-        return [
-            RunRecord(
-                run_id=row["run_id"],
-                envelope_id=row["envelope_id"],
-                source=row["source"],
-                workflow=row["workflow"],
-                latency_ms=row["latency_ms"],
-                result_status=row["result_status"],
-                created_at=_parse_rfc3339_utc(row["created_at"]),
-                schema_version=row["schema_version"],
-                work_item_id=row["work_item_id"],
-            )
-            for row in rows
-        ]
-
-    def list_recent_runs(
-        self, *, limit: int, include_internal: bool = False
-    ) -> list[RunRecord]:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        # Internal runs (heartbeats) dominate the table, so exclude them in SQL
-        # rather than after the limit — otherwise the limited window is almost
-        # entirely heartbeats and real runs never surface.
-        where = "" if include_internal else "WHERE source != 'internal'"
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                f"SELECT * FROM run_records {where} ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [
-            RunRecord(
-                run_id=row["run_id"],
-                envelope_id=row["envelope_id"],
-                source=row["source"],
-                workflow=row["workflow"],
-                latency_ms=row["latency_ms"],
-                result_status=row["result_status"],
-                created_at=_parse_rfc3339_utc(row["created_at"]),
-                schema_version=row["schema_version"],
-                work_item_id=row["work_item_id"],
-            )
-            for row in rows
-        ]
+        return [_run_from_row(row) for row in rows]
 
     def list_work_item_overview(self) -> list[dict[str, object]]:
         """Small rows for the landing page, without loading run transcripts."""
@@ -1172,21 +1030,11 @@ class SQLiteStateStore:
             ).fetchone()
         if row is None:
             return None
-        return RunRecord(
-            run_id=row["run_id"],
-            envelope_id=row["envelope_id"],
-            source=row["source"],
-            workflow=row["workflow"],
-            latency_ms=row["latency_ms"],
-            result_status=row["result_status"],
-            created_at=_parse_rfc3339_utc(row["created_at"]),
-            schema_version=row["schema_version"],
-            work_item_id=row["work_item_id"],
-        )
+        return _run_from_row(row)
 
     def append_audit_event(self, event: AuditEvent) -> None:
         payload = event.to_dict()
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO audit_events (
@@ -1215,7 +1063,6 @@ class SQLiteStateStore:
                     payload["run_id"],
                 ),
             )
-            connection.commit()
 
     def list_audit_events(self) -> list[AuditEvent]:
         with closing(self._connect()) as connection:
@@ -1223,19 +1070,7 @@ class SQLiteStateStore:
                 "SELECT * FROM audit_events ORDER BY event_id ASC"
             ).fetchall()
 
-        return [
-            AuditEvent(
-                run_id=row["run_id"],
-                envelope_id=row["envelope_id"],
-                source=row["source"],
-                workflow=row["workflow"],
-                result_status=row["result_status"],
-                detail=json.loads(row["detail_json"]),
-                created_at=_parse_rfc3339_utc(row["created_at"]),
-                schema_version=row["schema_version"],
-            )
-            for row in rows
-        ]
+        return [_audit_event_from_row(row) for row in rows]
 
     def get_audit_event_for_run(self, *, run_id: str) -> AuditEvent | None:
         if not run_id:
@@ -1253,16 +1088,7 @@ class SQLiteStateStore:
             ).fetchone()
         if row is None:
             return None
-        return AuditEvent(
-            run_id=row["run_id"],
-            envelope_id=row["envelope_id"],
-            source=row["source"],
-            workflow=row["workflow"],
-            result_status=row["result_status"],
-            detail=json.loads(row["detail_json"]),
-            created_at=_parse_rfc3339_utc(row["created_at"]),
-            schema_version=row["schema_version"],
-        )
+        return _audit_event_from_row(row)
 
     def append_dead_letter(
         self,
@@ -1280,8 +1106,8 @@ class SQLiteStateStore:
         if attempt_count <= 0:
             raise ValueError("attempt_count must be positive")
         payload = envelope.to_dict()
-        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
+        created_at = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO dead_letters (
@@ -1312,18 +1138,15 @@ class SQLiteStateStore:
                     run_id,
                 ),
             )
-            connection.commit()
-            if cursor.lastrowid is None:
-                raise RuntimeError("failed to retrieve dead letter ID after insert")
-            return cursor.lastrowid
+        if cursor.lastrowid is None:
+            raise RuntimeError("failed to retrieve dead letter ID after insert")
+        return cursor.lastrowid
 
     def queue_egress_outbox_event(self, message: EgressQueueMessage) -> None:
-        if message.event_id is None:
-            raise ValueError("event_id is required")
         if message.sequence is None:
             raise ValueError("sequence is required")
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO egress_outbox (
@@ -1352,13 +1175,12 @@ class SQLiteStateStore:
                     message.task_id,
                 ),
             )
-            connection.commit()
 
     def mark_egress_outbox_event_acked(self, *, event_id: str) -> None:
         if not event_id:
             raise ValueError("event_id is required")
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        with closing(self._connect()) as connection:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE egress_outbox
@@ -1367,7 +1189,6 @@ class SQLiteStateStore:
                 """,
                 ("acked", now, event_id),
             )
-            connection.commit()
 
     def list_replayable_egress_outbox_events(self) -> list[EgressQueueMessage]:
         with closing(self._connect()) as connection:
@@ -1403,7 +1224,7 @@ class SQLiteStateStore:
         if not summary:
             raise ValueError("summary is required")
         payload = _json_safe_dict(detail)
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO worker_activity_events (
@@ -1426,9 +1247,7 @@ class SQLiteStateStore:
                     ))
                 """,
                 (
-                    occurred_at.astimezone(timezone.utc)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    format_utc(occurred_at),
                     task_id,
                     envelope_id,
                     run_id,
@@ -1442,7 +1261,6 @@ class SQLiteStateStore:
                     run_id,
                 ),
             )
-            connection.commit()
 
     def count_conversation_bundle_main_reply_egress_events(
         self, *, parent_task_id: str
@@ -1496,99 +1314,12 @@ class SQLiteStateStore:
     ) -> list[dict[str, object]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        with closing(self._connect()) as connection:
-            if include_internal:
-                rows = connection.execute(
-                    """
-                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
-                    FROM worker_activity_events
-                    ORDER BY occurred_at DESC, activity_id DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """
-                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
-                    FROM worker_activity_events
-                    WHERE is_internal = 0
-                    ORDER BY occurred_at DESC, activity_id DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
-        return [
-            {
-                "activity_id": row["activity_id"],
-                "occurred_at": row["occurred_at"],
-                "task_id": row["task_id"],
-                "envelope_id": row["envelope_id"],
-                "run_id": row["run_id"],
-                "source": row["source"],
-                "workflow": row["workflow"],
-                "phase": row["phase"],
-                "summary": row["summary"],
-                "detail": json.loads(row["detail_json"]),
-                "is_internal": bool(row["is_internal"]),
-            }
-            for row in rows
-        ]
-
-    def list_worker_activity_for_run(
-        self,
-        *,
-        run_id: str,
-        task_id: str,
-        envelope_id: str,
-        include_internal: bool = False,
-    ) -> list[dict[str, object]]:
-        if not run_id:
-            raise ValueError("run_id is required")
-        if not task_id:
-            raise ValueError("task_id is required")
-        if not envelope_id:
-            raise ValueError("envelope_id is required")
-        with closing(self._connect()) as connection:
-            if include_internal:
-                rows = connection.execute(
-                    """
-                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
-                    FROM worker_activity_events
-                    WHERE run_id = ?
-                       OR (task_id = ? AND envelope_id = ?)
-                    ORDER BY occurred_at ASC, activity_id ASC
-                    """,
-                    (run_id, task_id, envelope_id),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """
-                    SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
-                    FROM worker_activity_events
-                    WHERE (run_id = ?
-                       OR (task_id = ? AND envelope_id = ?))
-                      AND is_internal = 0
-                    ORDER BY occurred_at ASC, activity_id ASC
-                    """,
-                    (run_id, task_id, envelope_id),
-                ).fetchall()
-        return [
-            {
-                "activity_id": row["activity_id"],
-                "occurred_at": row["occurred_at"],
-                "task_id": row["task_id"],
-                "envelope_id": row["envelope_id"],
-                "run_id": row["run_id"],
-                "source": row["source"],
-                "workflow": row["workflow"],
-                "phase": row["phase"],
-                "summary": row["summary"],
-                "detail": json.loads(row["detail_json"]),
-                "is_internal": bool(row["is_internal"]),
-            }
-            for row in rows
-        ]
+        return self._list_activity(
+            where="1",
+            params=(limit,),
+            include_internal=include_internal,
+            tail="ORDER BY occurred_at DESC, activity_id DESC LIMIT ?",
+        )
 
     def list_worker_activity_for_task(
         self,
@@ -1602,43 +1333,76 @@ class SQLiteStateStore:
             raise ValueError("task_id is required")
         if not envelope_id:
             raise ValueError("envelope_id is required")
+        return self._list_activity(
+            where="task_id = ? AND envelope_id = ?",
+            params=(task_id, envelope_id),
+            include_internal=include_internal,
+            tail="ORDER BY occurred_at ASC, activity_id ASC",
+        )
+
+    def _list_activity(
+        self,
+        *,
+        where: str,
+        params: tuple[object, ...],
+        include_internal: bool,
+        tail: str,
+    ) -> list[dict[str, object]]:
+        query = f"SELECT {_ACTIVITY_COLUMNS} FROM worker_activity_events WHERE {where}"
+        if not include_internal:
+            query += " AND is_internal = 0"
         with closing(self._connect()) as connection:
-            query = """
-                SELECT activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, phase, summary, detail_json, is_internal
-                FROM worker_activity_events
-                WHERE task_id = ? AND envelope_id = ?
-            """
-            params: tuple[object, ...] = (task_id, envelope_id)
-            if not include_internal:
-                query += " AND is_internal = 0"
-            query += " ORDER BY occurred_at ASC, activity_id ASC"
-            rows = connection.execute(query, params).fetchall()
-        return [
-            {
-                "activity_id": row["activity_id"],
-                "occurred_at": row["occurred_at"],
-                "task_id": row["task_id"],
-                "envelope_id": row["envelope_id"],
-                "run_id": row["run_id"],
-                "source": row["source"],
-                "workflow": row["workflow"],
-                "phase": row["phase"],
-                "summary": row["summary"],
-                "detail": json.loads(row["detail_json"]),
-                "is_internal": bool(row["is_internal"]),
-            }
-            for row in rows
-        ]
+            rows = connection.execute(f"{query} {tail}", params).fetchall()
+        return [_activity_from_row(row) for row in rows]
 
 
-def _parse_rfc3339_utc(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value.replace("Z", "+00:00")
-    return datetime.fromisoformat(value)
+def _run_from_row(row: sqlite3.Row) -> RunRecord:
+    return RunRecord(
+        run_id=row["run_id"],
+        envelope_id=row["envelope_id"],
+        source=row["source"],
+        workflow=row["workflow"],
+        latency_ms=row["latency_ms"],
+        result_status=row["result_status"],
+        created_at=parse_utc(row["created_at"]),
+        schema_version=row["schema_version"],
+        work_item_id=row["work_item_id"],
+    )
 
 
-def _serialize_rfc3339_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+def _audit_event_from_row(row: sqlite3.Row) -> AuditEvent:
+    return AuditEvent(
+        run_id=row["run_id"],
+        envelope_id=row["envelope_id"],
+        source=row["source"],
+        workflow=row["workflow"],
+        result_status=row["result_status"],
+        detail=json.loads(row["detail_json"]),
+        created_at=parse_utc(row["created_at"]),
+        schema_version=row["schema_version"],
+    )
+
+
+_ACTIVITY_COLUMNS = (
+    "activity_id, occurred_at, task_id, envelope_id, run_id, source, workflow, "
+    "phase, summary, detail_json, is_internal"
+)
+
+
+def _activity_from_row(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "activity_id": row["activity_id"],
+        "occurred_at": row["occurred_at"],
+        "task_id": row["task_id"],
+        "envelope_id": row["envelope_id"],
+        "run_id": row["run_id"],
+        "source": row["source"],
+        "workflow": row["workflow"],
+        "phase": row["phase"],
+        "summary": row["summary"],
+        "detail": json.loads(row["detail_json"]),
+        "is_internal": bool(row["is_internal"]),
+    }
 
 
 def _positive_metadata_int(metadata: dict[str, object], key: str) -> int | None:
@@ -1679,7 +1443,7 @@ def _telegram_history_turn_from_row(row: sqlite3.Row) -> TelegramHistoryTurn:
         sender=str(row["sender"]) if row["sender"] is not None else None,
         content=str(row["content"]) if row["content"] is not None else None,
         attachments=attachments,
-        occurred_at=_parse_rfc3339_utc(str(row["occurred_at"])),
+        occurred_at=parse_utc(str(row["occurred_at"])),
         task_id=str(row["task_id"]) if row["task_id"] is not None else None,
         event_id=str(row["event_id"]) if row["event_id"] is not None else None,
     )

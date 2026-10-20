@@ -52,19 +52,6 @@ def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler
                 ]
                 self._json(monitor.snapshot(include_internal=include_internal))
                 return
-            if path == "/runs.json":
-                include_internal = parse_qs(parsed.query).get("include_internal") == [
-                    "1"
-                ]
-                self._json(
-                    monitor.list_runs_snapshot(include_internal=include_internal)
-                )
-                return
-            if path.startswith("/runs/") and path.endswith(".json"):
-                run_id = unquote(path[len("/runs/") : -len(".json")])
-                snapshot = monitor.get_run_snapshot(run_id=run_id)
-                self._json(snapshot, status=200 if snapshot is not None else 404)
-                return
             if path in {"/", "/items", "/runs"} or (
                 path.startswith(("/items/", "/runs/", "/tasks/"))
                 and path.count("/") == 2

@@ -129,9 +129,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(json.loads(records[0].read_text())["task_id"], task.task_id)
         self.assertEqual([entry["phase"] for entry in self.log()], ["start", "end"])
-        self.assertEqual(
-            self.store.list_recent_runs(limit=1)[0].result_status, "success"
-        )
+        self.assertEqual(self.store.list_runs()[-1].result_status, "success")
         replacement.tick()
         self.assertEqual(replacement.status(1)["state"], "idle")
 

@@ -2,14 +2,12 @@ import json
 import os
 from pathlib import Path
 import socket
-import sqlite3
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 from dataclasses import replace
-from contextlib import closing
 
 from app.broker import TaskQueueMessage
 from app.models import ReplyChannel
@@ -69,19 +67,6 @@ class ExplicitFinishTests(unittest.TestCase):
             payload["reply_contract"]["executor_exit_status_drives_completion"]
         )
 
-    def test_migration_defaults_existing_item_on(self):
-        path = str(Path(self.temporary.name) / "old-worker.db")
-        with closing(sqlite3.connect(path)) as connection, connection:
-            connection.execute(
-                "CREATE TABLE work_items (work_item_id TEXT PRIMARY KEY, origin_conversation_id TEXT NOT NULL, preferred_reply_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', model_tier TEXT NOT NULL DEFAULT 'auto', created_at TEXT NOT NULL)"
-            )
-            connection.execute(
-                "INSERT INTO work_items VALUES ('existing', 'chat', '{}', 'open', 'high', '2026-10-14T00:00:00Z')"
-            )
-        migrated = SQLiteStateStore(path)
-        self.assertTrue(migrated.get_work_explicit_finish(work_item_id="existing"))
-        self.assertEqual(migrated.get_work_model_tier(work_item_id="existing"), "high")
-
     def test_finish_records_then_kills_executor_and_child(self):
         script = """
 import json, os, subprocess, sys
@@ -123,27 +108,9 @@ Path('executor-survived').touch()
         self.assertFalse(_process_exists(child_pid), "child must be killed")
         self.assertFalse((Path(self.temporary.name) / "executor-survived").exists())
 
-    def test_rollout_from_default_off_database_runs_once(self):
-        path = str(Path(self.temporary.name) / "default-off-worker.db")
-        with closing(sqlite3.connect(path)) as connection, connection:
-            connection.execute(
-                "CREATE TABLE work_items (work_item_id TEXT PRIMARY KEY, origin_conversation_id TEXT NOT NULL, preferred_reply_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', model_tier TEXT NOT NULL DEFAULT 'auto', explicit_finish INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
-            )
-            for item, enabled in (("existing_off", 0), ("existing_on", 1)):
-                connection.execute(
-                    "INSERT INTO work_items VALUES (?, 'chat', '{}', 'open', 'high', ?, '2026-10-14T00:00:00Z')",
-                    (item, enabled),
-                )
-        migrated = SQLiteStateStore(path)
-        for item in ("existing_off", "existing_on"):
-            self.assertTrue(migrated.get_work_explicit_finish(work_item_id=item))
-        migrated.set_work_explicit_finish(work_item_id="existing_off", enabled=False)
-        reopened = SQLiteStateStore(path)
-        self.assertFalse(reopened.get_work_explicit_finish(work_item_id="existing_off"))
-        self.assertTrue(reopened.get_work_explicit_finish(work_item_id="existing_on"))
-        reopened.stage_inbox_task(self.task)
-        self.assertTrue(reopened.get_work_explicit_finish(work_item_id=self.item))
-        reopened.set_work_explicit_finish(work_item_id=self.item, enabled=False)
+    def test_disabled_setting_survives_reopen_and_new_tasks(self):
+        self.store.set_work_explicit_finish(work_item_id=self.item, enabled=False)
+        reopened = SQLiteStateStore(str(Path(self.temporary.name) / "worker.db"))
         next_task = replace(
             self.task,
             task_id="task:next",

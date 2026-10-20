@@ -1,5 +1,4 @@
 import tempfile
-import json
 import sqlite3
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -77,47 +76,6 @@ class WorkerInboxTests(unittest.TestCase):
                     "pending",
                 )
             self.assertEqual(store.get_inbox_task(task_id=task.task_id).state, "active")
-
-    def test_existing_worker_history_keeps_topic_on_schema_upgrade(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "worker.db"
-            task = _telegram_task(1, thread_id=7)
-            with sqlite3.connect(db_path) as connection:
-                connection.execute(
-                    """CREATE TABLE worker_telegram_history (
-                    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    target TEXT NOT NULL, message_id INTEGER NOT NULL,
-                    reply_to_message_id INTEGER, role TEXT NOT NULL, sender TEXT,
-                    content TEXT, attachments_json TEXT NOT NULL, task_id TEXT,
-                    event_id TEXT, occurred_at TEXT NOT NULL, created_at TEXT NOT NULL,
-                    UNIQUE(target, message_id))"""
-                )
-                connection.execute(
-                    """CREATE TABLE worker_inbox (
-                    task_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
-                    task_payload_json TEXT NOT NULL, broker_guid TEXT,
-                    state TEXT NOT NULL, parent_task_id TEXT, staged_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL, reply_delivered_at TEXT)"""
-                )
-                connection.execute(
-                    """INSERT INTO worker_inbox VALUES (?, 'conv', ?, NULL,
-                    'pending', NULL, '2026-08-16T10:00:00Z',
-                    '2026-08-16T10:00:00Z', NULL)""",
-                    (task.task_id, json.dumps(task.to_dict())),
-                )
-                connection.execute(
-                    """INSERT INTO worker_telegram_history (
-                    target, message_id, role, content, attachments_json, task_id,
-                    occurred_at, created_at) VALUES
-                    ('chat-a', 101, 'user', 'old plan', '[]', ?,
-                    '2026-08-16T10:00:00Z', '2026-08-16T10:00:00Z')""",
-                    (task.task_id,),
-                )
-            store = SQLiteStateStore(str(db_path))
-            hits = store.search_telegram_history(
-                target="chat-a", topic_id=7, query="old plan"
-            )
-            self.assertEqual([turn.message_id for turn in hits], [101])
 
     def test_parallel_claims_skip_busy_item_and_keep_its_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

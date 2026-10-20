@@ -15,7 +15,13 @@ from app.egress_client import DEFAULT_HANDLER_EGRESS_URL, submit_egress
 from app.models import AttachmentRef, OutboundMessage
 from app.state import SQLiteStateStore
 from app.telegram_text import normalize_telegram_outbound_text
-from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
+from app.timefmt import format_utc
+from app.worker.main import (
+    WORKER_CONFIG_PATH_ENV_VAR,
+    _load_config,
+    _resolve_str,
+    worker_db_path,
+)
 
 # Exit codes the executor can act on. 0 = delivered; DROPPED = the handler
 # rejected the message for good (bad payload, unknown task, disallowed channel,
@@ -139,10 +145,8 @@ def _resolve_telegram_message_id(
             raise ValueError("telegram_message_id must be positive")
         return explicit_value
 
-    db_path = _resolve_str(
-        config.get("db_path"), default_value="", setting_name="db_path"
-    ).strip()
-    if not db_path:
+    db_path = worker_db_path(config)
+    if db_path is None:
         raise ValueError("telegram_message_id is required")
 
     inbox_task = SQLiteStateStore(db_path).get_inbox_task(task_id=task_id)
@@ -254,7 +258,7 @@ def main() -> int:
     base_event_id = _resolve_event_id(args.task_id, args.event_id)
 
     outbound_messages = _resolve_reply_messages(args, config)
-    db_path = _resolve_optional_db_path(config)
+    db_path = worker_db_path(config)
     intended_content = any(
         message.channel != "telegram_reaction" for message in outbound_messages
     )
@@ -282,8 +286,6 @@ def main() -> int:
             task_id=args.task_id,
             envelope_id=envelope_id,
             trace_id=trace_id,
-            event_index=0,
-            event_count=1,
             message=outbound_message,
             emitted_at=datetime.now(timezone.utc),
             event_id=_message_event_id(
@@ -293,7 +295,6 @@ def main() -> int:
             ),
             sequence=None,
             event_kind="incremental",
-            message_type="chatting.egress.v2",
         )
 
         status_code, response = submit_egress(
@@ -328,7 +329,6 @@ def main() -> int:
             and isinstance(sent_message_id, int)
             and not isinstance(sent_message_id, bool)
             and sent_message_id > 0
-            and egress_message.event_id is not None
         ):
             SQLiteStateStore(db_path).record_telegram_outbound(
                 target=outbound_message.target,
@@ -359,9 +359,6 @@ def main() -> int:
                     "body": egress_message.message.body,
                     "event_id": egress_message.event_id,
                     "event_kind": egress_message.event_kind,
-                    "event_count": egress_message.event_count,
-                    "event_index": egress_message.event_index,
-                    "message_type": egress_message.message_type,
                     "publish_source": "main_reply",
                     "sequence": egress_message.sequence,
                     "result_status": result_status,
@@ -421,23 +418,12 @@ def main() -> int:
     return EXIT_DROPPED
 
 
-def _resolve_optional_db_path(config: dict[str, object]) -> str | None:
-    raw_db_path = config.get("db_path")
-    if raw_db_path is None:
-        return None
-    if not isinstance(raw_db_path, str) or not raw_db_path.strip():
-        raise ValueError("config db_path must be a non-empty string")
-    return raw_db_path
-
-
 def _followup_payload(task_message: TaskQueueMessage) -> dict[str, object]:
     envelope = task_message.envelope
     return {
         "task_id": task_message.task_id,
         "actor": envelope.actor,
-        "received_at": envelope.received_at.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "received_at": format_utc(envelope.received_at),
         "content": envelope.content,
         "attachments": [
             {"uri": attachment.uri, "name": attachment.name}

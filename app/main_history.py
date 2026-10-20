@@ -10,7 +10,8 @@ import sys
 from datetime import datetime, time, timezone
 
 from app.state import SQLiteStateStore
-from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, _resolve_str
+from app.timefmt import format_utc
+from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, worker_db_path
 
 
 def _non_negative_int(value: str) -> int:
@@ -29,7 +30,10 @@ def _positive_int(value: str) -> int:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Search or retrieve worker-owned Telegram conversation history."
+        description=(
+            "Search or retrieve worker-owned Telegram conversation history. "
+            f"Worker config is read from {WORKER_CONFIG_PATH_ENV_VAR}."
+        )
     )
     parser.add_argument("--channel", required=True, choices=("telegram",))
     parser.add_argument("--target", required=True, help="Telegram chat id.")
@@ -45,23 +49,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--since", help="Search from this ISO 8601 date/time.")
     parser.add_argument("--until", help="Search through this ISO 8601 date/time.")
     parser.add_argument("--limit", type=_positive_int, default=20)
-    parser.add_argument("--config", help="Path to worker config JSON.")
-    parser.add_argument("--db-path", help="Worker SQLite state DB override.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-    config = _load_config(args.config, os.environ)
-    db_path = (
-        args.db_path
-        or _resolve_str(config.get("db_path"), default_value="", setting_name="db_path")
-    ).strip()
-    if not db_path:
-        raise ValueError(
-            "db_path is required via --db-path, --config, or "
-            f"{WORKER_CONFIG_PATH_ENV_VAR}"
-        )
+    db_path = worker_db_path(_load_config(None, os.environ))
+    if db_path is None:
+        raise ValueError(f"db_path is required via {WORKER_CONFIG_PATH_ENV_VAR}")
     store = SQLiteStateStore(db_path)
     if args.query is not None:
         turns = store.search_telegram_history(
@@ -98,9 +93,7 @@ def main() -> int:
                         "reply_to_message_id": turn.reply_to_message_id,
                         "role": turn.role,
                         "sender": turn.sender,
-                        "occurred_at": turn.occurred_at.isoformat().replace(
-                            "+00:00", "Z"
-                        ),
+                        "occurred_at": format_utc(turn.occurred_at),
                         "content": _excerpt(turn.content, args.query),
                         "attachments": [
                             {"uri": item.uri, "name": item.name}

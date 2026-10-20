@@ -34,27 +34,8 @@ def initialize(connection: sqlite3.Connection) -> None:
             route_reason TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS work_item_migrations (
-            migration TEXT PRIMARY KEY
-        );
         """
     )
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(work_items)")}
-    if "model_tier" not in columns:
-        connection.execute(
-            "ALTER TABLE work_items ADD COLUMN model_tier TEXT NOT NULL DEFAULT 'auto'"
-        )
-    if "explicit_finish" not in columns:
-        connection.execute(
-            "ALTER TABLE work_items ADD COLUMN explicit_finish INTEGER NOT NULL DEFAULT 1"
-        )
-    # Apply the rollout once. Reopening the store must preserve /finish off.
-    migration = "explicit_finish_default_on"
-    if connection.execute(
-        "INSERT OR IGNORE INTO work_item_migrations (migration) VALUES (?)",
-        (migration,),
-    ).rowcount:
-        connection.execute("UPDATE work_items SET explicit_finish = 1")
 
 
 def assign(

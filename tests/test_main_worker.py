@@ -14,7 +14,7 @@ from app.worker.main import (
     _log_worker_processed,
     _load_config,
     _publish_egress_with_outbox,
-    _resolve_non_negative_int,
+    _resolve_int,
 )
 from app.worker.runtime import WorkerProcessResult
 
@@ -32,14 +32,11 @@ def _completion_egress(event_id: str = "evt:task:1:0:completion") -> EgressQueue
         task_id="task:1",
         envelope_id="email:1",
         trace_id="trace:1",
-        event_index=0,
-        event_count=1,
         message=OutboundMessage(channel="log", target="task", body="done"),
         emitted_at=datetime(2026, 6, 7, 22, 30, tzinfo=timezone.utc),
         event_id=event_id,
         sequence=0,
         event_kind="completion",
-        message_type="chatting.egress.v2",
     )
 
 
@@ -110,10 +107,11 @@ class MainWorkerTests(unittest.TestCase):
         self.assertEqual(payload["activity_port"], 0)
 
     def test_resolve_non_negative_int_accepts_zero(self) -> None:
-        resolved = _resolve_non_negative_int(
+        resolved = _resolve_int(
             0,
             default_value=9465,
             setting_name="activity_port",
+            minimum=0,
         )
 
         self.assertEqual(resolved, 0)
@@ -122,10 +120,11 @@ class MainWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError, "config activity_port must be a non-negative integer"
         ):
-            _resolve_non_negative_int(
+            _resolve_int(
                 -1,
                 default_value=9465,
                 setting_name="activity_port",
+                minimum=0,
             )
 
     def test_build_executor_env_propagates_cli_config_path(self) -> None:
@@ -233,8 +232,6 @@ class MainWorkerTests(unittest.TestCase):
                     task_id="task:1",
                     envelope_id="email:1",
                     trace_id="trace:1",
-                    event_index=0,
-                    event_count=1,
                     message=OutboundMessage(
                         channel="internal",
                         target="task",
@@ -244,7 +241,6 @@ class MainWorkerTests(unittest.TestCase):
                     event_id="evt:task:1:0:completion",
                     sequence=0,
                     event_kind="completion",
-                    message_type="chatting.egress.v2",
                 )
             ],
             dead_lettered=result_status == "dead_letter",

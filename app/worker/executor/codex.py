@@ -18,7 +18,6 @@ from typing import IO, Any, Callable, Mapping, cast
 
 from app.models import (
     ExecutionResult,
-    PromptContext,
     SCHEMA_VERSION,
     TaskEnvelope,
     UsageReport,
@@ -26,6 +25,7 @@ from app.models import (
     parse_context_ref,
 )
 from app.model_command import MODELS
+from app.timefmt import format_utc
 from app.state import SQLiteStateStore, TelegramHistoryTurn
 from app.worker.executor.finish import FinishSession
 
@@ -137,19 +137,15 @@ class CodexExecutor:
                 context = original.prompt_context
                 envelope = replace(
                     original,
-                    prompt_context=PromptContext(
-                        global_instructions=list(context.global_instructions),
-                        source_instructions=list(context.source_instructions),
-                        reply_channel_instructions=list(
-                            context.reply_channel_instructions
-                        ),
-                        task_instructions=list(context.task_instructions)
-                        + [
+                    prompt_context=replace(
+                        context,
+                        task_instructions=[
+                            *context.task_instructions,
                             "The previous executor exited without requesting termination. "
                             "The task is unfinished. Review what already happened before continuing; "
                             "do not repeat completed side effects or replies. Finish the remaining work "
                             "and call main_finish, then wait. Previous captured transcript:\n"
-                            + "\n\n".join(transcripts)[-100000:]
+                            + "\n\n".join(transcripts)[-100000:],
                         ],
                     ),
                 )
@@ -514,9 +510,7 @@ def _task_payload(
         "task_id": f"task:{envelope.id}",
         "envelope_id": envelope.id,
         "workflow": "default",
-        "event_time": envelope.received_at.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "event_time": format_utc(envelope.received_at),
         "source": envelope.source,
         "content": envelope.content,
         "context": [parse_context_ref(ref).to_dict() for ref in envelope.context_refs],
@@ -551,9 +545,7 @@ def _task_payload(
     payload = {
         "schema_version": SCHEMA_VERSION,
         "task": task_dict,
-        "current_time": current_time.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "current_time": format_utc(current_time),
         "reply_contract": {
             # -P (safe path) stops Python prepending the cwd to sys.path, so this
             # always runs the deployed app.main_reply even when the cwd is a
@@ -630,7 +622,7 @@ def _task_payload(
                 "message_id": turn.message_id,
                 "role": turn.role,
                 "sender": turn.sender,
-                "occurred_at": turn.occurred_at.isoformat().replace("+00:00", "Z"),
+                "occurred_at": format_utc(turn.occurred_at),
                 "content": (
                     turn.content[:2000] + "… [truncated; fetch by message ID]"
                     if turn.content is not None and len(turn.content) > 2000
