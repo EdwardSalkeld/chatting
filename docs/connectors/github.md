@@ -21,12 +21,11 @@ that link to that pull request then route to the same work item.
 ## Config keys
 
 - `github_repositories`: `owner/repo` and/or `owner/*` selectors to scan.
-- `github_assignee_login`: the login to watch. Defaults to the authenticated
-  `gh` user.
-- `github_context_refs`
-- `github_max_issues` (default `25`) and `github_max_timeline_events` (default
-  `10`) bound each poll. The review poll reuses them for pull requests and
-  reviews.
+- `github_assignee_login` (required with `github_repositories`): the login to
+  watch.
+
+Each poll reads at most 25 issues or pull requests per repository, and 10
+timeline events or reviews per item.
 
 ## Checkpointing
 

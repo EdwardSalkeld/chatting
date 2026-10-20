@@ -13,8 +13,7 @@ Operators can also select it using an existing task from the conversation:
 python3 -P -m app.main_work_items --db /var/lib/worker/chatting-worker.db executor task:telegram:123 app-server
 ```
 
-Configure `app_server_command` separately from `codex_command`. Its default is
-`codex app-server`, with stdio transport. App-server inherits the installed Codex
+It runs `codex app-server` with stdio transport, separately from `codex_command`. App-server inherits the installed Codex
 configuration and authentication; it does not inherit flags from `codex_command`.
 The executor always sets `sandbox: danger-full-access` and `approvalPolicy: never`
 when creating and resuming threads: full filesystem and network access with no
@@ -24,7 +23,7 @@ Client approval or interactive input requests
 fail visibly rather than hanging an unattended worker. Per-work-item model
 selection, automatic routing and low-to-high escalation still apply.
 
-`app_server_dir` defaults to `<absolute-worker-db-path>.sessions`. Keep it on
+Sessions live in `<absolute-worker-db-path>.sessions`, which must be on
 persistent storage, private to the worker user, with a short path suitable for
 Unix sockets. It contains a hashed directory per conversation, with the saved
 Codex thread ID, request journals, a private socket and a session log. The actual
