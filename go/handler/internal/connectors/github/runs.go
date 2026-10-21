@@ -48,8 +48,8 @@ func RunPullRequests(runner RESTRunner) func(context.Context, routing.RunRef) ([
 			return nil, fmt.Errorf("github_rest_invalid_json:%w", err)
 		}
 		pulls := details.PullRequests
-		// A push-triggered run can leave pull_requests empty; its commit still
-		// belongs to the PR.
+		// GitHub empties a run's pull_requests once its PR closes; the head
+		// commit still belongs to the PR.
 		if len(pulls) == 0 && details.HeadSHA != "" {
 			body, err := runner(ctx, fmt.Sprintf("repos/%s/commits/%s/pulls", run.Repo, details.HeadSHA))
 			if err != nil {
