@@ -31,6 +31,7 @@ from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
 from app.worker.personal_inbox import collector_from_environment
+from app.worker.pr_registration import register_pr
 from app.worker.supervisor import SupervisorPool
 from app.worker.runtime import (
     build_coalesced_task_result,
@@ -345,6 +346,7 @@ def _process_claimed_task(
     executor: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
+    handler_egress_url: str,
 ) -> None:
     task_message = inbox_task.task_message
     if inbox_task.state == "closing":
@@ -359,6 +361,7 @@ def _process_claimed_task(
             executor_impl=executor,
             max_attempts=max_attempts,
             activity_monitor=activity_monitor,
+            on_pr_created=_pr_registrar(handler_egress_url, task_message.task_id),
         )
     # Supervisors only queue results: the manager alone drains the outbox, so
     # sends never run concurrently and results survive the manager's absence.
@@ -380,6 +383,26 @@ def _process_claimed_task(
         )
     store.finish_inbox_task(parent_task_id=task_message.task_id)
     _log_worker_processed(task_id=task_message.task_id, result=result)
+
+
+def _pr_registrar(handler_egress_url: str, task_id: str):
+    handler_url = handler_egress_url.rsplit("/", 1)[0]
+
+    def register(pr_url: str) -> None:
+        try:
+            register_pr(handler_url, task_id=task_id, pr_url=pr_url)
+        except OSError as exc:
+            # The PR still exists; only later notifications lose their route.
+            LOGGER.warning(
+                "pr_registration_failed task_id=%s pr_url=%s error=%s",
+                task_id,
+                pr_url,
+                exc,
+            )
+            return
+        LOGGER.info("pr_registered task_id=%s pr_url=%s", task_id, pr_url)
+
+    return register
 
 
 def _replay_egress_outbox(

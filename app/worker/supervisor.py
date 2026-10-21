@@ -156,6 +156,7 @@ class Supervisor:
                 executor=self.executor,
                 max_attempts=self.settings["max_attempts"],
                 activity_monitor=self.monitor,
+                handler_egress_url=self.settings["handler_egress_url"],
             )
         except Exception as exc:
             LOGGER.exception("supervisor_task_failed slot=%s", self.slot)

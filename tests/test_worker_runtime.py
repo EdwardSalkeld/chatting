@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 import sqlite3
 
+from tests.test_pr_registration import APP_SERVER_PR_CREATED
 from app.broker import TaskQueueMessage
 from app.internal_heartbeat import (
     INTERNAL_HEARTBEAT_TARGET,
@@ -49,6 +50,24 @@ class MultiMessageExecutor(TestExecutor):
         return ExecutionResult(
             errors=[], stdout="executor stdout", stderr="executor stderr"
         )
+
+
+@dataclass(frozen=True)
+class PRCreatingExecutor(TestExecutor):
+    output_callback: Callable[[str, str], None] | None = None
+
+    def with_output_callback(self, callback):
+        return replace(self, output_callback=callback)
+
+    def execute(self, task):
+        del task
+        assert self.output_callback is not None
+        line = APP_SERVER_PR_CREATED + "\n"
+        # Streamed output can split one event across callbacks.
+        self.output_callback("stdout", line[:40])
+        self.output_callback("stdout", line[40:])
+        self.output_callback("stderr", APP_SERVER_PR_CREATED + "\n")
+        return ExecutionResult(errors=[])
 
 
 @dataclass(frozen=True)
@@ -407,6 +426,23 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(activity[1]["phase"], "executor_stderr")
             self.assertEqual(activity[2]["phase"], "executor_stdout")
+
+    def test_reports_pull_requests_the_executor_creates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            created: list[str] = []
+            process_task_message(
+                store=store,
+                task_message=self._build_task_message(),
+                executor_impl=PRCreatingExecutor(),
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+                on_pr_created=created.append,
+            )
+
+            self.assertEqual(
+                created, ["https://github.com/EdwardSalkeld/chatting/pull/308"]
+            )
 
     def test_process_task_message_retries_and_dead_letters(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
