@@ -42,8 +42,8 @@ Completion is internal-only:
    instead of the deployed one. The inline `--message` flag is retired.
 4. If a task emits no visible replies, completion alone closes it.
 5. `incremental` is the visible reply path for both intermediate and final executor-published text.
-6. Conversation memory stores only externally visible assistant text on the real reply channel.
-   It never stores completion events or reactions.
+6. The worker's Telegram history stores only externally visible assistant text on the real reply
+   channel. It never stores completion events or reactions.
 
 ## Consequences
 

@@ -291,7 +291,6 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 	}
 	eventID := "telegram:" + strconv.FormatInt(updateID, 10)
 	metadata := map[string]any{"message_id": message.MessageID}
-	metadata["original_content"] = content
 	if title := strings.TrimSpace(message.Chat.Title); title != "" {
 		metadata["chat_title"] = title
 	}
