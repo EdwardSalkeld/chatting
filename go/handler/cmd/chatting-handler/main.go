@@ -32,6 +32,7 @@ import (
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/webhooks"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
 
@@ -252,6 +253,13 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		return nil, err
 	}
 	closers = append(closers, egressServer)
+	webhookServer, err := webhooks.StartServer(config.WebhookHTTPPort)
+	if err != nil {
+		return nil, err
+	}
+	if webhookServer != nil {
+		closers = append(closers, webhookServer)
+	}
 	runner, err := handlerruntime.NewRunner(config, adapter, store, connectors, metricRecorder)
 	if err != nil {
 		return nil, err
