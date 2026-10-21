@@ -23,6 +23,26 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestWebhookPort(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"webhook_http_port":0}`, `{"webhook_http_port":9468}`} {
+		cfg, err := Load([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(raw, "9468") && cfg.WebhookHTTPPort != 9468 {
+			t.Fatal("port not loaded")
+		}
+		if !strings.Contains(raw, "9468") && cfg.WebhookHTTPPort != 0 {
+			t.Fatal("listener should be disabled")
+		}
+	}
+	for _, raw := range []string{`-1`, `65536`, `"9468"`, `1.5`} {
+		if _, err := Load([]byte(`{"webhook_http_port":` + raw + `}`)); err == nil {
+			t.Fatalf("accepted %s", raw)
+		}
+	}
+}
+
 func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	config, err := Load([]byte(`{
 		"bbmb_address": "10.0.0.1:9999",

@@ -34,6 +34,7 @@ type Config struct {
 	MetricsHost                 string
 	MetricsPort                 int
 	EgressHTTPPort              int
+	WebhookHTTPPort             int
 	EgressAttachmentAllowedDirs []string
 	AllowedEgressChannels       []string
 	ContextRefs                 []string
@@ -228,6 +229,14 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		str(&c.MetricsHost, "metrics_host"),
 		posInt(&c.MetricsPort, "metrics_port"),
 		posInt(&c.EgressHTTPPort, "egress_http_port"),
+		bind(&c.WebhookHTTPPort, "webhook_http_port", func(raw json.RawMessage, name string) (int, error) {
+			var port int
+			err := json.Unmarshal(raw, &port)
+			if err != nil || port < 0 || port > 65535 {
+				return 0, fmt.Errorf("config %s must be an integer between 0 and 65535", name)
+			}
+			return port, err
+		}),
 		list(&c.EgressAttachmentAllowedDirs, "egress_attachment_allowed_dirs"),
 		bind(&c.AllowedEgressChannels, "allowed_egress_channels", decodeAllowedEgressChannels),
 		list(&c.ContextRefs, "context_refs"),
