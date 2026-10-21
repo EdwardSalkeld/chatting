@@ -13,7 +13,8 @@ Use it as the source of truth for:
 
 - `message-handler` owns ingress polling, ingress idempotency, work item routing, strict egress
   validation, and real-world dispatch (`email`, `telegram`, `telegram_reaction`, `github`, `log`)
-- `worker` owns executor calls, retries, dead-lettering, and egress publication
+- `worker` owns executor calls, retries, dead-lettering, egress publication, and Telegram
+  conversation history
 - `bbmb-server` is only the transport layer between them
 
 ## Queues
