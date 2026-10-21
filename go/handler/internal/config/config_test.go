@@ -24,7 +24,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 }
 
 func TestWebhookPort(t *testing.T) {
-	for _, raw := range []string{`{}`, `{"webhook_http_port":0}`, `{"webhook_http_port":9468}`} {
+	for _, raw := range []string{`{"webhook_http_port":0}`, `{"webhook_http_port":9468}`} {
 		cfg, err := Load([]byte(raw))
 		if err != nil {
 			t.Fatal(err)

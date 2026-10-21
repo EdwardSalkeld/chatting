@@ -1,7 +1,7 @@
 # Webhook transit probe
 
-Set handler `webhook_http_port` to `9468` to enable an isolated IPv4 loopback
-listener. The default, `0`, disables it. This listener exposes only
+The handler starts an isolated IPv4 loopback listener on port `9468` by default.
+Set `webhook_http_port` to `0` to disable it. This listener exposes only
 `POST /webhooks/test`, accepts any content type without credentials, and never
 creates tasks. Keep the control, UI, and metrics listeners private.
 
@@ -20,8 +20,10 @@ data. Normal journal retention applies. This is a receipt probe, not durable
 delivery or a promise of processing. Sender authentication, signatures and
 deduplication belong to future connectors.
 
-Roll out Chatting first, Webstack DNS second, Lab last. Lab must update its
-Chatting input to a revision containing the receiver before enabling the port.
+Chatting, Webstack DNS and Lab can land independently. Until the receiver is
+deployed, the proxy returns a gateway error. No handler configuration change or
+receiver-specific Chatting input pin is needed in Lab. A subsequent normal
+Chatting package update brings the listener into service.
 
 After deployment, POST from outside the Tailnet:
 

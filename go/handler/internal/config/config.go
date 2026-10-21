@@ -23,6 +23,7 @@ const (
 	DefaultMetricsHost         = "127.0.0.1"
 	DefaultMetricsPort         = 9464
 	DefaultEgressHTTPPort      = 9467
+	DefaultWebhookHTTPPort     = 9468
 )
 
 type Config struct {
@@ -75,6 +76,7 @@ func Defaults() Config {
 		MetricsHost:                 DefaultMetricsHost,
 		MetricsPort:                 DefaultMetricsPort,
 		EgressHTTPPort:              DefaultEgressHTTPPort,
+		WebhookHTTPPort:             DefaultWebhookHTTPPort,
 		EgressAttachmentAllowedDirs: []string{},
 		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		ContextRefs:                 []string{},
