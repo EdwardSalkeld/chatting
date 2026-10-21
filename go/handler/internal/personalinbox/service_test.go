@@ -953,6 +953,18 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 	}
 }
 
+func TestOwnerRulesRevisionSurvivesResultValidationAndPersistence(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	revision := strings.Repeat("a", 40)
+	got := classifyOnce(t, service, broker,
+		Classification{Category: "order", Summary: "Invoice", Confidence: .99,
+			Trace: &Trace{RulesRevision: revision, SuppliedRuleIDs: []string{"example-invoices"}}}).Classification
+	if got.Trace == nil || got.Trace.RulesRevision != revision ||
+		len(got.Trace.SuppliedRuleIDs) != 1 || got.Trace.SuppliedRuleIDs[0] != "example-invoices" {
+		t.Fatalf("owner rules provenance was lost: %+v", got.Trace)
+	}
+}
+
 func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 	service, _, broker, _ := fixture(t)
 	ctx := context.Background()

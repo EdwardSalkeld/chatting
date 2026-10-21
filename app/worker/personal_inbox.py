@@ -3,7 +3,7 @@
 It shares the worker's process and its TypeSafe key, but not its executor: the
 only thing this code can do with an email is ask two fixed HTTPS endpoints about
 it and publish the answer. It never touches the mailbox, the task queue the
-executor reads, or the filesystem beyond its own cache.
+executor reads. Owner-authored rules are read from a configured Git repository.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from threading import Event, Thread
 from typing import Any
 
 from app.broker.bbmb_client import BBMBQueueAdapter
+from app.worker.personal_inbox_rules import load_rules
 from app.personal_inbox import (
     DEAD_QUEUE,
     RESULTS_QUEUE,
@@ -34,7 +35,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def prepare(
-    task: object, *, jev_key: str, summary_model: str
+    task: object, *, jev_key: str, summary_model: str, rules_repo: str = ""
 ) -> tuple[str, Callable[[], dict[str, Any]]] | None:
     """The cache key and the work for one task, or None if it is not ours."""
     if not isinstance(task, dict):
@@ -42,9 +43,19 @@ def prepare(
     kind = task.get("kind")
     if kind == "personal_inbox.classify.v1":
         validate_task(task)
-        return task["message_id"], lambda: classify(
-            task, jev_key=jev_key, summary_model=summary_model
-        )
+
+        def classify_with_rules():
+            rules = load_rules(rules_repo)
+            return classify(
+                task,
+                jev_key=jev_key,
+                summary_model=summary_model,
+                rules_context=rules.instructions,
+                rules_revision=rules.revision,
+                rule_ids=rules.ids,
+            )
+
+        return task["message_id"], classify_with_rules
     if kind == "personal_inbox.digest.v1":
         validate_digest_task(task)
         return task["digest_id"], lambda: digest_lines(
@@ -59,12 +70,18 @@ def process_one(
     *,
     jev_key: str,
     summary_model: str,
+    rules_repo: str = "",
 ) -> bool:
     picked = broker.pickup_json(TASKS_QUEUE, timeout_seconds=120, wait_seconds=1)
     if picked is None:
         return False
     try:
-        prepared = prepare(picked.payload, jev_key=jev_key, summary_model=summary_model)
+        prepared = prepare(
+            picked.payload,
+            jev_key=jev_key,
+            summary_model=summary_model,
+            rules_repo=rules_repo,
+        )
     except (ValueError, TypeError, KeyError):
         prepared = None
     if prepared is None:
@@ -119,6 +136,7 @@ class PersonalInboxCollector:
     cache: sqlite3.Connection
     jev_key: str
     summary_model: str
+    rules_repo: str = ""
     _stop: Event = field(init=False, default_factory=Event)
     _thread: Thread | None = field(init=False, default=None)
 
@@ -143,6 +161,7 @@ class PersonalInboxCollector:
                     self.cache,
                     jev_key=self.jev_key,
                     summary_model=self.summary_model,
+                    rules_repo=self.rules_repo,
                 )
             except Exception as error:  # noqa: BLE001
                 # Never log request bodies, mail, credentials or URLs with
@@ -166,6 +185,7 @@ def collector_from_environment(
         cache=open_cache(cache_path),
         jev_key=jev_key,
         summary_model=os.environ.get("CHATTING_PERSONAL_SUMMARY_MODEL", "").strip(),
+        rules_repo=os.environ.get("CHATTING_PERSONAL_RULES_REPO", "").strip(),
     )
 
 

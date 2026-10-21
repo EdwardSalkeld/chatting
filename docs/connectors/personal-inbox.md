@@ -150,6 +150,38 @@ The thread starts only when both of these are set, so the default is off:
 `CHATTING_PERSONAL_SUMMARY_MODEL` is optional and passed to Codex as `-m`;
 without it Codex uses its own configured default.
 
+### Personal rules as data
+
+Set `CHATTING_PERSONAL_RULES_REPO` to a local clone of the owner's memory repo
+to enable runtime feedback. Leave it unset for the existing generic policy.
+The worker fetches `origin/main` before each uncached classification and reads
+`personal-inbox/rules.json` from the fetched commit, without changing the shared
+checkout or overwriting local edits. The repository, branch and path cannot be
+chosen by an email. Git must be available with noninteractive read credentials.
+
+The JSON document has exactly `schema_version: 1` and `rules`, a list of objects
+with exactly `id` and `instruction`. IDs are unique, at most 80 characters,
+lowercase letters/digits/hyphens/underscores, starting with a letter or digit.
+Instructions are nonempty plain English. Limit: 30 rules and 8,000 bytes total.
+Use narrow scopes with exceptions; an empty list removes all personal guidance.
+Personal rule contents belong in that data repository, never in Chatting.
+
+Jev's category/action/deadline questions and the per-message summariser receive
+the same immutable snapshot as trusted instructions, separately from untrusted
+mail. Injection screening remains unchanged. The trace persists `rules_revision`
+and `supplied_rule_ids`: these identify all context supplied, not a claim that a
+particular rule matched. Cached publish/ACK retries reuse the saved answer and
+revision without fetching again. Previously processed mail is not replayed.
+Digest generation is unchanged: it summarises already classified news and
+does not extract required actions.
+
+If configured rules cannot be fetched, are missing, or fail validation, the
+task remains unacknowledged for retry. No fresh classification is published
+using silently stale or absent rules. Fix the data or repository access to
+resume processing. Feedback supplied in a normal chat can be saved by updating,
+committing and pushing the rules file; the next fresh classification sees it
+without a code change, restart or deployment.
+
 ### Why there is no second API key
 
 Jev classifies, and summaries are written by the locally installed Codex CLI
