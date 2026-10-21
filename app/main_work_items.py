@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import urllib.error
-import urllib.request
 
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL
 from app.state import SQLiteStateStore
+from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, worker_db_path
+from app.worker.pr_registration import register_pr
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", required=True, help="worker SQLite database")
-    parser.add_argument(
-        "--handler-url",
-        default=DEFAULT_HANDLER_EGRESS_URL.rsplit("/", 1)[0],
-        help="handler loopback API base URL",
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=f"Without --db, settings come from the config in {WORKER_CONFIG_PATH_ENV_VAR}.",
     )
+    parser.add_argument("--db", help="worker SQLite database")
+    parser.add_argument("--handler-url", help="handler loopback API base URL")
     commands = parser.add_subparsers(dest="command", required=True)
     show = commands.add_parser("show")
     show.add_argument("task_id")
@@ -36,7 +37,17 @@ def main() -> int:
     register.add_argument("task_id")
     register.add_argument("pr_url")
     args = parser.parse_args()
-    store = SQLiteStateStore(args.db)
+    config = (
+        _load_config(None, os.environ)
+        if os.environ.get(WORKER_CONFIG_PATH_ENV_VAR)
+        else {}
+    )
+    db_path = args.db or worker_db_path(config)
+    if not db_path:
+        parser.error(f"pass --db or set {WORKER_CONFIG_PATH_ENV_VAR}")
+    egress_url = config.get("handler_egress_url") or DEFAULT_HANDLER_EGRESS_URL
+    handler_url = args.handler_url or str(egress_url).rsplit("/", 1)[0]
+    store = SQLiteStateStore(db_path)
     assignment = store.get_work_assignment(task_id=args.task_id)
     if assignment is None:
         parser.error("unknown task")
@@ -52,15 +63,8 @@ def main() -> int:
             work_item_id=assignment.work_item_id, enabled=args.mode == "on"
         )
     if args.command == "register-pr":
-        request = urllib.request.Request(
-            args.handler_url.rstrip("/") + "/work-items/register-pr",
-            data=json.dumps({"task_id": args.task_id, "pr_url": args.pr_url}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=10):
-                pass
+            register_pr(handler_url, task_id=args.task_id, pr_url=args.pr_url)
         except urllib.error.HTTPError as error:
             parser.error(f"handler rejected PR registration: {error.read().decode()}")
         except urllib.error.URLError as error:
