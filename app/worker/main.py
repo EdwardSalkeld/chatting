@@ -345,7 +345,6 @@ def _process_claimed_task(
     executor: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
-    handler_egress_url: str | None,
 ) -> None:
     task_message = inbox_task.task_message
     if inbox_task.state == "closing":
@@ -361,13 +360,10 @@ def _process_claimed_task(
             max_attempts=max_attempts,
             activity_monitor=activity_monitor,
         )
+    # Supervisors only queue results: the manager alone drains the outbox, so
+    # sends never run concurrently and results survive the manager's absence.
     for egress_message in result.egress_messages:
-        _publish_egress_with_outbox(
-            store=store,
-            handler_egress_url=handler_egress_url,
-            egress_message=egress_message,
-            activity_monitor=activity_monitor,
-        )
+        store.queue_egress_outbox_event(egress_message)
     for followup in store.list_closing_inbox_followups(
         parent_task_id=task_message.task_id
     ):
@@ -378,42 +374,12 @@ def _process_claimed_task(
             parent_run_id=result.run_record.run_id,
         )
         for egress_message in coalesced_result.egress_messages:
-            _publish_egress_with_outbox(
-                store=store,
-                handler_egress_url=handler_egress_url,
-                egress_message=egress_message,
-                activity_monitor=activity_monitor,
-            )
+            store.queue_egress_outbox_event(egress_message)
         _log_worker_processed(
             task_id=followup.task_message.task_id, result=coalesced_result
         )
     store.finish_inbox_task(parent_task_id=task_message.task_id)
     _log_worker_processed(task_id=task_message.task_id, result=result)
-
-
-def _publish_egress_with_outbox(
-    *,
-    store: SQLiteStateStore,
-    handler_egress_url: str | None,
-    egress_message: EgressQueueMessage,
-    activity_monitor: WorkerActivityMonitor,
-) -> None:
-    # Persist to the outbox first (write-ahead), then submit to the handler. If
-    # the submit fails transiently the event stays pending and is replayed on a
-    # later loop; the task is still acked, so we never re-run the executor just
-    # because a reply could not be delivered yet.
-    store.queue_egress_outbox_event(egress_message)
-    if handler_egress_url is None:
-        # Supervisors persist results even while the manager is absent. Only
-        # the manager drains these events, avoiding concurrent outbox sends.
-        return
-    _deliver_egress_event(
-        store=store,
-        handler_egress_url=handler_egress_url,
-        egress_message=egress_message,
-        activity_monitor=activity_monitor,
-        publish_source="worker",
-    )
 
 
 def _replay_egress_outbox(

@@ -13,7 +13,7 @@ from app.worker.main import (
     _build_executor_env,
     _log_worker_processed,
     _load_config,
-    _publish_egress_with_outbox,
+    _replay_egress_outbox,
     _resolve_int,
 )
 from app.worker.runtime import WorkerProcessResult
@@ -40,30 +40,17 @@ def _completion_egress(event_id: str = "evt:task:1:0:completion") -> EgressQueue
     )
 
 
-class PublishEgressWithOutboxTests(unittest.TestCase):
-    def test_supervisor_only_queues_egress_for_manager_delivery(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            store = SQLiteStateStore(str(Path(tmp) / "worker.db"))
-            with patch("app.worker.main.submit_egress") as submit:
-                _publish_egress_with_outbox(
-                    store=store,
-                    handler_egress_url=None,
-                    egress_message=_completion_egress(),
-                    activity_monitor=_RecordingMonitor(),
-                )
-            submit.assert_not_called()
-            self.assertEqual(len(store.list_replayable_egress_outbox_events()), 1)
-
+class ReplayEgressOutboxTests(unittest.TestCase):
     def _run(self, submit_return):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         store = SQLiteStateStore(str(Path(tmp.name) / "worker.db"))
         monitor = _RecordingMonitor()
+        store.queue_egress_outbox_event(_completion_egress())
         with patch("app.worker.main.submit_egress", return_value=submit_return):
-            _publish_egress_with_outbox(
+            _replay_egress_outbox(
                 store=store,
                 handler_egress_url="http://handler.test/egress",
-                egress_message=_completion_egress(),
                 activity_monitor=monitor,
             )
         return store, monitor
@@ -72,7 +59,7 @@ class PublishEgressWithOutboxTests(unittest.TestCase):
         store, monitor = self._run((200, {"status": "completed"}))
         # Acked -> not replayable.
         self.assertEqual(store.list_replayable_egress_outbox_events(), [])
-        self.assertEqual(monitor.egress_calls, ["worker"])
+        self.assertEqual(monitor.egress_calls, ["outbox_replay"])
 
     def test_transient_failure_leaves_event_pending_for_replay(self) -> None:
         store, monitor = self._run((0, {"reason": "unreachable"}))
