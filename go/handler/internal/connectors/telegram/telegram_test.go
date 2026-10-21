@@ -94,9 +94,6 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 	if envelope.ReplyChannel.Metadata["message_thread_id"] != int64(7) {
 		t.Fatalf("topic metadata = %#v", envelope.ReplyChannel.Metadata)
 	}
-	if envelope.ReplyChannel.Metadata["original_content"] != "[thread_id=7] hello from telegram" {
-		t.Fatalf("original content metadata = %#v", envelope.ReplyChannel.Metadata)
-	}
 	if deref(envelope.Actor) != "7:sender" {
 		t.Fatalf("actor = %#v", envelope.Actor)
 	}

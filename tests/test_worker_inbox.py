@@ -21,15 +21,12 @@ def _telegram_task(
     attachment: AttachmentRef | None = None,
     thread_id: int | None = None,
     reply_to_message_id: int | None = None,
-    original_content: str | None = None,
 ) -> TaskQueueMessage:
     metadata: dict[str, object] = {"message_id": 100 + number}
     if thread_id is not None:
         metadata["message_thread_id"] = thread_id
     if reply_to_message_id is not None:
         metadata["reply_to_message_id"] = reply_to_message_id
-    if original_content is not None:
-        metadata["original_content"] = original_content
     envelope = TaskEnvelope(
         id=f"telegram:{number}",
         source="im",
@@ -130,16 +127,11 @@ class WorkerInboxTests(unittest.TestCase):
                 [first.task_id],
             )
 
-    def test_staging_records_clean_inbound_turn_and_reply_anchor(self) -> None:
+    def test_staging_records_inbound_turn_and_reply_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            anchor = _telegram_task(1, original_content="The old subject")
-            reply = _telegram_task(
-                2,
-                content="Recent conversation context...\n\nCurrent message: Continue this",
-                original_content="Continue this",
-                reply_to_message_id=101,
-            )
+            anchor = _telegram_task(1, content="The old subject")
+            reply = _telegram_task(2, content="Continue this", reply_to_message_id=101)
             store.stage_inbox_task(anchor)
             store.stage_inbox_task(reply)
 

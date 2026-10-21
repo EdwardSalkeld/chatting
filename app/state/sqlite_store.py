@@ -363,12 +363,7 @@ class SQLiteStateStore:
         message_id = _positive_metadata_int(metadata, "message_id")
         if message_id is None:
             return
-        original_content = metadata.get("original_content")
-        content = (
-            original_content.strip()
-            if isinstance(original_content, str) and original_content.strip()
-            else envelope.content.strip()
-        )
+        content = envelope.content.strip()
         sender = metadata.get("sender")
         if not isinstance(sender, str) or not sender.strip():
             sender = envelope.actor

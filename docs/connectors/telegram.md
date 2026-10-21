@@ -24,7 +24,6 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `reply_channel`: `telegram:<chat_id>`
 - `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
 - `reply_channel.metadata.reply_to_message_id`: quoted Telegram message id when the inbound message uses Telegram's native Reply gesture
-- `reply_channel.metadata.original_content`: the clean connector-normalized live turn
 - `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
 - `reply_channel.metadata.sender`: human-readable sender label — `@username`, else first/last name, else the numeric id; suffixed with ` (bot)` when the sender is a bot. Falls back to the sending chat (title/username) for channel posts.
 - `actor`: `<user_id>:<username>` when available
@@ -33,7 +32,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 
 ## Notes
 
-- The worker supplies up to 30 earlier turns from its own Telegram history to each executor run. It records inbound and successfully delivered outbound turns by chat, topic, and message ID, including reply anchors and attachments.
+- Conversation history belongs to the worker alone. The handler passes each message through unchanged and keeps no history. The worker records inbound turns when it receives a task and outbound turns when `app.main_reply` delivers a message, by chat, topic, and message ID, including reply anchors and attachments. Each executor run gets up to 30 earlier turns from that history.
 - The executor can search older worker turns by words, sender, and date using `app.main_history --query`, then retrieve turns around a returned message ID using `--around-message-id`. Both commands are scoped to the task's chat and topic.
 - Unsupported update types are skipped.
 - Photo-only messages are accepted with synthesized content `[photo attached]`.
