@@ -107,7 +107,7 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                 ):
                     broker.publish_json(TASK_QUEUE_NAME, task.to_dict())
                 worker = subprocess.Popen(
-                    [sys.executable, "-m", "app.main_worker", "--config", str(config)],
+                    [sys.executable, "-m", "app.worker.main", "--config", str(config)],
                     cwd=repo_root,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -179,7 +179,7 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                 os.kill(worker.pid, signal.SIGKILL)
                 worker.wait(timeout=5)
                 worker = subprocess.Popen(
-                    [sys.executable, "-m", "app.main_worker", "--config", str(config)],
+                    [sys.executable, "-m", "app.worker.main", "--config", str(config)],
                     cwd=repo_root,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

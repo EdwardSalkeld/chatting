@@ -273,7 +273,7 @@ class SplitModeE2ETests(unittest.TestCase):
                     [
                         sys.executable,
                         "-m",
-                        "app.main_worker",
+                        "app.worker.main",
                         "--config",
                         str(worker_config_path),
                     ],
