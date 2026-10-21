@@ -5,7 +5,7 @@
 The only deployment is the `magpie` host, defined in the `lab` repo:
 
 - `flake.nix` builds `chatting-handler` from `go/handler`, wraps
-  `python -m app.main_worker` as `chatting-worker`, and builds `bbmb-server`.
+  `python -m app.worker.main` as `chatting-worker`, and builds `bbmb-server`.
 - `nixos/hosts/magpie/chatting.nix` defines the systemd units.
 - `nixos/hosts/magpie/chatting-config.nix` renders `/etc/chatting/handler.json`
   and `/etc/chatting/worker.json`. A config option that file does not set is

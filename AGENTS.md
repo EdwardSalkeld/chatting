@@ -15,7 +15,7 @@
 ## Entry points
 
 - `cd go/handler && go run ./cmd/chatting-handler --config <handler.json>`
-- `uv run python -m app.main_worker --config <worker.json>`
+- `uv run python -m app.worker.main --config <worker.json>`
 
 ## GitHub workflow
 
