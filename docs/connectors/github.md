@@ -18,6 +18,9 @@ When an executor opens a pull request, it registers it against its task with
 `app.main_work_items register-pr`. GitHub events and GitHub notification emails
 that link to that pull request then route to the same work item.
 
+CI failure emails link only the workflow run, so the handler asks GitHub which
+pull request the run, or failing that its head commit, belongs to.
+
 ## Config keys
 
 - `github_repositories`: `owner/repo` and/or `owner/*` selectors to scan.

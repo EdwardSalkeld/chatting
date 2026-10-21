@@ -2,7 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/routing"
 )
 
 func TestPersistentLaneAssignments(t *testing.T) {
@@ -105,5 +109,55 @@ func TestPersistentLaneAssignments(t *testing.T) {
 	}
 	if recordedID != first.WorkItemID {
 		t.Fatal("task ledger lost lane ID")
+	}
+}
+
+func TestCINotificationRoutesThroughItsWorkflowRun(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	origin := testTaskMessage(t)
+	origin.TaskID = "task:telegram-origin"
+	origin.Envelope.ID = "im:origin"
+	origin.Envelope.Source = "im"
+	origin.Envelope.ReplyChannel.Type = "telegram"
+	origin.Envelope.ReplyChannel.Target = "-100"
+	origin, err := store.AssignTask(ctx, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RegisterPR(ctx, origin.TaskID, "https://github.com/owner/repo/pull/50"); err != nil {
+		t.Fatal(err)
+	}
+	store.ResolveRunsWith(func(_ context.Context, run routing.RunRef) ([]string, error) {
+		if run.Repo == "owner/repo" && run.ID == 99 {
+			return []string{"owner/repo#50"}, nil
+		}
+		return nil, errors.New("unknown run")
+	})
+	actor := "notifications@github.com"
+	ciEmail := func(id string, run string) contracts.TaskQueueMessage {
+		task := testTaskMessage(t)
+		task.TaskID = "task:" + id
+		task.Envelope.ID = id
+		task.Envelope.Actor = &actor
+		task.Envelope.Content = "Subject: [Owner/Repo] PR run failed: CI - Fix it (abc1234)\n\n" +
+			"View results: https://github.com/Owner/Repo/actions/runs/" + run + "\n"
+		return task
+	}
+
+	routed, err := store.AssignTask(ctx, ciEmail("email:ci", "99"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routed.WorkItemID != origin.WorkItemID || routed.Envelope.ReplyChannel.Type != "telegram" {
+		t.Fatalf("CI email did not return to the PR's work item: %#v", routed)
+	}
+
+	unresolved, err := store.AssignTask(ctx, ciEmail("email:ci-unknown", "100"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unresolved.WorkItemID == origin.WorkItemID {
+		t.Fatal("an unresolvable run should fall back to the general lane")
 	}
 }

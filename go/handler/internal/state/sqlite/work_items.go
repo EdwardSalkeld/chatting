@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -14,6 +15,16 @@ import (
 // AssignTask makes the ingress handler authoritative for lane identity.
 func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
 	decision := store.router.Decide(task)
+	if len(decision.PRKeys) == 0 && store.resolveRuns != nil {
+		for _, run := range decision.RunRefs {
+			keys, err := store.resolveRuns(ctx, run)
+			if err != nil {
+				log.Printf("run_pr_lookup_failed task_id=%s repo=%s run_id=%d err=%v", task.TaskID, run.Repo, run.ID, err)
+				continue
+			}
+			decision.PRKeys = append(decision.PRKeys, keys...)
+		}
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return task, err

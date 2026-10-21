@@ -29,8 +29,18 @@ var (
 )
 
 type Store struct {
-	db     *sql.DB
-	router routing.Router
+	db          *sql.DB
+	router      routing.Router
+	resolveRuns RunResolver
+}
+
+// RunResolver returns the routing keys of the PRs a workflow run belongs to.
+type RunResolver func(ctx context.Context, run routing.RunRef) ([]string, error)
+
+// ResolveRunsWith lets CI notifications, which link only a workflow run, route
+// to the work item that registered the run's PR.
+func (store *Store) ResolveRunsWith(resolver RunResolver) {
+	store.resolveRuns = resolver
 }
 
 type TaskLedgerRecord struct {
