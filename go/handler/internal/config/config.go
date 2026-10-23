@@ -36,6 +36,7 @@ type Config struct {
 	MetricsPort                 int
 	EgressHTTPPort              int
 	WebhookHTTPPort             int
+	GitHubWebhookSecretEnv      string
 	EgressAttachmentAllowedDirs []string
 	AllowedEgressChannels       []string
 	ContextRefs                 []string
@@ -77,6 +78,7 @@ func Defaults() Config {
 		MetricsPort:                 DefaultMetricsPort,
 		EgressHTTPPort:              DefaultEgressHTTPPort,
 		WebhookHTTPPort:             DefaultWebhookHTTPPort,
+		GitHubWebhookSecretEnv:      "CHATTING_GITHUB_WEBHOOK_SECRET",
 		EgressAttachmentAllowedDirs: []string{},
 		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		ContextRefs:                 []string{},
@@ -239,6 +241,7 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 			}
 			return port, err
 		}),
+		str(&c.GitHubWebhookSecretEnv, "github_webhook_secret_env"),
 		list(&c.EgressAttachmentAllowedDirs, "egress_attachment_allowed_dirs"),
 		bind(&c.AllowedEgressChannels, "allowed_egress_channels", decodeAllowedEgressChannels),
 		list(&c.ContextRefs, "context_refs"),

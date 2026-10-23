@@ -11,7 +11,7 @@ import (
 
 func TestReceipt(t *testing.T) {
 	var logs bytes.Buffer
-	h := Handler(log.New(&logs, "", 0))
+	h := Handler(log.New(&logs, "", 0), nil)
 	body := "hello\nforged log\x00" + strings.Repeat("x", MaxLogBodyBytes)
 	r := httptest.NewRequest("POST", Path+"?token=private", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer private")
@@ -53,7 +53,7 @@ func TestRejections(t *testing.T) {
 	} {
 		var logs bytes.Buffer
 		w := httptest.NewRecorder()
-		Handler(log.New(&logs, "", 0)).ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+		Handler(log.New(&logs, "", 0), nil).ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
 		if w.Code != tc.status || logs.Len() != 0 {
 			t.Fatalf("%s %s: status=%d logs=%s", tc.method, tc.path, w.Code, logs.String())
 		}

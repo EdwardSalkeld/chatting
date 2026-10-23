@@ -253,7 +253,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		return nil, err
 	}
 	closers = append(closers, egressServer)
-	webhookServer, err := webhooks.StartServer(config.WebhookHTTPPort)
+	webhookServer, err := webhooks.StartServer(config.WebhookHTTPPort, []byte(os.Getenv(config.GitHubWebhookSecretEnv)))
 	if err != nil {
 		return nil, err
 	}
