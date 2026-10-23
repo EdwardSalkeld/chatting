@@ -27,33 +27,36 @@ const (
 )
 
 type Config struct {
-	PersonalInbox               *personalinbox.Config
-	BBMBAddress                 string
-	DBPath                      string
-	MaxLoops                    int
-	PollIntervalSeconds         float64
-	MetricsHost                 string
-	MetricsPort                 int
-	EgressHTTPPort              int
-	WebhookHTTPPort             int
-	GitHubWebhookSecretEnv      string
-	EgressAttachmentAllowedDirs []string
-	AllowedEgressChannels       []string
-	ContextRefs                 []string
-	IMAPHost                    string
-	IMAPPort                    int
-	IMAPUsername                string
-	IMAPPasswordEnv             string
-	IMAPMailbox                 string
-	IMAPSearch                  string
-	IMAPUseSSL                  bool
-	SMTPHost                    string
-	SMTPPort                    int
-	SMTPUsername                string
-	SMTPPasswordEnv             string
-	SMTPFrom                    string
-	SMTPStartTLS                bool
-	SMTPUseSSL                  bool
+	PersonalInbox                    *personalinbox.Config
+	BBMBAddress                      string
+	DBPath                           string
+	MaxLoops                         int
+	PollIntervalSeconds              float64
+	MetricsHost                      string
+	MetricsPort                      int
+	EgressHTTPPort                   int
+	WebhookHTTPPort                  int
+	GitHubWebhookSecretEnv           string
+	GitHubWebhookLogin               string
+	GitHubWebhookSelfLogins          []string
+	GitHubWebhookReleaseRepositories []string
+	EgressAttachmentAllowedDirs      []string
+	AllowedEgressChannels            []string
+	ContextRefs                      []string
+	IMAPHost                         string
+	IMAPPort                         int
+	IMAPUsername                     string
+	IMAPPasswordEnv                  string
+	IMAPMailbox                      string
+	IMAPSearch                       string
+	IMAPUseSSL                       bool
+	SMTPHost                         string
+	SMTPPort                         int
+	SMTPUsername                     string
+	SMTPPasswordEnv                  string
+	SMTPFrom                         string
+	SMTPStartTLS                     bool
+	SMTPUseSSL                       bool
 
 	TelegramEnabled            bool
 	TelegramBotTokenEnv        string
@@ -79,6 +82,8 @@ func Defaults() Config {
 		EgressHTTPPort:              DefaultEgressHTTPPort,
 		WebhookHTTPPort:             DefaultWebhookHTTPPort,
 		GitHubWebhookSecretEnv:      "CHATTING_GITHUB_WEBHOOK_SECRET",
+		GitHubWebhookLogin:          "BillyAcachofa",
+		GitHubWebhookSelfLogins:     []string{"billybotapp[bot]"},
 		EgressAttachmentAllowedDirs: []string{},
 		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		ContextRefs:                 []string{},
@@ -242,6 +247,9 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 			return port, err
 		}),
 		str(&c.GitHubWebhookSecretEnv, "github_webhook_secret_env"),
+		str(&c.GitHubWebhookLogin, "github_webhook_login"),
+		list(&c.GitHubWebhookSelfLogins, "github_webhook_self_logins"),
+		list(&c.GitHubWebhookReleaseRepositories, "github_webhook_release_repositories"),
 		list(&c.EgressAttachmentAllowedDirs, "egress_attachment_allowed_dirs"),
 		bind(&c.AllowedEgressChannels, "allowed_egress_channels", decodeAllowedEgressChannels),
 		list(&c.ContextRefs, "context_refs"),

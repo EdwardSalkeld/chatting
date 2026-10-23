@@ -23,6 +23,17 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestWebhookFilterConfiguration(t *testing.T) {
+	defaults, err := Load([]byte(`{}`))
+	if err != nil || defaults.GitHubWebhookLogin != "BillyAcachofa" || len(defaults.GitHubWebhookReleaseRepositories) != 0 {
+		t.Fatalf("defaults: %+v %v", defaults, err)
+	}
+	c, err := Load([]byte(`{"github_webhook_login":"other-login","github_webhook_release_repositories":["o/r"]}`))
+	if err != nil || c.GitHubWebhookLogin != "other-login" || !reflect.DeepEqual(c.GitHubWebhookReleaseRepositories, []string{"o/r"}) {
+		t.Fatalf("config: %+v %v", c, err)
+	}
+}
+
 func TestWebhookPort(t *testing.T) {
 	for _, raw := range []string{`{"webhook_http_port":0}`, `{"webhook_http_port":9468}`} {
 		cfg, err := Load([]byte(raw))
