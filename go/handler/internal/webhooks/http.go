@@ -79,8 +79,8 @@ func Handler(logger *log.Logger, githubSecret []byte) http.Handler {
 			fields["event"] = "github_webhook_received"
 			// These routing headers are useful for correlating GitHub deliveries,
 			// but are not covered by GitHub's body signature. Bound their size.
-			fields["github_event"] = boundedHeader(r, "X-GitHub-Event")
-			fields["github_delivery"] = boundedHeader(r, "X-GitHub-Delivery")
+			fields["github_event"] = boundedHeader(r.Header.Get("X-GitHub-Event"))
+			fields["github_delivery"] = boundedHeader(r.Header.Get("X-GitHub-Delivery"))
 		}
 		record, _ := json.Marshal(fields)
 		logger.Print(string(record))
@@ -94,8 +94,7 @@ func Handler(logger *log.Logger, githubSecret []byte) http.Handler {
 	return mux
 }
 
-func boundedHeader(r *http.Request, name string) string {
-	value := r.Header.Get(name)
+func boundedHeader(value string) string {
 	if len(value) > 256 {
 		value = value[:256]
 	}
