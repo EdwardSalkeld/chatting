@@ -52,6 +52,28 @@ Those two routing headers are not authenticated by GitHub's body signature.
 Signatures and other headers are not logged. Retries are logged again; there is
 no durable delivery or deduplication promise at this stage.
 
+Each accepted GitHub receipt also includes `mode: log_only` and a structured
+`task_preview` using the existing `chatting.task.v1` BBMB ingress contract
+(`TaskQueueMessage`, with a `TaskEnvelope`). This is a preview only: the public
+receiver has no broker or ledger dependency, does not assign work items, and
+never queues or executes tasks. Deploying this change keeps logging only.
+
+The adapter is event- and repository-independent, so additional subscriptions
+and installations need no adapter changes. It records the event, action,
+repository, sender, receipt time, and payload preview. The payload remains
+limited to the first 4096 bytes with explicit size and truncation evidence;
+extracted string fields and routing headers are limited to 256 bytes. Preview
+content is untrusted external data. Large deliveries remain subject to the
+existing 64 KiB request limit; increasing App subscriptions does not raise it.
+
+Envelope, task, trace and dedupe identities derive from `X-GitHub-Delivery`;
+redeliveries retain those identities but are logged again. If that header is
+missing, identity falls back to a hash of event type and body. Header-derived
+identities are correlation hints, not authenticated identities. Replies default
+to the existing `log` channel rather than assuming an issue comment destination.
+Before enabling real ingress, decide event filtering, reply routing, payload
+completeness, durable deduplication and work item assignment explicitly.
+
 The initial App subscribes only to `release` with read-only Contents permission.
 Install it on one selected repository to limit traffic. GitHub may also send
 ping and installation lifecycle events; these are authenticated and logged in

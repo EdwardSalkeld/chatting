@@ -81,6 +81,8 @@ func Handler(logger *log.Logger, githubSecret []byte) http.Handler {
 			// but are not covered by GitHub's body signature. Bound their size.
 			fields["github_event"] = boundedHeader(r.Header.Get("X-GitHub-Event"))
 			fields["github_delivery"] = boundedHeader(r.Header.Get("X-GitHub-Delivery"))
+			fields["mode"] = "log_only"
+			fields["task_preview"] = GitHubTaskPreview(body, r.Header.Get("X-GitHub-Event"), r.Header.Get("X-GitHub-Delivery"), time.Now())
 		}
 		record, _ := json.Marshal(fields)
 		logger.Print(string(record))

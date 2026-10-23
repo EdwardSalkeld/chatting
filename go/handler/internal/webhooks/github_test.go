@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func TestGitHubAuthentication(t *testing.T) {
@@ -64,6 +66,14 @@ func TestGitHubAuthentication(t *testing.T) {
 			}
 			if strings.Contains(logs.String(), "private") || strings.Contains(logs.String(), tc.signature) {
 				t.Fatal("credentials leaked into log")
+			}
+			preview, err := json.Marshal(record["task_preview"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := contracts.DecodeTaskQueueMessage(preview)
+			if err != nil || task.TaskID != "task:github-webhook:delivery-id" || task.Envelope.ReplyChannel.Type != "log" || record["mode"] != "log_only" {
+				t.Fatalf("invalid log-only ingress preview: %s, %v", preview, err)
 			}
 		})
 	}
