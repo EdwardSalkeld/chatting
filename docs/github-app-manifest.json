@@ -1,0 +1,15 @@
+{
+  "name": "Billy Chatting Webhook",
+  "url": "https://github.com/EdwardSalkeld/chatting",
+  "description": "Logging-only GitHub release webhook for Chatting.",
+  "hook_attributes": {
+    "url": "https://hooks.alcachofa.faith/webhooks/github",
+    "active": true
+  },
+  "public": true,
+  "default_permissions": {
+    "contents": "read"
+  },
+  "default_events": ["release"],
+  "request_oauth_on_install": false
+}
