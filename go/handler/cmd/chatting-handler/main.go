@@ -103,6 +103,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	if err != nil {
 		return nil, err
 	}
+	store.ResolveRunsWith(githubconnector.RunPullRequests(nil))
 	closers = append(closers, store)
 	personal, err := newPersonalInbox(config, adapter)
 	if err != nil {

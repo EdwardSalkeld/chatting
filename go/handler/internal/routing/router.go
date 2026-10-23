@@ -16,6 +16,15 @@ type Decision struct {
 	Key    string
 	Reason string
 	PRKeys []string
+	// RunRefs are workflow runs linked from a GitHub notification. CI failure
+	// emails link only the run, so the caller resolves these to PRs.
+	RunRefs []RunRef
+}
+
+// RunRef identifies a GitHub Actions workflow run.
+type RunRef struct {
+	Repo string
+	ID   int64
 }
 
 // Router can be replaced when lane selection becomes more sophisticated.
@@ -103,6 +112,13 @@ func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 			continue
 		}
 		candidate := strings.TrimRight(token[index:], "),.>;!?\"'")
+		if run, ok := runRef(candidate); ok {
+			if !seen[candidate] {
+				seen[candidate] = true
+				decision.RunRefs = append(decision.RunRefs, run)
+			}
+			continue
+		}
 		key, err := prKey(candidate, true)
 		if err != nil {
 			continue
@@ -113,4 +129,21 @@ func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 		}
 	}
 	return decision
+}
+
+func runRef(value string) (RunRef, bool) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
+		return RunRef{}, false
+	}
+	parts := strings.Split(parsed.Path, "/")
+	if len(parts) < 6 || parts[0] != "" || !validPRName(parts[1]) || !validPRName(parts[2]) ||
+		parts[3] != "actions" || parts[4] != "runs" || !validPRNumber(parts[5]) {
+		return RunRef{}, false
+	}
+	id, err := strconv.ParseInt(parts[5], 10, 64)
+	if err != nil {
+		return RunRef{}, false
+	}
+	return RunRef{Repo: strings.ToLower(parts[1] + "/" + parts[2]), ID: id}, true
 }

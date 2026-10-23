@@ -25,6 +25,9 @@ route to the same work item. When that work item started in Telegram, the task
 replies to the original chat and joins its conversation, so an app-server
 executor resumes the same Codex thread.
 
+CI failure emails link only the workflow run, so the handler asks GitHub which
+pull request the run, or failing that its head commit, belongs to.
+
 ## Config keys
 
 - `github_repositories`: `owner/repo` and/or `owner/*` selectors to scan.

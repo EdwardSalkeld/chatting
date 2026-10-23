@@ -1,6 +1,10 @@
 package routing
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+)
 
 func TestNormalizePRRejectsEmbeddedGitHubURL(t *testing.T) {
 	for _, value := range []string{
@@ -30,5 +34,28 @@ func TestNormalizePRRejectsEmbeddedGitHubURL(t *testing.T) {
 		if _, err := prKey(value, true); err == nil {
 			t.Errorf("prKey(%q, true) accepted an invalid URL", value)
 		}
+	}
+}
+
+func TestDecideCollectsWorkflowRunsOnlyFromGitHubEmail(t *testing.T) {
+	content := "View results: https://github.com/Owner/Repo/actions/runs/38644659620\n" +
+		"Manage: https://github.com/settings/notifications"
+	task := contracts.TaskQueueMessage{Envelope: contracts.TaskEnvelope{
+		Source:       "email",
+		Content:      content,
+		ReplyChannel: contracts.ReplyChannel{Type: "email", Target: "bot@example.com"},
+	}}
+	actor := "notifications@github.com"
+	task.Envelope.Actor = &actor
+	decision := PersistentLaneRouter{}.Decide(task)
+	if len(decision.PRKeys) != 0 ||
+		len(decision.RunRefs) != 1 || decision.RunRefs[0] != (RunRef{Repo: "owner/repo", ID: 38644659620}) {
+		t.Fatalf("decision = %#v", decision)
+	}
+
+	stranger := "someone@example.com"
+	task.Envelope.Actor = &stranger
+	if decision := (PersistentLaneRouter{}).Decide(task); len(decision.RunRefs) != 0 {
+		t.Fatalf("run links from other senders must be ignored: %#v", decision)
 	}
 }
