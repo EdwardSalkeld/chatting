@@ -111,7 +111,7 @@ func TestSignedFilterIngress(t *testing.T) {
 		}
 		return record
 	}
-	body := `{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":7},"comment":{"body":"@BillyAcachofa help"}}`
+	body := `{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":7},"comment":{"id":99,"body":"@BillyAcachofa help"}}`
 	send(body, "tag", false, 401)
 	stored, err := store.WebhookState(context.Background(), "watch", "billyacachofa/o/r#7")
 	if err != nil || stored != "" {

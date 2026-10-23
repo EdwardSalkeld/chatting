@@ -194,6 +194,7 @@ class SQLiteStateStore:
         with self._transaction() as connection:
             connection.executescript(_SCHEMA)
             work_items.initialize(connection)
+            work_items.migrate_identity(connection)
 
     def stage_inbox_task(
         self, task_message: TaskQueueMessage, *, broker_guid: str | None = None
@@ -210,7 +211,11 @@ class SQLiteStateStore:
                 """,
                 (route_type, route_key),
             ).fetchone()
-            if row is None:
+            if task_message.work_item_id:
+                # The handler owns identity. Transport is only an address; an
+                # event returning to this item must resume its existing session.
+                conversation_id = task_message.work_item_id
+            elif row is None:
                 conversation_id = f"conv_{uuid.uuid4().hex}"
                 connection.execute(
                     """
@@ -301,8 +306,9 @@ class SQLiteStateStore:
         with self._transaction() as connection:
             if (
                 connection.execute(
-                    "SELECT 1 FROM conversation_routes WHERE conversation_id = ?",
-                    (conversation_id,),
+                    "SELECT 1 FROM conversation_routes WHERE conversation_id = ? "
+                    "UNION ALL SELECT 1 FROM work_items WHERE work_item_id = ?",
+                    (conversation_id, conversation_id),
                 ).fetchone()
                 is None
             ):
@@ -312,6 +318,16 @@ class SQLiteStateStore:
                 "ON CONFLICT(conversation_id) DO UPDATE SET backend = excluded.backend",
                 (conversation_id, backend),
             )
+
+    def legacy_work_sessions(self, *, work_item_id: str) -> list[str]:
+        """Keep all old associations so migration cannot hide competing threads."""
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT origin_conversation_id FROM work_items WHERE work_item_id = ? "
+                "UNION SELECT legacy_id FROM work_item_session_aliases WHERE work_item_id = ?",
+                (work_item_id, work_item_id),
+            ).fetchall()
+        return [str(row[0]) for row in rows if str(row[0]).startswith("conv_")]
 
     def get_work_explicit_finish(self, *, work_item_id: str) -> bool:
         with closing(self._connect()) as connection:

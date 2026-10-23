@@ -143,6 +143,9 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	}
 	metricRecorder := metrics.New(time.Time{}, nil)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
+	if config.GitHubWebhookDeliveryEnabled {
+		connectors = append(connectors, webhooks.Connector{Store: store})
+	}
 	scheduleConnector, err := schedule.NewFromSource(schedule.NewStoreSource(store), nil)
 	if err != nil {
 		return nil, err
@@ -256,7 +259,8 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	closers = append(closers, egressServer)
 	webhookServer, err := webhooks.StartServer(config.WebhookHTTPPort, []byte(os.Getenv(config.GitHubWebhookSecretEnv)), &webhooks.Filter{
 		Store: store, Login: config.GitHubWebhookLogin, ReleaseRepositories: config.GitHubWebhookReleaseRepositories,
-		SelfLogins: config.GitHubWebhookSelfLogins,
+		SelfLogins:      config.GitHubWebhookSelfLogins,
+		DeliveryEnabled: config.GitHubWebhookDeliveryEnabled, AssignTask: store.AssignTask,
 	})
 	if err != nil {
 		return nil, err

@@ -10,7 +10,7 @@ import urllib.error
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL
 from app.state import SQLiteStateStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, worker_db_path
-from app.worker.pr_registration import register_pr
+from app.worker.pr_registration import register_github_artifact, register_pr
 
 
 def main() -> int:
@@ -36,6 +36,10 @@ def main() -> int:
     register = commands.add_parser("register-pr")
     register.add_argument("task_id")
     register.add_argument("pr_url")
+    for command in ("subject", "repository"):
+        artifact = commands.add_parser(f"register-{command}")
+        artifact.add_argument("task_id")
+        artifact.add_argument("value")
     args = parser.parse_args()
     config = (
         _load_config(None, os.environ)
@@ -62,11 +66,21 @@ def main() -> int:
         store.set_work_explicit_finish(
             work_item_id=assignment.work_item_id, enabled=args.mode == "on"
         )
-    if args.command == "register-pr":
+    if args.command.startswith("register-"):
         try:
-            register_pr(handler_url, task_id=args.task_id, pr_url=args.pr_url)
+            if args.command == "register-pr":
+                register_pr(handler_url, task_id=args.task_id, pr_url=args.pr_url)
+            else:
+                register_github_artifact(
+                    handler_url,
+                    task_id=args.task_id,
+                    kind=args.command.removeprefix("register-"),
+                    value=args.value,
+                )
         except urllib.error.HTTPError as error:
-            parser.error(f"handler rejected PR registration: {error.read().decode()}")
+            parser.error(
+                f"handler rejected GitHub registration: {error.read().decode()}"
+            )
         except urllib.error.URLError as error:
             parser.error(f"handler unavailable: {error.reason}")
     preferred_reply = store.preferred_work_reply(work_item_id=assignment.work_item_id)

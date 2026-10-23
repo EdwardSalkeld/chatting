@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 type FilterStore interface {
@@ -32,6 +34,8 @@ type Filter struct {
 	Login               string
 	SelfLogins          []string
 	ReleaseRepositories []string
+	DeliveryEnabled     bool
+	AssignTask          func(context.Context, contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
 }
 
 type user struct {

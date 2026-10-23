@@ -170,8 +170,8 @@ class WorkerInboxTests(unittest.TestCase):
 
     def test_email_routed_to_a_chat_joins_that_chat_conversation(self) -> None:
         # The handler routes a PR notification to the work item that opened the
-        # PR by giving it that item's Telegram reply channel. Sharing the
-        # conversation is what resumes the same persistent Codex thread.
+        # PR by giving it that item's ID. Transport addresses alone do not
+        # select a session.
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
             chat = _telegram_task(1, thread_id=7)
@@ -190,7 +190,9 @@ class WorkerInboxTests(unittest.TestCase):
                 trace_id="trace:email:50",
             )
             store.stage_inbox_task(chat)
-            store.stage_inbox_task(notification)
+            store.stage_inbox_task(
+                replace(notification, work_item_id=chat.work_item_id)
+            )
 
             chat_task = store.get_inbox_task(task_id=chat.task_id)
             routed_task = store.get_inbox_task(task_id=notification.task_id)
@@ -269,8 +271,7 @@ class WorkerInboxTests(unittest.TestCase):
 
             active = store.claim_next_inbox_task()
             assert active is not None
-            self.assertTrue(active.conversation_id.startswith("conv_"))
-            self.assertNotIn("chat-a", active.conversation_id)
+            self.assertEqual(active.conversation_id, parent.work_item_id)
 
             claimed = store.claim_conversation_followups(parent_task_id=parent.task_id)
 
