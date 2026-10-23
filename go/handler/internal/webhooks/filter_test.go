@@ -128,3 +128,40 @@ func TestMentionBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnPRWatch(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { store.Close() }()
+	f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}}
+	check := func(event, body, want, reason string, newWatch bool) {
+		t.Helper()
+		d, err := f.Evaluate(ctx, []byte(body), event, "")
+		if err != nil || d.Disposition != want || d.Reason != reason || d.NewWatch != newWatch {
+			t.Fatalf("%s: %+v %v", body, d, err)
+		}
+	}
+	check("pull_request", `{"action":"opened","sender":{"login":"BillyAcachofa"},"repository":{"full_name":"o/r"},"pull_request":{"number":1,"user":{"login":"billyacachofa"},"head":{"sha":"abc"}}}`, "drop", "self_action", true)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Store = store
+	check("issue_comment", `{"action":"created","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"issue":{"number":1},"comment":{"body":"please fix this"}}`, "keep", "watched_subject", false)
+	check("pull_request_review", `{"action":"submitted","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"pull_request":{"number":1},"review":{"body":"changes requested"}}`, "keep", "watched_subject", false)
+	check("workflow_run", `{"action":"completed","sender":{"login":"BillyAcachofa"},"repository":{"full_name":"o/r"},"workflow_run":{"workflow_id":10,"run_number":1,"run_attempt":1,"head_sha":"abc","conclusion":"failure","pull_requests":[{"number":1}]}}`, "keep", "workflow_failure", false)
+	check("issue_comment", `{"action":"created","sender":{"login":"BillyAcachofa"},"repository":{"full_name":"o/r"},"issue":{"number":1},"comment":{"body":"fixed"}}`, "drop", "self_action", false)
+	// PR author metadata can establish a watch even if the opening hook was missed.
+	check("issue_comment", `{"action":"created","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"issue":{"number":2,"user":{"login":"BillyAcachofa"},"pull_request":{"url":"https://api.github.com/repos/o/r/pulls/2"}},"comment":{"body":"feedback"}}`, "keep", "own_pr", true)
+	check("pull_request", `{"action":"opened","sender":{"login":"billybotapp[bot]"},"repository":{"full_name":"o/r"},"pull_request":{"number":3,"user":{"login":"billybotapp[bot]"}}}`, "drop", "self_action", true)
+	// Authorship alone must not subscribe ordinary issues or other people's PRs.
+	check("issue_comment", `{"action":"created","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"issue":{"number":4,"user":{"login":"BillyAcachofa"}},"comment":{"body":"feedback"}}`, "drop", "not_tagged_or_watched", false)
+	check("pull_request", `{"action":"opened","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"pull_request":{"number":5,"user":{"login":"alice"}}}`, "drop", "not_tagged_or_watched", false)
+}

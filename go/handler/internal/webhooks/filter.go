@@ -38,11 +38,13 @@ type user struct {
 	Login string `json:"login"`
 }
 type subject struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	Draft  bool   `json:"draft"`
-	Head   struct {
+	Number      int             `json:"number"`
+	User        user            `json:"user"`
+	PullRequest json.RawMessage `json:"pull_request"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body"`
+	Draft       bool            `json:"draft"`
+	Head        struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
 }
@@ -131,6 +133,21 @@ func (f *Filter) watchKey(repo string, number int) string {
 	return fmt.Sprintf("%s/%s#%d", strings.ToLower(f.Login), strings.ToLower(repo), number)
 }
 
+func (f *Filter) isSelf(login string) bool {
+	if login == "" {
+		return false
+	}
+	if strings.EqualFold(login, f.Login) {
+		return true
+	}
+	for _, self := range f.SelfLogins {
+		if strings.EqualFold(login, self) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (Decision, error) {
 	if event == "ping" {
 		return decision("drop", "ping"), nil
@@ -146,10 +163,7 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 	if p.Sender.Login == "" {
 		return decision("needs_context", "missing_sender"), nil
 	}
-	self := strings.EqualFold(p.Sender.Login, f.Login)
-	for _, login := range f.SelfLogins {
-		self = self || strings.EqualFold(p.Sender.Login, login)
-	}
+	self := f.isSelf(p.Sender.Login)
 	if event == "release" {
 		if self {
 			return decision("drop", "self_action"), nil
@@ -184,7 +198,11 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 	if err != nil {
 		return Decision{}, err
 	}
-	if self && stored == "" {
+	// PR authorship subscribes us even when the opening event is our own.
+	// Ordinary issue comments carry PR metadata under issue.pull_request.
+	isPR := p.PR != nil || (len(s.PullRequest) > 0 && string(s.PullRequest) != "null")
+	ownedPR := isPR && f.isSelf(s.User.Login)
+	if self && stored == "" && !ownedPR {
 		return decision("drop", "self_action"), nil
 	}
 	// Only text belonging to this event can tag us in. An old mention copied
@@ -207,7 +225,7 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		}
 	}
 	tagged := mention(text, f.Login)
-	if stored == "" && !tagged {
+	if stored == "" && !tagged && !ownedPR {
 		return decision("drop", "not_tagged_or_watched"), nil
 	}
 	state := watchState{}
@@ -230,7 +248,11 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		return d, nil
 	}
 	if d.NewWatch {
-		d.Reason = "tagged_in"
+		if ownedPR {
+			d.Reason = "own_pr"
+		} else {
+			d.Reason = "tagged_in"
+		}
 		return d, nil
 	}
 	d.Disposition, d.Reason = actionDecision(p, event, s)

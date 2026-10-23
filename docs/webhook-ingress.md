@@ -78,18 +78,24 @@ coalescing with the existing polling connector. No jobs are currently emitted.
 
 ## Tag-to-watch filtering
 
-`github_webhook_login` defaults to `BillyAcachofa`. An external actor must
+`github_webhook_login` defaults to `BillyAcachofa`. For ordinary issues, an external actor must
 directly `@mention` that login in a new/edited issue or PR title/body, issue
-comment, inline review comment, or review to start watching. Author, assignee,
+comment, inline review comment, or review to start watching. Issue author, assignee,
 reviewer status and old mentions copied into parent objects do not subscribe
 an issue. Usernames match case-insensitively with boundaries, so a longer login
 does not match. Mentions are plain text matching, not a Markdown parser.
 
+PRs authored by that login or a configured `github_webhook_self_logins` identity
+are watched automatically, without a tag. The opening hook records the watch
+even when it is a suppressed own action. Later PR/review hooks or ordinary PR
+comments can also establish the watch when they include PR author metadata.
+Other people's PRs still require an external tag.
+
 The handler stores watches in `github_webhook_watches` in its existing SQLite
 DB, scoped by login, repository and issue/PR number. Watches survive restarts
 and remain after close/merge, so reopen and late feedback are observed. There
-is currently no unwatch command or expiry. Only newly delivered tagging events
-start watches; historical conversations are not fetched or backfilled.
+is currently no unwatch command or expiry. Watches start from newly delivered
+tagging or own-PR events; historical conversations are not fetched or backfilled.
 
 Every subsequent related hook is inspected. Candidate task previews follow
 these rules (an initial tag itself is always kept):
@@ -111,8 +117,9 @@ tag still carries `tagged_in`. This is a preview filter, not permission to
 execute work or post a reply.
 
 Events whose sender is Billy or an additional `github_webhook_self_logins`
-identity (default: `billybotapp[bot]`) are dropped as `self_action`, while an existing
-watch's PR head is still updated. Own comments cannot start a watch. Other
+identity (default: `billybotapp[bot]`) are dropped as `self_action`, while a
+watch's PR head is still updated. Own mentions cannot subscribe unrelated
+subjects; PR authorship can create a watch independently of the actor. Other
 bots are evaluated normally. Workflow runs are the exception: relevance comes
 from the watched PR and head SHA, regardless of who triggered the run.
 
