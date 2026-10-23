@@ -343,6 +343,18 @@ provider response text or email content. Legacy failures without these fields
 retain `triage_unavailable`. Alongside it each
 message records `body_html`, `body_chars` and `body_truncated`.
 
+Body extraction preserves useful plain text but compares the rendered HTML
+alternative when the text is a browser-view placeholder, mostly tracking URLs,
+degraded, or substantially shorter than the HTML content. HTML is parsed locally:
+visible text and image alt text are retained, while scripts, styles, comments,
+hidden preheaders and invisible padding are excluded. No linked pages, images or
+other remote resources are fetched. Image-only content without descriptive alt
+text cannot be recovered by this text extraction. Digest lines use concrete
+facts from the subject when those are missing from the extracted body. The same
+extracted body reaches classification and the digest; existing excerpt limits
+and suspicious-mail withholding still apply. This affects newly ingested mail;
+stored classifications and already delivered digests are not replayed.
+
 That is enough to answer "why is this in review" from the record, without
 going back to the mailbox to guess.
 

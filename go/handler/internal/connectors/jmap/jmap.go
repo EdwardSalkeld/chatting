@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/mailtext"
 )
@@ -150,16 +152,46 @@ type Body struct {
 	Degraded  bool
 }
 
-// BodyText prefers the plain text part and falls back to HTML, converting it.
-// Parts are not always labelled accurately, so content decides, not the type.
+var bodyURLPattern = regexp.MustCompile(`(?i)(?:https?://|mailto:|www\.)\S+`)
+var placeholderPattern = regexp.MustCompile(`(?i)(?:can'?t|cannot|does not|doesn't|unable to)\s+(?:display|view|read|support)\s+html|(?:only available|only viewable)\s+in\s+html`)
+
+func bodyContentSize(text string) int {
+	count := 0
+	for _, char := range bodyURLPattern.ReplaceAllString(text, "") {
+		if unicode.IsLetter(char) || unicode.IsNumber(char) {
+			count++
+		}
+	}
+	return count
+}
+
+// preferHTML recognises missing substance, not merely a missing MIME part.
+// Newsletters often supply a browser-view notice or a dump of tracking URLs as
+// text/plain. A substantially fuller rendered alternative is useful too.
+func preferHTML(plain, rendered string) bool {
+	richSize := bodyContentSize(rendered)
+	if richSize == 0 {
+		return false
+	}
+	if placeholderPattern.MatchString(plain) {
+		return true
+	}
+	plainSize := bodyContentSize(plain)
+	linkHeavy := len(bodyURLPattern.ReplaceAllString(plain, ""))*2 < len(plain)
+	return (linkHeavy && richSize > plainSize) || (richSize >= 2*plainSize && richSize >= plainSize+80)
+}
+
+// BodyText keeps useful plain text, but tries rendered HTML when that part is
+// missing, degraded, a placeholder, link-heavy or substantially less complete.
 func (email Email) BodyText() Body {
-	for _, parts := range [][]BodyPart{email.TextBody, email.HTMLBody} {
+	partsBody := func(parts []BodyPart, isHTML bool) Body {
+		fallback := Body{Degraded: true}
 		for _, part := range parts {
 			value, ok := email.BodyValues[part.PartID]
 			if !ok || strings.TrimSpace(value.Value) == "" {
 				continue
 			}
-			text, markup := value.Value, mailtext.LooksLikeHTML(value.Value)
+			text, markup := value.Value, isHTML || strings.EqualFold(part.Type, "text/html") || mailtext.LooksLikeHTML(value.Value)
 			if markup {
 				text = mailtext.HTMLToText(text)
 			}
@@ -167,11 +199,22 @@ func (email Email) BodyText() Body {
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
-			return Body{Text: strings.TrimSpace(text), HTML: markup,
+			body := Body{Text: strings.TrimSpace(text), HTML: markup,
 				Truncated: value.IsTruncated, Degraded: value.IsEncodingProblem}
+			if !body.Degraded {
+				return body
+			}
+			if fallback.Text == "" {
+				fallback = body
+			}
 		}
+		return fallback
 	}
-	return Body{Degraded: true}
+	plain, rich := partsBody(email.TextBody, false), partsBody(email.HTMLBody, true)
+	if plain.Text == "" || (rich.Text != "" && !rich.Degraded && (plain.Degraded || preferHTML(plain.Text, rich.Text))) {
+		return rich
+	}
+	return plain
 }
 
 func (client *Client) sessionURL() string {

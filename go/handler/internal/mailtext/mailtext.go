@@ -2,28 +2,16 @@
 package mailtext
 
 import (
-	"html"
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
 var (
-	// Style and script bodies survive tag stripping and dominate marketing
-	// email, so they go first, along with comments. One pattern each: RE2 has
-	// no backreference to match the closing tag against the opening one.
-	dropContentPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?is)<style\b[^>]*>.*?</\s*style\s*>`),
-		regexp.MustCompile(`(?is)<script\b[^>]*>.*?</\s*script\s*>`),
-		regexp.MustCompile(`(?is)<title\b[^>]*>.*?</\s*title\s*>`),
-	}
-	commentPattern    = regexp.MustCompile(`(?s)<!--.*?-->`)
-	blockBreakPattern = regexp.MustCompile(`(?i)<\s*(br|/p|/div|/li|/tr|/table|/h[1-6])\b[^>]*>`)
-	openBreakPattern  = regexp.MustCompile(`(?i)<\s*(p|div|li|tr|h[1-6])\b[^>]*>`)
-	tagPattern        = regexp.MustCompile(`(?s)<[^>]+>`)
-	multiBreakPattern = regexp.MustCompile(`\n\s*\n\s*\n+`)
 	// Non-breaking and zero-width characters are spacing hacks in marketing
 	// HTML. They survive unescaping and reach the model as noise.
-	zeroWidthPattern = regexp.MustCompile(`[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}]`)
+	zeroWidthPattern = regexp.MustCompile(`[\x{00ad}\x{034f}\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}]`)
 	spacePattern     = regexp.MustCompile(`[ \t\x{00a0}\x{2007}\x{202f}]+`)
 	htmlLikePattern  = regexp.MustCompile(`(?i)<\s*(!doctype|html|head|body|div|table|td|tr|span|p|br|a|img|style|meta)\b`)
 )
@@ -34,23 +22,61 @@ func LooksLikeHTML(value string) bool {
 	return htmlLikePattern.MatchString(value)
 }
 
-// HTMLToText strips markup, leaving the words in reading order.
+// HTMLToText renders the supplied markup without executing it or fetching any
+// resources. Image alt text is email content too: offers often exist only in
+// a banner. Hidden preheaders, scripts, CSS and tracking URLs are not content.
 func HTMLToText(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return ""
 	}
-	text := commentPattern.ReplaceAllString(value, " ")
-	for _, pattern := range dropContentPatterns {
-		text = pattern.ReplaceAllString(text, " ")
+	doc, err := html.Parse(strings.NewReader(value))
+	if err != nil {
+		return ""
 	}
-	text = blockBreakPattern.ReplaceAllString(text, "\n")
-	text = openBreakPattern.ReplaceAllString(text, "\n")
-	text = tagPattern.ReplaceAllString(text, "")
-	text = html.UnescapeString(text)
+	var rendered strings.Builder
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			rendered.WriteString(node.Data)
+			return
+		}
+		block := false
+		if node.Type == html.ElementNode {
+			switch node.Data {
+			case "head", "script", "style", "title", "template":
+				return
+			}
+			for _, attr := range node.Attr {
+				style := strings.Join(strings.Fields(strings.ToLower(attr.Val)), "")
+				if attr.Key == "hidden" || (attr.Key == "aria-hidden" && strings.EqualFold(attr.Val, "true")) ||
+					(attr.Key == "style" && (strings.Contains(style, "display:none") || strings.Contains(style, "visibility:hidden"))) {
+					return
+				}
+			}
+			switch node.Data {
+			case "img":
+				for _, attr := range node.Attr {
+					if attr.Key == "alt" && strings.TrimSpace(attr.Val) != "" {
+						rendered.WriteString(" " + attr.Val + " ")
+					}
+				}
+			case "br", "p", "div", "li", "tr", "td", "th", "table", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "blockquote":
+				block = true
+				rendered.WriteByte('\n')
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+		if block {
+			rendered.WriteByte('\n')
+		}
+	}
+	walk(doc)
+	text := rendered.String()
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = zeroWidthPattern.ReplaceAllString(text, "")
 	text = spacePattern.ReplaceAllString(text, " ")
-	text = multiBreakPattern.ReplaceAllString(text, "\n\n")
 	lines := strings.Split(text, "\n")
 	trimmed := make([]string, 0, len(lines))
 	for _, line := range lines {
