@@ -232,12 +232,13 @@ class SplitModeE2ETests(unittest.TestCase):
                 json.dumps(
                     {
                         "db_path": str(worker_db_path),
-                        "workspace_root": str(Path(worker_db_path).parent / "workspaces"),
+                        "workspace_root": str(
+                            Path(worker_db_path).parent / "workspaces"
+                        ),
                         "bbmb_address": bbmb_address,
                         "max_attempts": 2,
                         "poll_timeout_seconds": 1,
                         "sleep_seconds": 0.05,
-                        "max_loops": 20,
                         "activity_port": 0,
                         "codex_command": f"{sys.executable} {fake_codex}",
                         "handler_egress_url": f"http://127.0.0.1:{egress_http_port}/egress",
@@ -283,11 +284,32 @@ class SplitModeE2ETests(unittest.TestCase):
                     text=True,
                 )
 
-                # Egress is delivered synchronously worker -> handler, so the
-                # handler must stay up until the worker is done. The handler runs
-                # until terminated (no max_loops); wait for the bounded worker
-                # first, then stop the handler and collect its output.
-                worker_out, worker_err = worker_proc.communicate(timeout=45)
+                # Manager ticks do not wait for executors. A fixed tick count
+                # can stop collection before both tasks are claimed under load.
+                # Wait for the actual outcomes, keeping the handler available
+                # for synchronous egress until both tasks have completed.
+                worker_store = SQLiteStateStore(str(worker_db_path))
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    if (
+                        worker_proc.poll() is not None
+                        or handler_proc.poll() is not None
+                    ):
+                        break
+                    successful = {
+                        run.envelope_id
+                        for run in worker_store.list_runs()
+                        if run.result_status == "success"
+                    }
+                    if "reminder:rem_ci_split_smoke:1" in successful and any(
+                        envelope_id.startswith("cron:ci-split-smoke:")
+                        for envelope_id in successful
+                    ):
+                        break
+                    time.sleep(0.05)
+                if worker_proc.poll() is None:
+                    worker_proc.terminate()
+                worker_out, worker_err = worker_proc.communicate(timeout=15)
                 handler_proc.terminate()
                 handler_out, handler_err = handler_proc.communicate(timeout=15)
             finally:
@@ -317,9 +339,9 @@ class SplitModeE2ETests(unittest.TestCase):
                 (0, -signal.SIGTERM),
                 msg=f"message-handler exited unexpectedly\nstdout:\n{handler_out}\nstderr:\n{handler_err}",
             )
-            self.assertEqual(
+            self.assertIn(
                 worker_proc.returncode,
-                0,
+                (0, -signal.SIGTERM),
                 msg=f"worker exited non-zero\nstdout:\n{worker_out}\nstderr:\n{worker_err}",
             )
 
@@ -340,7 +362,7 @@ class SplitModeE2ETests(unittest.TestCase):
                     and run.result_status == "success"
                     for run in worker_runs
                 ),
-                msg="missing successful worker run for one-off reminder",
+                msg=f"missing successful worker run for one-off reminder\nstdout:\n{worker_out}\nstderr:\n{worker_err}",
             )
             expected_envelope_id = matching_worker_runs[0].envelope_id
             self.assertTrue(
