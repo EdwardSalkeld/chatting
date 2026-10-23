@@ -163,6 +163,12 @@ func (store *Store) Close() error {
 
 func (store *Store) initialize(ctx context.Context) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS github_webhook_watches (
+			watch_key TEXT PRIMARY KEY, state TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS github_webhook_workflows (
+			workflow_key TEXT PRIMARY KEY, state TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS idempotency_keys (
 			source TEXT NOT NULL,
 			dedupe_key TEXT NOT NULL,

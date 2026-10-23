@@ -22,8 +22,12 @@ const GitHubPath = "/webhooks/github"
 const MaxBodyBytes = 64 << 10
 const MaxLogBodyBytes = 4096
 
-func Handler(logger *log.Logger, githubSecret []byte) http.Handler {
+func Handler(logger *log.Logger, githubSecret []byte, filters ...*Filter) http.Handler {
 	mux := http.NewServeMux()
+	filter := &Filter{}
+	if len(filters) > 0 && filters[0] != nil {
+		filter = filters[0]
+	}
 	receive := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -82,7 +86,16 @@ func Handler(logger *log.Logger, githubSecret []byte) http.Handler {
 			fields["github_event"] = boundedHeader(r.Header.Get("X-GitHub-Event"))
 			fields["github_delivery"] = boundedHeader(r.Header.Get("X-GitHub-Delivery"))
 			fields["mode"] = "log_only"
-			fields["task_preview"] = GitHubTaskPreview(body, r.Header.Get("X-GitHub-Event"), r.Header.Get("X-GitHub-Delivery"), time.Now())
+			decision, err := filter.Evaluate(r.Context(), body, boundedHeader(r.Header.Get("X-GitHub-Event")), boundedHeader(r.Header.Get("X-GitHub-Delivery")))
+			if err != nil {
+				logger.Printf("github_webhook_state_error: %v", err)
+				http.Error(w, "could not evaluate webhook", http.StatusInternalServerError)
+				return
+			}
+			fields["filter"] = decision
+			if decision.Disposition == "keep" {
+				fields["task_preview"] = GitHubTaskPreview(body, r.Header.Get("X-GitHub-Event"), r.Header.Get("X-GitHub-Delivery"), time.Now())
+			}
 		}
 		record, _ := json.Marshal(fields)
 		logger.Print(string(record))
@@ -104,7 +117,7 @@ func boundedHeader(value string) string {
 }
 
 // StartServer binds only IPv4 loopback. Zero disables the optional listener.
-func StartServer(port int, githubSecret []byte) (*http.Server, error) {
+func StartServer(port int, githubSecret []byte, filters ...*Filter) (*http.Server, error) {
 	if port == 0 {
 		return nil, nil
 	}
@@ -113,7 +126,7 @@ func StartServer(port int, githubSecret []byte) (*http.Server, error) {
 		return nil, err
 	}
 	server := &http.Server{
-		Handler: Handler(log.Default(), githubSecret), ReadHeaderTimeout: 5 * time.Second,
+		Handler: Handler(log.Default(), githubSecret, filters...), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
 		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
 	}
