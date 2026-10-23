@@ -125,6 +125,45 @@ func TestSenderPrefersDisplayName(t *testing.T) {
 	}
 }
 
+func TestBodyTextUsesUsefulHTMLInsteadOfAnUnhelpfulTextAlternative(t *testing.T) {
+	cases := []struct {
+		name, plain, html, want string
+		encodingProblem         bool
+		wantHTML                bool
+	}{
+		{"browser placeholder", "Your email software can't display HTML emails. View the newsletter here: https://tracking.invalid/browser",
+			"<p>The Sleep Out raised £12,000 for local homelessness support.</p>",
+			"The Sleep Out raised £12,000 for local homelessness support.", false, true},
+		{"even a short offer beats a browser placeholder", "Your email software cannot display HTML emails. View this newsletter in a browser.",
+			`<img alt="50% off" src="https://tracking.invalid/banner">`, "50% off", false, true},
+		{"tracking link dump", strings.Repeat("https://tracking.invalid/"+strings.Repeat("a", 100)+"\n", 10) + "Update profile",
+			`<img alt="Family tickets: children visit free until 31 October" src="https://tracking.invalid/image">`,
+			"Family tickets: children visit free until 31 October", false, true},
+		{"degraded text", "badly decoded order text", "<p>Your order has shipped today.</p>",
+			"Your order has shipped today.", true, true},
+		{"substantially abridged text", "October newsletter",
+			"<p>October newsletter: the charity's sleep out raised £12,000 for local homelessness support. Donations will fund outreach, hot meals and emergency accommodation throughout winter.</p>",
+			"October newsletter: the charity's sleep out raised £12,000 for local homelessness support. Donations will fund outreach, hot meals and emergency accommodation throughout winter.", false, true},
+		{"useful text is preserved", "Free shipping over £25 until Sunday", "<p>Free shipping over £25 until Sunday</p>",
+			"Free shipping over £25 until Sunday", false, false},
+		{"empty HTML does not erase text", "Free shipping over £25 until Sunday", `<img src="https://tracking.invalid/pixel">`,
+			"Free shipping over £25 until Sunday", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			email := Email{TextBody: []BodyPart{{PartID: "text"}}, HTMLBody: []BodyPart{{PartID: "html"}},
+				BodyValues: map[string]BodyValue{
+					"text": {Value: tc.plain, IsEncodingProblem: tc.encodingProblem},
+					"html": {Value: tc.html, IsTruncated: true},
+				}}
+			body := email.BodyText()
+			if body.Text != tc.want || body.HTML != tc.wantHTML || body.Degraded || body.Truncated != tc.wantHTML {
+				t.Fatalf("got %+v, want text=%q HTML=%v", body, tc.want, tc.wantHTML)
+			}
+		})
+	}
+}
+
 func TestFileMovesAndMarksReadInOneSet(t *testing.T) {
 	var update map[string]any
 	client, _ := fixture(t, func(request *http.Request, body map[string]any, writer http.ResponseWriter) {

@@ -556,6 +556,29 @@ func TestDigestFreezesTheDayAndAsksForOneBatch(t *testing.T) {
 	}
 }
 
+func TestDigestReceivesRenderedHTMLFactsInsteadOfBrowserPlaceholder(t *testing.T) {
+	service, mailbox, broker, _ := fixture(t)
+	email := mailbox.emails["Stm4"]
+	email.BodyValues["1"] = jmap.BodyValue{Value: "Your email software can't display HTML emails. Click here to read the newsletter."}
+	email.HTMLBody = []jmap.BodyPart{{PartID: "2"}}
+	email.BodyValues["2"] = jmap.BodyValue{Value: `<div style="display:none">Preview</div>
+		<p>The Big Sleep Out raised £12,000.</p><img src="https://tracking.invalid/promo" alt="Free shipping over £25">`}
+	mailbox.emails["Stm4"] = email
+	classifyAsNews(t, service, broker)
+	if err := service.digest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items := digestTask(t, broker)["items"].([]map[string]any)
+	want := "The Big Sleep Out raised £12,000.\nFree shipping over £25"
+	if items[0]["body"] != want {
+		t.Fatalf("digest lacked the actual content: %+v", items[0])
+	}
+	message := oneMessage(t, service)
+	if !message.BodyHTML || message.Mail.Incomplete {
+		t.Fatalf("fallback was not recorded as usable HTML: %+v", message)
+	}
+}
+
 func TestSuspiciousNewsCannotReachTheDigestSummariser(t *testing.T) {
 	service, _, broker, _ := fixture(t)
 	ctx := context.Background()

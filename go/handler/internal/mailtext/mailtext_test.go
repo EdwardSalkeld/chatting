@@ -40,3 +40,31 @@ func TestLooksLikeHTMLSeparatesMarkupFromProse(t *testing.T) {
 		t.Fatal("prose with comparison operators treated as markup")
 	}
 }
+
+func TestImageOffersSurviveWithoutLoadingResources(t *testing.T) {
+	text := HTMLToText(`<div><a href="https://tracking.invalid/click"><img
+		src="https://tracking.invalid/banner.jpg" alt="Free shipping over £25 &amp; 15% off > £50"></a>
+		<p>22–25 October</p><img src="https://tracking.invalid/pixel.gif" alt=""></div>`)
+	if text != "Free shipping over £25 & 15% off > £50\n22–25 October" {
+		t.Fatalf("offer lost or tracking attributes leaked: %q", text)
+	}
+}
+
+func TestHiddenPreheadersAndPaddingDoNotConsumeTheExcerpt(t *testing.T) {
+	text := HTMLToText(`<div style="display: none !important">Preview only</div>
+		<div hidden><p>Hidden offer</p></div><span aria-hidden="true">Not for reading</span>
+		<p>News` + strings.Repeat("\u034f\u00ad\u200b", 1000) + `</p>
+		<table><tr><td>£25 off</td><td>Until Sunday</td></tr></table>`)
+	if text != "News\n£25 off\nUntil Sunday" {
+		t.Fatalf("hidden material or layout noise survived: %q", text)
+	}
+}
+
+func TestMalformedNewsletterHTMLStillRenders(t *testing.T) {
+	text := HTMLToText(`<p>First offer<p><b>Second &amp; final offer<img alt='£10 off' src=x>`)
+	for _, want := range []string{"First offer", "Second & final offer", "£10 off"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%q missing from %q", want, text)
+		}
+	}
+}
