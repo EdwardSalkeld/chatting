@@ -31,6 +31,7 @@ from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
 from app.worker.personal_inbox import collector_from_environment
+from app.worker.pr_registration import register_pr
 from app.worker.supervisor import SupervisorPool
 from app.worker.runtime import (
     build_coalesced_task_result,
@@ -345,7 +346,7 @@ def _process_claimed_task(
     executor: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
-    handler_egress_url: str | None,
+    handler_egress_url: str,
 ) -> None:
     task_message = inbox_task.task_message
     if inbox_task.state == "closing":
@@ -360,14 +361,12 @@ def _process_claimed_task(
             executor_impl=executor,
             max_attempts=max_attempts,
             activity_monitor=activity_monitor,
+            on_pr_created=_pr_registrar(handler_egress_url, task_message.task_id),
         )
+    # Supervisors only queue results: the manager alone drains the outbox, so
+    # sends never run concurrently and results survive the manager's absence.
     for egress_message in result.egress_messages:
-        _publish_egress_with_outbox(
-            store=store,
-            handler_egress_url=handler_egress_url,
-            egress_message=egress_message,
-            activity_monitor=activity_monitor,
-        )
+        store.queue_egress_outbox_event(egress_message)
     for followup in store.list_closing_inbox_followups(
         parent_task_id=task_message.task_id
     ):
@@ -378,12 +377,7 @@ def _process_claimed_task(
             parent_run_id=result.run_record.run_id,
         )
         for egress_message in coalesced_result.egress_messages:
-            _publish_egress_with_outbox(
-                store=store,
-                handler_egress_url=handler_egress_url,
-                egress_message=egress_message,
-                activity_monitor=activity_monitor,
-            )
+            store.queue_egress_outbox_event(egress_message)
         _log_worker_processed(
             task_id=followup.task_message.task_id, result=coalesced_result
         )
@@ -391,29 +385,24 @@ def _process_claimed_task(
     _log_worker_processed(task_id=task_message.task_id, result=result)
 
 
-def _publish_egress_with_outbox(
-    *,
-    store: SQLiteStateStore,
-    handler_egress_url: str | None,
-    egress_message: EgressQueueMessage,
-    activity_monitor: WorkerActivityMonitor,
-) -> None:
-    # Persist to the outbox first (write-ahead), then submit to the handler. If
-    # the submit fails transiently the event stays pending and is replayed on a
-    # later loop; the task is still acked, so we never re-run the executor just
-    # because a reply could not be delivered yet.
-    store.queue_egress_outbox_event(egress_message)
-    if handler_egress_url is None:
-        # Supervisors persist results even while the manager is absent. Only
-        # the manager drains these events, avoiding concurrent outbox sends.
-        return
-    _deliver_egress_event(
-        store=store,
-        handler_egress_url=handler_egress_url,
-        egress_message=egress_message,
-        activity_monitor=activity_monitor,
-        publish_source="worker",
-    )
+def _pr_registrar(handler_egress_url: str, task_id: str):
+    handler_url = handler_egress_url.rsplit("/", 1)[0]
+
+    def register(pr_url: str) -> None:
+        try:
+            register_pr(handler_url, task_id=task_id, pr_url=pr_url)
+        except OSError as exc:
+            # The PR still exists; only later notifications lose their route.
+            LOGGER.warning(
+                "pr_registration_failed task_id=%s pr_url=%s error=%s",
+                task_id,
+                pr_url,
+                exc,
+            )
+            return
+        LOGGER.info("pr_registered task_id=%s pr_url=%s", task_id, pr_url)
+
+    return register
 
 
 def _replay_egress_outbox(

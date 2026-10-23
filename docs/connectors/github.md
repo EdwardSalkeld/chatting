@@ -14,9 +14,16 @@ authenticated as the handler user.
 
 Both reply by GitHub comment on the issue or pull request.
 
-When an executor opens a pull request, it registers it against its task with
-`app.main_work_items register-pr`. GitHub events and GitHub notification emails
-that link to that pull request then route to the same work item.
+When an executor opens a pull request with `gh pr create`, the worker sees the
+command complete in the executor's event stream and registers the PR against
+the task's work item on the handler. PRs opened another way, or taken over, are
+registered with `python3 -P -m app.main_work_items register-pr <task_id>
+<pr_url>`, which reads its settings from the worker config in the environment.
+
+GitHub events and GitHub notification emails that link to a registered PR then
+route to the same work item. When that work item started in Telegram, the task
+replies to the original chat and joins its conversation, so an app-server
+executor resumes the same Codex thread.
 
 ## Config keys
 

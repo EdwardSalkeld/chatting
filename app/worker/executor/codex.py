@@ -605,6 +605,18 @@ def _task_payload(
                 "with endpoints, an example body, and correction notes."
             ),
         },
+        "pull_request_contract": {
+            "register_command": (
+                "python3 -P -m app.main_work_items register-pr "
+                f"task:{envelope.id} <pr_url>"
+            ),
+            "instructions": (
+                "A pull request opened with gh pr create is linked to this work "
+                "automatically, so its comments, reviews and notifications come back "
+                "here. If you open a PR any other way, or take over an existing one, "
+                "link it with register_command."
+            ),
+        },
     }
     if finish_session is not None:
         payload["termination_contract"] = finish_session.contract()

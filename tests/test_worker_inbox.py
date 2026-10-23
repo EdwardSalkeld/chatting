@@ -168,6 +168,35 @@ class WorkerInboxTests(unittest.TestCase):
             self.assertEqual(turns[-1].content, "A reply")
             self.assertEqual(turns[-1].event_id, "evt:reply:1")
 
+    def test_email_routed_to_a_chat_joins_that_chat_conversation(self) -> None:
+        # The handler routes a PR notification to the work item that opened the
+        # PR by giving it that item's Telegram reply channel. Sharing the
+        # conversation is what resumes the same persistent Codex thread.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            chat = _telegram_task(1, thread_id=7)
+            notification = TaskQueueMessage.from_envelope(
+                TaskEnvelope(
+                    id="email:50",
+                    source="email",
+                    received_at=datetime(2026, 8, 16, 11, 0, tzinfo=timezone.utc),
+                    actor="notifications@github.com",
+                    content="Subject: Re: [o/r] Fix it (PR #9)",
+                    attachments=[],
+                    context_refs=[],
+                    reply_channel=chat.envelope.reply_channel,
+                    dedupe_key="email:50",
+                ),
+                trace_id="trace:email:50",
+            )
+            store.stage_inbox_task(chat)
+            store.stage_inbox_task(notification)
+
+            chat_task = store.get_inbox_task(task_id=chat.task_id)
+            routed_task = store.get_inbox_task(task_id=notification.task_id)
+            assert chat_task is not None and routed_task is not None
+            self.assertEqual(routed_task.conversation_id, chat_task.conversation_id)
+
     def test_history_stays_within_chat_topic_and_excludes_current_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))

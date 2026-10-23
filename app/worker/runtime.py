@@ -7,7 +7,7 @@ import time
 from dataclasses import replace
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Callable, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage, build_task_egress
 from app.worker.executor import Executor, SupervisedReplyRecoveryExecutor, UsageReporter
@@ -23,6 +23,7 @@ from app.timefmt import format_utc
 from app.model_command import MODELS, parse_model_command
 from app.worker.model_router import choose_model
 from app.state import SQLiteStateStore
+from app.worker.pr_registration import created_pr_url
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
@@ -47,6 +48,7 @@ def process_task_message(
     executor_impl: Executor,
     max_attempts: int,
     activity_monitor: WorkerActivityMonitor,
+    on_pr_created: Callable[[str], None] | None = None,
 ) -> WorkerProcessResult:
     """Process one task message and persist run/audit records."""
     if max_attempts <= 0:
@@ -133,6 +135,7 @@ def process_task_message(
                 work_item_id=assignment.work_item_id if assignment else None,
                 model_tier=model_tier,
                 supervised=supervised,
+                on_pr_created=on_pr_created,
             )
             executor_launch_count += 1
             activity_monitor.record_executor_started(
@@ -161,6 +164,7 @@ def process_task_message(
                     work_item_id=assignment.work_item_id if assignment else None,
                     model_tier="high",
                     supervised=supervised,
+                    on_pr_created=on_pr_created,
                 )
                 context = envelope.prompt_context
                 sol_envelope = replace(
@@ -668,6 +672,7 @@ def _executor_chain(
     work_item_id: str | None,
     model_tier: str,
     supervised: bool,
+    on_pr_created: Callable[[str], None] | None,
 ) -> Executor:
     executor = executor_impl
     if work_item_id is not None:
@@ -677,14 +682,23 @@ def _executor_chain(
         executor = cast(Executor, model_selector(model_tier))
     output_callback_setter = getattr(executor, "with_output_callback", None)
     if callable(output_callback_setter):
-        executor = cast(
-            Executor,
-            output_callback_setter(
-                lambda stream, content: activity_monitor.record_executor_output(
-                    task_message=task_message, stream=stream, content=content
-                )
-            ),
-        )
+
+        # Exec output arrives in arbitrary chunks, so events are read by line.
+        pending_stdout = [""]
+
+        def on_output(stream: str, content: str) -> None:
+            activity_monitor.record_executor_output(
+                task_message=task_message, stream=stream, content=content
+            )
+            if on_pr_created is None or stream != "stdout":
+                return
+            *lines, pending_stdout[0] = (pending_stdout[0] + content).split("\n")
+            for line in lines:
+                pr_url = created_pr_url(line)
+                if pr_url is not None:
+                    on_pr_created(pr_url)
+
+        executor = cast(Executor, output_callback_setter(on_output))
     if supervised:
         executor = SupervisedReplyRecoveryExecutor(inner=executor, store=store)
     return executor
