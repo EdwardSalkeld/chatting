@@ -3,9 +3,9 @@
 from dataclasses import replace
 import hashlib
 import json
+import sqlite3
 
 import pytest
-import sqlite3
 
 from app.state import SQLiteStateStore
 from app.worker.executor.app_server import AppServerExecutor
