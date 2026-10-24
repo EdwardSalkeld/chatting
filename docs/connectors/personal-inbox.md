@@ -203,17 +203,14 @@ is accepted and then ignored. Two things stand in front of it:
    `CHATTING_*` variable removed. Output is constrained by `--output-schema`
    and re-validated by the handler.
 
-The read-only sandbox also blocks network egress. Measured on the deployment
-host as the worker user: an outbound request succeeds unsandboxed and fails to
-resolve inside `codex exec --sandbox read-only`. That is a property of the
-host's sandbox implementation and differs between platforms, so the screening
-above does not depend on it; re-measure if the host or the Codex version
-changes, by running a read-only `codex exec` that attempts an outbound request
-and comparing it against the same request outside the sandbox.
+Network restrictions of the read-only sandbox depend on the platform and Codex
+version, so the screening above does not depend on network isolation. Verify
+the sandbox's behavior on the target platform by comparing an outbound request
+inside a read-only `codex exec` with the same request outside the sandbox.
 
-`--ignore-user-config` also discards the deployment's `codex-config.toml`,
-including its model setting, so set `CHATTING_PERSONAL_SUMMARY_MODEL` to the
-model that file names rather than letting Codex fall back to its own default.
+`--ignore-user-config` also discards user configuration, including its model
+setting. Set `CHATTING_PERSONAL_SUMMARY_MODEL` explicitly to choose the summary
+model rather than letting Codex fall back to its own default.
 
 Routing is never Codex's to decide. Jev sets the category, the handler chooses
 the folder and destinations from its own configuration, and the handler
@@ -261,8 +258,8 @@ and only mail that needs acting on buys a summary.
 
 The `personal_inbox` object in the handler config enables the workflow. Its
 keys are defined in
-[`personalinbox/config.go`](../../go/handler/internal/personalinbox/config.go),
-and lab's `chatting-config.nix` shows the deployed values. Defaults are disabled, dry-run, no backfill and no folders. Folders in
+[`personalinbox/config.go`](../../go/handler/internal/personalinbox/config.go).
+Defaults are disabled, dry-run, no backfill and no folders. Folders in
 the `folders` map must exist before startup.
 
 The handler alone receives:

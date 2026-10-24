@@ -1,7 +1,7 @@
 # Agent Notes
 
 - Before starting a feature, update from current `main` / the branch tip so new work does not start from stale code.
-- The only deployment is defined in the `lab` repo (`nixos/hosts/magpie/chatting*.nix`). A config option or entry point that lab does not use is not in use anywhere. See [docs/operations.md](docs/operations.md).
+- This repo defines the Chatting app. Document runtime requirements, configuration and interfaces here; keep host configuration, rollout procedures and installed values in each deployment's repository. Do not infer app usage from one deployment.
 - Docs are indexed in [docs/README.md](docs/README.md).
 
 ## Commands

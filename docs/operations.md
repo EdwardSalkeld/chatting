@@ -1,58 +1,29 @@
 # Operations
 
-## Deployment
-
-The only deployment is the `magpie` host, defined in the `lab` repo:
-
-- `flake.nix` builds `chatting-handler` from `go/handler`, wraps
-  `python -m app.worker.main` as `chatting-worker`, and builds `bbmb-server`.
-- `nixos/hosts/magpie/chatting.nix` defines the systemd units.
-- `nixos/hosts/magpie/chatting-config.nix` renders `/etc/chatting/handler.json`
-  and `/etc/chatting/worker.json`. A config option that file does not set is
-  not in use anywhere.
-- `nixos/hosts/magpie/chatting-secrets.nix` renders the secret env files with
-  sops-nix. Config refers to secrets by env-var name (the `*_env` keys).
-
-After CI passes on `main`, `.github/workflows/open-lab-deploy-pr.yml` opens a
-lab PR that bumps the `chatting` flake input. Merging and switching that PR is
-the deploy.
-
-### Python runtime upgrades
+## Runtime requirements
 
 Local development and CI use Python 3.14.x (`.python-version` and
 `actions/setup-python`); `pyproject.toml` requires Python 3.14 or newer.
-The worker is interpreted Python, so CI installs the locked dependencies and
-tests it alongside the compiled Go handler.
+Install the worker dependencies declared in `pyproject.toml`; `uv.lock` pins
+the development and CI environment. The Go handler is compiled separately
+from `go/handler`. Run a compatible handler and worker together with a BBMB
+broker and configuration files supplied to each process.
 
-Lab selects its interpreter independently of these files. Bumping only the
-`chatting` flake input does not upgrade Python. To deploy on 3.14.x:
-
-- In lab's `flake.nix`, use
-  `chattingWorkerPython = pkgs.python314.withPackages (ps: [ ps.croniter ]);`.
-- In `nixos/hosts/magpie/chatting.nix`, select `pkgs.python314` in the worker
-  service's `path` as well, keeping executor helper commands on the same minor
-  version. Changing Magpie's `environment.systemPackages` entry is optional for
-  interactive shells.
-- Build `.#chatting-worker` and Magpie's system configuration, then deploy
-  through lab's usual switch process with the updated `chatting` input.
-
-Lab's locked nixpkgs already provides Python 3.14.7 and a working
-`python314.withPackages` environment with croniter (checked 2026-10-24); no
-nixpkgs update or custom Python build is needed. Nix controls the patch release
-and supplies dependencies; deployment does not run `uv sync`.
-
-The supervisor generation includes `sys.executable` and the environment. After
-the worker manager restarts, idle supervisors are replaced with the new runtime;
-busy supervisors finish their current task first. Allow them to drain and check
-the new worker/supervisor interpreters before declaring the upgrade complete.
+Keep the worker and executor helper commands on the intended Python runtime.
+Runtime changes replace idle supervisors; busy supervisors finish their
+current task before replacement. Verify the worker and supervisor runtimes
+after they drain.
 
 ## Services
 
-| Unit | Process | Listens on |
+| Process | Start command | Default listeners |
 | --- | --- | --- |
-| `chatting-bbmb` | `bbmb-server` | `:9876` (broker), `:9877` (metrics) |
-| `chatting-handler` | `chatting-handler --config /etc/chatting/handler.json` | `9464` metrics/admin, `127.0.0.1:9467` egress |
-| `chatting-worker` | `chatting-worker --config /etc/chatting/worker.json` | `9465` activity UI |
+| Broker | `bbmb-server` (provided separately) | Configured in the broker; match the app's `bbmb_address` |
+| Handler | `chatting-handler --config /path/to/handler.json` | `127.0.0.1:9464` metrics/admin, `127.0.0.1:9467` egress, `127.0.0.1:9468` webhook |
+| Worker | `python -m app.worker.main --config /path/to/worker.json` | `9465` activity UI |
+
+Listener addresses and ports are configurable. Keep control and UI endpoints
+private; expose only the intended webhook paths through an ingress proxy.
 
 The handler's metrics/admin listener serves `/metrics`, the `/schedules`,
 `/reminders` and `/personal-inbox` pages, and the `/api/schedules` and
@@ -67,8 +38,7 @@ through `/api/tasks/<task_id>/events`; raw activity JSON is at
 The handler owns every integration secret and is the only process that sends
 anything externally. The worker reads no integration secrets. `gh` must be
 authenticated as the handler user for GitHub polling and issue comments, and
-Codex must be logged in as the worker user (`scripts/magpie-codex-reauth.sh`
-in lab).
+Codex must be logged in as the worker user.
 
 ## Worker
 
@@ -130,15 +100,15 @@ slots.
 
 ## Inspecting state
 
-The handler and worker databases have no built-in retention. Lab's
-`chatting-prune.nix` deletes rows older than 30 days from both each week; the
-personal inbox database and cache are not pruned.
+The handler and worker databases have no built-in retention. Choose retention
+and backup policies for each installation, including the personal inbox
+database and cache.
 
 Run records, audit events and dead letters live in the worker database:
 
 ```sh
-sqlite3 /var/lib/worker/chatting-worker.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
-sqlite3 /var/lib/worker/chatting-worker.db "select dead_letter_id, status, created_at from dead_letters where status = 'pending' order by created_at desc;"
+sqlite3 /path/to/worker.db "select run_id, result_status, created_at from run_records order by created_at desc limit 20;"
+sqlite3 /path/to/worker.db "select dead_letter_id, status, created_at from dead_letters where status = 'pending' order by created_at desc;"
 ```
 
 Useful worker log lines: `worker_processed` (per-task outcome, including
