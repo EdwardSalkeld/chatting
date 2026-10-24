@@ -17,6 +17,35 @@ After CI passes on `main`, `.github/workflows/open-lab-deploy-pr.yml` opens a
 lab PR that bumps the `chatting` flake input. Merging and switching that PR is
 the deploy.
 
+### Python runtime upgrades
+
+Local development and CI use Python 3.14.x (`.python-version` and
+`actions/setup-python`); `pyproject.toml` requires Python 3.14 or newer.
+The worker is interpreted Python, so CI installs the locked dependencies and
+tests it alongside the compiled Go handler.
+
+Lab selects its interpreter independently of these files. Bumping only the
+`chatting` flake input does not upgrade Python. To deploy on 3.14.x:
+
+- In lab's `flake.nix`, use
+  `chattingWorkerPython = pkgs.python314.withPackages (ps: [ ps.croniter ]);`.
+- In `nixos/hosts/magpie/chatting.nix`, select `pkgs.python314` in the worker
+  service's `path` as well, keeping executor helper commands on the same minor
+  version. Changing Magpie's `environment.systemPackages` entry is optional for
+  interactive shells.
+- Build `.#chatting-worker` and Magpie's system configuration, then deploy
+  through lab's usual switch process with the updated `chatting` input.
+
+Lab's locked nixpkgs already provides Python 3.14.7 and a working
+`python314.withPackages` environment with croniter (checked 2026-10-24); no
+nixpkgs update or custom Python build is needed. Nix controls the patch release
+and supplies dependencies; deployment does not run `uv sync`.
+
+The supervisor generation includes `sys.executable` and the environment. After
+the worker manager restarts, idle supervisors are replaced with the new runtime;
+busy supervisors finish their current task first. Allow them to drain and check
+the new worker/supervisor interpreters before declaring the upgrade complete.
+
 ## Services
 
 | Unit | Process | Listens on |
