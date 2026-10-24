@@ -208,6 +208,9 @@ class SplitModeE2ETests(unittest.TestCase):
                         "metrics_port": handler_metrics_port,
                         "allowed_egress_channels": ["log"],
                         "egress_http_port": egress_http_port,
+                        # This roundtrip does not use webhook ingress. Avoid
+                        # competing with other handlers for its default port.
+                        "webhook_http_port": 0,
                     }
                 ),
                 encoding="utf-8",
