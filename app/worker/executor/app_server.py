@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import socket
@@ -17,6 +18,8 @@ from typing import Callable, cast
 
 from app.models import ExecutionResult, TaskEnvelope
 from app.worker.executor.codex import CodexExecutor, _executor_env, _task_payload
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _write_migration_file(path: Path, content: bytes) -> None:
@@ -31,6 +34,16 @@ def _write_migration_file(path: Path, content: bytes) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _has_unfinished_request(session: Path) -> bool:
+    for journal in session.glob("request-*.json"):
+        try:
+            if "result" not in json.loads(journal.read_text()):
+                return True
+        except (OSError, ValueError):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -178,6 +191,9 @@ class AppServerExecutor(CodexExecutor):
     def _migrate_session(self, directory: Path) -> None:
         if not self.work_item_id or not self.history_store or not self.session_root:
             return
+        # Once the item has its own thread, old sessions are history.
+        if (directory / "thread.json").exists():
+            return
         candidates = [
             Path(self.session_root) / hashlib.sha256(legacy.encode()).hexdigest()[:24]
             for legacy in self.history_store.legacy_work_sessions(
@@ -194,9 +210,20 @@ class AppServerExecutor(CodexExecutor):
         if not candidates:
             return
         if len(candidates) > 1:
-            raise ValueError(
-                "multiple legacy app-server threads for this work item; reconcile before resuming"
+            # Adopting one thread would hide the others' context, so none is
+            # adopted. A fresh thread is safe unless an old request may have
+            # run without a recorded outcome: retrying it could repeat effects.
+            if any(_has_unfinished_request(old) for old in candidates):
+                raise ValueError(
+                    "legacy app-server sessions for this work item have unfinished "
+                    "requests; reconcile before resuming"
+                )
+            LOGGER.warning(
+                "app_server_ambiguous_legacy_sessions work_item_id=%s count=%s",
+                self.work_item_id,
+                len(candidates),
             )
+            return
         old = candidates[0]
         if old.is_symlink() or old.stat().st_mode & 0o077:
             raise ValueError("legacy app-server session directory must be private")

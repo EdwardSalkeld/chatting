@@ -3,8 +3,9 @@
 from dataclasses import replace
 import hashlib
 import json
-import sqlite3
+
 import pytest
+import sqlite3
 
 from app.state import SQLiteStateStore
 from app.worker.executor.app_server import AppServerExecutor
@@ -94,7 +95,7 @@ def test_upgrade_preserves_settings_and_old_thread_and_journals(tmp_path):
     executor._migrate_session(new)
     assert json.loads((new / "thread.json").read_text())["thread_id"] == "newer-thread"
     # Historical General items could contain several conversation threads.
-    # Keep all associations and stop rather than silently picking one.
+    # Neither is chosen: the item keeps its own thread, or starts a new one.
     other_legacy = "conv_competing"
     other = root / hashlib.sha256(other_legacy.encode()).hexdigest()[:24]
     other.mkdir(mode=0o700)
@@ -104,5 +105,12 @@ def test_upgrade_preserves_settings_and_old_thread_and_journals(tmp_path):
             "INSERT INTO work_item_session_aliases VALUES (?, ?)",
             (task.work_item_id, other_legacy),
         )
-    with pytest.raises(ValueError, match="multiple legacy"):
+    executor._migrate_session(new)
+    assert json.loads((new / "thread.json").read_text())["thread_id"] == "newer-thread"
+    (new / "thread.json").unlink()
+    # The first old session still holds a request with no recorded outcome.
+    with pytest.raises(ValueError, match="unfinished"):
         executor._migrate_session(new)
+    (old / "request-abc.json").write_text('{"result":{"errors":[]}}')
+    executor._migrate_session(new)
+    assert not (new / "thread.json").exists()
