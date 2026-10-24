@@ -47,9 +47,11 @@ marker prevents two items from adopting the same old thread; ambiguous legacy
 ownership fails visibly for operator reconciliation.
 All historical conversation associations are retained in
 `work_item_session_aliases`. If an old broad item (for example General) has more
-than one saved app-server thread or request journal, migration stops instead of
-selecting one and hiding the others. Reconcile those associations before resuming
-that item; the original directories remain intact.
+than one saved app-server thread, none is adopted: the item starts a fresh thread
+and the original directories remain intact. If any of them holds a request with
+no recorded outcome, migration stops instead, because a fresh thread could repeat
+that request's effects. Reconcile those before resuming the item. Once an item has
+its own thread, old sessions are never consulted again.
 
 The existing supervisors and inbox still own tasks and delivery. An opted-in
 item runs one task at a time. Each turn

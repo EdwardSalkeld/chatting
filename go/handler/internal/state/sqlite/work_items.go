@@ -16,7 +16,7 @@ import (
 func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
 	decision := store.router.Decide(task)
 	if decision.Kind == "github_unresolved" {
-		return task, fmt.Errorf("github ownership needs_context")
+		return task, contracts.ErrGitHubNeedsContext
 	}
 	if len(decision.PRKeys) == 0 && store.resolveRuns != nil {
 		for _, run := range decision.RunRefs {
@@ -49,7 +49,10 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 	reason := decision.Reason
 	if decision.Kind == "github_repository" {
 		if err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = 'github_repository' AND artifact_key = ?`, decision.Key).Scan(&itemID); err != nil {
-			return task, fmt.Errorf("github repository ownership needs_context: %w", err)
+			if err == sql.ErrNoRows {
+				return task, fmt.Errorf("%w: unregistered repository", contracts.ErrGitHubNeedsContext)
+			}
+			return task, err
 		}
 	}
 	if len(decision.PRKeys) > 0 {
@@ -69,7 +72,7 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 			}
 			reason = "github_pr"
 		} else if len(owners) > 1 && task.Envelope.Source == "webhook" {
-			return task, fmt.Errorf("github ownership needs_context: conflicting owners")
+			return task, fmt.Errorf("%w: conflicting owners", contracts.ErrGitHubNeedsContext)
 		}
 	}
 	if itemID == "" {
@@ -176,7 +179,12 @@ func (store *Store) applyPreferredReply(ctx context.Context, task contracts.Task
 		if err := json.Unmarshal([]byte(encoded), &reply); err != nil {
 			return task, err
 		}
-		task.Envelope.ReplyChannel = reply
+		// Only a conversation or a GitHub thread is somewhere to answer. A
+		// work item first created by a log, email or heartbeat keeps the
+		// event's own channel.
+		if reply.Type == "telegram" || reply.Type == "github" {
+			task.Envelope.ReplyChannel = reply
+		}
 	}
 	return task, nil
 }

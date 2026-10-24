@@ -62,8 +62,9 @@ Examples:
 
 `message-handler` then:
 - skips the envelope if `(source, dedupe_key)` has already been seen
-- assigns the task to a work item (one per Telegram chat and topic, a registered pull request's
-  work item for GitHub events, otherwise a general work item)
+- assigns the task to a work item: a registered pull request's work item for GitHub events,
+  otherwise one per Telegram chat and topic for anything that replies there (messages,
+  reminders, schedules), otherwise one per reply route (sender, schedule log, GitHub issue)
 - wraps the envelope in a `TaskQueueMessage`
 - publishes that task message to `chatting.tasks.v1`
 - records the task in the message-handler ledger so future egress can be matched back to a known
