@@ -1,6 +1,6 @@
 # Documentation
 
-- [Operations](operations.md): the deployment, its services and the worker's supervisors
+- [Operations](operations.md): runtime requirements, process interfaces and the worker's supervisors
 - [Message flow](bbmb-message-flow.md): how tasks and replies move between handler and worker
 - [Testing](testing.md)
 - [Connectors](connectors/README.md)

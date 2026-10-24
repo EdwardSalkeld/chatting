@@ -231,7 +231,7 @@ handler path.
 
 ## Config That Changes The Flow
 
-The deployed values are in lab's `nixos/hosts/magpie/chatting-config.nix`.
+Set these values in the handler and worker configuration files for each installation.
 
 ### Shared
 

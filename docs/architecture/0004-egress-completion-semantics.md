@@ -14,8 +14,8 @@ That coupling made it awkward to send the real answer before run end without als
 synthetic closing reply. It also made out-of-band worker/operator replies feel secondary even when
 they were the messages the user actually saw.
 
-The deployment is private and single-owner. We control both `worker` and `message-handler`, so we
-can change this protocol coherently without carrying a long mixed-version compatibility burden.
+The app owns both `worker` and `message-handler`. They must use compatible protocol versions;
+the protocol change does not provide mixed-version compatibility.
 
 ## Decision
 
