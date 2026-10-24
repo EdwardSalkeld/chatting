@@ -12,6 +12,7 @@ import unittest
 from email.message import EmailMessage
 from pathlib import Path
 
+from tests.e2e.exec_backend import use_exec_backend
 from tests.e2e.handler_command import message_handler_command
 
 
@@ -87,6 +88,7 @@ class EmailE2ETests(unittest.TestCase):
             temp_root = Path(tmpdir)
             handler_db = temp_root / "handler.db"
             worker_db = temp_root / "worker.db"
+            use_exec_backend(worker_db)
             prompt_dir = temp_root / "prompts"
             prompt_dir.mkdir()
 

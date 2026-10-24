@@ -118,7 +118,8 @@ them or replay events previously received in logging-only mode.
 
 The worker uses the work-item ID as its conversation/session ID and workspace
 key. See [session migration](conversation-executor.md). New dedicated GitHub
-items start on app-server; existing items keep their chosen backend. Each item
+items, like all new handler-assigned work items, start on app-server; existing
+items keep their chosen backend. Each item
 queues events behind its active task. Webhook turns may complete silently when
 the worker finds nothing to do. Semantic interpretation, review/comment grouping
 and deciding whether to act belong to the worker. The handler does not infer

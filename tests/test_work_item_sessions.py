@@ -37,22 +37,48 @@ def test_transport_cannot_override_item_session(tmp_path):
     ]
 
 
-def test_new_github_item_uses_app_server_without_changing_existing_item(tmp_path):
-    store = SQLiteStateStore(str(tmp_path / "state.db"))
+@pytest.mark.parametrize(
+    "source", ["im", "webhook", "email", "cron", "reminder", "internal"]
+)
+@pytest.mark.parametrize("existing_backend", [None, "exec", "app-server"])
+def test_new_items_use_app_server_without_changing_existing_items(
+    tmp_path, source, existing_backend
+):
+    path = tmp_path / "state.db"
+    store = SQLiteStateStore(str(path))
     first = _telegram_task(1)
     store.stage_inbox_task(first)
-    event = replace(_telegram_task(2), work_item_id="item_github")
-    event = replace(event, envelope=replace(event.envelope, source="webhook"))
+    # Simulate an item created before app-server became the default.
+    with sqlite3.connect(path) as db:
+        db.execute("DELETE FROM conversation_executors")
+        if existing_backend:
+            db.execute(
+                "INSERT INTO conversation_executors VALUES (?, ?)",
+                (first.work_item_id, existing_backend),
+            )
+    store = SQLiteStateStore(str(path))
+    event = replace(_telegram_task(2), work_item_id="item_new")
+    event = replace(event, envelope=replace(event.envelope, source=source))
     store.stage_inbox_task(event)
-    assert (
-        store.get_conversation_executor(conversation_id="item_github") == "app-server"
+    assert store.get_conversation_executor(conversation_id="item_new") == "app-server"
+    assert store.get_conversation_executor(conversation_id=first.work_item_id) == (
+        existing_backend or "exec"
     )
-    assert store.get_conversation_executor(conversation_id=first.work_item_id) == "exec"
     returning = replace(
         event, task_id="task:returning", work_item_id=first.work_item_id
     )
     store.stage_inbox_task(returning)
-    assert store.get_conversation_executor(conversation_id=first.work_item_id) == "exec"
+    assert store.get_conversation_executor(conversation_id=first.work_item_id) == (
+        existing_backend or "exec"
+    )
+
+
+def test_legacy_unassigned_messages_keep_exec_default(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    task = replace(_telegram_task(1), work_item_id=None)
+    store.stage_inbox_task(task)
+    conversation = store.get_inbox_task(task_id=task.task_id).conversation_id
+    assert store.get_conversation_executor(conversation_id=conversation) == "exec"
 
 
 def test_upgrade_preserves_settings_and_old_thread_and_journals(tmp_path):
@@ -63,6 +89,7 @@ def test_upgrade_preserves_settings_and_old_thread_and_journals(tmp_path):
     legacy = "conv_before_upgrade"
     with sqlite3.connect(path) as db:
         db.execute("DELETE FROM worker_schema_migrations")
+        db.execute("DELETE FROM conversation_executors")
         db.execute("UPDATE work_items SET origin_conversation_id = ?", (legacy,))
         db.execute("UPDATE worker_inbox SET conversation_id = ?", (legacy,))
         db.execute("UPDATE work_item_events SET conversation_id = ?", (legacy,))

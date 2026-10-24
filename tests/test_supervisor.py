@@ -16,6 +16,7 @@ import unittest
 from app.state import SQLiteStateStore
 from app.worker.supervisor import SupervisorError, SupervisorPool, request
 from tests.e2e.test_parallel_worker_e2e import _task
+from tests.e2e.exec_backend import use_exec_backend
 from tests.test_worker_inbox import _telegram_task
 
 
@@ -25,6 +26,7 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.store = SQLiteStateStore(str(self.root / "worker.db"))
+        use_exec_backend(self.root / "worker.db")
         self.events = self.root / "events.jsonl"
         fake = Path(__file__).parent / "e2e/parallel_fake_codex.py"
         self.settings = {
@@ -55,7 +57,7 @@ class SupervisorTests(unittest.TestCase):
                 if child.poll() is None:
                     try:
                         os.killpg(child.pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
+                    except ProcessLookupError, PermissionError:
                         # macOS can report EPERM when a clean shutdown races
                         # killpg. wait() below still fails if it remains alive.
                         pass

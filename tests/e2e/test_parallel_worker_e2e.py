@@ -16,6 +16,7 @@ from app.broker import BBMBQueueAdapter, TASK_QUEUE_NAME, TaskQueueMessage
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.worker.supervisor import request
+from tests.e2e.exec_backend import use_exec_backend
 
 
 def _free_port() -> int:
@@ -71,6 +72,7 @@ class ParallelWorkerE2ETests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db = root / "worker.db"
+            use_exec_backend(db)
             events = root / "events.jsonl"
             config = root / "worker.json"
             config.write_text(
