@@ -264,7 +264,7 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertIn("uncertain_request", result.errors[0])
         self.assertIsNone(session.server)
 
-    def test_setting_is_work_item_scoped_persistent_and_default_is_legacy(self):
+    def test_setting_is_work_item_scoped_persistent_and_default_is_app_server(self):
         first = _telegram_task(1)
         same_chat_other_item = replace(_telegram_task(2), work_item_id="item_another")
         other = _telegram_task(3, thread_id=99)
@@ -272,15 +272,16 @@ class AppServerExecutorTests(unittest.TestCase):
             self.store.stage_inbox_task(task)
         conversation = self.store.get_inbox_task(task_id=first.task_id).conversation_id
         self.assertEqual(
-            self.store.get_conversation_executor(conversation_id=conversation), "exec"
+            self.store.get_conversation_executor(conversation_id=conversation),
+            "app-server",
         )
         self.store.set_conversation_executor(
-            conversation_id=conversation, backend="app-server"
+            conversation_id=conversation, backend="exec"
         )
         reopened = SQLiteStateStore(str(self.root / "worker.db"))
         self.assertEqual(
             reopened.get_conversation_executor(conversation_id=conversation),
-            "app-server",
+            "exec",
         )
         self.assertNotEqual(
             self.store.get_inbox_task(
@@ -290,7 +291,7 @@ class AppServerExecutorTests(unittest.TestCase):
         )
         other_id = self.store.get_inbox_task(task_id=other.task_id).conversation_id
         self.assertEqual(
-            reopened.get_conversation_executor(conversation_id=other_id), "exec"
+            reopened.get_conversation_executor(conversation_id=other_id), "app-server"
         )
         claimed = self.store.claim_next_inbox_task()
         self.assertEqual(claimed.task_message.task_id, first.task_id)
@@ -350,6 +351,14 @@ class AppServerExecutorTests(unittest.TestCase):
         conversation = self.store.get_inbox_task(task_id=task.task_id).conversation_id
         selector = ConversationExecutor(
             legacy=CodexExecutor(), persistent=self.executor, store=self.store
+        )
+        with patch.object(
+            AppServerExecutor, "execute", return_value=ExecutionResult(errors=[])
+        ) as persistent:
+            selector.execute(task.envelope)
+            persistent.assert_called_once()
+        self.store.set_conversation_executor(
+            conversation_id=conversation, backend="exec"
         )
         with patch.object(
             CodexExecutor, "execute", return_value=ExecutionResult(errors=[])

@@ -77,7 +77,10 @@ def assign(
             created_at,
         ),
     )
-    if created.rowcount and task.envelope.source == "webhook" and task.work_item_id:
+    # Set the default only at creation; existing items without a setting keep
+    # using exec until explicitly switched. Legacy unassigned messages also
+    # retain their existing routing and backend.
+    if created.rowcount and task.work_item_id:
         connection.execute(
             "INSERT OR IGNORE INTO conversation_executors VALUES (?, 'app-server')",
             (item_id,),

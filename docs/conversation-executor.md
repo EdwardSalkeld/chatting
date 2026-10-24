@@ -1,15 +1,17 @@
 # Persistent conversation executor
 
-The default executor remains `codex exec`. Opt an individual conversation into
-the separate Codex app-server executor with `/executor app-server`. `/executor`
-reports its setting and `/executor exec` switches it back. Commands in Telegram
+New work items default to the Codex app-server executor. `/executor`
+reports the current setting; `/executor exec` selects `codex exec` and
+`/executor app-server` selects app-server. Commands in Telegram
 forum topics affect that topic, not every topic in the group. The selection is
 stored against the work-item ID. One item has one channel, workspace and current
 app-server session. The inbox's `conversation_id` is that same item ID for
 handler-assigned tasks; transport addresses do not select another session.
 Old broker messages without a handler assignment retain their legacy routes.
-New GitHub-only items use app-server automatically. Existing items retain their
-executor choice, including an explicit choice of `exec`.
+Existing items retain their executor choice, including an explicit choice of
+`exec`. Items created before this default changed with no saved setting continue
+using `exec` until explicitly switched. Legacy broker messages without a handler
+assignment also continue using `exec` by default.
 
 Operators can also select it using an existing task from the conversation:
 
@@ -53,7 +55,7 @@ no recorded outcome, migration stops instead, because a fresh thread could repea
 that request's effects. Reconcile those before resuming the item. Once an item has
 its own thread, old sessions are never consulted again.
 
-The existing supervisors and inbox still own tasks and delivery. An opted-in
+The existing supervisors and inbox still own tasks and delivery. An app-server
 item runs one task at a time. Each turn
 receives the current task ID, reply channel and workspace; its `cwd` and model are
 set explicitly. Only a new thread receives the recent-history bootstrap. Follow-up

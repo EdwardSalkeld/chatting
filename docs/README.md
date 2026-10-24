@@ -7,7 +7,7 @@
 - [Schedules](schedules.md) and [one-off reminders](reminders.md)
 - [Explicit executor termination](explicit-finish.md)
 - [Work item model selection](model-selection.md)
-- [Persistent conversation executor](conversation-executor.md): opt individual conversations into Codex app-server
+- [Persistent conversation executor](conversation-executor.md): Codex app-server defaults and per-item executor selection
 - [GitHub webhook ingress](webhook-ingress.md): filtering, subject ownership and optional event delivery
 
 ## Architecture decisions

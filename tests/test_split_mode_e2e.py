@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.state import SQLiteStateStore
+from tests.e2e.exec_backend import use_exec_backend
 from tests.e2e.handler_command import message_handler_command
 
 
@@ -196,6 +197,7 @@ class SplitModeE2ETests(unittest.TestCase):
             temp_root = Path(tmpdir)
             handler_db_path = temp_root / "handler.db"
             worker_db_path = temp_root / "worker.db"
+            use_exec_backend(worker_db_path)
             handler_config_path = temp_root / "message-handler.json"
             worker_config_path = temp_root / "worker.json"
 
