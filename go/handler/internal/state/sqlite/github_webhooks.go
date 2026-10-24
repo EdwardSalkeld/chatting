@@ -6,7 +6,7 @@ import (
 	"errors"
 )
 
-// WebhookState is separate from task/work-item state: this receiver only logs.
+// WebhookState stores watches and CI outcomes independently of subject ownership.
 func (store *Store) WebhookState(ctx context.Context, kind, key string) (string, error) {
 	table, err := webhookTable(kind)
 	if err != nil {

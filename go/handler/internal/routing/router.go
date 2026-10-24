@@ -39,6 +39,28 @@ func NormalizePR(value string) (string, error) {
 	return prKey(value, false)
 }
 
+// Issues and PRs share GitHub's repository number namespace.
+func NormalizeSubject(value string) (string, error) {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(parsed.Path, "/")
+	if len(parts) >= 4 && parts[3] == "issues" {
+		parts[3] = "pull"
+		parsed.Path = strings.Join(parts, "/")
+	}
+	return prKey(parsed.String(), false)
+}
+
+func NormalizeRepository(value string) (string, error) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 || !validPRName(parts[0]) || !validPRName(parts[1]) {
+		return "", fmt.Errorf("invalid GitHub repository")
+	}
+	return strings.ToLower(value), nil
+}
+
 func prKey(value string, allowPathSuffix bool) (string, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
@@ -84,6 +106,22 @@ func validPRNumber(value string) bool {
 func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 	envelope := task.Envelope
 	reply := envelope.ReplyChannel
+	if envelope.Source == "webhook" {
+		if repo, ok := reply.Metadata["github_repository"].(string); ok {
+			key, err := NormalizeRepository(repo)
+			if err == nil {
+				return Decision{Kind: "github_repository", Key: key, Reason: "github_repository"}
+			}
+		}
+		if subject, ok := reply.Metadata["github_subject"].(string); ok {
+			key, err := NormalizeSubject(subject)
+			if err == nil {
+				return Decision{Kind: "github_subject", Key: key, Reason: "github_subject", PRKeys: []string{key}}
+			}
+		}
+		// Missing or ambiguous ownership must never fall into General.
+		return Decision{Kind: "github_unresolved", Reason: "needs_context"}
+	}
 	if envelope.Source == "im" && reply.Type == "telegram" {
 		var topic any
 		if reply.Metadata != nil {

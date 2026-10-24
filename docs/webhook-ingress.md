@@ -37,7 +37,8 @@ The key comes from the environment variable named by `github_webhook_secret_env`
 (default `CHATTING_GITHUB_WEBHOOK_SECRET`). Supply that variable in the
 handler process environment. Missing configuration returns 503; missing or
 invalid signatures return 401 without logging the payload. Signed invalid JSON
-returns 400. No requests on this endpoint create tasks or call the GitHub API.
+returns 400. By default this endpoint only logs and records ownership; delivery
+requires `github_webhook_delivery_enabled: true`. It makes no GitHub API calls.
 
 Accepted requests log `github_webhook_received`, the server request ID, up to
 4096 bytes of JSON-escaped body, and bounded GitHub event and delivery headers.
@@ -46,11 +47,14 @@ Signatures and other headers are not logged. All receipts, including drops and
 retries, are logged with a `filter` decision (`keep`, `drop`, `needs_context`)
 and a reason.
 
-Each accepted GitHub receipt includes `mode: log_only`; **only keeps** include a structured
+With delivery disabled, each accepted GitHub receipt includes `mode: log_only`; **only keeps** include a structured
 `task_preview` using the existing `chatting.task.v1` BBMB ingress contract
 (`TaskQueueMessage`, with a `TaskEnvelope`). This is a preview only: the public
-receiver has no broker dependency, does not write the task ledger or assign work items, and
-never queues or executes tasks. Deploying this change keeps logging only.
+receiver has no broker dependency. Keeps also include a compact
+`notification_preview`, assigned to the owning work item when ownership resolves.
+Assignment may create an item/subject association, but logging-only mode never
+writes the task ledger, queues a task or launches a worker. Deploying this change
+keeps logging only because the delivery switch defaults to false.
 
 The adapter is event- and repository-independent, so additional subscriptions
 and installations need no adapter changes. It records the event, action,
@@ -65,9 +69,65 @@ redeliveries retain those identities but are logged again without a second previ
 missing, identity falls back to a hash of event type and body. Header-derived
 identities are correlation hints, not authenticated identities. Replies default
 to the existing `log` channel rather than assuming an issue comment destination.
-Before enabling real ingress, implement reply routing, payload completeness,
-transactional delivery/outbox handling, work item assignment, and burst/review
-coalescing with the existing polling connector. No jobs are currently emitted.
+Live notifications use an event/body hash for task and envelope identity;
+delivery headers remain correlation metadata. They contain only the event,
+action, repository/subject and specific comment/review/thread/run/release IDs,
+plus run attempt and commit when available. They do not include a payload body or
+context bundle. The worker resumes its item session and fetches the details.
+
+## Ownership and optional delivery
+
+Ownership reuses #314's `work_item_artifacts` registry. A registered PR's events
+return to its originating item and preferred reply channel. An unowned watched
+issue/PR gets one dedicated item whose channel is that GitHub subject. Later
+events reuse it, including after restart. Several related subjects can share an
+item through explicit registration; conflicts are rejected, not reassigned.
+
+The worker automatically registers PRs opened through `gh pr create`. Register
+other related subjects against a task already owned by the desired item:
+
+```sh
+python3 -P -m app.main_work_items register-subject task:telegram:123 https://github.com/owner/repo/issues/45
+python3 -P -m app.main_work_items register-pr task:telegram:123 https://github.com/owner/repo/pull/46
+python3 -P -m app.main_work_items register-repository task:telegram:123 owner/repo
+```
+
+These call `/work-items/register-subject` (`task_id`, `subject_url`),
+`/work-items/register-pr` (`task_id`, `pr_url`) and
+`/work-items/register-repository` (`task_id`, `repository`) on the handler's
+existing loopback API. Issues and PRs share GitHub's repository/number namespace.
+The historical artifact kind `github_pr` stores either kind of numbered subject;
+repository destinations use `github_repository`.
+
+Releases require both the repository filter opt-in and a registered repository
+destination. Missing destinations, event IDs or ambiguous workflow subjects are
+`needs_context`, never General. Their full bounded event is retained in
+`github_webhook_held` with a reason. There is no automatic enrichment or held-event
+replay in this version: inspect the row, supply the missing registration/context
+and redeliver the event through GitHub. A successful redelivery clears the held
+record. Workflows linked to several PRs are held rather than guessing an owner.
+
+With `github_webhook_delivery_enabled: true`, filtering/watch/CI/dedupe state and
+the compact pending notification commit in one SQLite transaction. A failure
+rolls everything back so redelivery is safe. `github_webhook_pending` survives
+restart; the ordinary ingress loop assigns the item, records the ledger and
+publishes to `chatting.tasks.v1`, acknowledging the pending row after publication.
+Broker retries retain task identity and worker inbox dedupe prevents a second
+execution. Turning delivery off pauses pending notifications; it does not delete
+them or replay events previously received in logging-only mode.
+
+The worker uses the work-item ID as its conversation/session ID and workspace
+key. See [session migration](conversation-executor.md). New dedicated GitHub
+items start on app-server; existing items keep their chosen backend. Each item
+queues events behind its active task. Webhook turns may complete silently when
+the worker finds nothing to do. Semantic interpretation, review/comment grouping
+and deciding whether to act belong to the worker. The handler does not infer
+relationships from issue text or summarize reviews.
+
+The deployed configuration lives in Lab's
+`nixos/hosts/magpie/chatting-config.nix`; this PR does not enable delivery there.
+Before enabling it, turn off the older GitHub assignment/review polling inputs
+for the same repositories to avoid receiving the same feedback from two sources.
 
 ## Tag-to-watch filtering
 
@@ -127,8 +187,8 @@ waits and canceled-run waits have no state source yet and are not inferred.
 Delivery IDs and event/body hashes suppress repeated previews using the existing
 SQLite idempotency table. Changing a delivery header does not defeat body-hash
 deduplication. Missing-context events remain retryable. These records and watches
-are single-process filtering state, not a transactional task-delivery guarantee;
-a crash between state updates and logging can lose a preview. State errors return
+are committed atomically with pending notifications when delivery is enabled.
+Logging-only previews still depend on journal delivery. State errors return
 500 rather than acknowledging a decision. Signature verification precedes all
 filter/state access. Payload previews still cap at 4096 bytes, but filtering reads
 the entire accepted body up to the existing 64 KiB request limit.

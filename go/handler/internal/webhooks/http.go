@@ -1,5 +1,5 @@
-// Package webhooks implements logging-only public webhook receivers. It never
-// submits tasks.
+// Package webhooks implements signed event receipt, filtering and optional
+// durable ingress. Delivery is disabled by default; the transit probe only logs.
 package webhooks
 
 import (
@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 const Path = "/webhooks/test"
@@ -86,7 +88,17 @@ func Handler(logger *log.Logger, githubSecret []byte, filters ...*Filter) http.H
 			fields["github_event"] = boundedHeader(r.Header.Get("X-GitHub-Event"))
 			fields["github_delivery"] = boundedHeader(r.Header.Get("X-GitHub-Delivery"))
 			fields["mode"] = "log_only"
-			decision, err := filter.Evaluate(r.Context(), body, boundedHeader(r.Header.Get("X-GitHub-Event")), boundedHeader(r.Header.Get("X-GitHub-Delivery")))
+			var preview *contracts.TaskQueueMessage
+			var decision Decision
+			var err error
+			event, delivery := boundedHeader(r.Header.Get("X-GitHub-Event")), boundedHeader(r.Header.Get("X-GitHub-Delivery"))
+			if receiver, ok := filter.Store.(AtomicReceiver); ok {
+				filter.mu.Lock()
+				decision, preview, err = ReceiveGitHub(r.Context(), receiver, filter, body, event, delivery, time.Now())
+				filter.mu.Unlock()
+			} else {
+				decision, err = filter.Evaluate(r.Context(), body, event, delivery)
+			}
 			if err != nil {
 				logger.Printf("github_webhook_state_error: %v", err)
 				http.Error(w, "could not evaluate webhook", http.StatusInternalServerError)
@@ -95,6 +107,21 @@ func Handler(logger *log.Logger, githubSecret []byte, filters ...*Filter) http.H
 			fields["filter"] = decision
 			if decision.Disposition == "keep" {
 				fields["task_preview"] = GitHubTaskPreview(body, r.Header.Get("X-GitHub-Event"), r.Header.Get("X-GitHub-Delivery"), time.Now())
+				if preview != nil {
+					if filter.AssignTask != nil {
+						assigned, routeErr := filter.AssignTask(r.Context(), *preview)
+						if routeErr != nil {
+							fields["routing"] = "needs_context"
+							fields["routing_error"] = routeErr.Error()
+						} else {
+							preview = &assigned
+						}
+					}
+					fields["notification_preview"] = preview
+				}
+				if filter.DeliveryEnabled && preview != nil {
+					fields["mode"] = "queued"
+				}
 			}
 		}
 		record, _ := json.Marshal(fields)

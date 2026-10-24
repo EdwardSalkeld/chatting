@@ -4,8 +4,12 @@ The default executor remains `codex exec`. Opt an individual conversation into
 the separate Codex app-server executor with `/executor app-server`. `/executor`
 reports its setting and `/executor exec` switches it back. Commands in Telegram
 forum topics affect that topic, not every topic in the group. The selection is
-stored in the worker database against its existing opaque conversation ID; it
-applies to subsequent tasks, including different work items in that conversation.
+stored against the work-item ID. One item has one channel, workspace and current
+app-server session. The inbox's `conversation_id` is that same item ID for
+handler-assigned tasks; transport addresses do not select another session.
+Old broker messages without a handler assignment retain their legacy routes.
+New GitHub-only items use app-server automatically. Existing items retain their
+executor choice, including an explicit choice of `exec`.
 
 Operators can also select it using an existing task from the conversation:
 
@@ -25,7 +29,7 @@ selection, automatic routing and low-to-high escalation still apply.
 
 Sessions live in `<absolute-worker-db-path>.sessions`, which must be on
 persistent storage, private to the worker user, with a short path suitable for
-Unix sockets. It contains a hashed directory per conversation, with the saved
+Unix sockets. It contains a hashed directory per work item, with the saved
 Codex thread ID, request journals, a private socket and a session log. The actual
 Codex rollouts remain under the usual persistent `CODEX_HOME`; both must survive
 restarts. Processes start lazily and expire after five minutes idle, while the
@@ -33,8 +37,22 @@ thread survives. Threads resume after process expiry or restart. A configuration
 generation change retires the previous owner before the next attempt starts one
 with the new environment.
 
+On upgrade, the worker canonicalizes existing inbox IDs and copies executor
+settings from each item's original conversation. It retains that old ID as a
+migration hint. On first use, it retires the old session owner through the normal
+generation-change protocol after any active turn, then copies the saved thread,
+request journals and pending-crash marker into the item's session directory.
+It never starts a fresh thread to bypass an uncertain old request. A migration
+marker prevents two items from adopting the same old thread; ambiguous legacy
+ownership fails visibly for operator reconciliation.
+All historical conversation associations are retained in
+`work_item_session_aliases`. If an old broad item (for example General) has more
+than one saved app-server thread or request journal, migration stops instead of
+selecting one and hiding the others. Reconcile those associations before resuming
+that item; the original directories remain intact.
+
 The existing supervisors and inbox still own tasks and delivery. An opted-in
-conversation runs one task at a time, even across different work items. Each turn
+item runs one task at a time. Each turn
 receives the current task ID, reply channel and workspace; its `cwd` and model are
 set explicitly. Only a new thread receives the recent-history bootstrap. Follow-up
 messages use the existing reply-time claiming protocol: `main_reply` returns the
@@ -47,6 +65,8 @@ Successful `turn/completed` ends a task without killing the conversation process
 The exec backend's `/finish` setting remains saved but does not apply to this
 backend. Visible replies still go through `main_reply`; an app-server turn that
 omits its reply receives the existing recovery continuation and delivery checks.
+GitHub webhook turns can finish silently when the worker finds no action is
+needed, even when their item's reply channel is Telegram.
 
 Before starting a model turn the owner fsyncs a request journal. Completed
 requests return their cached result on transport retries, so a dropped connection

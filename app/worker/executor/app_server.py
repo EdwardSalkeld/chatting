@@ -19,6 +19,20 @@ from app.models import ExecutionResult, TaskEnvelope
 from app.worker.executor.codex import CodexExecutor, _executor_env, _task_payload
 
 
+def _write_migration_file(path: Path, content: bytes) -> None:
+    temporary = path.with_name(path.name + ".migrating")
+    with temporary.open("wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class AppServerExecutor(CodexExecutor):
     """Send turns to one lazy, idle-expiring app-server per conversation."""
@@ -43,18 +57,20 @@ class AppServerExecutor(CodexExecutor):
         return replace(self, conversation_id=conversation_id)
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
-        if self.conversation_id is None or self.session_root is None:
+        identity = self.work_item_id or self.conversation_id
+        if identity is None or self.session_root is None:
             return ExecutionResult(errors=["app_server_conversation_missing"])
         directory = (
-            Path(self.session_root)
-            / hashlib.sha256(self.conversation_id.encode()).hexdigest()[:24]
+            Path(self.session_root) / hashlib.sha256(identity.encode()).hexdigest()[:24]
         )
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if directory.is_symlink() or directory.stat().st_mode & 0o077:
             raise ValueError("app-server session directory must be private")
         path = directory / "rpc.sock"
         if len(os.fsencode(path)) > 103:
-            raise ValueError("app-server session directory is too long for Unix sockets")
+            raise ValueError(
+                "app-server session directory is too long for Unix sockets"
+            )
         environment = _executor_env(self.env)
         # A persistent process must never inherit credentials for an outer turn.
         for key in tuple(environment):
@@ -136,6 +152,7 @@ class AppServerExecutor(CodexExecutor):
         try:
             with (directory / "startup.lock").open("a+") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
+                self._migrate_session(directory)
                 connection = self._connect(path, directory, environment, generation)
             with connection:
                 connection.settimeout(self.timeout_seconds + 15)
@@ -157,6 +174,70 @@ class AppServerExecutor(CodexExecutor):
                 stdout="".join(captured["stdout"]),
                 stderr="".join(captured["stderr"]),
             )
+
+    def _migrate_session(self, directory: Path) -> None:
+        if not self.work_item_id or not self.history_store or not self.session_root:
+            return
+        candidates = [
+            Path(self.session_root) / hashlib.sha256(legacy.encode()).hexdigest()[:24]
+            for legacy in self.history_store.legacy_work_sessions(
+                work_item_id=self.work_item_id
+            )
+        ]
+        candidates = [
+            old
+            for old in candidates
+            if (old / "thread.json").exists()
+            or (old / "pending.json").exists()
+            or any(old.glob("request-*.json"))
+        ]
+        if not candidates:
+            return
+        if len(candidates) > 1:
+            raise ValueError(
+                "multiple legacy app-server threads for this work item; reconcile before resuming"
+            )
+        old = candidates[0]
+        if old.is_symlink() or old.stat().st_mode & 0o077:
+            raise ValueError("legacy app-server session directory must be private")
+        # The old owner handles requests sequentially. A generation change
+        # retires it after any current turn finishes, before copying its state.
+        with (old / "startup.lock").open("a+") as startup:
+            fcntl.flock(startup, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (old / "owner.lock").open("a+") as owner:
+                try:
+                    fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                        client.settimeout(self.timeout_seconds + 15)
+                        client.connect(str(old / "rpc.sock"))
+                        client.sendall(
+                            b'{"generation":"work-item-identity-migration"}\n'
+                        )
+                        with client.makefile("rb") as stream:
+                            result = json.loads(stream.readline())
+                        if result.get("result", {}).get("errors") != [
+                            "app_server_config_changed:retry_with_new_owner"
+                        ]:
+                            raise RuntimeError("legacy session did not retire")
+                    fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                marker = old / "migrated-to"
+                if marker.exists() and marker.read_text() != self.work_item_id:
+                    raise ValueError("legacy session already belongs to another item")
+                if (directory / "thread.json").exists():
+                    return
+                _write_migration_file(marker, self.work_item_id.encode())
+                # Preserve crash and retry journals as well as the thread ID.
+                # Write thread.json last, so interrupted copies can be retried.
+                for source in [
+                    *old.glob("request-*.json"),
+                    old / "pending.json",
+                    old / "thread.json",
+                ]:
+                    if source.exists():
+                        _write_migration_file(
+                            directory / source.name, source.read_bytes()
+                        )
 
     def _connect(
         self, path: Path, directory: Path, environment: dict[str, str], generation: str

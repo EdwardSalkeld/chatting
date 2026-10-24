@@ -682,7 +682,6 @@ def _executor_chain(
         executor = cast(Executor, model_selector(model_tier))
     output_callback_setter = getattr(executor, "with_output_callback", None)
     if callable(output_callback_setter):
-
         # Exec output arrives in arbitrary chunks, so events are read by line.
         pending_stdout = [""]
 
@@ -775,7 +774,10 @@ def _should_run_supervised_recovery(task_message: TaskQueueMessage) -> bool:
 
 
 def _requires_visible_telegram_reply(task_message: TaskQueueMessage) -> bool:
-    return task_message.envelope.reply_channel.type == "telegram"
+    return (
+        task_message.envelope.reply_channel.type == "telegram"
+        and task_message.envelope.source != "webhook"
+    )
 
 
 def _build_visible_error_body(

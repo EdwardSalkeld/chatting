@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import os
 import signal
+import sqlite3
 import sys
 import tempfile
 import time
@@ -78,7 +79,7 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(executor.execute(first.envelope), result)
         second = _telegram_task(2)
         self.store.stage_inbox_task(second)
-        executor = executor.for_workspace(work_item_id="item_b").for_model("low")
+        executor = executor.for_model("low")
         self.assertEqual(executor.execute(second.envelope).errors, [])
         turns = self.calls("turn/start")
         self.assertEqual(len(turns), 2)
@@ -86,7 +87,7 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(len(self.calls("thread/start")), 1)
         self.assertEqual(turns[0]["pid"], turns[1]["pid"])
         self.assertEqual(turns[0]["params"]["threadId"], turns[1]["params"]["threadId"])
-        self.assertTrue(turns[1]["params"]["cwd"].endswith("item_b"))
+        self.assertTrue(turns[1]["params"]["cwd"].endswith("item_a"))
         self.assertEqual(turns[1]["params"]["model"], "gpt-6-luna")
         payload = json.loads(turns[1]["params"]["input"][0]["text"])
         self.assertNotIn("termination_contract", payload)
@@ -108,6 +109,9 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertTrue(self.calls("thread/resume")[0]["params"]["excludeTurns"])
         other = self.executor.for_conversation("conversation-b")
         self.assertEqual(other.execute(_telegram_task(3).envelope).errors, [])
+        self.assertEqual(self.calls("turn/start")[-1]["params"]["threadId"], thread)
+        other = other.for_workspace(work_item_id="item_b")
+        self.assertEqual(other.execute(_telegram_task(4).envelope).errors, [])
         self.assertNotEqual(self.calls("turn/start")[-1]["params"]["threadId"], thread)
 
     def test_failed_interrupted_protocol_and_timeout_turns_are_errors_without_replay(
@@ -118,13 +122,42 @@ class AppServerExecutorTests(unittest.TestCase):
         ):
             with self.subTest(content=content):
                 executor = replace(
-                    self.executor.for_conversation(content), timeout_seconds=1
+                    self.executor.for_workspace(work_item_id=f"item_{content}"),
+                    timeout_seconds=1,
                 )
                 task = _telegram_task(number, content=content)
                 first = executor.execute(task.envelope)
                 self.assertTrue(first.errors)
                 self.assertEqual(executor.execute(task.envelope).errors, first.errors)
         self.assertEqual(len(self.calls("turn/start")), 5)
+
+    def test_live_legacy_owner_retires_and_thread_resumes_under_item_identity(self):
+        first = _telegram_task(1)
+        self.store.stage_inbox_task(first)
+        legacy = "conv_before_upgrade"
+        old_executor = replace(self.executor, work_item_id=None, conversation_id=legacy)
+        self.assertEqual(old_executor.execute(first.envelope).errors, [])
+        thread = self.calls("turn/start")[-1]["params"]["threadId"]
+        with sqlite3.connect(self.root / "worker.db") as db:
+            db.execute("UPDATE work_items SET origin_conversation_id = ?", (legacy,))
+        executor = self.executor.for_workspace(work_item_id=first.work_item_id)
+        self.assertEqual(executor.execute(_telegram_task(2).envelope).errors, [])
+        self.assertEqual(self.calls("thread/resume")[-1]["params"]["threadId"], thread)
+
+    def test_webhook_on_telegram_item_can_complete_without_visible_reply(self):
+        task = _telegram_task(1)
+        task = replace(task, envelope=replace(task.envelope, source="webhook"))
+        self.store.stage_inbox_task(task)
+        self.store.set_work_model_tier(work_item_id=task.work_item_id, tier="high")
+        result = process_task_message(
+            store=self.store,
+            task_message=task,
+            executor_impl=self.executor,
+            max_attempts=1,
+            activity_monitor=WorkerActivityMonitor(store=self.store),
+        )
+        self.assertNotIn("missing_visible_reply", result.reason_codes)
+        self.assertEqual(len(self.calls("turn/start")), 1)
 
     def test_low_model_escalation_is_returned_to_worker(self):
         result = self.executor.for_model("low").execute(
@@ -202,7 +235,7 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertIn("uncertain_request", result.errors[0])
         self.assertIsNone(session.server)
 
-    def test_setting_is_conversation_scoped_persistent_and_default_is_legacy(self):
+    def test_setting_is_work_item_scoped_persistent_and_default_is_legacy(self):
         first = _telegram_task(1)
         same_chat_other_item = replace(_telegram_task(2), work_item_id="item_another")
         other = _telegram_task(3, thread_id=99)
@@ -220,7 +253,7 @@ class AppServerExecutorTests(unittest.TestCase):
             reopened.get_conversation_executor(conversation_id=conversation),
             "app-server",
         )
-        self.assertEqual(
+        self.assertNotEqual(
             self.store.get_inbox_task(
                 task_id=same_chat_other_item.task_id
             ).conversation_id,
@@ -232,7 +265,9 @@ class AppServerExecutorTests(unittest.TestCase):
         )
         claimed = self.store.claim_next_inbox_task()
         self.assertEqual(claimed.task_message.task_id, first.task_id)
-        # Same conversation, different lane waits; another topic may run.
+        # Different work items have independent sessions and may run together.
+        claimed = self.store.claim_next_inbox_task()
+        self.assertEqual(claimed.task_message.task_id, same_chat_other_item.task_id)
         claimed = self.store.claim_next_inbox_task()
         self.assertEqual(claimed.task_message.task_id, other.task_id)
         self.assertIsNone(self.store.claim_next_inbox_task())

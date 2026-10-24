@@ -44,9 +44,16 @@ def created_pr_url(line: str) -> str | None:
 
 def register_pr(handler_url: str, *, task_id: str, pr_url: str) -> None:
     """Record pr_url against task_id's work item on the handler."""
+    register_github_artifact(handler_url, task_id=task_id, kind="pr", value=pr_url)
+
+
+def register_github_artifact(
+    handler_url: str, *, task_id: str, kind: str, value: str
+) -> None:
+    field = {"pr": "pr_url", "subject": "subject_url", "repository": "repository"}[kind]
     request = urllib.request.Request(
-        handler_url.rstrip("/") + "/work-items/register-pr",
-        data=json.dumps({"task_id": task_id, "pr_url": pr_url}).encode(),
+        handler_url.rstrip("/") + f"/work-items/register-{kind}",
+        data=json.dumps({"task_id": task_id, field: value}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
