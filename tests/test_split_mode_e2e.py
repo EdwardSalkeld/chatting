@@ -290,7 +290,8 @@ class SplitModeE2ETests(unittest.TestCase):
                 # Manager ticks do not wait for executors. A fixed tick count
                 # can stop collection before both tasks are claimed under load.
                 # Wait for the actual outcomes, keeping the handler available
-                # for synchronous egress until both tasks have completed.
+                # until both tasks have completed and the manager has delivered
+                # their queued completions.
                 worker_store = SQLiteStateStore(str(worker_db_path))
                 deadline = time.monotonic() + 30
                 while time.monotonic() < deadline:
@@ -299,14 +300,22 @@ class SplitModeE2ETests(unittest.TestCase):
                         or handler_proc.poll() is not None
                     ):
                         break
-                    successful = {
-                        run.envelope_id
-                        for run in worker_store.list_runs()
-                        if run.result_status == "success"
-                    }
-                    if "reminder:rem_ci_split_smoke:1" in successful and any(
-                        envelope_id.startswith("cron:ci-split-smoke:")
-                        for envelope_id in successful
+                    # A task's inbox row completes only after its completion
+                    # is queued, so this also waits for the outbox to drain.
+                    with sqlite3.connect(str(worker_db_path)) as worker_db:
+                        finished = {
+                            task_id
+                            for (task_id,) in worker_db.execute(
+                                "SELECT task_id FROM worker_inbox WHERE state = 'completed'"
+                            )
+                        }
+                    if (
+                        "task:reminder:rem_ci_split_smoke:1" in finished
+                        and any(
+                            task_id.startswith("task:cron:ci-split-smoke:")
+                            for task_id in finished
+                        )
+                        and not worker_store.list_replayable_egress_outbox_events()
                     ):
                         break
                     time.sleep(0.05)
