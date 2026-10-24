@@ -131,6 +131,31 @@ func TestPublishIngressAcksAckingConnectorAfterPublish(t *testing.T) {
 	}
 }
 
+func TestPublishIngressLeavesAnUnownedEventPendingAndCarriesOn(t *testing.T) {
+	broker := &fakeBroker{}
+	state := newFakeIngressState()
+	unowned := heartbeat.BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
+	owned := heartbeat.BuildEnvelope(2, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
+	state.unownedIDs = map[string]bool{unowned.ID: true}
+	connector := &fakeAckingConnector{envelopes: []contracts.TaskEnvelope{unowned, owned}}
+	runner, err := NewRunner(handlerconfig.Defaults(), broker, state, []Connector{connector}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := runner.PublishIngress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if published != 1 {
+		t.Fatalf("published = %d", published)
+	}
+	if got, want := connector.acked, []string{owned.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("acked = %#v, want %#v", got, want)
+	}
+}
+
 func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
@@ -241,8 +266,9 @@ func (broker *fakeBroker) PublishJSON(ctx context.Context, queueName string, pay
 }
 
 type fakeIngressState struct {
-	seen  map[string]map[string]bool
-	tasks map[string]contracts.TaskQueueMessage
+	seen       map[string]map[string]bool
+	tasks      map[string]contracts.TaskQueueMessage
+	unownedIDs map[string]bool
 }
 
 func newFakeIngressState() *fakeIngressState {
@@ -270,6 +296,9 @@ func (state *fakeIngressState) RecordTask(ctx context.Context, taskMessage contr
 }
 
 func (state *fakeIngressState) AssignTask(ctx context.Context, taskMessage contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
+	if state.unownedIDs[taskMessage.Envelope.ID] {
+		return taskMessage, contracts.ErrGitHubNeedsContext
+	}
 	return taskMessage, nil
 }
 

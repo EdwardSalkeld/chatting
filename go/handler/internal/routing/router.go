@@ -122,7 +122,9 @@ func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 		// Missing or ambiguous ownership must never fall into General.
 		return Decision{Kind: "github_unresolved", Reason: "needs_context"}
 	}
-	if envelope.Source == "im" && reply.Type == "telegram" {
+	// Reminders and schedules that answer in a chat belong to that chat's work,
+	// so they share its session. Notices for chats not yet allowed do not.
+	if reply.Type == "telegram" && envelope.Source != "internal" {
 		var topic any
 		if reply.Metadata != nil {
 			topic = reply.Metadata["message_thread_id"]
@@ -130,7 +132,14 @@ func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 		key, _ := json.Marshal(map[string]any{"chat": reply.Target, "topic": topic})
 		return Decision{Kind: "telegram", Key: string(key), Reason: "telegram_channel"}
 	}
-	decision := Decision{Kind: "general", Key: "default", Reason: "general_lane"}
+	// Unrelated work is grouped by where it replies, so one sender, schedule or
+	// GitHub issue never shares a session with another.
+	route, _ := json.Marshal(map[string]any{
+		"type":   reply.Type,
+		"target": reply.Target,
+		"thread": reply.Metadata["message_thread_id"],
+	})
+	decision := Decision{Kind: "general", Key: string(route), Reason: "general_lane"}
 	actor := ""
 	if envelope.Actor != nil {
 		actor = strings.ToLower(*envelope.Actor)

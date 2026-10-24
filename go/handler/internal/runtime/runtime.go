@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
@@ -161,6 +162,12 @@ func (runner *Runner) PublishIngress(ctx context.Context) (int, error) {
 				runner.now(),
 			)
 			taskMessage, err = runner.ingressState.AssignTask(ctx, taskMessage)
+			if errors.Is(err, contracts.ErrGitHubNeedsContext) {
+				// One event without an owner must not stop every other source.
+				// It stays pending for inspection rather than being dropped.
+				log.Printf("ingress_assignment_needs_context envelope_id=%s err=%v", envelope.ID, err)
+				continue
+			}
 			if err != nil {
 				return published, err
 			}
