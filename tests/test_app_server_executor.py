@@ -159,6 +159,35 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertNotIn("missing_visible_reply", result.reason_codes)
         self.assertEqual(len(self.calls("turn/start")), 1)
 
+    def test_multiple_live_legacy_sessions_preserve_retries_in_a_fresh_thread(self):
+        first, second = _telegram_task(1), _telegram_task(2)
+        self.store.stage_inbox_task(first)
+        old = replace(self.executor, work_item_id=None)
+        first_result = old.for_conversation("conv_old_a").execute(first.envelope)
+        second_result = old.for_conversation("conv_old_b").execute(second.envelope)
+        self.assertEqual(first_result.errors, [])
+        self.assertEqual(second_result.errors, [])
+        old_threads = {call["params"]["threadId"] for call in self.calls("turn/start")}
+        with sqlite3.connect(self.root / "worker.db") as db:
+            for legacy in ("conv_old_a", "conv_old_b"):
+                db.execute(
+                    "INSERT INTO work_item_session_aliases VALUES (?, ?)",
+                    (first.work_item_id, legacy),
+                )
+        executor = self.executor.for_workspace(work_item_id=first.work_item_id)
+        # Simulate retries after completion but before worker acknowledgement.
+        # Both results must survive without another turn or thread adoption.
+        self.assertEqual(executor.execute(first.envelope), first_result)
+        self.assertEqual(executor.execute(second.envelope), second_result)
+        self.assertEqual(len(self.calls("turn/start")), 2)
+        self.assertEqual(executor.execute(_telegram_task(3).envelope).errors, [])
+        self.assertEqual(len(self.calls("turn/start")), 3)
+        self.assertNotIn(
+            self.calls("turn/start")[-1]["params"]["threadId"], old_threads
+        )
+        self.assertEqual(executor.execute(first.envelope), first_result)
+        self.assertEqual(len(self.calls("turn/start")), 3)
+
     def test_low_model_escalation_is_returned_to_worker(self):
         result = self.executor.for_model("low").execute(
             _telegram_task(1, content="escalate").envelope

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 import fcntl
 import hashlib
@@ -14,7 +15,7 @@ import subprocess
 import sys
 import time
 from threading import Thread
-from typing import Callable, cast
+from typing import Callable, Iterator, cast
 
 from app.models import ExecutionResult, TaskEnvelope
 from app.worker.executor.codex import CodexExecutor, _executor_env, _task_payload
@@ -37,11 +38,21 @@ def _write_migration_file(path: Path, content: bytes) -> None:
 
 
 def _has_unfinished_request(session: Path) -> bool:
+    pending = session / "pending.json"
+    if pending.exists():
+        try:
+            key = json.loads(pending.read_text())["request_id"]
+            if "result" not in json.loads(
+                (session / f"request-{key}.json").read_text()
+            ):
+                return True
+        except OSError, ValueError, KeyError:
+            return True
     for journal in session.glob("request-*.json"):
         try:
             if "result" not in json.loads(journal.read_text()):
                 return True
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return True
     return False
 
@@ -192,7 +203,9 @@ class AppServerExecutor(CodexExecutor):
         if not self.work_item_id or not self.history_store or not self.session_root:
             return
         # Once the item has its own thread, old sessions are history.
-        if (directory / "thread.json").exists():
+        if (directory / "thread.json").exists() or (
+            directory / "legacy-migrated"
+        ).exists():
             return
         candidates = [
             Path(self.session_root) / hashlib.sha256(legacy.encode()).hexdigest()[:24]
@@ -213,10 +226,38 @@ class AppServerExecutor(CodexExecutor):
             # Adopting one thread would hide the others' context, so none is
             # adopted. A fresh thread is safe unless an old request may have
             # run without a recorded outcome: retrying it could repeat effects.
-            if any(_has_unfinished_request(old) for old in candidates):
-                raise ValueError(
-                    "legacy app-server sessions for this work item have unfinished "
-                    "requests; reconcile before resuming"
+            with ExitStack() as locks:
+                # Retire every owner before inspecting or copying journals.
+                # Hold all locks until the entire migration is durable.
+                for old in sorted(candidates):
+                    locks.enter_context(self._legacy_session_lock(old))
+                if any(_has_unfinished_request(old) for old in candidates):
+                    raise ValueError(
+                        "legacy app-server sessions for this work item have unfinished "
+                        "requests; reconcile before resuming"
+                    )
+                journals: dict[str, bytes] = {}
+                for old in candidates:
+                    for source in old.glob("request-*.json"):
+                        content = source.read_bytes()
+                        target = directory / source.name
+                        previous = journals.get(source.name)
+                        if previous is None and target.exists():
+                            previous = target.read_bytes()
+                        if previous is not None and previous != content:
+                            raise ValueError("conflicting legacy request journals")
+                        journals[source.name] = content
+                for old in candidates:
+                    _write_migration_file(
+                        old / "migrated-to", self.work_item_id.encode()
+                    )
+                for name, content in journals.items():
+                    _write_migration_file(directory / name, content)
+                # No old thread or pending pointer is adopted. This marker
+                # makes a completed migration idempotent even before a new
+                # turn has created thread.json (e.g. a cached-result retry).
+                _write_migration_file(
+                    directory / "legacy-migrated", self.work_item_id.encode()
                 )
             LOGGER.warning(
                 "app_server_ambiguous_legacy_sessions work_item_id=%s count=%s",
@@ -225,6 +266,22 @@ class AppServerExecutor(CodexExecutor):
             )
             return
         old = candidates[0]
+        with self._legacy_session_lock(old):
+            if (directory / "thread.json").exists():
+                return
+            _write_migration_file(old / "migrated-to", self.work_item_id.encode())
+            # Preserve crash and retry journals as well as the thread ID.
+            # Write thread.json last, so interrupted copies can be retried.
+            for source in [
+                *old.glob("request-*.json"),
+                old / "pending.json",
+                old / "thread.json",
+            ]:
+                if source.exists():
+                    _write_migration_file(directory / source.name, source.read_bytes())
+
+    @contextmanager
+    def _legacy_session_lock(self, old: Path) -> Iterator[None]:
         if old.is_symlink() or old.stat().st_mode & 0o077:
             raise ValueError("legacy app-server session directory must be private")
         # The old owner handles requests sequentially. A generation change
@@ -251,20 +308,7 @@ class AppServerExecutor(CodexExecutor):
                 marker = old / "migrated-to"
                 if marker.exists() and marker.read_text() != self.work_item_id:
                     raise ValueError("legacy session already belongs to another item")
-                if (directory / "thread.json").exists():
-                    return
-                _write_migration_file(marker, self.work_item_id.encode())
-                # Preserve crash and retry journals as well as the thread ID.
-                # Write thread.json last, so interrupted copies can be retried.
-                for source in [
-                    *old.glob("request-*.json"),
-                    old / "pending.json",
-                    old / "thread.json",
-                ]:
-                    if source.exists():
-                        _write_migration_file(
-                            directory / source.name, source.read_bytes()
-                        )
+                yield
 
     def _connect(
         self, path: Path, directory: Path, environment: dict[str, str], generation: str
@@ -281,7 +325,7 @@ class AppServerExecutor(CodexExecutor):
 
         try:
             return connect()
-        except (FileNotFoundError, ConnectionRefusedError):
+        except FileNotFoundError, ConnectionRefusedError:
             pass
         settings = directory / "settings.json"
         settings.write_text(
@@ -316,6 +360,6 @@ class AppServerExecutor(CodexExecutor):
                 connection = connect()
                 Thread(target=child.wait, daemon=True).start()
                 return connection
-            except (FileNotFoundError, ConnectionRefusedError):
+            except FileNotFoundError, ConnectionRefusedError:
                 time.sleep(0.025)
         raise RuntimeError("session did not open its socket")
