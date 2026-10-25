@@ -124,5 +124,5 @@ def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDec
             probabilities={k: float(v) for k, v in probabilities.items()},
             provider_model=str(result.get("model", _MODEL)),
         )
-    except (OSError, ValueError, KeyError, TypeError, urllib.error.HTTPError):
+    except OSError, ValueError, KeyError, TypeError, urllib.error.HTTPError:
         return ModelDecision("high", "jev_unavailable_or_invalid")

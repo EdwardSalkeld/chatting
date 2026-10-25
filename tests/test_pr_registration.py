@@ -10,7 +10,7 @@ APP_SERVER_PR_CREATED = json.dumps(
         "params": {
             "item": {
                 "type": "commandExecution",
-                "command": "/bin/bash -lc \"gh pr create --repo EdwardSalkeld/chatting "
+                "command": '/bin/bash -lc "gh pr create --repo EdwardSalkeld/chatting '
                 "--base main --head fix/x --title 'Fix x' --body-file pr.md\"",
                 "status": "completed",
                 "aggregatedOutput": "https://github.com/EdwardSalkeld/chatting/pull/308\n",
@@ -26,7 +26,7 @@ EXEC_PR_CREATED = json.dumps(
         "type": "item.completed",
         "item": {
             "type": "command_execution",
-            "command": "/bin/bash -lc \"git push -u origin HEAD; gh pr create --base main\"",
+            "command": '/bin/bash -lc "git push -u origin HEAD; gh pr create --base main"',
             "aggregated_output": (
                 "remote: Create a pull request for 'fix/x' on GitHub by visiting:\n"
                 "remote:      https://github.com/brokensbone/media-collection-manager"

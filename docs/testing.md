@@ -6,8 +6,13 @@ Run `uv sync` once first.
 uv run pytest -n auto
 cd go/handler && go test ./...
 uv run ruff check app tests
+uv run ruff format --check app tests
 uv run pyright app/
 ```
+
+Apply Python formatting with `uv run ruff format app tests`. Ruff targets Python
+3.14 and removes optional parentheses from multi-exception handlers. CI checks
+this style; parentheses remain where required, including handlers with `as`.
 
 Run one module with, for example, `uv run pytest tests/test_worker_runtime.py`.
 

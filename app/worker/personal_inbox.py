@@ -82,7 +82,7 @@ def process_one(
             summary_model=summary_model,
             rules_repo=rules_repo,
         )
-    except (ValueError, TypeError, KeyError):
+    except ValueError, TypeError, KeyError:
         prepared = None
     if prepared is None:
         broker.publish_json(DEAD_QUEUE, {"guid": picked.guid, "reason": "invalid_task"})

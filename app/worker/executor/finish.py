@@ -66,7 +66,7 @@ class FinishSession:
                 }:
                     connection.sendall(b'{"error":"invalid execution"}\n')
                     return False
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 return False
             self.record_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             with (self.record_dir / f"{self.execution_id}.json").open("x") as record:

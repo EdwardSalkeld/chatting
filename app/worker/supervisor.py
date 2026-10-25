@@ -223,7 +223,7 @@ class SupervisorPool:
         try:
             self.status(slot)
             return
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
         marker = self.directory / f"supervisor-{slot}.lock"
         # A lock file remains after a crash. Never silently replace a dead or
@@ -258,7 +258,7 @@ class SupervisorPool:
             try:
                 self.status(slot)
                 return
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 time.sleep(0.05)
         raise SupervisorError(f"supervisor {slot} did not open its socket")
 

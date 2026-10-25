@@ -605,7 +605,9 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(len(submit.calls), 2)
         self.assertEqual(submit.calls[1][1]["message"]["channel"], "telegram")
 
-    def test_reaction_via_spec_file_uses_inbound_message_id_from_worker_inbox(self) -> None:
+    def test_reaction_via_spec_file_uses_inbound_message_id_from_worker_inbox(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "state.db"
             config_path = Path(tmpdir) / "worker.json"

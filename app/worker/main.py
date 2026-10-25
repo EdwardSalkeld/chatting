@@ -121,9 +121,7 @@ def _load_config(
     return payload
 
 
-def _resolve_str(
-    config_value: object, *, default_value: str, setting_name: str
-) -> str:
+def _resolve_str(config_value: object, *, default_value: str, setting_name: str) -> str:
     if config_value is None:
         return default_value
     if not isinstance(config_value, str) or not config_value.strip():
@@ -169,7 +167,9 @@ def _resolve_positive_float(
     return parsed
 
 
-def _build_executor(config: dict[str, object], config_path: str | None) -> CodexExecutor:
+def _build_executor(
+    config: dict[str, object], config_path: str | None
+) -> CodexExecutor:
     codex_working_dir = _resolve_optional_str(
         config.get("codex_working_dir"), setting_name="codex_working_dir"
     )
