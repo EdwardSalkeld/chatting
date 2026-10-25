@@ -57,7 +57,9 @@ class BBMBQueueAdapter:
             with self._client_factory(self._address) as client:
                 client.ensure_queue(queue_name)
         except Exception as error:  # noqa: BLE001
-            raise BrokerOperationError(f"ensure_queue_failed:{queue_name}:{error}") from error
+            raise BrokerOperationError(
+                f"ensure_queue_failed:{queue_name}:{error}"
+            ) from error
 
     def publish_json(self, queue_name: str, payload: dict[str, Any]) -> str:
         encoded = json.dumps(payload, sort_keys=True)
@@ -66,7 +68,9 @@ class BBMBQueueAdapter:
                 client.ensure_queue(queue_name)
                 return client.add_message(queue_name, encoded)
         except Exception as error:  # noqa: BLE001
-            raise BrokerOperationError(f"publish_failed:{queue_name}:{error}") from error
+            raise BrokerOperationError(
+                f"publish_failed:{queue_name}:{error}"
+            ) from error
 
     def pickup_json(
         self,
@@ -90,9 +94,13 @@ class BBMBQueueAdapter:
         try:
             payload = json.loads(result.content)
         except Exception as error:  # noqa: BLE001
-            raise BrokerOperationError(f"pickup_payload_invalid_json:{queue_name}:{error}") from error
+            raise BrokerOperationError(
+                f"pickup_payload_invalid_json:{queue_name}:{error}"
+            ) from error
         if not isinstance(payload, dict):
-            raise BrokerOperationError(f"pickup_payload_invalid_type:{queue_name}:object_required")
+            raise BrokerOperationError(
+                f"pickup_payload_invalid_type:{queue_name}:object_required"
+            )
         return PickedMessage(guid=result.guid, payload=payload)
 
     def ack(self, queue_name: str, guid: str) -> None:
@@ -100,11 +108,14 @@ class BBMBQueueAdapter:
             with self._client_factory(self._address) as client:
                 client.delete_message(queue_name, guid)
         except Exception as error:  # noqa: BLE001
-            raise BrokerOperationError(f"ack_failed:{queue_name}:{guid}:{error}") from error
+            raise BrokerOperationError(
+                f"ack_failed:{queue_name}:{guid}:{error}"
+            ) from error
 
 
 def _default_client_factory(address: str) -> _BBMBClientProtocol:
     from app.broker.local_bbmb_client import Client
+
     return Client(address=address)
 
 

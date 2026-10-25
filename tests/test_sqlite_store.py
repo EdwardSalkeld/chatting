@@ -5,8 +5,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.broker import EgressQueueMessage
-from app.models import AttachmentRef, AuditEvent, OutboundMessage, ReplyChannel, RunRecord, TaskEnvelope
+from app.models import (
+    AttachmentRef,
+    AuditEvent,
+    OutboundMessage,
+    ReplyChannel,
+    RunRecord,
+    TaskEnvelope,
+)
 from app.state.sqlite_store import SQLiteStateStore
+
+
 class SQLiteStateStoreTests(unittest.TestCase):
     def test_append_run_persists_and_lists_run_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -54,7 +63,9 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 received_at=datetime(2026, 2, 27, 16, 10, tzinfo=timezone.utc),
                 actor="alice@example.com",
                 content="Please retry",
-                attachments=[AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")],
+                attachments=[
+                    AttachmentRef(uri="file:///tmp/photo.jpg", name="photo.jpg")
+                ],
                 context_refs=["repo:/home/edward/chatting"],
                 reply_channel=ReplyChannel(type="email", target="alice@example.com"),
                 dedupe_key="email:dead-1",
@@ -73,7 +84,14 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 ).fetchall()
             self.assertEqual(
                 rows,
-                [(dead_letter_id, "run:email:dead-1", '["retry_exhausted"]', "pending")],
+                [
+                    (
+                        dead_letter_id,
+                        "run:email:dead-1",
+                        '["retry_exhausted"]',
+                        "pending",
+                    )
+                ],
             )
 
     def test_egress_outbox_roundtrip_and_replay_listing(self) -> None:
@@ -84,7 +102,9 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 task_id="task:email:1",
                 envelope_id="email:1",
                 trace_id="trace:email:1",
-                message=OutboundMessage(channel="email", target="alice@example.com", body="hello"),
+                message=OutboundMessage(
+                    channel="email", target="alice@example.com", body="hello"
+                ),
                 emitted_at=datetime(2026, 3, 6, 11, 1, tzinfo=timezone.utc),
                 event_id="evt:task:email:1:0",
                 sequence=0,
@@ -128,11 +148,15 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(visible[0]["phase"], "task_received")
             self.assertIsInstance(visible[0]["activity_id"], int)
 
-            all_events = store.list_recent_worker_activity(limit=10, include_internal=True)
+            all_events = store.list_recent_worker_activity(
+                limit=10, include_internal=True
+            )
             self.assertEqual(len(all_events), 2)
             self.assertEqual(all_events[0]["phase"], "egress_message")
             self.assertEqual(all_events[1]["phase"], "task_received")
-            self.assertGreater(all_events[0]["activity_id"], all_events[1]["activity_id"])
+            self.assertGreater(
+                all_events[0]["activity_id"], all_events[1]["activity_id"]
+            )
 
     def test_worker_activity_orders_by_occurred_at_not_insert_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -164,5 +188,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 ["task:im:new", "task:cron:old"],
             )
             self.assertGreater(visible[1]["activity_id"], visible[0]["activity_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

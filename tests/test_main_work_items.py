@@ -47,7 +47,9 @@ class RegisterPRTests(unittest.TestCase):
             SQLiteStateStore(str(db_path)).stage_inbox_task(task)
 
             with (
-                patch.dict("os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
+                ),
                 patch(
                     "sys.argv",
                     [

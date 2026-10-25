@@ -461,7 +461,7 @@ def triage_failure(error: Exception) -> tuple[str, int]:
                 payload = json.loads(error.read(4096))
                 if payload.get("detail", {}).get("error_type") == "max_tokens_exceeded":
                     return "input_too_large", status
-            except (OSError, ValueError, AttributeError, TypeError):
+            except OSError, ValueError, AttributeError, TypeError:
                 pass
         if status == 429:
             return "rate_limited", status
@@ -568,7 +568,7 @@ def classify(
     try:
         summary = summarize(mail, summary_model, rules_context=rules_context)
         trace["summarised"] = True
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError:
         summary = {
             "summary": "Automatic summary unavailable; inspect the original email.",
             "action": "",

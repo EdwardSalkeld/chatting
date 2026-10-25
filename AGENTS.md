@@ -10,6 +10,8 @@
 - Python tests: `uv run pytest -n auto`
 - Go tests: `cd go/handler && go test ./...`
 - Lint: `uv run ruff check app tests` and `uv run pyright app/`
+- Format: `uv run ruff format app tests`; check with `uv run ruff format --check app tests`.
+- Use Ruff's Python 3.14 formatting, including unparenthesized multi-exception handlers where permitted. CI enforces this; handlers with `as` still require parentheses.
 - E2E setup: [docs/testing.md](docs/testing.md)
 
 ## Entry points

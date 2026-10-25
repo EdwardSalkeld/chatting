@@ -80,7 +80,9 @@ class CodexExecutorTests(unittest.TestCase):
                 received_at=datetime(2026, 8, 16, 10, 0, tzinfo=timezone.utc),
                 actor="alice",
                 content="the earlier plan",
-                attachments=[AttachmentRef(uri="file:///tmp/plan.pdf", name="plan.pdf")],
+                attachments=[
+                    AttachmentRef(uri="file:///tmp/plan.pdf", name="plan.pdf")
+                ],
                 context_refs=[],
                 reply_channel=ReplyChannel(
                     type="telegram",
@@ -181,7 +183,9 @@ class CodexExecutorTests(unittest.TestCase):
                 CodexExecutor(command=("codex",), history_store=store).execute(envelope)
             payload = json.loads(run_mock.call_args.kwargs["payload"])
             self.assertEqual(payload["recent_history"], [])
-            self.assertIn("app.main_history", payload["history_contract"]["search_command"])
+            self.assertIn(
+                "app.main_history", payload["history_contract"]["search_command"]
+            )
 
     def test_reply_quoted_telegram_task_exposes_supported_history_lookup(self) -> None:
         completed = subprocess.CompletedProcess(

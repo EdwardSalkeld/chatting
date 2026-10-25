@@ -10,5 +10,5 @@ def stop_test_supervisors(db_path: Path) -> None:
     for marker in Path(f"{db_path}.supervisors").glob("supervisor-*.lock"):
         try:
             os.killpg(int(marker.read_text()), signal.SIGKILL)
-        except (FileNotFoundError, ProcessLookupError, ValueError):
+        except FileNotFoundError, ProcessLookupError, ValueError:
             pass

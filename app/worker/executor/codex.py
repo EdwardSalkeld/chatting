@@ -235,7 +235,7 @@ class CodexExecutor:
                     reason = request.get("reason")
                     if isinstance(reason, str) and reason.strip():
                         escalation_reason = reason.strip()[:4000]
-            except (OSError, ValueError, AttributeError):
+            except OSError, ValueError, AttributeError:
                 pass
 
         return ExecutionResult(
@@ -464,7 +464,7 @@ def _parse_epoch(value: object) -> datetime | None:
         return None
     try:
         return datetime.fromtimestamp(value, tz=timezone.utc)
-    except (OverflowError, OSError, ValueError):
+    except OverflowError, OSError, ValueError:
         return None
 
 

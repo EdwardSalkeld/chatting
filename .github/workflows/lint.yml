@@ -64,6 +64,9 @@ jobs:
       - name: Run Ruff
         run: uv run ruff check app tests
 
+      - name: Check Python formatting
+        run: uv run ruff format --check app tests
+
   typecheck:
     name: Pyright
     runs-on: ubuntu-latest
