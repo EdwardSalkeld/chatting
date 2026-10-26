@@ -67,6 +67,7 @@ type workflow struct {
 type filterPayload struct {
 	Action     string `json:"action"`
 	Sender     user   `json:"sender"`
+	Assignee   user   `json:"assignee"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
@@ -229,7 +230,12 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		}
 	}
 	tagged := mention(text, f.Login)
-	if stored == "" && !tagged && !ownedPR {
+	// Subscribe only to the assignee changed by this event. An assignment to
+	// someone else (or an old assignees list copied into a payload) is not a
+	// request for us to start work.
+	assignedToUs := (event == "issues" || event == "pull_request") &&
+		p.Action == "assigned" && strings.EqualFold(p.Assignee.Login, f.Login)
+	if stored == "" && !tagged && !ownedPR && !assignedToUs {
 		return decision("drop", "not_tagged_or_watched"), nil
 	}
 	state := watchState{}
@@ -252,7 +258,9 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		return d, nil
 	}
 	if d.NewWatch {
-		if ownedPR {
+		if assignedToUs {
+			d.Reason = "assigned_to_us"
+		} else if ownedPR {
 			d.Reason = "own_pr"
 		} else {
 			d.Reason = "tagged_in"
