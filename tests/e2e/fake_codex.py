@@ -20,9 +20,9 @@ def main():
     parsed = json.loads(payload)
     task = parsed.get("task", {})
     task_id = task.get("task_id", "")
-    reply_channel = task.get("reply_channel", {})
-    channel = reply_channel.get("type", "log")
-    target = reply_channel.get("target", "test")
+    event_channel = task["event_channel"]
+    channel = event_channel["type"]
+    target = event_channel["target"]
     # Some ingress sources (e.g. internal triggers) declare a reply
     # channel that the handler has no dispatcher for, so a reply there is
     # undeliverable by design. Send the reply on "log" in that case rather than

@@ -1,4 +1,5 @@
 import json
+import io
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,8 @@ from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
 from app.broker import TaskQueueMessage
 from app.state import SQLiteStateStore
 from app.worker.executor import CodexExecutor
-from app.worker.executor.codex import _run_streaming
+from app.worker.executor.codex import _run_streaming, _task_payload
+from tests.e2e import fake_codex
 
 
 def _envelope() -> TaskEnvelope:
@@ -41,6 +43,27 @@ def _envelope() -> TaskEnvelope:
 
 
 class CodexExecutorTests(unittest.TestCase):
+    def test_email_e2e_agent_uses_current_prompt_destination(self) -> None:
+        payload = _task_payload(_envelope(), current_time=datetime.now(timezone.utc))
+        sent = []
+
+        def capture_send(command, **kwargs):
+            spec_path = Path(command[command.index("--spec-file") + 1])
+            sent.append(json.loads(spec_path.read_text()))
+            spec_path.unlink()
+
+        with (
+            patch("sys.stdin", io.StringIO(json.dumps(payload))),
+            patch("sys.stdout", io.StringIO()),
+            patch.dict("os.environ", {"FAKE_CODEX_PROMPT_DIR": ""}),
+            patch.object(fake_codex.subprocess, "run", side_effect=capture_send),
+        ):
+            fake_codex.main()
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["channel"], "email")
+        self.assertEqual(sent[0]["target"], "alice@example.com")
+
     def test_streaming_output_arrives_before_process_exits(self) -> None:
         first_chunk = threading.Event()
         output: list[tuple[str, str]] = []
