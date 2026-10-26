@@ -132,12 +132,15 @@ for the same repositories to avoid receiving the same feedback from two sources.
 
 ## Tag-to-watch filtering
 
-`github_webhook_login` defaults to `BillyAcachofa`. For ordinary issues, an external actor must
-directly `@mention` that login in a new/edited issue or PR title/body, issue
-comment, inline review comment, or review to start watching. Issue author, assignee,
-reviewer status and old mentions copied into parent objects do not subscribe
-an issue. Usernames match case-insensitively with boundaries, so a longer login
-does not match. Mentions are plain text matching, not a Markdown parser.
+`github_webhook_login` defaults to `BillyAcachofa`. An external actor can start
+watching an issue or PR by assigning it to that login (`assigned_to_us`), or by
+directly `@mention`ing it in a new/edited issue or PR title/body, issue comment,
+inline review comment, or review. Assignment matches the top-level `assignee`
+changed by an `assigned` event, case-insensitively. Assignments to other users,
+old assignee lists copied into parent objects, issue authorship and reviewer
+status do not start a watch. Mentions match case-insensitively with boundaries,
+so a longer login does not match; they use plain text matching, not a Markdown
+parser. Own actions remain suppressed.
 
 PRs authored by that login or a configured `github_webhook_self_logins` identity
 are watched automatically, without a tag. The opening hook records the watch

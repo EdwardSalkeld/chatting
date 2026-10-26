@@ -143,6 +143,38 @@ func TestPendingDeliveryRetriesThroughOrdinaryIngress(t *testing.T) {
 	}
 }
 
+func TestAssignmentDeliveryAndFollowupShareOwner(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "handler.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	filter := &Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+	body := []byte(`{"action":"assigned","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"assignee":{"login":"BillyAcachofa"},"issue":{"number":42}}`)
+	d, _, err := ReceiveGitHub(ctx, store, filter, body, "issues", "assignment", time.Now())
+	if err != nil || d.Disposition != "keep" || d.Reason != "assigned_to_us" {
+		t.Fatalf("assignment: %+v %v", d, err)
+	}
+	pending, err := store.PendingGitHub(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending assignment: %v %v", pending, err)
+	}
+	task, err := store.AssignTask(ctx, contracts.NewTaskQueueMessage(pending[0], "assignment", time.Now()))
+	if err != nil || task.WorkItemID == "" || task.Envelope.ReplyChannel.Target != "https://github.com/o/r/issues/42" {
+		t.Fatalf("assignment route: %+v %v", task, err)
+	}
+	followup := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":42},"comment":{"id":99,"body":"more information"}}`)
+	d, notification, err := ReceiveGitHub(ctx, store, filter, followup, "issue_comment", "followup", time.Now())
+	if err != nil || d.Disposition != "keep" || notification == nil {
+		t.Fatalf("followup: %+v %v", d, err)
+	}
+	routed, err := store.AssignTask(ctx, *notification)
+	if err != nil || routed.WorkItemID != task.WorkItemID {
+		t.Fatalf("followup lost assignment owner: %+v %v", routed, err)
+	}
+}
+
 func TestNotificationEventIdentifiers(t *testing.T) {
 	for _, tc := range []struct{ event, extra, want string }{
 		{"pull_request_review", `"review":{"id":4}`, `"review_id":4`},

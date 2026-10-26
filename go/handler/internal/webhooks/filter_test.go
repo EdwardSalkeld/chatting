@@ -116,6 +116,66 @@ func TestActionRulesAndWorkflowRecovery(t *testing.T) {
 	check("workflow_run", "completed", map[string]any{"workflow_run": run}, "needs_context", "workflow_missing_pr_context")
 }
 
+func TestAssignmentStartsWatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, action, sender, assignee, want, reason string
+	}{
+		{"issue", "issues", "assigned", "alice", "billyacachofa", "keep", "assigned_to_us"},
+		{"pull request", "pull_request", "assigned", "alice", "BillyAcachofa", "keep", "assigned_to_us"},
+		{"other assignee", "issues", "assigned", "alice", "bob", "drop", "not_tagged_or_watched"},
+		{"missing assignee", "issues", "assigned", "alice", "", "drop", "not_tagged_or_watched"},
+		{"unassignment", "issues", "unassigned", "alice", "BillyAcachofa", "drop", "not_tagged_or_watched"},
+		{"opening with old assignment", "issues", "opened", "alice", "BillyAcachofa", "drop", "not_tagged_or_watched"},
+		{"own assignment", "issues", "assigned", "BillyAcachofa", "BillyAcachofa", "drop", "self_action"},
+		{"app assignment", "issues", "assigned", "billybotapp[bot]", "BillyAcachofa", "drop", "self_action"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "state.db")
+			store, err := sqlite.Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { store.Close() }()
+			f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}}
+			subjectKey := "issue"
+			if tc.event == "pull_request" {
+				subjectKey = "pull_request"
+			}
+			payload := map[string]any{
+				"action": tc.action, "sender": user{tc.sender}, "assignee": user{tc.assignee},
+				"repository": map[string]string{"full_name": "o/r"},
+				subjectKey:   map[string]any{"number": 1, "assignees": []user{{"BillyAcachofa"}}},
+			}
+			body, _ := json.Marshal(payload)
+			d, err := f.Evaluate(ctx, body, tc.event, "assignment")
+			if err != nil || d.Disposition != tc.want || d.Reason != tc.reason || d.NewWatch != (tc.want == "keep") {
+				t.Fatalf("assignment: %+v %v", d, err)
+			}
+			if tc.want != "keep" {
+				return
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = sqlite.Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Store = store
+			d, err = f.Evaluate(ctx, body, tc.event, "assignment")
+			if err != nil || d.Reason != "duplicate" {
+				t.Fatalf("redelivery: %+v %v", d, err)
+			}
+			followup := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"body":"please check this"}}`)
+			d, err = f.Evaluate(ctx, followup, "issue_comment", "followup")
+			if err != nil || d.Disposition != "keep" || !d.Watched || d.NewWatch {
+				t.Fatalf("followup after restart: %+v %v", d, err)
+			}
+		})
+	}
+}
+
 func TestMentionBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		text string
