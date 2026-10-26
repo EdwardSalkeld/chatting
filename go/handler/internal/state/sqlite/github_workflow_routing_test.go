@@ -91,7 +91,11 @@ func TestCIWebhookOwnership(t *testing.T) {
 				t.Fatal(err)
 			}
 			filter := &webhooks.Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
-			body := []byte(fmt.Sprintf(`{"action":"completed","repository":{"full_name":"o/r"},"sender":{"login":"BillyAcachofa"},"workflow_run":{"id":7,"workflow_id":20,"run_number":1,"run_attempt":1,"head_sha":%q,"conclusion":%q,"pull_requests":[]}}`, tc.sha, tc.conclusion))
+			event := "pull_request"
+			if tc.sha != "abc" {
+				event = "push"
+			}
+			body := []byte(fmt.Sprintf(`{"action":"completed","repository":{"full_name":"o/r"},"sender":{"login":"BillyAcachofa"},"workflow_run":{"id":7,"workflow_id":20,"run_number":1,"run_attempt":1,"event":%q,"head_branch":"main","head_sha":%q,"conclusion":%q,"pull_requests":[]}}`, event, tc.sha, tc.conclusion))
 			d, notification, err := webhooks.ReceiveGitHub(ctx, store, filter, body, "workflow_run", "one", time.Now())
 			if err != nil || d.Disposition != tc.want || d.Reason != tc.reason {
 				t.Fatalf("receipt: %+v %v", d, err)

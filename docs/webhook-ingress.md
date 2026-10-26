@@ -110,7 +110,7 @@ unless that exact run has an explicit destination.
 
 ### CI ownership without a PR link
 
-When GitHub omits a run's `pull_requests`, match its exact repository and
+When GitHub omits a PR-triggered run's `pull_requests`, match its repository and
 `head_sha` against current watched PR heads. One match routes through that PR's
 existing owner. Multiple matches stay held as `workflow_ambiguous_commit`;
 unmatched events remain held. This uses local watch state, including heads
@@ -127,6 +127,11 @@ That exact run takes precedence over PR matching. It reports every completed
 outcome, including an initial success or cancellation; retries of the same
 attempt are suppressed. Registrations persist for subsequent rerun attempts.
 Registration is explicit; starting `gh run watch` does not register ownership.
+The latest observed completion is saved even if its ordinary PR notification
+was filtered. Registering after completion atomically queues that saved outcome
+for the owner, without requiring redelivery. Re-registering or retrying does not
+notify the same owner twice for an attempt. Only outcomes observed by this
+receiver can be reconciled; registration does not fetch GitHub history.
 
 For unattended runs without a watched PR, register a workflow destination using
 its numeric workflow ID (the Actions run API's `workflow_id`):
@@ -135,24 +140,36 @@ its numeric workflow ID (the Actions run API's `workflow_id`):
 python3 -P -m app.main_work_items register-workflow <task-id> https://github.com/owner/repo/actions/workflows/456
 ```
 
-A workflow destination reports failures and recovery of a recorded failure on
-the same commit. Routine successes remain filtered. Exact run ownership wins,
-then watched PR ownership, then a workflow destination for otherwise unlinked
-runs. Workflow destinations never override ambiguous PR matches. There is no
-implicit repository-wide fallback or display-title/branch-name inference.
+A workflow destination receives failures and the next successful run of that
+workflow on the same branch, including when it installs a newer commit. That
+event goes to the owning worker to interpret; the handler does not announce a
+problem fixed. Routine successes remain filtered. PR check recovery stays
+commit-specific.
+
+Exact run ownership wins. For non-PR executions (pushes, manual deployments,
+schedules), an explicitly registered workflow destination is used; an old PR
+sharing the commit does not override it. PR-triggered runs use watched PR
+ownership. Commit inference is restricted to PR-triggered runs; unregistered
+non-PR runs without explicit PR links remain held. There is no implicit
+repository-wide fallback or display-title/branch-name inference.
 
 Both commands use the existing artifact registry, restore the owning item's
 Telegram/GitHub channel, and reject reassignment to another item. Other channel
 types fall back to logging; an Actions page is not an issue comment destination.
-Held events are not
-automatically replayed: register the missing destination and redeliver through
-GitHub. Task identity still derives from the original event/body, including when
-routing was resolved from local state.
+Ordinary held events still require registration/context and redelivery. Explicit
+run registration instead reconciles the saved completion. Receipt dedupe uses
+the original event/body, while completion delivery uses a separate owner/run/
+attempt identity. Workflow ordering advances for every valid observed completion
+independently of destination and notification. An explicitly awaited older run
+can complete without moving that shared ordering backward.
 
 The worker API endpoints are `/work-items/register-run` (`task_id`, `run_url`)
 and `/work-items/register-workflow` (`task_id`, `workflow_url`). Executor task
 instructions include the run registration command; registration itself neither
 starts a run nor enables delivery.
+If delivery is paused, registration may stage a saved completion, but the queue
+does not dispatch until delivery is enabled. Saved observations retain only the
+latest attempt's compact notification per run, not full webhook payloads.
 
 ### Durable delivery
 

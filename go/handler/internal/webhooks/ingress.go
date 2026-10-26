@@ -3,6 +3,7 @@ package webhooks
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -26,6 +27,20 @@ func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter,
 	var notification *contracts.TaskQueueMessage
 	var buildErr error
 	err := receiver.WebhookTransaction(ctx, func(tx contracts.WebhookTransaction) error {
+		var observed *contracts.TaskEnvelope
+		var observedURL string
+		var observedAttempt int64
+		// Observing an outcome is independent of whether a PR needs a notice.
+		if event == "workflow_run" {
+			var p filterPayload
+			if json.Unmarshal(body, &p) == nil && p.Action == "completed" && p.Run != nil && p.Run.ID > 0 && p.Run.RunAttempt > 0 && p.Run.WorkflowID > 0 && p.Run.HeadSHA != "" && p.Run.RunNumber > 0 && p.Run.Conclusion != "" {
+				runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d", p.Repository.FullName, p.Run.ID)
+				task, err := GitHubNotification(body, event, delivery, now, runURL)
+				if err == nil {
+					observed, observedURL, observedAttempt = &task.Envelope, runURL, p.Run.RunAttempt
+				}
+			}
+		}
 		local := &Filter{Store: tx, Login: filter.Login, SelfLogins: filter.SelfLogins, ReleaseRepositories: filter.ReleaseRepositories}
 		var err error
 		d, err = local.Evaluate(ctx, body, event, delivery)
@@ -38,8 +53,17 @@ func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter,
 				buildErr = err
 				return err
 			}
+			err = tx.StageGitHub(ctx, &task.Envelope, filter.DeliveryEnabled)
+			if err != nil {
+				return err
+			}
+			task.TaskID = "task:" + task.Envelope.ID
 			notification = &task
-			return tx.StageGitHub(ctx, task.Envelope, filter.DeliveryEnabled)
+		}
+		// Advance observations after filtering has read the previous outcome.
+		// Holds/drops still contribute to shared ordering and late registration.
+		if observed != nil {
+			return tx.ObserveGitHubRun(ctx, filter.Login, observedURL, observedAttempt, *observed)
 		}
 		return nil
 	})

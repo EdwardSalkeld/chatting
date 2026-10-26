@@ -56,6 +56,8 @@ type textObject struct {
 	Body string `json:"body"`
 }
 type workflow struct {
+	Event        string    `json:"event"`
+	HeadBranch   string    `json:"head_branch"`
 	ID           int64     `json:"id"`
 	WorkflowID   int64     `json:"workflow_id"`
 	RunNumber    int64     `json:"run_number"`
@@ -345,7 +347,9 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 		return Decision{}, err
 	}
 	explicitRun := strings.Contains(destination, "/actions/runs/")
-	if len(r.PullRequests) == 0 && !explicitRun {
+	prExecution := r.Event == "pull_request" || r.Event == "pull_request_target"
+	workflowOwned := strings.Contains(destination, "/actions/workflows/") && !prExecution
+	if len(r.PullRequests) == 0 && !explicitRun && !workflowOwned && prExecution {
 		numbers, err := f.Store.WatchedGitHubPRs(ctx, f.Login, p.Repository.FullName, r.HeadSHA)
 		if err != nil {
 			return Decision{}, err
@@ -357,7 +361,7 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 			r.PullRequests = []subject{{Number: numbers[0]}}
 		}
 	}
-	if len(r.PullRequests) > 1 && !explicitRun {
+	if len(r.PullRequests) > 1 && !explicitRun && !workflowOwned {
 		return decision("needs_context", "workflow_ambiguous_subject"), nil
 	}
 	matched := false
@@ -387,7 +391,7 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 		}
 		matched = true
 	}
-	if !matched && !explicitRun && !(len(r.PullRequests) == 0 && destination != "") {
+	if !matched && !explicitRun && !workflowOwned {
 		if missingHead {
 			return decision("needs_context", "workflow_missing_head_context"), nil
 		}
@@ -399,10 +403,9 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 	if r.WorkflowID == 0 || r.HeadSHA == "" || r.Conclusion == "" {
 		return decision("needs_context", "incomplete_workflow"), nil
 	}
-	key := fmt.Sprintf("%s/%s/%d/%s", strings.ToLower(f.Login), strings.ToLower(p.Repository.FullName), r.WorkflowID, r.HeadSHA)
-	if explicitRun {
-		key += fmt.Sprintf("/run/%d", r.ID)
-	}
+	// PR health is commit-specific; unattended workflow health spans commits
+	// on the same branch. Run ownership never changes this ordering history.
+	key := contracts.GitHubWorkflowHistoryKey(f.Login, p.Repository.FullName, r.WorkflowID, r.HeadSHA, r.Event, r.HeadBranch)
 	previous, err := f.Store.WebhookState(ctx, "workflow", key)
 	if err != nil {
 		return Decision{}, err
@@ -413,17 +416,39 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 			return Decision{}, err
 		}
 	}
-	if old.RunNumber > r.RunNumber || (old.RunNumber == r.RunNumber && old.RunAttempt >= r.RunAttempt && previous != "") {
+	sharedAhead := previous != "" && newerWorkflow(&old, r)
+	if !explicitRun && sharedAhead {
 		return decision("drop", "superseded_workflow"), nil
 	}
 	encoded, _ := json.Marshal(r)
-	if err := f.Store.PutWebhookState(ctx, "workflow", key, string(encoded)); err != nil {
-		return Decision{}, err
+	if explicitRun {
+		runKey := fmt.Sprintf("%s/%s/run/%d", strings.ToLower(f.Login), strings.ToLower(p.Repository.FullName), r.ID)
+		seen, err := f.Store.WebhookState(ctx, "workflow", runKey)
+		if err != nil {
+			return Decision{}, err
+		}
+		var oldRun workflow
+		if seen != "" {
+			if err := json.Unmarshal([]byte(seen), &oldRun); err != nil {
+				return Decision{}, err
+			}
+			if !newerWorkflow(r, &oldRun) {
+				return decision("drop", "superseded_workflow"), nil
+			}
+		}
+		if err := f.Store.PutWebhookState(ctx, "workflow", runKey, string(encoded)); err != nil {
+			return Decision{}, err
+		}
+	}
+	if !sharedAhead {
+		if err := f.Store.PutWebhookState(ctx, "workflow", key, string(encoded)); err != nil {
+			return Decision{}, err
+		}
 	}
 	// Prefer an explicitly registered run, then a single watched PR, then an
 	// explicit workflow destination for runs without a PR. Never infer an
 	// owner from branch names or display titles.
-	if !explicitRun && len(r.PullRequests) == 1 {
+	if !explicitRun && !workflowOwned && len(r.PullRequests) == 1 {
 		destination = fmt.Sprintf("https://github.com/%s/pull/%d", p.Repository.FullName, r.PullRequests[0].Number)
 	}
 	keep := func(reason string) Decision {
@@ -441,6 +466,10 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 		return keep("workflow_recovered"), nil
 	}
 	return decision("drop", "routine_workflow_result"), nil
+}
+
+func newerWorkflow(current, previous *workflow) bool {
+	return current.RunNumber > previous.RunNumber || (current.RunNumber == previous.RunNumber && current.RunAttempt > previous.RunAttempt)
 }
 
 func workflowFailed(conclusion string) bool {

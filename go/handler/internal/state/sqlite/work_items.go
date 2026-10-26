@@ -148,7 +148,19 @@ func (store *Store) RegisterRun(ctx context.Context, taskID, value string) error
 	if err != nil {
 		return err
 	}
-	return store.registerArtifact(ctx, taskID, "github_run", key)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+	owner, err := registerArtifactTx(ctx, tx, taskID, "github_run", key)
+	if err != nil {
+		return err
+	}
+	if err := reconcileRunCompletion(ctx, tx, key, owner); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (store *Store) RegisterWorkflow(ctx context.Context, taskID, value string) error {
@@ -165,22 +177,29 @@ func (store *Store) registerArtifact(ctx context.Context, taskID, kind, key stri
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
-	var itemID string
-	if err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM task_assignments WHERE task_id = ?`, taskID).Scan(&itemID); err != nil {
-		return err
-	}
-	var owner string
-	err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = ? AND artifact_key = ?`, kind, key).Scan(&owner)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if owner != "" && owner != itemID {
-		return fmt.Errorf("GitHub subject already belongs to another work item")
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO work_item_artifacts VALUES (?, ?, ?)`, kind, key, itemID); err != nil {
+	if _, err := registerArtifactTx(ctx, tx, taskID, kind, key); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func registerArtifactTx(ctx context.Context, tx *sql.Tx, taskID, kind, key string) (string, error) {
+	var itemID string
+	if err := tx.QueryRowContext(ctx, `SELECT work_item_id FROM task_assignments WHERE task_id = ?`, taskID).Scan(&itemID); err != nil {
+		return "", err
+	}
+	var owner string
+	err := tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = ? AND artifact_key = ?`, kind, key).Scan(&owner)
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	if owner != "" && owner != itemID {
+		return "", fmt.Errorf("GitHub subject already belongs to another work item")
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO work_item_artifacts VALUES (?, ?, ?)`, kind, key, itemID); err != nil {
+		return "", err
+	}
+	return itemID, nil
 }
 
 func (store *Store) applyPreferredReply(ctx context.Context, task contracts.TaskQueueMessage, reason string) (contracts.TaskQueueMessage, error) {

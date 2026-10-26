@@ -108,6 +108,12 @@ func GitHubNotification(body []byte, event, delivery string, receivedAt time.Tim
 		}
 	}
 	if p.Run != nil {
+		metadata["run_url"] = fmt.Sprintf("https://github.com/%s/actions/runs/%d", repo, p.Run.ID)
+		metadata["workflow_id"] = p.Run.WorkflowID
+		metadata["run_number"] = p.Run.RunNumber
+		metadata["conclusion"] = p.Run.Conclusion
+		metadata["run_event"] = p.Run.Event
+		metadata["head_branch"] = p.Run.HeadBranch
 		metadata["run_id"] = p.Run.ID
 		metadata["run_attempt"] = p.Run.RunAttempt
 		metadata["head_sha"] = p.Run.HeadSHA
