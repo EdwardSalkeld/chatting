@@ -83,7 +83,7 @@ def main() -> int:
             )
         except urllib.error.URLError as error:
             parser.error(f"handler unavailable: {error.reason}")
-    preferred_reply = store.preferred_work_reply(work_item_id=assignment.work_item_id)
+    origin_channel = store.work_origin_channel(work_item_id=assignment.work_item_id)
     print(
         json.dumps(
             {
@@ -98,11 +98,11 @@ def main() -> int:
                 "explicit_finish": store.get_work_explicit_finish(
                     work_item_id=assignment.work_item_id
                 ),
-                "preferred_reply": {
-                    "type": preferred_reply.type,
-                    "target": preferred_reply.target,
+                "origin_channel": {
+                    "type": origin_channel.type,
+                    "target": origin_channel.target,
                 }
-                if preferred_reply
+                if origin_channel
                 else None,
             },
             sort_keys=True,

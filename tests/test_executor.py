@@ -1,4 +1,5 @@
 import json
+import io
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,8 @@ from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
 from app.broker import TaskQueueMessage
 from app.state import SQLiteStateStore
 from app.worker.executor import CodexExecutor
-from app.worker.executor.codex import _run_streaming
+from app.worker.executor.codex import _run_streaming, _task_payload
+from tests.e2e import fake_codex
 
 
 def _envelope() -> TaskEnvelope:
@@ -28,6 +30,11 @@ def _envelope() -> TaskEnvelope:
         context_refs=["repo:/workspace/chatting"],
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         dedupe_key="evt_1",
+        conversation_channels=[
+            ReplyChannel(
+                type="telegram", target="-100", metadata={"chat_title": "Project"}
+            )
+        ],
         prompt_context=PromptContext(
             global_instructions=["Keep replies concise."],
             reply_channel_instructions=["Use a short email subject line."],
@@ -36,6 +43,27 @@ def _envelope() -> TaskEnvelope:
 
 
 class CodexExecutorTests(unittest.TestCase):
+    def test_email_e2e_agent_uses_current_prompt_destination(self) -> None:
+        payload = _task_payload(_envelope(), current_time=datetime.now(timezone.utc))
+        sent = []
+
+        def capture_send(command, **kwargs):
+            spec_path = Path(command[command.index("--spec-file") + 1])
+            sent.append(json.loads(spec_path.read_text()))
+            spec_path.unlink()
+
+        with (
+            patch("sys.stdin", io.StringIO(json.dumps(payload))),
+            patch("sys.stdout", io.StringIO()),
+            patch.dict("os.environ", {"FAKE_CODEX_PROMPT_DIR": ""}),
+            patch.object(fake_codex.subprocess, "run", side_effect=capture_send),
+        ):
+            fake_codex.main()
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["channel"], "email")
+        self.assertEqual(sent[0]["target"], "alice@example.com")
+
     def test_streaming_output_arrives_before_process_exits(self) -> None:
         first_chunk = threading.Event()
         output: list[tuple[str, str]] = []
@@ -277,7 +305,16 @@ class CodexExecutorTests(unittest.TestCase):
         payload = json.loads(run_mock.call_args.kwargs["payload"])
         self.assertEqual(payload["schema_version"], "1.0")
         self.assertEqual(payload["task"]["task_id"], "task:evt_1")
-        self.assertEqual(payload["task"]["reply_channel"]["type"], "email")
+        self.assertEqual(payload["task"]["event_channel"]["type"], "email")
+        self.assertNotIn("reply_channel", payload["task"])
+        self.assertEqual(
+            payload["task"]["associated_conversations"][0]["target"], "-100"
+        )
+        self.assertEqual(payload["history_contract"]["scope"]["target"], "-100")
+        self.assertIn(
+            "Neither is a required or preferred",
+            payload["reply_contract"]["destination_choice"],
+        )
         self.assertEqual(
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -P -m app.main_reply --spec-file <path>",

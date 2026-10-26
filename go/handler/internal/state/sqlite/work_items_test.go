@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -90,14 +91,17 @@ func TestPersistentLaneAssignments(t *testing.T) {
 	if notification.WorkItemID != first.WorkItemID {
 		t.Fatal("PR notification did not return to origin lane")
 	}
-	if notification.Envelope.ReplyChannel.Type != "telegram" || notification.Envelope.ReplyChannel.Target != "-100" {
-		t.Fatal("PR notification did not inherit origin reply route")
+	if !reflect.DeepEqual(notification.Envelope.ReplyChannel, originalNotification.Envelope.ReplyChannel) {
+		t.Fatal("PR notification origin was replaced")
+	}
+	if len(notification.Envelope.ConversationChannels) != 1 || notification.Envelope.ConversationChannels[0].Target != "-100" {
+		t.Fatal("PR notification lost associated Telegram context")
 	}
 	replayed, err := store.AssignTask(ctx, originalNotification)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.WorkItemID != first.WorkItemID || replayed.Envelope.ReplyChannel.Type != "telegram" {
+	if replayed.WorkItemID != first.WorkItemID || replayed.Envelope.ReplyChannel.Type != "email" || len(replayed.Envelope.ConversationChannels) != 1 {
 		t.Fatal("replayed notification lost its route")
 	}
 	if err = store.RecordTask(ctx, notification); err != nil {
@@ -149,7 +153,7 @@ func TestCINotificationRoutesThroughItsWorkflowRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if routed.WorkItemID != origin.WorkItemID || routed.Envelope.ReplyChannel.Type != "telegram" {
+	if routed.WorkItemID != origin.WorkItemID || routed.Envelope.ReplyChannel.Type != "email" || len(routed.Envelope.ConversationChannels) != 1 {
 		t.Fatalf("CI email did not return to the PR's work item: %#v", routed)
 	}
 

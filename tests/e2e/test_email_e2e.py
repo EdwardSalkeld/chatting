@@ -257,8 +257,8 @@ class EmailE2ETests(unittest.TestCase):
                 self.assertIn("E2E test task", task["content"])
                 self.assertIn("Please do the e2e test thing", task["content"])
                 self.assertEqual(task["source"], "email")
-                self.assertEqual(task["reply_channel"]["type"], "email")
-                self.assertEqual(task["reply_channel"]["target"], "sender@test.local")
+                self.assertEqual(task["event_channel"]["type"], "email")
+                self.assertEqual(task["event_channel"]["target"], "sender@test.local")
                 self.assertIn("current_time", prompt)
                 self.assertIn("reply_contract", prompt)
 

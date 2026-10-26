@@ -44,6 +44,19 @@ func (sender *GitHubIssueCommentSender) Send(ctx context.Context, target string,
 		"--body",
 		body,
 	}
+	if parsed, parseErr := url.Parse(target); parseErr == nil && strings.HasPrefix(parsed.Fragment, "discussion_r") {
+		commentID := strings.TrimPrefix(parsed.Fragment, "discussion_r")
+		id, err := strconv.ParseInt(commentID, 10, 64)
+		if err != nil || id <= 0 {
+			return errors.New("github_review_comment_target_invalid")
+		}
+		if !strings.Contains(parsed.Path, "/pull/") {
+			return errors.New("github_review_comment_target_invalid")
+		}
+		command = []string{"gh", "api", "--method", "POST",
+			"repos/" + repository + "/pulls/" + strconv.Itoa(issueNumber) + "/comments/" + commentID + "/replies",
+			"--raw-field", "body=" + body}
+	}
 	if err := sender.runCommand(ctx, command); err != nil {
 		return errors.New("github_issue_comment_failed")
 	}

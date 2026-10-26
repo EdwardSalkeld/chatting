@@ -516,7 +516,7 @@ def _task_payload(
         "source": envelope.source,
         "content": envelope.content,
         "context": [parse_context_ref(ref).to_dict() for ref in envelope.context_refs],
-        "reply_channel": {
+        "event_channel": {
             "type": envelope.reply_channel.type,
             "target": envelope.reply_channel.target,
         },
@@ -543,12 +543,26 @@ def _task_payload(
     if envelope.prompt_context.has_content():
         task_dict["prompt_context"] = envelope.prompt_context.to_dict()
     if envelope.reply_channel.metadata:
-        task_dict["reply_channel"]["metadata"] = envelope.reply_channel.metadata
+        task_dict["event_channel"]["metadata"] = envelope.reply_channel.metadata
+    task_dict["associated_conversations"] = [
+        {"type": channel.type, "target": channel.target, "metadata": channel.metadata}
+        for channel in envelope.conversation_channels
+    ]
     payload = {
         "schema_version": SCHEMA_VERSION,
         "task": task_dict,
         "current_time": format_utc(current_time),
         "reply_contract": {
+            "destination_choice": (
+                "Choose whether and where to communicate using the event and conversation context. "
+                "event_channel records the current event's origin; associated_conversations records "
+                "related conversations. Neither is a required or preferred reply destination. "
+                "You may reply on the issue/PR, reply inline to a review comment, message the user "
+                "on Telegram, use several destinations, or say nothing when no response is useful. "
+                "Set channel and target explicitly for each send. For an inline GitHub review reply, "
+                "use channel github and the review comment's URL ending #discussion_r<comment-id>. "
+                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment."
+            ),
             # -P (safe path) stops Python prepending the cwd to sys.path, so this
             # always runs the deployed app.main_reply even when the cwd is a
             # chatting checkout in the workspace whose stale app/ would otherwise
@@ -598,8 +612,8 @@ def _task_payload(
             "reminder_api": "/api/reminders",
             "instructions": (
                 "Use the handler JSON APIs directly; there is no scheduling CLI. For POST/PUT, "
-                "write JSON to a temporary file and use curl --data-binary @<path>. Copy the "
-                "current task reply_channel unless the user explicitly requests another target. "
+                "write JSON to a temporary file and use curl --data-binary @<path>. Choose the "
+                "reminder's destination from the user's request and conversation context. "
                 "Reminder run_at values must include Z or an explicit offset and every reminder "
                 "POST/PUT needs an idempotency_key. Any 4xx JSON response includes a usage object "
                 "with endpoints, an example body, and correction notes."
@@ -622,8 +636,16 @@ def _task_payload(
         payload["termination_contract"] = finish_session.contract()
         payload["reply_contract"]["executor_exit_status_drives_completion"] = False
     scope_option = ""
-    if envelope.reply_channel.type == "telegram":
-        topic_id = envelope.reply_channel.metadata.get("message_thread_id")
+    telegram_context = next(
+        (
+            channel
+            for channel in [envelope.reply_channel, *envelope.conversation_channels]
+            if channel.type == "telegram"
+        ),
+        None,
+    )
+    if telegram_context is not None:
+        topic_id = telegram_context.metadata.get("message_thread_id")
         scope_option = (
             f" --topic-id {topic_id}"
             if isinstance(topic_id, int)
@@ -651,12 +673,12 @@ def _task_payload(
         payload["history_contract"] = {
             "scope": {
                 "channel": "telegram",
-                "target": envelope.reply_channel.target,
+                "target": telegram_context.target,
                 "topic_id": topic_id if scope_option else None,
             },
             "search_command": (
                 "python3 -P -m app.main_history --channel telegram "
-                f"--target {envelope.reply_channel.target}{scope_option} "
+                f"--target {telegram_context.target}{scope_option} "
                 "--query 'search words'"
             ),
             "instructions": (
