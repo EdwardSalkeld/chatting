@@ -183,6 +183,9 @@ class TaskEnvelope:
     prompt_context: PromptContext = field(default_factory=PromptContext)
     schema_version: str = SCHEMA_VERSION
 
+    # Associated conversations are facts, not a preferred reply destination.
+    conversation_channels: list[ReplyChannel] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         _validate_schema_version(self.schema_version)
         if self.source not in SOURCE_TYPES:
@@ -219,6 +222,15 @@ class TaskEnvelope:
         }
         if self.prompt_context.has_content():
             payload["prompt_context"] = self.prompt_context.to_dict()
+        if self.conversation_channels:
+            payload["conversation_channels"] = [
+                {
+                    "type": channel.type,
+                    "target": channel.target,
+                    "metadata": channel.metadata,
+                }
+                for channel in self.conversation_channels
+            ]
         return payload
 
 

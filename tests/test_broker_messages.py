@@ -30,6 +30,11 @@ class TaskQueueMessageTests(unittest.TestCase):
                 metadata={"thread_id": "abc"},
             ),
             dedupe_key="email:1",
+            conversation_channels=[
+                ReplyChannel(
+                    type="telegram", target="-100", metadata={"chat_title": "Project"}
+                )
+            ],
             prompt_context=PromptContext(
                 global_instructions=["Keep replies concise."],
                 reply_channel_instructions=["Use email formatting."],

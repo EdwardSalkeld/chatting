@@ -28,6 +28,11 @@ def _envelope() -> TaskEnvelope:
         context_refs=["repo:/workspace/chatting"],
         reply_channel=ReplyChannel(type="email", target="alice@example.com"),
         dedupe_key="evt_1",
+        conversation_channels=[
+            ReplyChannel(
+                type="telegram", target="-100", metadata={"chat_title": "Project"}
+            )
+        ],
         prompt_context=PromptContext(
             global_instructions=["Keep replies concise."],
             reply_channel_instructions=["Use a short email subject line."],
@@ -277,7 +282,16 @@ class CodexExecutorTests(unittest.TestCase):
         payload = json.loads(run_mock.call_args.kwargs["payload"])
         self.assertEqual(payload["schema_version"], "1.0")
         self.assertEqual(payload["task"]["task_id"], "task:evt_1")
-        self.assertEqual(payload["task"]["reply_channel"]["type"], "email")
+        self.assertEqual(payload["task"]["event_channel"]["type"], "email")
+        self.assertNotIn("reply_channel", payload["task"])
+        self.assertEqual(
+            payload["task"]["associated_conversations"][0]["target"], "-100"
+        )
+        self.assertEqual(payload["history_contract"]["scope"]["target"], "-100")
+        self.assertIn(
+            "Neither is a required or preferred",
+            payload["reply_contract"]["destination_choice"],
+        )
         self.assertEqual(
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -P -m app.main_reply --spec-file <path>",

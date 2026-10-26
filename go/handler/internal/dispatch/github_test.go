@@ -63,6 +63,24 @@ func TestGitHubIssueCommentSenderRejectsInvalidTarget(t *testing.T) {
 	}
 }
 
+func TestGitHubReviewReplyUsesThreadEndpoint(t *testing.T) {
+	var seen []string
+	sender := NewGitHubIssueCommentSender(func(_ context.Context, command []string) error { seen = command; return nil })
+	body := "Thanks.\nHere is the fix: `value` costs $0."
+	if err := sender.Send(context.Background(), "https://github.com/o/r/pull/71#discussion_r123", body); err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"gh", "api", "--method", "POST", "repos/o/r/pulls/71/comments/123/replies", "--raw-field", "body=" + body}
+	if !reflect.DeepEqual(seen, expected) {
+		t.Fatalf("commands = %#v", seen)
+	}
+	for _, target := range []string{"https://github.com/o/r/pull/71#discussion_rnope", "https://github.com/o/r/issues/70#discussion_r123"} {
+		if err := sender.Send(context.Background(), target, body); err == nil {
+			t.Fatalf("accepted invalid thread %s", target)
+		}
+	}
+}
+
 func TestGitHubIssueCommentSenderReturnsFailureWhenGHFails(t *testing.T) {
 	sender := NewGitHubIssueCommentSender(func(_ context.Context, _ []string) error {
 		return errors.New("boom")

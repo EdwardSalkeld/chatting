@@ -63,7 +63,9 @@ def assign(
 
     item_id = task.work_item_id or "item_legacy_general"
     reason = "handler_assignment" if task.work_item_id else "legacy_general"
-    reply = task.envelope.reply_channel
+    # Mirror the recorded origin as context, without changing the event channel.
+    # The legacy SQL column name is retained for existing worker databases.
+    reply = next(iter(task.envelope.conversation_channels), task.envelope.reply_channel)
     created = connection.execute(
         """INSERT OR IGNORE INTO work_items
            (work_item_id, origin_conversation_id, preferred_reply_json, state, model_tier, explicit_finish, created_at)

@@ -41,7 +41,7 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		if err = tx.Commit(); err != nil {
 			return task, err
 		}
-		return store.applyPreferredReply(ctx, task, existingReason)
+		return store.addConversationContext(ctx, task)
 	}
 	if err != sql.ErrNoRows {
 		return task, err
@@ -110,7 +110,7 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		return task, err
 	}
 	task.WorkItemID = itemID
-	return store.applyPreferredReply(ctx, task, reason)
+	return store.addConversationContext(ctx, task)
 }
 
 // RegisterPR links a PR to the lane assigned to the originating task.
@@ -167,24 +167,30 @@ func (store *Store) registerArtifact(ctx context.Context, taskID, kind, key stri
 	return tx.Commit()
 }
 
-func (store *Store) applyPreferredReply(ctx context.Context, task contracts.TaskQueueMessage, reason string) (contracts.TaskQueueMessage, error) {
-	if reason == "github_pr" || reason == "github_subject" || reason == "github_repository" {
-		var encoded string
-		if err := store.db.QueryRowContext(ctx,
-			`SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?`, task.WorkItemID,
-		).Scan(&encoded); err != nil {
-			return task, err
+func (store *Store) addConversationContext(ctx context.Context, task contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error) {
+	// The legacy column records where this work started. It supplies context,
+	// never an instruction to replace the current event's destination.
+	var encoded string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?`, task.WorkItemID,
+	).Scan(&encoded); err != nil {
+		return task, err
+	}
+	var origin contracts.ReplyChannel
+	if err := json.Unmarshal([]byte(encoded), &origin); err != nil {
+		return task, err
+	}
+	if origin.Type == "telegram" || origin.Type == "github" {
+		// Conversation context must not masquerade as another current event:
+		// retain labels/topic identity, not the old message/comment payload.
+		metadata := map[string]any{}
+		for _, key := range []string{"chat_title", "chat_type", "message_thread_id"} {
+			if value, ok := origin.Metadata[key]; ok {
+				metadata[key] = value
+			}
 		}
-		var reply contracts.ReplyChannel
-		if err := json.Unmarshal([]byte(encoded), &reply); err != nil {
-			return task, err
-		}
-		// Only a conversation or a GitHub thread is somewhere to answer. A
-		// work item first created by a log, email or heartbeat keeps the
-		// event's own channel.
-		if reply.Type == "telegram" || reply.Type == "github" {
-			task.Envelope.ReplyChannel = reply
-		}
+		origin.Metadata = metadata
+		task.Envelope.ConversationChannels = []contracts.ReplyChannel{origin}
 	}
 	return task, nil
 }

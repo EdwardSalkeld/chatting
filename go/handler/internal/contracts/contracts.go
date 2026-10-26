@@ -170,45 +170,48 @@ func (value *PromptContext) UnmarshalJSON(raw []byte) error {
 }
 
 type TaskEnvelope struct {
-	SchemaVersion string          `json:"schema_version"`
-	ID            string          `json:"id"`
-	Source        string          `json:"source"`
-	ReceivedAt    Timestamp       `json:"received_at"`
-	Actor         *string         `json:"actor"`
-	Content       string          `json:"content"`
-	Attachments   []AttachmentRef `json:"attachments"`
-	ContextRefs   []string        `json:"context_refs"`
-	PromptContext *PromptContext  `json:"prompt_context,omitempty"`
-	ReplyChannel  ReplyChannel    `json:"reply_channel"`
-	DedupeKey     string          `json:"dedupe_key"`
+	SchemaVersion        string          `json:"schema_version"`
+	ID                   string          `json:"id"`
+	Source               string          `json:"source"`
+	ReceivedAt           Timestamp       `json:"received_at"`
+	Actor                *string         `json:"actor"`
+	Content              string          `json:"content"`
+	Attachments          []AttachmentRef `json:"attachments"`
+	ContextRefs          []string        `json:"context_refs"`
+	PromptContext        *PromptContext  `json:"prompt_context,omitempty"`
+	ReplyChannel         ReplyChannel    `json:"reply_channel"`
+	ConversationChannels []ReplyChannel  `json:"conversation_channels,omitempty"`
+	DedupeKey            string          `json:"dedupe_key"`
 }
 
 func (value TaskEnvelope) MarshalJSON() ([]byte, error) {
 	type taskEnvelopeJSON struct {
-		SchemaVersion string          `json:"schema_version"`
-		ID            string          `json:"id"`
-		Source        string          `json:"source"`
-		ReceivedAt    Timestamp       `json:"received_at"`
-		Actor         *string         `json:"actor"`
-		Content       string          `json:"content"`
-		Attachments   []AttachmentRef `json:"attachments"`
-		ContextRefs   []string        `json:"context_refs"`
-		PromptContext *PromptContext  `json:"prompt_context,omitempty"`
-		ReplyChannel  ReplyChannel    `json:"reply_channel"`
-		DedupeKey     string          `json:"dedupe_key"`
+		SchemaVersion        string          `json:"schema_version"`
+		ID                   string          `json:"id"`
+		Source               string          `json:"source"`
+		ReceivedAt           Timestamp       `json:"received_at"`
+		Actor                *string         `json:"actor"`
+		Content              string          `json:"content"`
+		Attachments          []AttachmentRef `json:"attachments"`
+		ContextRefs          []string        `json:"context_refs"`
+		PromptContext        *PromptContext  `json:"prompt_context,omitempty"`
+		ReplyChannel         ReplyChannel    `json:"reply_channel"`
+		ConversationChannels []ReplyChannel  `json:"conversation_channels,omitempty"`
+		DedupeKey            string          `json:"dedupe_key"`
 	}
 	return json.Marshal(taskEnvelopeJSON{
-		SchemaVersion: value.SchemaVersion,
-		ID:            value.ID,
-		Source:        value.Source,
-		ReceivedAt:    value.ReceivedAt,
-		Actor:         value.Actor,
-		Content:       value.Content,
-		Attachments:   nonNilAttachments(value.Attachments),
-		ContextRefs:   nonNilStrings(value.ContextRefs),
-		PromptContext: value.PromptContext,
-		ReplyChannel:  value.ReplyChannel,
-		DedupeKey:     value.DedupeKey,
+		SchemaVersion:        value.SchemaVersion,
+		ID:                   value.ID,
+		Source:               value.Source,
+		ReceivedAt:           value.ReceivedAt,
+		Actor:                value.Actor,
+		Content:              value.Content,
+		Attachments:          nonNilAttachments(value.Attachments),
+		ContextRefs:          nonNilStrings(value.ContextRefs),
+		PromptContext:        value.PromptContext,
+		ReplyChannel:         value.ReplyChannel,
+		ConversationChannels: value.ConversationChannels,
+		DedupeKey:            value.DedupeKey,
 	})
 }
 
@@ -243,6 +246,11 @@ func (value TaskEnvelope) Validate() error {
 	}
 	if err := value.ReplyChannel.Validate(); err != nil {
 		return err
+	}
+	for _, channel := range value.ConversationChannels {
+		if err := channel.Validate(); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(value.DedupeKey) == "" {
 		return errors.New("dedupe_key is required")

@@ -78,10 +78,24 @@ context bundle. The worker resumes its item session and fetches the details.
 ## Ownership and optional delivery
 
 Ownership reuses #314's `work_item_artifacts` registry. A registered PR's events
-return to its originating item and preferred reply channel. An unowned watched
+return to its originating item. An unowned watched
 issue/PR gets one dedicated item whose channel is that GitHub subject. Later
 events reuse it, including after restart. Several related subjects can share an
 item through explicit registration; conflicts are rejected, not reassigned.
+
+Workspace ownership does not choose where the agent speaks. The handler preserves
+the event's own channel and adds the item's originating conversation as context.
+The agent receives `event_channel` and `associated_conversations`, and chooses
+whether to comment on the issue/PR, reply inside a review thread, message the
+associated Telegram conversation, use several destinations, or stay silent.
+Every send explicitly selects its channel and target; no preferred reply address
+replaces the event's origin. The legacy database column `preferred_reply_json`
+is retained for compatibility, solely as origin context.
+
+For GitHub sends, an issue/PR URL creates an ordinary comment. A PR review
+comment URL ending in `#discussion_r<comment-id>` replies inside that thread.
+Both use `app.main_reply` with channel `github`. Inline destinations must identify
+a review **comment**, not the overall review ID.
 
 The worker automatically registers PRs opened through `gh pr create`. Register
 other related subjects against a task already owned by the desired item:

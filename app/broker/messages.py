@@ -147,6 +147,27 @@ class TaskQueueMessage:
         if not isinstance(reply_channel_payload, dict):
             raise ValueError("envelope.reply_channel must be an object")
 
+        conversations_payload = envelope_payload.get("conversation_channels", [])
+        if not isinstance(conversations_payload, list):
+            raise ValueError("envelope.conversation_channels must be a list")
+        conversations: list[ReplyChannel] = []
+        for channel in conversations_payload:
+            if not isinstance(channel, dict):
+                raise ValueError("envelope.conversation_channels[] must be an object")
+            conversations.append(
+                ReplyChannel(
+                    type=_require_non_empty_string(
+                        channel.get("type"), field_name="conversation.type"
+                    ),
+                    target=_require_non_empty_string(
+                        channel.get("target"), field_name="conversation.target"
+                    ),
+                    metadata=_parse_optional_dict(
+                        channel.get("metadata"), field_name="conversation.metadata"
+                    ),
+                )
+            )
+
         attachments: list[AttachmentRef] = []
         for item in attachments_payload:
             if not isinstance(item, dict):
@@ -200,6 +221,7 @@ class TaskQueueMessage:
                 envelope_payload.get("dedupe_key"),
                 field_name="envelope.dedupe_key",
             ),
+            conversation_channels=conversations,
             prompt_context=_parse_prompt_context_payload(
                 envelope_payload.get("prompt_context")
             ),
