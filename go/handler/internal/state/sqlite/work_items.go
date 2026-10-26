@@ -47,10 +47,10 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		return task, err
 	}
 	reason := decision.Reason
-	if decision.Kind == "github_repository" {
-		if err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = 'github_repository' AND artifact_key = ?`, decision.Key).Scan(&itemID); err != nil {
+	if decision.Kind == "github_repository" || decision.Kind == "github_run" || decision.Kind == "github_workflow" {
+		if err = tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = ? AND artifact_key = ?`, decision.Kind, decision.Key).Scan(&itemID); err != nil {
 			if err == sql.ErrNoRows {
-				return task, fmt.Errorf("%w: unregistered repository", contracts.ErrGitHubNeedsContext)
+				return task, fmt.Errorf("%w: unregistered GitHub destination", contracts.ErrGitHubNeedsContext)
 			}
 			return task, err
 		}
@@ -143,6 +143,22 @@ func (store *Store) RegisterRepository(ctx context.Context, taskID, repo string)
 	return store.registerArtifact(ctx, taskID, "github_repository", key)
 }
 
+func (store *Store) RegisterRun(ctx context.Context, taskID, value string) error {
+	key, err := routing.NormalizeRun(value)
+	if err != nil {
+		return err
+	}
+	return store.registerArtifact(ctx, taskID, "github_run", key)
+}
+
+func (store *Store) RegisterWorkflow(ctx context.Context, taskID, value string) error {
+	key, err := routing.NormalizeWorkflow(value)
+	if err != nil {
+		return err
+	}
+	return store.registerArtifact(ctx, taskID, "github_workflow", key)
+}
+
 func (store *Store) registerArtifact(ctx context.Context, taskID, kind, key string) error {
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -168,7 +184,7 @@ func (store *Store) registerArtifact(ctx context.Context, taskID, kind, key stri
 }
 
 func (store *Store) applyPreferredReply(ctx context.Context, task contracts.TaskQueueMessage, reason string) (contracts.TaskQueueMessage, error) {
-	if reason == "github_pr" || reason == "github_subject" || reason == "github_repository" {
+	if reason == "github_pr" || reason == "github_subject" || reason == "github_repository" || reason == "github_run" || reason == "github_workflow" {
 		var encoded string
 		if err := store.db.QueryRowContext(ctx,
 			`SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?`, task.WorkItemID,

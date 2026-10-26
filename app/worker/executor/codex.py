@@ -617,6 +617,20 @@ def _task_payload(
                 "link it with register_command."
             ),
         },
+        "github_actions_contract": {
+            "register_run_command": (
+                "python3 -P -m app.main_work_items register-run "
+                f"task:{envelope.id} <run_url>"
+            ),
+            "instructions": (
+                "Before waiting for a specific GitHub Actions or deployment run, "
+                "register its exact run URL against this task so webhook completion "
+                "returns to this work item. Registration does not start a run or "
+                "enable webhook delivery; retain normal monitoring until delivery "
+                "is enabled. Workflow-wide destinations are explicit configuration, "
+                "not something to infer from a run title."
+            ),
+        },
     }
     if finish_session is not None:
         payload["termination_contract"] = finish_session.contract()

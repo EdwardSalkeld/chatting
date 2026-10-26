@@ -113,6 +113,7 @@ func TestActionRulesAndWorkflowRecovery(t *testing.T) {
 	run.HeadSHA = "def"
 	check("workflow_run", "completed", map[string]any{"workflow_run": run}, "keep", "workflow_failure")
 	run.PullRequests = nil
+	run.HeadSHA = "unknown"
 	check("workflow_run", "completed", map[string]any{"workflow_run": run}, "needs_context", "workflow_missing_pr_context")
 }
 

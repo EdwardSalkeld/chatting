@@ -36,7 +36,7 @@ def main() -> int:
     register = commands.add_parser("register-pr")
     register.add_argument("task_id")
     register.add_argument("pr_url")
-    for command in ("subject", "repository"):
+    for command in ("subject", "repository", "run", "workflow"):
         artifact = commands.add_parser(f"register-{command}")
         artifact.add_argument("task_id")
         artifact.add_argument("value")

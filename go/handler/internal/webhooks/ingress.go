@@ -33,7 +33,7 @@ func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter,
 			return err
 		}
 		if d.Disposition == "keep" {
-			task, err := GitHubNotification(body, event, delivery, now)
+			task, err := GitHubNotification(body, event, delivery, now, d.WorkflowTarget)
 			if err != nil {
 				buildErr = err
 				return err

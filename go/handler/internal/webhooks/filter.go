@@ -13,10 +13,7 @@ import (
 )
 
 type FilterStore interface {
-	WebhookState(context.Context, string, string) (string, error)
-	PutWebhookState(context.Context, string, string, string) error
-	Seen(context.Context, string, string) (bool, error)
-	MarkSeen(context.Context, string, string) error
+	contracts.WebhookFilterState
 }
 
 type Decision struct {
@@ -24,6 +21,9 @@ type Decision struct {
 	Reason      string `json:"reason"`
 	Watched     bool   `json:"watched"`
 	NewWatch    bool   `json:"new_watch,omitempty"`
+	// Routing evidence only: never serialized into filter diagnostics or used
+	// to replace the original signed body for task identity/deduplication.
+	WorkflowTarget string `json:"-"`
 }
 
 // Filter serializes decisions and state writes within the handler process.
@@ -340,6 +340,26 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 	if p.Action != "completed" {
 		return decision("drop", "workflow_progress"), nil
 	}
+	destination, err := f.Store.GitHubWorkflowDestination(ctx, p.Repository.FullName, r.ID, r.WorkflowID)
+	if err != nil {
+		return Decision{}, err
+	}
+	explicitRun := strings.Contains(destination, "/actions/runs/")
+	if len(r.PullRequests) == 0 && !explicitRun {
+		numbers, err := f.Store.WatchedGitHubPRs(ctx, f.Login, p.Repository.FullName, r.HeadSHA)
+		if err != nil {
+			return Decision{}, err
+		}
+		if len(numbers) > 1 {
+			return decision("needs_context", "workflow_ambiguous_commit"), nil
+		}
+		if len(numbers) == 1 {
+			r.PullRequests = []subject{{Number: numbers[0]}}
+		}
+	}
+	if len(r.PullRequests) > 1 && !explicitRun {
+		return decision("needs_context", "workflow_ambiguous_subject"), nil
+	}
 	matched := false
 	missingHead := false
 	for _, pr := range r.PullRequests {
@@ -367,7 +387,7 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 		}
 		matched = true
 	}
-	if !matched {
+	if !matched && !explicitRun && !(len(r.PullRequests) == 0 && destination != "") {
 		if missingHead {
 			return decision("needs_context", "workflow_missing_head_context"), nil
 		}
@@ -380,6 +400,9 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 		return decision("needs_context", "incomplete_workflow"), nil
 	}
 	key := fmt.Sprintf("%s/%s/%d/%s", strings.ToLower(f.Login), strings.ToLower(p.Repository.FullName), r.WorkflowID, r.HeadSHA)
+	if explicitRun {
+		key += fmt.Sprintf("/run/%d", r.ID)
+	}
 	previous, err := f.Store.WebhookState(ctx, "workflow", key)
 	if err != nil {
 		return Decision{}, err
@@ -397,11 +420,25 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 	if err := f.Store.PutWebhookState(ctx, "workflow", key, string(encoded)); err != nil {
 		return Decision{}, err
 	}
+	// Prefer an explicitly registered run, then a single watched PR, then an
+	// explicit workflow destination for runs without a PR. Never infer an
+	// owner from branch names or display titles.
+	if !explicitRun && len(r.PullRequests) == 1 {
+		destination = fmt.Sprintf("https://github.com/%s/pull/%d", p.Repository.FullName, r.PullRequests[0].Number)
+	}
+	keep := func(reason string) Decision {
+		d := decision("keep", reason)
+		d.WorkflowTarget = destination
+		return d
+	}
+	if explicitRun {
+		return keep("registered_run_completed"), nil
+	}
 	if workflowFailed(r.Conclusion) {
-		return decision("keep", "workflow_failure"), nil
+		return keep("workflow_failure"), nil
 	}
 	if r.Conclusion == "success" && workflowFailed(old.Conclusion) {
-		return decision("keep", "workflow_recovered"), nil
+		return keep("workflow_recovered"), nil
 	}
 	return decision("drop", "routine_workflow_result"), nil
 }

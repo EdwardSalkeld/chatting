@@ -105,7 +105,54 @@ destination. Missing destinations, event IDs or ambiguous workflow subjects are
 `github_webhook_held` with a reason. There is no automatic enrichment or held-event
 replay in this version: inspect the row, supply the missing registration/context
 and redeliver the event through GitHub. A successful redelivery clears the held
-record. Workflows linked to several PRs are held rather than guessing an owner.
+record. Workflows linked to several PRs are held rather than guessing an owner,
+unless that exact run has an explicit destination.
+
+### CI ownership without a PR link
+
+When GitHub omits a run's `pull_requests`, match its exact repository and
+`head_sha` against current watched PR heads. One match routes through that PR's
+existing owner. Multiple matches stay held as `workflow_ambiguous_commit`;
+unmatched events remain held. This uses local watch state, including heads
+recorded on suppressed own-PR events, and works for fork PRs without GitHub API
+calls in the receiver. Old PR heads are not backfilled.
+
+For a run being awaited, explicitly register its owner before waiting:
+
+```sh
+python3 -P -m app.main_work_items register-run <task-id> https://github.com/owner/repo/actions/runs/123
+```
+
+That exact run takes precedence over PR matching. It reports every completed
+outcome, including an initial success or cancellation; retries of the same
+attempt are suppressed. Registrations persist for subsequent rerun attempts.
+Registration is explicit; starting `gh run watch` does not register ownership.
+
+For unattended runs without a watched PR, register a workflow destination using
+its numeric workflow ID (the Actions run API's `workflow_id`):
+
+```sh
+python3 -P -m app.main_work_items register-workflow <task-id> https://github.com/owner/repo/actions/workflows/456
+```
+
+A workflow destination reports failures and recovery of a recorded failure on
+the same commit. Routine successes remain filtered. Exact run ownership wins,
+then watched PR ownership, then a workflow destination for otherwise unlinked
+runs. Workflow destinations never override ambiguous PR matches. There is no
+implicit repository-wide fallback or display-title/branch-name inference.
+
+Both commands use the existing artifact registry, preserve the owning item's
+preferred channel, and reject reassignment to another item. Held events are not
+automatically replayed: register the missing destination and redeliver through
+GitHub. Task identity still derives from the original event/body, including when
+routing was resolved from local state.
+
+The worker API endpoints are `/work-items/register-run` (`task_id`, `run_url`)
+and `/work-items/register-workflow` (`task_id`, `workflow_url`). Executor task
+instructions include the run registration command; registration itself neither
+starts a run nor enables delivery.
+
+### Durable delivery
 
 With `github_webhook_delivery_enabled: true`, filtering/watch/CI/dedupe state and
 the compact pending notification commit in one SQLite transaction. A failure
@@ -186,7 +233,8 @@ default. Release opt-in is independent of personal watches. Workflow state in
 older run numbers/attempts are ignored. Routine successes, cancellations and
 progress hooks produce no previews. Missing PR links/head context or incomplete
 edits produce `needs_context`, without GitHub API calls. Explicit branch/workflow
-waits and canceled-run waits have no state source yet and are not inferred.
+waits are not inferred; explicit run registrations deliver completed outcomes
+including cancellations.
 
 Delivery IDs and event/body hashes suppress repeated previews using the existing
 SQLite idempotency table. Changing a delivery header does not defeat body-hash

@@ -1,7 +1,31 @@
 import json
 import unittest
+from unittest.mock import patch
 
-from app.worker.pr_registration import created_pr_url
+from app.worker.pr_registration import created_pr_url, register_github_artifact
+
+
+class ActionsRegistrationTests(unittest.TestCase):
+    def test_actions_registration_sends_handler_field(self) -> None:
+        for kind in ("run", "workflow"):
+            with (
+                self.subTest(kind=kind),
+                patch("app.worker.pr_registration.urllib.request.urlopen") as send,
+            ):
+                value = f"https://github.com/o/r/actions/{kind}s/7"
+                register_github_artifact(
+                    "http://127.0.0.1:9467", task_id="task:1", kind=kind, value=value
+                )
+                request = send.call_args.args[0]
+                self.assertEqual(
+                    request.full_url,
+                    f"http://127.0.0.1:9467/work-items/register-{kind}",
+                )
+                self.assertEqual(
+                    json.loads(request.data),
+                    {"task_id": "task:1", f"{kind}_url": value},
+                )
+
 
 # Shaped like events captured from the deployed worker.
 APP_SERVER_PR_CREATED = json.dumps(
