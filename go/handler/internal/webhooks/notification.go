@@ -127,7 +127,13 @@ func GitHubNotification(body []byte, event, delivery string, receivedAt time.Tim
 		"To associate a related GitHub issue or PR with this work item, run python3 -P -m app.main_work_items register-subject <current-task-id> <issue-or-pr-url>. PRs opened with gh pr create are registered automatically. Do not guess which other item owns a subject.",
 		"Before waiting for a GitHub Actions run, register its URL with python3 -P -m app.main_work_items register-run <current-task-id> <run-url> so completion returns to this work item. Explicit run registrations notify all completed outcomes, including success and cancellation.",
 	}}
-	task.Envelope.ReplyChannel = contracts.ReplyChannel{Type: "github", Target: target, Metadata: metadata}
+	replyType := "github"
+	if metadata["github_run"] != nil || metadata["github_workflow"] != nil {
+		// Actions pages are not issue/PR comment destinations. Assignment will
+		// restore an owning Telegram/GitHub conversation; otherwise log safely.
+		replyType = "log"
+	}
+	task.Envelope.ReplyChannel = contracts.ReplyChannel{Type: replyType, Target: target, Metadata: metadata}
 	// Body-derived identity prevents a modified, unsigned delivery header from
 	// changing the task identity. Keep the header only as a correlation hint.
 	stable := GitHubTaskPreview(body, strings.TrimSpace(event), "", receivedAt)

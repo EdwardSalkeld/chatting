@@ -109,6 +109,9 @@ func TestCIWebhookOwnership(t *testing.T) {
 			if len(pending) != 1 || notification == nil {
 				t.Fatal("notification not persisted")
 			}
+			if (tc.registration == "run" || (tc.registration == "workflow" && tc.sha != "abc")) && notification.Envelope.ReplyChannel.Type != "log" {
+				t.Fatal("Actions URL must not become an issue comment destination")
+			}
 			routed, err := store.AssignTask(ctx, *notification)
 			wantOwner := origin
 			if tc.registration == "run" || (tc.registration == "workflow" && tc.sha != "abc") {

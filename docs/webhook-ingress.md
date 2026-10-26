@@ -141,8 +141,10 @@ then watched PR ownership, then a workflow destination for otherwise unlinked
 runs. Workflow destinations never override ambiguous PR matches. There is no
 implicit repository-wide fallback or display-title/branch-name inference.
 
-Both commands use the existing artifact registry, preserve the owning item's
-preferred channel, and reject reassignment to another item. Held events are not
+Both commands use the existing artifact registry, restore the owning item's
+Telegram/GitHub channel, and reject reassignment to another item. Other channel
+types fall back to logging; an Actions page is not an issue comment destination.
+Held events are not
 automatically replayed: register the missing destination and redeliver through
 GitHub. Task identity still derives from the original event/body, including when
 routing was resolved from local state.
