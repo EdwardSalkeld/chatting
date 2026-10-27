@@ -180,11 +180,11 @@ func (store *Store) addConversationContext(ctx context.Context, task contracts.T
 	if err := json.Unmarshal([]byte(encoded), &origin); err != nil {
 		return task, err
 	}
-	if origin.Type == "telegram" || origin.Type == "github" {
+	if origin.Type == "telegram" || origin.Type == "github" || origin.Type == "zulip" {
 		// Conversation context must not masquerade as another current event:
 		// retain labels/topic identity, not the old message/comment payload.
 		metadata := map[string]any{}
-		for _, key := range []string{"chat_title", "chat_type", "message_thread_id"} {
+		for _, key := range []string{"chat_title", "chat_type", "message_thread_id", "zulip_site", "channel_id", "topic"} {
 			if value, ok := origin.Metadata[key]; ok {
 				metadata[key] = value
 			}

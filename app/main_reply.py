@@ -212,7 +212,11 @@ def _resolve_reply_messages(
 
     body: str | None = None
     if args.message is not None:
-        body = normalize_telegram_outbound_text(args.message).strip()
+        body = (
+            args.message.strip()
+            if args.channel == "zulip"
+            else normalize_telegram_outbound_text(args.message).strip()
+        )
         if not body and not messages and attachment is None:
             raise ValueError("message must not be empty")
         if not body:

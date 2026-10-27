@@ -27,6 +27,13 @@ const (
 )
 
 type Config struct {
+	ZulipEnabled                     bool
+	ZulipSite                        string
+	ZulipBotEmail                    string
+	ZulipAPIKeyEnv                   string
+	ZulipAllowedChannelIDs           []string
+	ZulipAllowPrivateMessages        bool
+	ZulipContextRefs                 []string
 	PersonalInbox                    *personalinbox.Config
 	BBMBAddress                      string
 	DBPath                           string
@@ -74,6 +81,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
+		ZulipAPIKeyEnv:              "CHATTING_ZULIP_API_KEY",
 		BBMBAddress:                 DefaultBBMBAddress,
 		DBPath:                      filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
 		MaxLoops:                    0,
@@ -86,7 +94,7 @@ func Defaults() Config {
 		GitHubWebhookLogin:          "BillyAcachofa",
 		GitHubWebhookSelfLogins:     []string{"billybotapp[bot]"},
 		EgressAttachmentAllowedDirs: []string{},
-		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
+		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "zulip", "log"},
 		ContextRefs:                 []string{},
 		IMAPHost:                    "",
 		IMAPPort:                    993,
@@ -279,6 +287,13 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		}},
 		boolean(&c.SMTPUseSSL, "smtp_use_ssl"),
 		boolean(&c.TelegramEnabled, "telegram_enabled"),
+		boolean(&c.ZulipEnabled, "zulip_enabled"),
+		str(&c.ZulipSite, "zulip_site"),
+		str(&c.ZulipBotEmail, "zulip_bot_email"),
+		str(&c.ZulipAPIKeyEnv, "zulip_api_key_env"),
+		list(&c.ZulipAllowedChannelIDs, "zulip_allowed_channel_ids"),
+		boolean(&c.ZulipAllowPrivateMessages, "zulip_allow_private_messages"),
+		list(&c.ZulipContextRefs, "zulip_context_refs"),
 		str(&c.TelegramBotTokenEnv, "telegram_bot_token_env"),
 		str(&c.TelegramAPIBaseURL, "telegram_api_base_url"),
 		posInt(&c.TelegramPollTimeoutSeconds, "telegram_poll_timeout_seconds"),

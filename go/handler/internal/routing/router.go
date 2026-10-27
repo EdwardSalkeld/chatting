@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/zulip"
+
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
@@ -106,6 +108,14 @@ func validPRNumber(value string) bool {
 func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 	envelope := task.Envelope
 	reply := envelope.ReplyChannel
+	if reply.Type == "zulip" {
+		// Canonicalize the address so field order and topic case do not split
+		// conversations. Server identity is part of the address, including schedules.
+		if target, err := zulip.ParseTarget(reply.Target); err == nil {
+			target.Topic = strings.ToLower(target.Topic)
+			return Decision{Kind: "zulip", Key: target.String(), Reason: "zulip_conversation"}
+		}
+	}
 	if envelope.Source == "webhook" {
 		if repo, ok := reply.Metadata["github_repository"].(string); ok {
 			key, err := NormalizeRepository(repo)

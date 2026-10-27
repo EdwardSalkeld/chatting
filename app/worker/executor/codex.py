@@ -558,10 +558,13 @@ def _task_payload(
                 "event_channel records the current event's origin; associated_conversations records "
                 "related conversations. Neither is a required or preferred reply destination. "
                 "You may reply on the issue/PR, reply inline to a review comment, message the user "
-                "on Telegram, use several destinations, or say nothing when no response is useful. "
+                "on Telegram or Zulip, use several destinations, or say nothing when no response is useful. "
                 "Set channel and target explicitly for each send. For an inline GitHub review reply, "
                 "use channel github and the review comment's URL ending #discussion_r<comment-id>. "
-                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment."
+                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment. "
+                "For Zulip, use channel zulip and copy the event/conversation target exactly to reply "
+                "in that topic. A Zulip target is a JSON string containing site, channel_id and topic, "
+                "or site and user_ids for a private chat. Sending to a new channel/topic creates that topic."
             ),
             # -P (safe path) stops Python prepending the cwd to sys.path, so this
             # always runs the deployed app.main_reply even when the cwd is a

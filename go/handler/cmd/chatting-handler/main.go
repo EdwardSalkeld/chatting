@@ -23,6 +23,7 @@ import (
 	reminderconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/reminder"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/telegram"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/zulip"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/egress"
@@ -181,6 +182,22 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		}
 		connectors = append(connectors, connector)
 	}
+	if config.ZulipEnabled {
+		refs := config.ZulipContextRefs
+		if len(refs) == 0 {
+			refs = config.ContextRefs
+		}
+		connector, err := zulip.New(zulip.Config{
+			Site: config.ZulipSite, Email: config.ZulipBotEmail, APIKey: os.Getenv(config.ZulipAPIKeyEnv),
+			AllowedChannelIDs:    config.ZulipAllowedChannelIDs,
+			AllowPrivateMessages: config.ZulipAllowPrivateMessages,
+			ContextRefs:          refs,
+		}, store)
+		if err != nil {
+			return nil, err
+		}
+		connectors = append(connectors, connector)
+	}
 	if config.TelegramEnabled {
 		token := os.Getenv(config.TelegramBotTokenEnv)
 		if token == "" {
@@ -315,6 +332,13 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.E
 			return nil, nil, err
 		}
 		dispatcher.TelegramSender = sender
+	}
+	if config.ZulipEnabled {
+		sender, err := zulip.NewClient(zulip.Config{Site: config.ZulipSite, Email: config.ZulipBotEmail, APIKey: os.Getenv(config.ZulipAPIKeyEnv)})
+		if err != nil {
+			return nil, nil, err
+		}
+		dispatcher.ZulipSender = sender
 	}
 	if _, err := ghLookPath("gh"); err == nil {
 		dispatcher.GitHubSender = dispatch.NewGitHubIssueCommentSender(nil)

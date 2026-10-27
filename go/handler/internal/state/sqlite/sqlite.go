@@ -173,6 +173,7 @@ func (store *Store) Close() error {
 
 func (store *Store) initialize(ctx context.Context) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS zulip_cursors (scope TEXT PRIMARY KEY, message_id INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS github_webhook_held (
 			event_key TEXT PRIMARY KEY, event TEXT NOT NULL, delivery TEXT NOT NULL,
 			body BLOB NOT NULL, reason TEXT NOT NULL, received_at TEXT NOT NULL
