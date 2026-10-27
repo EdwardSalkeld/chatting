@@ -121,7 +121,7 @@ func TestCIWebhookOwnership(t *testing.T) {
 			if tc.registration == "run" || (tc.registration == "workflow" && tc.sha != "abc") {
 				wantOwner = other
 			}
-			if err != nil || routed.WorkItemID != wantOwner.WorkItemID || routed.Envelope.ReplyChannel.Target != wantOwner.Envelope.ReplyChannel.Target {
+			if err != nil || routed.WorkItemID != wantOwner.WorkItemID || routed.Envelope.ReplyChannel.Target != notification.Envelope.ReplyChannel.Target || len(routed.Envelope.ConversationChannels) != 1 || routed.Envelope.ConversationChannels[0].Target != wantOwner.Envelope.ReplyChannel.Target {
 				t.Fatalf("route: %+v %v", routed, err)
 			}
 			if !strings.Contains(notification.Envelope.Content, `"run_id":7`) {

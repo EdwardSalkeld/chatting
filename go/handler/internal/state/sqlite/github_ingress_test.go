@@ -35,7 +35,7 @@ func TestGitHubSubjectOwnership(t *testing.T) {
 		return task
 	}
 	feedback := notify("pull_request_review", `{"repository":{"full_name":"O/R"},"pull_request":{"number":9},"review":{"id":5}}`)
-	if feedback.WorkItemID != origin.WorkItemID || feedback.Envelope.ReplyChannel.Target != "-100" || feedback.Envelope.ReplyChannel.Metadata["message_thread_id"] != float64(7) {
+	if feedback.WorkItemID != origin.WorkItemID || feedback.Envelope.ReplyChannel.Target != "https://github.com/O/R/pull/9" || len(feedback.Envelope.ConversationChannels) != 1 || feedback.Envelope.ConversationChannels[0].Metadata["message_thread_id"] != float64(7) {
 		t.Fatalf("lost origin channel/item: %+v", feedback)
 	}
 	issue := notify("issue_comment", `{"repository":{"full_name":"o/r"},"issue":{"number":2},"comment":{"id":6}}`)
@@ -62,6 +62,39 @@ func TestGitHubSubjectOwnership(t *testing.T) {
 	release := notify("release", `{"repository":{"full_name":"o/r"},"release":{"id":10},"action":"published"}`)
 	if release.WorkItemID != origin.WorkItemID {
 		t.Fatal("release did not use explicit repository owner")
+	}
+}
+
+func TestRelatedPRCommentPreservesEventAndOriginContext(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	issue, err := webhooks.GitHubNotification([]byte(`{"repository":{"full_name":"o/r"},"issue":{"number":70},"action":"assigned"}`), "issues", "issue", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err = store.AssignTask(ctx, issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RegisterPR(ctx, issue.TaskID, "https://github.com/o/r/pull/71"); err != nil {
+		t.Fatal(err)
+	}
+	comment, err := webhooks.GitHubNotification([]byte(`{"repository":{"full_name":"o/r"},"issue":{"number":71,"pull_request":{}},"comment":{"id":123},"action":"created"}`), "issue_comment", "comment", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := comment.Envelope.ReplyChannel
+	for i := 0; i < 2; i++ {
+		comment, err = store.AssignTask(ctx, comment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if comment.WorkItemID != issue.WorkItemID || comment.Envelope.ReplyChannel.Target != "https://github.com/o/r/pull/71" || comment.Envelope.ReplyChannel.Metadata["comment_id"] != original.Metadata["comment_id"] {
+			t.Fatalf("PR comment origin changed: %+v", comment)
+		}
+		if len(comment.Envelope.ConversationChannels) != 1 || comment.Envelope.ConversationChannels[0].Target != "https://github.com/o/r/issues/70" {
+			t.Fatalf("lost associated issue: %+v", comment)
+		}
 	}
 }
 

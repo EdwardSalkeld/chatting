@@ -47,6 +47,9 @@
         "thread_id": "thread-fixture-1"
       }
     },
+    "conversation_channels": [
+      {"type": "telegram", "target": "-100", "metadata": {"chat_title": "Project"}}
+    ],
     "dedupe_key": "email:fixture:1"
   }
 }

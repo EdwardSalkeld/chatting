@@ -350,7 +350,8 @@ class SQLiteStateStore:
             if cursor.rowcount != 1:
                 raise KeyError(work_item_id)
 
-    def preferred_work_reply(self, *, work_item_id: str) -> ReplyChannel:
+    def work_origin_channel(self, *, work_item_id: str) -> ReplyChannel:
+        """Return the recorded origin for context; it does not select a reply."""
         with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT preferred_reply_json FROM work_items WHERE work_item_id = ?",

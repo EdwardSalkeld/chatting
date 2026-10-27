@@ -166,6 +166,13 @@ An IMAP message from `alice@example.com` turns into a `chatting.task.v1` payload
 
 ### Example reply
 
+The transport field `reply_channel` is retained for compatibility and preserves
+the incoming event's channel. It is exposed to the agent as `event_channel`.
+The optional `conversation_channels` list carries associated conversation
+addresses and labels, exposed as `associated_conversations`. These are context,
+not a destination selection. Workspace ownership does not overwrite either the
+event or an explicitly chosen outbound destination.
+
 If the worker decides to send one email reply, it POSTs a `chatting.egress.v2` payload
 to the egress endpoint like this:
 
