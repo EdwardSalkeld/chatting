@@ -70,6 +70,30 @@ def _telegram_task_message(
 
 
 class MainReplyCliTests(unittest.TestCase):
+    def test_zulip_reply_preserves_markdown_and_literal_escapes(self) -> None:
+        body = "**Checks passed**\n```python\nprint(r'\\n')\n```"
+        target = '{"site":"https://chat.example.com","channel_id":12,"topic":"PR #325 / café"}'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:zulip:example",
+                    "channel": "zulip",
+                    "target": target,
+                    "message": body,
+                },
+            )
+            submit = _FakeSubmit()
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stdout", io.StringIO()),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                self.assertEqual(main(), 0)
+            payload = submit.calls[0][1]
+            self.assertEqual(payload["message"]["body"], body)
+            self.assertEqual(payload["message"]["target"], target)
+
     def test_reaction_only_does_not_hide_task_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)

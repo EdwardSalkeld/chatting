@@ -18,8 +18,22 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("config = %#v, want %#v", config, expected)
 	}
-	if !reflect.DeepEqual(config.AllowedEgressChannels, []string{"email", "telegram", "telegram_reaction", "github", "log"}) {
+	if !reflect.DeepEqual(config.AllowedEgressChannels, []string{"email", "telegram", "telegram_reaction", "github", "zulip", "log"}) {
 		t.Fatalf("AllowedEgressChannels = %#v", config.AllowedEgressChannels)
+	}
+}
+
+func TestZulipConfiguration(t *testing.T) {
+	config, err := Load([]byte(`{"zulip_enabled":true,"zulip_site":"https://chat.example.com","zulip_bot_email":"bot@example.com","zulip_api_key_env":"TEST_ZULIP_KEY","zulip_allowed_channel_ids":["12"],"zulip_allow_private_messages":true,"zulip_context_refs":["repo:/project"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.ZulipEnabled || config.ZulipSite != "https://chat.example.com" || config.ZulipBotEmail != "bot@example.com" || config.ZulipAPIKeyEnv != "TEST_ZULIP_KEY" || !config.ZulipAllowPrivateMessages || !reflect.DeepEqual(config.ZulipAllowedChannelIDs, []string{"12"}) || !reflect.DeepEqual(config.ZulipContextRefs, []string{"repo:/project"}) {
+		t.Fatalf("invalid Zulip config: %#v", config)
+	}
+	defaults := Defaults()
+	if defaults.ZulipEnabled || defaults.ZulipAllowPrivateMessages || defaults.ZulipAPIKeyEnv != "CHATTING_ZULIP_API_KEY" {
+		t.Fatal("unsafe Zulip defaults")
 	}
 }
 

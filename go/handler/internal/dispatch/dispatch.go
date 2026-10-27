@@ -26,7 +26,12 @@ type GitHubSender interface {
 	Send(ctx context.Context, target string, body string) error
 }
 
+type ZulipSender interface {
+	Send(ctx context.Context, target string, body string) error
+}
+
 type Dispatcher struct {
+	ZulipSender    ZulipSender
 	EmailSender    EmailSender
 	TelegramSender TelegramSender
 	GitHubSender   GitHubSender
@@ -47,6 +52,14 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 	normalized.Target = target
 
 	switch channel {
+	case "zulip":
+		if dispatcher.ZulipSender == nil || message.Body == nil || message.Attachment != nil {
+			return nil, MessageDispatchError{ReasonCode: "zulip_dispatch_unavailable_or_invalid"}
+		}
+		if err := dispatcher.ZulipSender.Send(ctx, target, *message.Body); err != nil {
+			return nil, MessageDispatchError{ReasonCode: "zulip_dispatch_failed"}
+		}
+		return &normalized, nil
 	case "log", "drop":
 		return &normalized, nil
 	case "email":
