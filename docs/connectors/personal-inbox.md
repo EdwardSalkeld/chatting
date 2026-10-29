@@ -64,6 +64,18 @@ No sending, deleting or arbitrary JMAP method is exposed — the only mailbox
 change available is moving one ingested message into one configured folder,
 optionally marking it read in the same operation.
 
+Injection screening uses the existing question about instructions addressed to
+an automated system rather than the human reader. Category selection uses
+Choice; action, deadline and injection
+questions use [Noul](https://docs.typesafe.ai/primitives/noul), whose single
+number is the probability of yes, with no separate confidence value. For
+injection, only values at most 0.3 permit a summary; values above 0.3 withhold
+it. Values at least 0.7 produce a detection notice; the intervening values
+produce an uncertainty notice. These are TypeSafe's documented starting
+boundaries, not thresholds fitted to one email. Action/deadline values above
+0.3 retain the conservative decision to buy a summary. Invalid answers fail
+closed. These probabilities are not interchangeable with Choice confidence.
+
 ## Links back to the message
 
 Every alert ends with a link that opens the message in the mail client, built
