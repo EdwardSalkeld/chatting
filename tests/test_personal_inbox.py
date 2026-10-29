@@ -15,7 +15,6 @@ from unittest.mock import patch
 from app.personal_inbox import (
     CATEGORIES,
     DEAD_QUEUE,
-    YES_NO,
     JEV_ENDPOINT,
     MAIL_EXCERPT_CHARS,
     TASKS_QUEUE,
@@ -91,9 +90,18 @@ def jev_answer(
     return {
         "answers": {
             "category": choice_answer(category, CATEGORIES, confidence),
-            "requires_action": choice_answer(action, YES_NO, 0.99),
-            "has_deadline": choice_answer(deadline, YES_NO, 0.99),
-            "prompt_injection": choice_answer(injection, YES_NO, 0.99),
+            "requires_action": {
+                "type": "noul",
+                "noul": 0.99 if action == "yes" else 0.01,
+            },
+            "has_deadline": {
+                "type": "noul",
+                "noul": 0.99 if deadline == "yes" else 0.01,
+            },
+            "prompt_injection": {
+                "type": "noul",
+                "noul": 0.99 if injection == "yes" else 0.01,
+            },
         }
     }
 
@@ -130,7 +138,10 @@ class PersonalInboxTests(unittest.TestCase):
             "has_deadline",
             "prompt_injection",
         ):
-            self.assertEqual(jev.args[2]["questions"][question]["type"], "choice")
+            self.assertEqual(
+                jev.args[2]["questions"][question]["type"],
+                "choice" if question == "category" else "noul",
+            )
         sent = post.codex.call_args
         self.assertEqual(sent.args[1], mail_task()["mail"])
         self.assertEqual(sent.kwargs["model"], "configured-model")
@@ -162,7 +173,7 @@ class PersonalInboxTests(unittest.TestCase):
 
     def test_unsure_about_injection_also_withholds_the_mail(self):
         answer = jev_answer("news")
-        answer["answers"]["prompt_injection"] = choice_answer("no", YES_NO, 0.5)
+        answer["answers"]["prompt_injection"] = {"type": "noul", "noul": 0.5}
         result, post = self.classify_with([answer])
         self.assertEqual(result["classification"]["category"], "news")
         self.assertIn(
@@ -171,11 +182,10 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertNotIn("detected instructions", result["classification"]["summary"])
         post.codex.assert_not_called()
 
-    def test_injection_probability_also_controls_confidence(self):
+    def test_injection_probability_above_clear_no_withholds(self):
         answer = jev_answer("news")
         injection = answer["answers"]["prompt_injection"]
-        injection["confidence"] = 0.99
-        injection["probabilities"] = {"yes": 0.15, "no": 0.85}
+        injection["noul"] = 0.35
         result, post = self.classify_with([answer])
         self.assertTrue(result["classification"]["trace"]["suspicious"])
         self.assertIn(
@@ -189,6 +199,57 @@ class PersonalInboxTests(unittest.TestCase):
         result, post = self.classify_with([TimeoutError()])
         self.assertEqual(result["classification"]["category"], "review")
         post.codex.assert_not_called()
+
+    def test_invalid_noul_answers_fail_closed(self):
+        invalid = [
+            {"type": "choice", "noul": 0.01},
+            {"type": "noul"},
+            *[
+                {"type": "noul", "noul": value}
+                for value in (
+                    True,
+                    None,
+                    "0.01",
+                    -0.01,
+                    1.01,
+                    float("nan"),
+                    float("inf"),
+                )
+            ],
+        ]
+        for question in ("requires_action", "has_deadline", "prompt_injection"):
+            for value in invalid:
+                with self.subTest(question=question, answer=value):
+                    answer = jev_answer()
+                    answer["answers"][question] = value
+                    with self.assertLogs("app.personal_inbox", level="WARNING"):
+                        result, post = self.classify_with([answer])
+                    self.assertTrue(result["classification"]["trace"]["triage_failed"])
+                    post.codex.assert_not_called()
+
+    def test_noul_injection_boundaries(self):
+        for probability, blocked, detected in (
+            (0.0, False, False),
+            (0.3, False, False),
+            (0.3001, True, False),
+            (0.6999, True, False),
+            (0.7, True, True),
+            (1.0, True, True),
+        ):
+            with self.subTest(probability=probability):
+                answer = jev_answer()
+                answer["answers"]["prompt_injection"]["noul"] = probability
+                result, post = self.classify_with([answer, summary_answer()])
+                c = result["classification"]
+                self.assertEqual(c["trace"]["suspicious"], blocked)
+                self.assertEqual(post.codex.call_count, 0 if blocked else 1)
+                if blocked:
+                    self.assertIn(
+                        "detected instructions"
+                        if detected
+                        else "could not confidently rule out",
+                        c["summary"],
+                    )
 
     def test_triage_is_reported_not_decided(self):
         # The worker reports confidence; the handler applies its review threshold.
@@ -368,7 +429,7 @@ class PersonalInboxTests(unittest.TestCase):
         # A low-confidence "no" is treated as a maybe, because the cost of being
         # wrong is one call against missing something the recipient had to do.
         answer = jev_answer("news")
-        answer["answers"]["requires_action"] = choice_answer("no", YES_NO, 0.5)
+        answer["answers"]["requires_action"] = {"type": "noul", "noul": 0.5}
         result, post = self.classify_with([answer, summary_answer()])
         self.assertEqual(post.codex.call_count, 1)
         self.assertEqual(result["classification"]["summary"], "Order confirmed.")

@@ -66,9 +66,15 @@ optionally marking it read in the same operation.
 
 Injection screening distinguishes instructions to an automated reader from
 ordinary customer instructions, including sharing referral codes or redeeming
-vouchers. A positive injection answer or a negative answer below 90% confidence
-still withholds the summary. The notice distinguishes a detected instruction
-from an inability to confidently rule one out; neither is a quoted finding.
+vouchers. Category selection uses Choice; action, deadline and injection
+questions use [Noul](https://docs.typesafe.ai/primitives/noul), whose single
+number is the probability of yes, with no separate confidence value. For
+injection, only values at most 0.3 permit a summary; values above 0.3 withhold
+it. Values at least 0.7 produce a detection notice; the intervening values
+produce an uncertainty notice. These are TypeSafe's documented starting
+boundaries, not thresholds fitted to one email. Action/deadline values above
+0.3 retain the conservative decision to buy a summary. Invalid answers fail
+closed. These probabilities are not interchangeable with Choice confidence.
 
 ## Links back to the message
 
