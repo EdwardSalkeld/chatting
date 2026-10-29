@@ -502,6 +502,7 @@ def classify(
     original = validate_task(task)
     mail = {**original, "body": original["body"][:MAIL_EXCERPT_CHARS]}
     failure, http_status = "", 0
+    injection = ""
     try:
         (
             category,
