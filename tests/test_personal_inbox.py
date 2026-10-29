@@ -165,6 +165,22 @@ class PersonalInboxTests(unittest.TestCase):
         answer["answers"]["prompt_injection"] = choice_answer("no", YES_NO, 0.5)
         result, post = self.classify_with([answer])
         self.assertEqual(result["classification"]["category"], "news")
+        self.assertIn(
+            "could not confidently rule out", result["classification"]["summary"]
+        )
+        self.assertNotIn("detected instructions", result["classification"]["summary"])
+        post.codex.assert_not_called()
+
+    def test_injection_probability_also_controls_confidence(self):
+        answer = jev_answer("news")
+        injection = answer["answers"]["prompt_injection"]
+        injection["confidence"] = 0.99
+        injection["probabilities"] = {"yes": 0.15, "no": 0.85}
+        result, post = self.classify_with([answer])
+        self.assertTrue(result["classification"]["trace"]["suspicious"])
+        self.assertIn(
+            "could not confidently rule out", result["classification"]["summary"]
+        )
         post.codex.assert_not_called()
 
     def test_a_failed_triage_withholds_the_mail_too(self):
@@ -255,6 +271,8 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertTrue(c["trace"]["suspicious"])
         self.assertFalse(c["trace"]["triage_failed"])
         self.assertIn("automated system", c["summary"])
+        self.assertIn("detected instructions", c["summary"])
+        self.assertNotIn("could not confidently rule out", c["summary"])
         post.codex.assert_not_called()
 
     def test_surveys_and_feedback_requests_are_named_as_news(self):

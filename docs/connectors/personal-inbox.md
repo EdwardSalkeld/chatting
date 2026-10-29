@@ -64,6 +64,12 @@ No sending, deleting or arbitrary JMAP method is exposed — the only mailbox
 change available is moving one ingested message into one configured folder,
 optionally marking it read in the same operation.
 
+Injection screening distinguishes instructions to an automated reader from
+ordinary customer instructions, including sharing referral codes or redeeming
+vouchers. A positive injection answer or a negative answer below 90% confidence
+still withholds the summary. The notice distinguishes a detected instruction
+from an inability to confidently rule one out; neither is a quoted finding.
+
 ## Links back to the message
 
 Every alert ends with a link that opens the message in the mail client, built
