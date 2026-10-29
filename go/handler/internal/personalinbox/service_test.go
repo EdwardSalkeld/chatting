@@ -988,6 +988,35 @@ func TestOwnerRulesRevisionSurvivesResultValidationAndPersistence(t *testing.T) 
 	}
 }
 
+func TestJevAssessmentSurvivesStrictValidationAndPersistence(t *testing.T) {
+	service, _, broker, _ := fixture(t)
+	got := classifyOnce(t, service, broker, Classification{
+		Category: "order", Summary: "Invoice", Confidence: .99,
+		Trace: &Trace{
+			JevModel: "jev-1.13.0", JevQuestionsSHA256: strings.Repeat("a", 64), JevPolicyVersion: "noul-0.3-0.7-v1",
+			CategoryProbabilities: map[string]float64{"news_or_marketing": .0025, "order": .9925, "action": .0025, "review": .0025},
+			NoulProbabilities:     map[string]float64{"requires_action": 0, "has_deadline": .05, "prompt_injection": .1},
+			InputBodyChars:        8000, CleanedBodyChars: 3000, ExcerptChars: 2000, ExcerptTruncated: true, TextExtractionVersion: "mail-text-v1",
+		},
+	}).Classification.Trace
+	if got == nil || got.JevModel != "jev-1.13.0" || len(got.JevQuestionsSHA256) != 64 || got.JevPolicyVersion != "noul-0.3-0.7-v1" || got.CategoryProbabilities["order"] != .9925 || len(got.NoulProbabilities) != 3 || got.NoulProbabilities["requires_action"] != 0 || !got.ExcerptTruncated || got.ExcerptChars != 2000 || got.TextExtractionVersion != "mail-text-v1" {
+		t.Fatalf("lost assessment: %+v", got)
+	}
+}
+
+func TestInvalidJevAssessmentIsRejected(t *testing.T) {
+	for _, trace := range []*Trace{
+		{NoulProbabilities: map[string]float64{"prompt_injection": .1}},
+		{NoulProbabilities: map[string]float64{"requires_action": 0, "has_deadline": .1, "prompt_injection": 1.1}},
+		{CategoryProbabilities: map[string]float64{"news_or_marketing": .9, "order": .9, "action": .9, "review": .9}},
+		{ExcerptChars: 2001}, {InputBodyChars: -1},
+	} {
+		if err := (Classification{Category: "order", Summary: "x", Confidence: .99, Trace: trace}).Validate(); err == nil {
+			t.Fatalf("accepted invalid trace %+v", trace)
+		}
+	}
+}
+
 func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 	service, _, broker, _ := fixture(t)
 	ctx := context.Background()

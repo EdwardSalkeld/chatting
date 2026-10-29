@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import os
 import urllib.error
-import urllib.request
 from dataclasses import asdict, dataclass
 
 from app.models import TaskEnvelope
 from app.state import SQLiteStateStore
+from app import typesafe
 
-_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-_MODEL = "jev-latest"
+_ENDPOINT = typesafe.ENDPOINT
+_MODEL = typesafe.ROUTING_MODEL
 _LOW_THRESHOLD = 0.80
 
 
@@ -80,39 +79,13 @@ def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDec
         },
     }
     try:
-        data = json.dumps(request).encode("utf-8")
-        http_request = urllib.request.Request(
-            _ENDPOINT,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(http_request, timeout=5) as response:
-            result = json.load(response)
+        result = typesafe.post(_ENDPOINT, key, request, timeout=5, retry_429=False)
         answer = result["answers"]["executor_tier"]
+        selected, confidence = typesafe.choice(answer, ("high", "low"))
         probabilities = answer["probabilities"]
-        if (
-            answer["type"] != "choice"
-            or answer["choice"] not in ("high", "low")
-            or not isinstance(probabilities, dict)
-            or set(probabilities) != {"high", "low"}
-            or any(
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not 0 <= value <= 1
-                for value in probabilities.values()
-            )
-        ):
-            raise ValueError("invalid Jev choice")
-        confidence = float(answer["confidence"])
-        if not 0 <= confidence <= 1:
-            raise ValueError("invalid Jev confidence")
         tier = (
             "low"
-            if answer["choice"] == "low"
+            if selected == "low"
             and probabilities["low"] >= _LOW_THRESHOLD
             and confidence >= _LOW_THRESHOLD
             else "high"

@@ -7,22 +7,25 @@ provider can return a tool invocation that this worker will execute.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
-import math
 import os
 import re
 import subprocess
 import tempfile
 import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
+from dataclasses import dataclass
+
+from app import mail_text, typesafe
+from app.typesafe import post
 
 TASKS_QUEUE = "chatting.personal-inbox.tasks.v1"
 RESULTS_QUEUE = "chatting.personal-inbox.results.v1"
 DEAD_QUEUE = "chatting.personal-inbox.invalid.v1"
 MESSAGE_ID = re.compile(r"[A-Za-z0-9_-]+")
-JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+JEV_ENDPOINT = typesafe.ENDPOINT
 LOGGER = logging.getLogger(__name__)
 # Classify the opening excerpt, not whole newsletters or their tracking URLs.
 # The summariser must receive the same screened text, never the unseen tail.
@@ -174,30 +177,6 @@ SUMMARY_SCHEMA = {
 }
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError("provider redirect refused")
-
-
-def post(endpoint: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.build_opener(NoRedirect()).open(
-        request, timeout=30
-    ) as response:
-        raw = response.read(1_000_001)
-    if len(raw) > 1_000_000:
-        raise ValueError("provider result too large")
-    result = json.loads(raw)
-    if not isinstance(result, dict):
-        raise ValueError("provider result must be an object")
-    return result
-
-
 def validate_task(task: dict[str, Any]) -> dict[str, Any]:
     if set(task) != {"kind", "message_id", "work_item_id", "mail"}:
         raise ValueError("invalid task fields")
@@ -231,43 +210,28 @@ def validate_task(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_answer(answer: dict[str, Any], criteria: dict[str, str]) -> tuple[str, float]:
-    choice = answer["choice"]
-    probabilities = answer["probabilities"]
-    confidence = answer["confidence"]
-    if (
-        answer["type"] != "choice"
-        or choice not in criteria
-        or not isinstance(probabilities, dict)
-        or set(probabilities) != set(criteria)
-        or any(
-            not isinstance(value, (int, float))
-            or isinstance(value, bool)
-            or not math.isfinite(value)
-            or not 0 <= value <= 1
-            for value in [confidence, *probabilities.values()]
-        )
-        or abs(sum(probabilities.values()) - 1) > 0.01
-    ):
-        raise ValueError("invalid Jev answer")
-    return choice, min(float(confidence), float(probabilities[choice]))
+    return typesafe.choice(answer, criteria)
 
 
 def check_noul(answer: dict[str, Any]) -> float:
-    value = answer["noul"]
-    if (
-        answer["type"] != "noul"
-        or not isinstance(value, (int, float))
-        or isinstance(value, bool)
-        or not math.isfinite(value)
-        or not 0 <= value <= 1
-    ):
+    if answer["type"] != "noul":
         raise ValueError("invalid Jev Noul answer")
-    return float(value)
+    return typesafe.probability(answer["noul"])
 
 
-def jev_triage(
-    mail: dict[str, Any], key: str, *, rules_context: str = ""
-) -> tuple[str, float, bool, bool, bool, str]:
+@dataclass(frozen=True)
+class Triage:
+    category: str
+    confidence: float
+    action: float
+    deadline: float
+    injection: float
+    probabilities: dict[str, float]
+    model: str
+    questions_sha256: str
+
+
+def jev_triage(mail: dict[str, Any], key: str, *, rules_context: str = "") -> Triage:
     """Category, the two facts that decide whether a summary is worth buying,
     and whether the email is talking to the machine rather than the reader."""
     questions = {
@@ -279,7 +243,7 @@ def jev_triage(
     result = post(
         JEV_ENDPOINT,
         key,
-        {"model": "jev-1.13.0", "state": mail, "questions": questions},
+        {"model": typesafe.MODEL, "state": mail, "questions": questions},
     )
     answers = result["answers"]
     category, confidence = check_answer(answers["category"], CATEGORIES)
@@ -287,22 +251,15 @@ def jev_triage(
     action = check_noul(answers["requires_action"])
     deadline = check_noul(answers["has_deadline"])
     injection = check_noul(answers["prompt_injection"])
-    # Report Jev's category and confidence. The handler holds unsettled
-    # readings for review using its configured confidence threshold.
-    # An unsure "no" is treated as a maybe: the cost of being wrong is one
-    # summary call, against missing something the recipient had to do.
-    requires_action = action > NOUL_CLEAR_NO
-    has_deadline = deadline > NOUL_CLEAR_NO
-    # Anything but a confident "no" counts as suspicious. The cost of being
-    # wrong is one email going unsummarised. Its category is unchanged.
-    suspicious = injection > NOUL_CLEAR_NO
-    return (
+    return Triage(
         category,
         confidence,
-        requires_action,
-        has_deadline,
-        suspicious,
-        "yes" if injection >= NOUL_CLEAR_YES else "uncertain",
+        action,
+        deadline,
+        injection,
+        answers["category"]["probabilities"],
+        str(result.get("model", typesafe.MODEL)),
+        hashlib.sha256(json.dumps(questions).encode()).hexdigest(),
     )
 
 
@@ -503,18 +460,18 @@ def classify(
     rule_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     original = validate_task(task)
-    mail = {**original, "body": original["body"][:MAIL_EXCERPT_CHARS]}
+    cleaned = mail_text.compact(original["body"])
+    mail = {**original, "body": cleaned[:MAIL_EXCERPT_CHARS]}
     failure, http_status = "", 0
     injection = ""
+    assessment = None
     try:
-        (
-            category,
-            confidence,
-            requires_action,
-            has_deadline,
-            suspicious,
-            injection,
-        ) = jev_triage(mail, jev_key, rules_context=rules_context)
+        assessment = jev_triage(mail, jev_key, rules_context=rules_context)
+        category, confidence = assessment.category, assessment.confidence
+        requires_action = assessment.action > NOUL_CLEAR_NO
+        has_deadline = assessment.deadline > NOUL_CLEAR_NO
+        suspicious = assessment.injection > NOUL_CLEAR_NO
+        injection = "yes" if assessment.injection >= NOUL_CLEAR_YES else "uncertain"
         triage_failed = False
     except (OSError, ValueError, KeyError, TypeError) as error:
         # Losing Jev fails closed like a suspected injection does, but it is
@@ -535,7 +492,24 @@ def classify(
         "suspicious": suspicious,
         "triage_failed": triage_failed,
         "summarised": False,
+        "input_body_chars": len(original["body"]),
+        "cleaned_body_chars": len(cleaned),
+        "excerpt_chars": len(mail["body"]),
+        "excerpt_truncated": len(cleaned) > MAIL_EXCERPT_CHARS,
+        "text_extraction_version": mail_text.VERSION,
     }
+    if assessment is not None:
+        trace.update(
+            jev_model=assessment.model,
+            jev_questions_sha256=assessment.questions_sha256,
+            jev_policy_version="noul-0.3-0.7-v1",
+            category_probabilities=assessment.probabilities,
+            noul_probabilities={
+                "requires_action": assessment.action,
+                "has_deadline": assessment.deadline,
+                "prompt_injection": assessment.injection,
+            },
+        )
     if triage_failed:
         trace.update(triage_error=failure, triage_http_status=http_status)
     if rules_revision:
