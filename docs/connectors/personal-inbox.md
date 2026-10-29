@@ -64,9 +64,9 @@ No sending, deleting or arbitrary JMAP method is exposed — the only mailbox
 change available is moving one ingested message into one configured folder,
 optionally marking it read in the same operation.
 
-Injection screening distinguishes instructions to an automated reader from
-ordinary customer instructions, including sharing referral codes or redeeming
-vouchers. Category selection uses Choice; action, deadline and injection
+Injection screening uses the existing question about instructions addressed to
+an automated system rather than the human reader. Category selection uses
+Choice; action, deadline and injection
 questions use [Noul](https://docs.typesafe.ai/primitives/noul), whose single
 number is the probability of yes, with no separate confidence value. For
 injection, only values at most 0.3 permit a summary; values above 0.3 withhold
