@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/bbmb"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/jmap"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/mailtext"
 )
 
 // How much of a body is handed to the classifier, and how many new messages one
@@ -77,22 +79,32 @@ type Classification struct {
 
 // Trace records Jev's decision and whether a summary was available.
 type Trace struct {
-	Reason           string   `json:"reason,omitempty"`
-	JevCategory      string   `json:"jev_category,omitempty"`
-	JevConfidence    float64  `json:"jev_confidence,omitempty"`
-	RequiresAction   bool     `json:"requires_action,omitempty"`
-	HasDeadline      bool     `json:"has_deadline,omitempty"`
-	Suspicious       bool     `json:"suspicious,omitempty"`
-	TriageFailed     bool     `json:"triage_failed,omitempty"`
-	TriageError      string   `json:"triage_error,omitempty"`
-	TriageHTTPStatus int      `json:"triage_http_status,omitempty"`
-	Summarised       bool     `json:"summarised,omitempty"`
-	RulesRevision    string   `json:"rules_revision,omitempty"`
-	SuppliedRuleIDs  []string `json:"supplied_rule_ids,omitempty"`
+	Reason                string             `json:"reason,omitempty"`
+	JevCategory           string             `json:"jev_category,omitempty"`
+	JevConfidence         float64            `json:"jev_confidence,omitempty"`
+	RequiresAction        bool               `json:"requires_action,omitempty"`
+	HasDeadline           bool               `json:"has_deadline,omitempty"`
+	Suspicious            bool               `json:"suspicious,omitempty"`
+	TriageFailed          bool               `json:"triage_failed,omitempty"`
+	TriageError           string             `json:"triage_error,omitempty"`
+	TriageHTTPStatus      int                `json:"triage_http_status,omitempty"`
+	Summarised            bool               `json:"summarised,omitempty"`
+	RulesRevision         string             `json:"rules_revision,omitempty"`
+	SuppliedRuleIDs       []string           `json:"supplied_rule_ids,omitempty"`
+	JevModel              string             `json:"jev_model,omitempty"`
+	JevQuestionsSHA256    string             `json:"jev_questions_sha256,omitempty"`
+	JevPolicyVersion      string             `json:"jev_policy_version,omitempty"`
+	CategoryProbabilities map[string]float64 `json:"category_probabilities,omitempty"`
+	NoulProbabilities     map[string]float64 `json:"noul_probabilities,omitempty"`
+	InputBodyChars        int                `json:"input_body_chars,omitempty"`
+	CleanedBodyChars      int                `json:"cleaned_body_chars,omitempty"`
+	ExcerptChars          int                `json:"excerpt_chars,omitempty"`
+	ExcerptTruncated      bool               `json:"excerpt_truncated,omitempty"`
+	TextExtractionVersion string             `json:"text_extraction_version,omitempty"`
 }
 
 func (value Classification) Validate() error {
-	if value.Confidence < 0 || value.Confidence > 1 {
+	if math.IsNaN(value.Confidence) || math.IsInf(value.Confidence, 0) || value.Confidence < 0 || value.Confidence > 1 {
 		return errors.New("invalid confidence")
 	}
 	if value.Category != "news" && value.Category != "order" && value.Category != "action" && value.Category != "review" {
@@ -105,6 +117,43 @@ func (value Classification) Validate() error {
 	}
 	if len([]rune(value.Summary)) > 600 || len([]rune(value.Action)) > 600 || len([]rune(value.Deadline)) > 100 {
 		return errors.New("invalid classification text")
+	}
+	if trace := value.Trace; trace != nil {
+		for _, item := range []struct {
+			values map[string]float64
+			keys   []string
+		}{
+			{trace.CategoryProbabilities, []string{"news_or_marketing", "order", "action", "review"}},
+			{trace.NoulProbabilities, []string{"requires_action", "has_deadline", "prompt_injection"}},
+		} {
+			if len(item.values) == 0 {
+				continue
+			}
+			if len(item.values) != len(item.keys) {
+				return errors.New("invalid assessment keys")
+			}
+			for _, key := range item.keys {
+				p, ok := item.values[key]
+				if !ok || math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+					return errors.New("invalid assessment probability")
+				}
+			}
+		}
+		if len(trace.CategoryProbabilities) > 0 {
+			total := 0.0
+			for _, p := range trace.CategoryProbabilities {
+				total += p
+			}
+			if math.Abs(total-1) > 0.01 {
+				return errors.New("invalid assessment distribution")
+			}
+		}
+		if trace.InputBodyChars < 0 || trace.CleanedBodyChars < 0 || trace.ExcerptChars < 0 || trace.ExcerptChars > DigestBodyChars {
+			return errors.New("invalid excerpt metadata")
+		}
+		if len(trace.JevModel) > 100 || len(trace.JevQuestionsSHA256) > 64 || len(trace.JevPolicyVersion) > 100 || len(trace.TextExtractionVersion) > 100 {
+			return errors.New("invalid assessment metadata")
+		}
 	}
 	return nil
 }
@@ -157,7 +206,7 @@ func mail(email jmap.Email) (Mail, jmap.Body) {
 		From:       limitRunes(email.Sender(), 300),
 		Subject:    limitRunes(email.Subject, 300),
 		Date:       limitRunes(email.ReceivedAt, 100),
-		Body:       limitRunes(body.Text, MaxBodyBytes),
+		Body:       limitRunes(mailtext.Compact(body.Text), MaxBodyBytes),
 		Incomplete: body.Degraded || email.HasAttachment,
 	}, body
 }
@@ -643,7 +692,7 @@ func (service *Service) publishDigests(ctx context.Context) error {
 			// the line has to come from the body. The lead is enough: offers and
 			// announcements put the substance at the top.
 			items = append(items, map[string]any{"ref": id, "from": messages[0].Mail.From,
-				"subject": messages[0].Mail.Subject, "body": limitRunes(messages[0].Mail.Body, DigestBodyChars)})
+				"subject": messages[0].Mail.Subject, "body": limitRunes(mailtext.Compact(messages[0].Mail.Body), DigestBodyChars)})
 		}
 		if len(items) == 0 {
 			digest.Lines = []DigestLine{}

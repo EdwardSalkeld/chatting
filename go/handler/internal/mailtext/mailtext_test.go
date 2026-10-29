@@ -22,6 +22,23 @@ func TestStyleAndScriptBodiesAreDropped(t *testing.T) {
 	}
 }
 
+func TestCompactPreservesMessageBeforeExcerptBudget(t *testing.T) {
+	tracking := "https://clicks.example/" + strings.Repeat("token", 100)
+	plain := strings.Repeat("Shop ("+tracking+")\n\n", 8) + "Refer a friend: £10 off, £20 credit."
+	for _, body := range []string{plain, HTMLToText("<p>" + plain + "</p>")} {
+		got := Compact(body)
+		if len([]rune(got)) > 2000 || !strings.Contains(got, "£20 credit") || strings.Contains(got, "tokentoken") {
+			t.Fatalf("content displaced by tracking: %q", got)
+		}
+		if Compact(got) != got {
+			t.Fatal("compaction is not idempotent")
+		}
+	}
+	if got := Compact("Pay at https://example.com/pay\n\n Reference: ABC123"); got != "Pay at https://example.com/pay\nReference: ABC123" {
+		t.Fatalf("short useful link lost: %q", got)
+	}
+}
+
 func TestEntitiesAndBlocksBecomeReadableText(t *testing.T) {
 	text := HTMLToText(`<p>Order&nbsp;#10195 &amp; shipped</p><br><div>Thanks</div>`)
 	if text != "Order #10195 & shipped\nThanks" {

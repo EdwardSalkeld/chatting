@@ -1,5 +1,4 @@
-import io
-import json
+import copy
 import os
 import tempfile
 import unittest
@@ -34,7 +33,7 @@ class ModelRouterTests(unittest.TestCase):
     def test_missing_key_uses_sol_without_network_call(self):
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("app.worker.model_router.urllib.request.urlopen") as call,
+            patch("app.worker.model_router.typesafe.post") as call,
         ):
             decision = choose_model(store=self.store, envelope=self.envelope)
         self.assertEqual((decision.tier, decision.reason), ("high", "jev_key_missing"))
@@ -42,47 +41,48 @@ class ModelRouterTests(unittest.TestCase):
 
     def test_confident_low_uses_luna_and_sends_bounded_state(self):
         answer = {
-            "model": "jev-1.13.0",
+            "model": "jev-1.14.0",
             "answers": {
                 "executor_tier": {
                     "type": "choice",
                     "choice": "low",
                     "confidence": 0.94,
-                    "probabilities": {"low": 0.94, "high": 0.06},
+                    "probabilities": {"low": 0.97, "high": 0.03},
                 }
             },
         }
         with (
             patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
             patch(
-                "app.worker.model_router.urllib.request.urlopen",
-                return_value=io.BytesIO(json.dumps(answer).encode()),
+                "app.worker.model_router.typesafe.post",
+                return_value=answer,
             ) as call,
         ):
             decision = choose_model(store=self.store, envelope=self.envelope)
         self.assertEqual(decision.tier, "low")
-        sent = json.loads(call.call_args.args[0].data)
+        sent = call.call_args.args[2]
         self.assertEqual(sent["state"]["current_request"], self.envelope.content)
-        self.assertEqual(sent["model"], "jev-latest")
+        self.assertEqual(sent["model"], "jev-1.14.0")
         self.assertEqual(call.call_args.kwargs["timeout"], 5)
+        self.assertFalse(call.call_args.kwargs["retry_429"])
 
     def test_uncertain_or_failed_choice_uses_sol(self):
         answer = {
-            "model": "jev-latest",
+            "model": "jev-1.14.0",
             "answers": {
                 "executor_tier": {
                     "type": "choice",
                     "choice": "low",
                     "confidence": 0.70,
-                    "probabilities": {"low": 0.70, "high": 0.30},
+                    "probabilities": {"low": 0.85, "high": 0.15},
                 }
             },
         }
         with (
             patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
             patch(
-                "app.worker.model_router.urllib.request.urlopen",
-                return_value=io.BytesIO(json.dumps(answer).encode()),
+                "app.worker.model_router.typesafe.post",
+                return_value=answer,
             ),
         ):
             self.assertEqual(
@@ -91,7 +91,7 @@ class ModelRouterTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
             patch(
-                "app.worker.model_router.urllib.request.urlopen",
+                "app.worker.model_router.typesafe.post",
                 side_effect=TimeoutError,
             ),
         ):
@@ -99,6 +99,60 @@ class ModelRouterTests(unittest.TestCase):
                 choose_model(store=self.store, envelope=self.envelope).reason,
                 "jev_unavailable_or_invalid",
             )
+
+    def test_malformed_results_never_choose_luna(self):
+        valid = {
+            "type": "choice",
+            "choice": "low",
+            "confidence": 0.9,
+            "probabilities": {"low": 0.95, "high": 0.05},
+        }
+        cases = [
+            {**valid, "probabilities": {"low": 0.95, "high": 0.95}},
+            {**valid, "confidence": True},
+            {**valid, "confidence": "0.9"},
+            {**valid, "confidence": float("nan")},
+            {**valid, "confidence": 0.99},
+            {**valid, "choice": "high"},
+            {**valid, "probabilities": {"low": True, "high": 0}},
+            {**valid, "probabilities": {"low": 0.95, "other": 0.05}},
+        ]
+        for answer in cases:
+            with (
+                self.subTest(answer=answer),
+                patch.dict(os.environ, {"TYPESAFE_API_KEY": "test"}),
+                patch(
+                    "app.worker.model_router.typesafe.post",
+                    return_value={"answers": {"executor_tier": copy.deepcopy(answer)}},
+                ),
+            ):
+                decision = choose_model(store=self.store, envelope=self.envelope)
+                self.assertEqual(
+                    (decision.tier, decision.reason),
+                    ("high", "jev_unavailable_or_invalid"),
+                )
+
+    def test_real_binary_confidence_boundaries(self):
+        for confidence, expected in ((0.79, "high"), (0.8, "low"), (0.81, "low")):
+            p = (1 + confidence) / 2
+            answer = {
+                "type": "choice",
+                "choice": "low",
+                "confidence": confidence,
+                "probabilities": {"low": p, "high": 1 - p},
+            }
+            with (
+                self.subTest(confidence=confidence),
+                patch.dict(os.environ, {"TYPESAFE_API_KEY": "test"}),
+                patch(
+                    "app.worker.model_router.typesafe.post",
+                    return_value={"answers": {"executor_tier": answer}},
+                ),
+            ):
+                self.assertEqual(
+                    choose_model(store=self.store, envelope=self.envelope).tier,
+                    expected,
+                )
 
 
 if __name__ == "__main__":

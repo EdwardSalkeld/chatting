@@ -15,6 +15,17 @@ least 0.80 confidence and 0.80 low probability. The audit event records the
 selected tier, probabilities, model, and fallback reason. Manual high/low modes
 do not call Jev.
 
+Auto selection pins `jev-1.14.0` (the stable release behind `jev-latest` when
+this pin was introduced); inbox triage independently retains its `jev-1.13.0`
+pin. Update pins deliberately after evaluating their respective workloads.
+Shared response validation rejects invalid types, non-normalized distributions,
+non-maximal choices and confidence inconsistent with the documented formula
+(allowing rounding). For this binary Choice, confidence 0.80 corresponds to
+low probability 0.90; the extra 0.80 probability condition is conservative but
+redundant for a valid response. Responses are size-bounded and redirects are
+refused. Auto routing keeps its five-second request budget and does not retry;
+only inbox triage uses the small 429 retry allowance.
+
 A Luna executor can request a handoff by writing the task ID and its findings
 to the request path in `escalation_contract`. The worker accepts a request only
 when the Luna process finishes successfully and has not published a visible

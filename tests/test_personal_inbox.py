@@ -71,12 +71,15 @@ def digest_task():
 
 
 def choice_answer(choice, criteria, confidence):
+    selected_probability = (1 + (len(criteria) - 1) * confidence) / len(criteria)
     return {
         "type": "choice",
         "choice": choice,
         "confidence": confidence,
         "probabilities": {
-            key: confidence if key == choice else (1 - confidence) / (len(criteria) - 1)
+            key: selected_probability
+            if key == choice
+            else (1 - selected_probability) / (len(criteria) - 1)
             for key in criteria
         },
     }
@@ -171,7 +174,55 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertEqual(result["classification"]["category"], "order")
         self.assertEqual(post.call_count, 1)
 
-    def test_unsure_about_injection_also_withholds_the_mail(self):
+    def test_tracking_links_do_not_displace_the_actual_offer(self):
+        task = mail_task()
+        task["mail"]["body"] = (
+            "Shop (https://clicks.example/" + "x" * 400 + ")\n\n"
+        ) * 8 + "Refer a friend: they get £10 off, you get £20 credit."
+        original = copy.deepcopy(task)
+        result, post = self.classify_with([jev_answer(), summary_answer()], task)
+        screened = post.call_args.args[2]["state"]
+        self.assertIn("you get £20 credit", screened["body"])
+        self.assertNotIn("x" * 400, screened["body"])
+        self.assertIn("clicks.example", screened["body"])
+        self.assertEqual(post.codex.call_args.args[1], screened)
+        self.assertEqual(task, original)
+        trace = result["classification"]["trace"]
+        self.assertGreater(trace["input_body_chars"], MAIL_EXCERPT_CHARS)
+        self.assertFalse(trace["excerpt_truncated"])
+        self.assertLess(trace["cleaned_body_chars"], MAIL_EXCERPT_CHARS)
+
+    def test_assessment_scores_and_versions_are_retained(self):
+        answer = jev_answer()
+        answer["model"] = "jev-1.13.0"
+        answer["answers"]["requires_action"]["noul"] = 0
+        result, _ = self.classify_with([answer, summary_answer()])
+        trace = result["classification"]["trace"]
+        self.assertEqual(
+            trace["category_probabilities"],
+            answer["answers"]["category"]["probabilities"],
+        )
+        self.assertEqual(
+            trace["noul_probabilities"],
+            {"requires_action": 0, "has_deadline": 0.01, "prompt_injection": 0.01},
+        )
+        self.assertEqual(trace["jev_model"], "jev-1.13.0")
+        self.assertEqual(len(trace["jev_questions_sha256"]), 64)
+        self.assertEqual(trace["jev_policy_version"], "noul-0.3-0.7-v1")
+        self.assertNotIn("body", trace)
+
+    def test_four_category_boundary_uses_real_choice_confidence(self):
+        for confidence in (0.79, 0.8, 0.81):
+            with self.subTest(confidence=confidence):
+                answer = jev_answer(confidence=confidence)
+                result, _ = self.classify_with([answer, summary_answer()])
+                self.assertAlmostEqual(
+                    result["classification"]["confidence"], confidence
+                )
+                p = answer["answers"]["category"]["probabilities"]["order"]
+                self.assertAlmostEqual(p, (1 + 3 * confidence) / 4)
+
+    def test_uncertain_injection_notice_is_not_a_positive_detection(self):
         answer = jev_answer("news")
         answer["answers"]["prompt_injection"] = {"type": "noul", "noul": 0.5}
         result, post = self.classify_with([answer])

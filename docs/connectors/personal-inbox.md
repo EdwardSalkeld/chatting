@@ -46,17 +46,35 @@ is no decision to use: the worker returns `review`
 without calling the summariser. Suspicious mail is withheld from both summary
 paths, while retaining Jev's category. Summary failures produce a notice to read
 the original, retaining the category and confidence.
-The Jev version is pinned to `jev-1.13.0`, and the confidence it reports is
-the lower of its reported confidence and the probability of the category it
-chose. The handler compares it with `confidence_threshold` to distinguish a
-decision from an unsettled reading.
+The Jev version is pinned to `jev-1.13.0`. Choice confidence is derived from
+the option probabilities, not another probability of correctness. The worker
+validates the distribution and confidence (allowing rounding) and reports
+the provider's confidence. The handler compares it with `confidence_threshold`
+to distinguish a decision from an unsettled reading.
 
-Classification uses the first 2,000 body characters, together with the sender,
-subject, date and completeness flag. The per-message summariser sees the same
+Classification uses the first 2,000 **compacted** body characters, together with
+the sender, subject, date and completeness flag. The per-message summariser sees the same
 excerpt that Jev screened; the daily digest already uses at most 2,000 body
 characters per email. The handler can retain a longer body for its record, but
 it is not sent to Jev. Deliberate excerpting does not itself force Review.
-This applies to future processing; saved decisions are not reclassified.
+
+Before that budget is applied, long HTTP(S) links (over 120 characters) become
+host-only markers, and blank/whitespace padding is collapsed. Short useful
+links, visible link labels and HTML image alt text are preserved. Nothing is
+fetched. Both plain-text bodies and rendered HTML use this path; digest
+publication also compacts older stored bodies before cutting its excerpt.
+The worker repeats the idempotent compaction for messages queued by an older
+handler. The trace records the body sizes and whether compacted text was
+excerpted.
+
+Only HTTP 429 gets automatic retries: at most three attempts, with one- and
+two-second backoff and no more than three seconds of sleeping. A numeric
+`Retry-After` can increase a delay within that cap. A longer or unparseable
+value stops retries rather than retrying early. Attempts share the configured
+30-second request budget. Other failures remain final review results; an
+exhausted 429 is also final. Successful results are still cached before
+publication, so a publish/ACK replay does not buy more model calls. No existing
+accepted messages are automatically reclassified.
 
 The handler rejects unknown result fields: the model cannot supply a target,
 folder, team, shell command, attachment path, or arbitrary mailbox operation.
@@ -351,6 +369,18 @@ Worker warnings contain only this fixed error kind and HTTP status, never
 provider response text or email content. Legacy failures without these fields
 retain `triage_unavailable`. Alongside it each
 message records `body_html`, `body_chars` and `body_truncated`.
+
+New successful assessments also retain `category_probabilities`,
+`noul_probabilities` (including zero values), `jev_model`,
+`jev_questions_sha256` and `jev_policy_version`. The question hash includes
+owner-rule context and option order. Input/cleaned/excerpt character counts,
+`excerpt_truncated` and `text_extraction_version` explain preprocessing;
+these are separate from the server's completeness flag. No extra mail content
+is added to the trace. Older records remain readable without these fields.
+
+Deploy the updated handler before the updated worker: older handlers reject
+unknown trace fields. This changes new assessments only; it does not replay
+old classifications or change the handler's category threshold.
 
 Body extraction preserves useful plain text but compares the rendered HTML
 alternative when the text is a browser-view placeholder, mostly tracking URLs,
