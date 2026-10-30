@@ -107,6 +107,25 @@ type fakeSource struct {
 	scheduled []Scheduled
 }
 
+func TestPollSkipsStoredBareContextPathAndRunsValidJob(t *testing.T) {
+	now := testutil.MustTime(t, "2026-03-09T12:34:56Z")
+	source := &fakeSource{scheduled: []Scheduled{
+		{ScheduleID: "bad", Job: Job{JobName: "bad", Content: "Bad refs", Cron: "34 12 * * *", ContextRefs: []string{"/workspace/memory"}}},
+		{ScheduleID: "good", Job: Job{JobName: "good", Content: "Good refs", Cron: "34 12 * * *", ContextRefs: []string{"repo:/workspace/memory"}}},
+	}}
+	connector, err := NewFromSource(source, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelopes) != 1 || envelopes[0].Content != "Good refs" {
+		t.Fatalf("invalid stored context must not reach worker or block valid jobs: %+v", envelopes)
+	}
+}
+
 func (source *fakeSource) ActiveSchedules(context.Context) ([]Scheduled, error) {
 	return source.scheduled, nil
 }

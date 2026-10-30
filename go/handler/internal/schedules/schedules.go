@@ -250,10 +250,10 @@ func writeError(writer http.ResponseWriter, status int, message string) {
 			"request_body": map[string]any{
 				"job_name": "daily-summary", "content": "Prepare the daily summary",
 				"cron": "0 9 * * *", "timezone": "Europe/London",
-				"context_refs": []string{}, "prompt_context": []string{},
+				"context_refs": []string{"repo:/workspace/memory"}, "prompt_context": []string{},
 				"reply_channel_type": "telegram", "reply_channel_target": "-1001234567890", "created_by": "worker",
 			},
-			"notes": []string{"cron uses exactly five fields", "timezone defaults to UTC", "reply channel type and target must be supplied together"},
+			"notes": []string{"cron uses exactly five fields", "timezone defaults to UTC", "context_refs entries must use repo:/absolute/path; bare filesystem paths are invalid", "reply channel type and target must be supplied together"},
 		}
 	}
 	writeJSON(writer, status, payload)
