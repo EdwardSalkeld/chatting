@@ -16,6 +16,10 @@ type subjectRegistrar interface {
 type repositoryRegistrar interface {
 	RegisterRepository(context.Context, string, string) error
 }
+type actionsRegistrar interface {
+	RegisterRun(context.Context, string, string) error
+	RegisterWorkflow(context.Context, string, string) error
+}
 
 // RegisterRoutes exposes explicit ownership on the handler's loopback worker API.
 func RegisterRoutes(mux *http.ServeMux, store registrar) {
@@ -25,6 +29,10 @@ func RegisterRoutes(mux *http.ServeMux, store registrar) {
 	}
 	if repositories, ok := store.(repositoryRegistrar); ok {
 		registerRoute(mux, "/work-items/register-repository", "repository", repositories.RegisterRepository)
+	}
+	if actions, ok := store.(actionsRegistrar); ok {
+		registerRoute(mux, "/work-items/register-run", "run_url", actions.RegisterRun)
+		registerRoute(mux, "/work-items/register-workflow", "workflow_url", actions.RegisterWorkflow)
 	}
 }
 

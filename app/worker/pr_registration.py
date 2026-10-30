@@ -50,7 +50,13 @@ def register_pr(handler_url: str, *, task_id: str, pr_url: str) -> None:
 def register_github_artifact(
     handler_url: str, *, task_id: str, kind: str, value: str
 ) -> None:
-    field = {"pr": "pr_url", "subject": "subject_url", "repository": "repository"}[kind]
+    field = {
+        "pr": "pr_url",
+        "subject": "subject_url",
+        "repository": "repository",
+        "run": "run_url",
+        "workflow": "workflow_url",
+    }[kind]
     request = urllib.request.Request(
         handler_url.rstrip("/") + f"/work-items/register-{kind}",
         data=json.dumps({"task_id": task_id, field: value}).encode(),

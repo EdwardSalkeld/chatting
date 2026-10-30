@@ -6,6 +6,23 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
+func TestNormalizeActionsOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		kind      string
+		normalize func(string) (string, error)
+	}{{"runs", NormalizeRun}, {"workflows", NormalizeWorkflow}} {
+		good := "https://github.com/Owner/Repo/actions/" + tc.kind + "/007/"
+		if key, err := tc.normalize(good); err != nil || key != "https://github.com/owner/repo/actions/"+tc.kind+"/7" {
+			t.Fatalf("normalization: %s %v", key, err)
+		}
+		for _, bad := range []string{"https://github.com", "https://github.com/o/r", "https://github.com/o/r/actions/" + tc.kind + "/0", "https://github.com/o/r/actions/" + tc.kind + "/abc", good + "more", good + "?other=1", "https://github.com.evil/o/r/actions/" + tc.kind + "/7", "https://someone@github.com/o/r/actions/" + tc.kind + "/7"} {
+			if _, err := tc.normalize(bad); err == nil {
+				t.Fatalf("accepted %s", bad)
+			}
+		}
+	}
+}
+
 func TestNormalizePRRejectsEmbeddedGitHubURL(t *testing.T) {
 	for _, value := range []string{
 		"https://evil.example/https://github.com/owner/repo/pull/50",

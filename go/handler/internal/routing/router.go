@@ -61,6 +61,27 @@ func NormalizeRepository(value string) (string, error) {
 	return strings.ToLower(value), nil
 }
 
+// Actions ownership accepts exact numeric run/workflow URLs, never branch or
+// display names. The normalized URL is also the artifact registry key.
+func NormalizeRun(value string) (string, error)      { return normalizeActions(value, "runs") }
+func NormalizeWorkflow(value string) (string, error) { return normalizeActions(value, "workflows") }
+
+func normalizeActions(value, kind string) (string, error) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid GitHub Actions URL")
+	}
+	parts := strings.Split(strings.TrimSuffix(parsed.Path, "/"), "/")
+	if len(parts) != 6 || !validPRName(parts[1]) || !validPRName(parts[2]) || parts[3] != "actions" || parts[4] != kind || !validPRNumber(parts[5]) {
+		return "", fmt.Errorf("invalid GitHub Actions URL")
+	}
+	id, err := strconv.ParseInt(parts[5], 10, 64)
+	if err != nil || id <= 0 {
+		return "", fmt.Errorf("invalid GitHub Actions ID")
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/actions/%s/%d", strings.ToLower(parts[1]), strings.ToLower(parts[2]), kind, id), nil
+}
+
 func prKey(value string, allowPathSuffix bool) (string, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
@@ -107,6 +128,18 @@ func (PersistentLaneRouter) Decide(task contracts.TaskQueueMessage) Decision {
 	envelope := task.Envelope
 	reply := envelope.ReplyChannel
 	if envelope.Source == "webhook" {
+		for _, kind := range []string{"run", "workflow"} {
+			if value, ok := reply.Metadata["github_"+kind].(string); ok {
+				normalize := NormalizeRun
+				if kind == "workflow" {
+					normalize = NormalizeWorkflow
+				}
+				if key, err := normalize(value); err == nil {
+					return Decision{Kind: "github_" + kind, Key: key, Reason: "github_" + kind}
+				}
+				return Decision{Kind: "github_unresolved", Reason: "needs_context"}
+			}
+		}
 		if repo, ok := reply.Metadata["github_repository"].(string); ok {
 			key, err := NormalizeRepository(repo)
 			if err == nil {

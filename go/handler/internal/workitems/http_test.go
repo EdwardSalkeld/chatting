@@ -18,6 +18,28 @@ func (fake *fakeRegistrar) RegisterPR(_ context.Context, taskID, prURL string) e
 	return nil
 }
 
+func (fake *fakeRegistrar) RegisterRun(ctx context.Context, taskID, value string) error {
+	return fake.RegisterPR(ctx, taskID, value)
+}
+func (fake *fakeRegistrar) RegisterWorkflow(ctx context.Context, taskID, value string) error {
+	return fake.RegisterPR(ctx, taskID, value)
+}
+
+func TestRegisterActionsRoutes(t *testing.T) {
+	for _, kind := range []string{"run", "workflow"} {
+		fake := &fakeRegistrar{}
+		mux := http.NewServeMux()
+		RegisterRoutes(mux, fake)
+		body := `{"task_id":"task:1","` + kind + `_url":"https://github.com/o/r/actions/` + kind + `s/7"}`
+		request := httptest.NewRequest(http.MethodPost, "/work-items/register-"+kind, strings.NewReader(body))
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || fake.taskID != "task:1" || fake.prURL != "https://github.com/o/r/actions/"+kind+"s/7" {
+			t.Fatalf("%s registration: %d %+v", kind, response.Code, fake)
+		}
+	}
+}
+
 func TestRegisterPRRoute(t *testing.T) {
 	fake := &fakeRegistrar{}
 	mux := http.NewServeMux()

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/routing"
 )
 
 type webhookTx struct{ tx *sql.Tx }
@@ -53,7 +54,43 @@ func (store *Store) WebhookTransaction(ctx context.Context, receive func(contrac
 	return tx.Commit()
 }
 
-func (s webhookTx) StageGitHub(ctx context.Context, envelope contracts.TaskEnvelope, enabled bool) error {
+func (s webhookTx) StageGitHub(ctx context.Context, envelope *contracts.TaskEnvelope, enabled bool) error {
+	if runURL, ok := envelope.ReplyChannel.Metadata["github_run"].(string); ok {
+		var owner string
+		if err := s.tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind='github_run' AND artifact_key=?`, runURL).Scan(&owner); err != nil {
+			return err
+		}
+		if err := prepareRunCompletion(envelope, runURL, owner); err != nil {
+			return err
+		}
+		if !enabled {
+			return nil
+		}
+		return stageRunCompletion(ctx, s.tx, envelope)
+	}
+	// A PR/workflow notice may already have told the same owner about this
+	// attempt. Share its delivery marker with later explicit run registration.
+	if runURL, ok := envelope.ReplyChannel.Metadata["run_url"].(string); ok && enabled {
+		kind, key := "", ""
+		if subject, ok := envelope.ReplyChannel.Metadata["github_subject"].(string); ok {
+			if normalized, err := routing.NormalizeSubject(subject); err == nil {
+				kind, key = "github_pr", normalized
+			}
+		} else if workflow, ok := envelope.ReplyChannel.Metadata["github_workflow"].(string); ok {
+			kind, key = "github_workflow", workflow
+		}
+		var owner string
+		err := s.tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind=? AND artifact_key=?`, kind, key).Scan(&owner)
+		if err == nil {
+			if err := prepareRunCompletion(envelope, runURL, owner); err != nil {
+				return err
+			}
+			return stageRunCompletion(ctx, s.tx, envelope)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
 	if repo, ok := envelope.ReplyChannel.Metadata["github_repository"].(string); ok {
 		var item string
 		err := s.tx.QueryRowContext(ctx, `SELECT work_item_id FROM work_item_artifacts WHERE kind = 'github_repository' AND artifact_key = ?`, strings.ToLower(repo)).Scan(&item)
