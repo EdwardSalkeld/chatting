@@ -614,6 +614,8 @@ def _task_payload(
                 "Use the handler JSON APIs directly; there is no scheduling CLI. For POST/PUT, "
                 "write JSON to a temporary file and use curl --data-binary @<path>. Choose the "
                 "reminder's destination from the user's request and conversation context. "
+                "Context refs must use repo:/absolute/path (for example repo:/workspace/memory), "
+                "never bare filesystem paths. "
                 "Reminder run_at values must include Z or an explicit offset and every reminder "
                 "POST/PUT needs an idempotency_key. Any 4xx JSON response includes a usage object "
                 "with endpoints, an example body, and correction notes."

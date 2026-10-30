@@ -160,6 +160,9 @@ func prepareJob(job Job) (Job, error) {
 	if strings.TrimSpace(job.Content) == "" {
 		return Job{}, errors.New("content is required")
 	}
+	if err := contracts.ValidateContextRefs(job.ContextRefs); err != nil {
+		return Job{}, err
+	}
 	if strings.TrimSpace(job.Cron) == "" {
 		return Job{}, errors.New("cron must be non-empty when provided")
 	}

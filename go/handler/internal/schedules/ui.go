@@ -167,8 +167,8 @@ var formTemplate = template.Must(template.New("form").Parse(`<!doctype html>
 <label>Timezone
 <input name="timezone" value="{{.Timezone}}" placeholder="UTC">
 </label>
-<label>Context refs <span class="hint">one per line</span>
-<textarea name="context_refs">{{.ContextRefs}}</textarea>
+<label>Context refs <span class="hint">one per line; use repo:/absolute/path</span>
+<textarea name="context_refs" placeholder="repo:/workspace/memory">{{.ContextRefs}}</textarea>
 </label>
 <label>Prompt context <span class="hint">one per line</span>
 <textarea name="prompt_context">{{.PromptContext}}</textarea>

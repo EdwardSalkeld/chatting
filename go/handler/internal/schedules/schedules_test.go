@@ -46,7 +46,7 @@ func TestSchedulesAPILifecycle(t *testing.T) {
 	server := newTestServer(t)
 	client := server.Client()
 
-	createBody := `{"job_name":"daily","content":"do the thing","cron":"0 9 * * *","context_refs":["a"],"reply_channel_type":"telegram","reply_channel_target":"123"}`
+	createBody := `{"job_name":"daily","content":"do the thing","cron":"0 9 * * *","context_refs":["repo:/workspace"],"reply_channel_type":"telegram","reply_channel_target":"123"}`
 	response, err := client.Post(server.URL+"/api/schedules", "application/json", strings.NewReader(createBody))
 	if err != nil {
 		t.Fatalf("POST: %v", err)

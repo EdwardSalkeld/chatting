@@ -336,6 +336,10 @@ class CodexExecutorTests(unittest.TestCase):
             payload["scheduling_contract"]["instructions"],
         )
         self.assertNotIn("handler_api_url", payload["scheduling_contract"])
+        self.assertIn(
+            "repo:/absolute/path",
+            payload["scheduling_contract"]["instructions"],
+        )
         self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
         executor_env = run_mock.call_args.kwargs["env"]
         self.assertEqual(executor_env["TOKEN"], "secret")
