@@ -303,6 +303,71 @@ Logging-only previews still depend on journal delivery. State errors return
 filter/state access. Payload previews still cap at 4096 bytes, but filtering reads
 the entire accepted body up to the existing 64 KiB request limit.
 
+## Optional automated notification triage
+
+The worker can assess automated issue comments before admitting them to its
+executor inbox, including comments that would otherwise become active-session
+follow-ups. Chatting contains no notification author names or message parsers.
+Owner policy lives at `notifications/rules.json` in a configured Git repository,
+using the same schema and immutable-main-revision loader as personal inbox rules.
+Repository, ref and path are not selected by incoming content.
+
+The handler attaches signed comment body, author, ID and update time only when
+GitHub identifies the author as a Bot and that author also sent the event.
+Human comments, human edits of bot comments, initial watches, direct mentions of
+the configured login, reviews and workflow completions bypass suppression.
+The candidate metadata contains the complete accepted comment, not the truncated
+journal preview. Oversized, incomplete or out-of-order candidates are forwarded.
+
+Worker environment settings:
+
+- `CHATTING_NOTIFICATION_TRIAGE_MODE`: `off` (default), `observe`, or `enforce`.
+- `CHATTING_NOTIFICATION_RULES_REPO`: checkout with an `origin/main` containing
+  `notifications/rules.json`; the loader fetches a private ref without changing
+  the working tree.
+- `TYPESAFE_API_KEY`: existing TypeSafe credential, never supplied to the executor.
+
+Start with `observe`: every event is forwarded, and the decision records what
+would have been suppressed. `enforce` suppresses only a clear no (`noul <= 0.3`)
+to whether the notification adds information worth agent attention. Uncertainty,
+missing rules, failed fetches, malformed answers and provider errors forward.
+The TypeSafe request uses the existing bounded transport with an eight-second
+request budget. Rules fetching also has bounded subprocess timeouts. Triage is
+serialized in the collector, so a slow assessment can delay later broker pickup;
+it never holds the handler webhook request or a worker database transaction.
+
+Comparison context is scoped to subject and comment ID: current version,
+previous observed version and last forwarded version. This does not compare
+independent comments, fetch GitHub or infer relationships across work items.
+“Forwarded” means admitted for execution, not a claim that the agent posted a reply.
+
+`<worker-db-path>.notifications` stores decisions by task ID and the latest
+comparison bodies per comment. A replay after a failed ACK reuses the saved
+decision even if rules or mode changed. Decisions and comparison state commit
+together before admission/ACK; the one collector stages a forwarded event before
+collecting the next. Missing/unavailable optional triage storage forwards events.
+`notification_triage` journal records include rule revision, supplied IDs, model,
+probability, mode and compared event IDs, without message bodies or credentials.
+An ingress `keep` receipt may therefore have a later worker triage decision that
+suppresses executor work; audit both records rather than treating every absence
+of an agent turn as a lost task.
+The database contains comment bodies and follows the worker DB's local access
+and backup policy; there is no automatic retention pruning in this version.
+
+Before enforcing policy, replay labelled examples in a disposable database:
+
+```sh
+python -m app.worker.notification_replay --rules-repo /path/to/memory --input examples.jsonl
+```
+
+Each JSONL line has `task` (a normal task queue payload) and `expected_forward`
+(boolean). Preserve event order and distinct task IDs; use genuine historical
+versions where available. The command calls TypeSafe but never dispatches tasks,
+changes live state or sends replies. Inspect false suppressions and observation
+logs before enabling enforcement. Model classification tests use injected answers
+and do not establish real-world accuracy. Deployment settings belong in Lab;
+this change does not enable triage in an installation.
+
 ## GitHub App registration
 
 Register an App with the subscriptions and repository permissions required

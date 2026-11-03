@@ -9,6 +9,7 @@ from threading import Event, Thread
 from app.broker import BBMBQueueAdapter, TASK_QUEUE_NAME, TaskQueueMessage
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
+from app.worker.notification_triage import NotificationTriage
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class InboxCollector:
     store: SQLiteStateStore
     activity_monitor: WorkerActivityMonitor
     pickup_timeout_seconds: int
+    notification_triage: NotificationTriage | None = None
     _stop: Event = field(init=False, default_factory=Event)
     _thread: Thread | None = field(init=False, default=None)
 
@@ -46,6 +48,12 @@ class InboxCollector:
         if picked is None:
             return False
         task_message = TaskQueueMessage.from_dict(picked.payload)
+        if (
+            self.notification_triage is not None
+            and not self.notification_triage.forward(task_message)
+        ):
+            self.broker.ack(TASK_QUEUE_NAME, picked.guid)
+            return True
         inserted = self.store.stage_inbox_task(task_message, broker_guid=picked.guid)
         # SQLite is the durable handoff point. A redelivered task is already
         # present, so it is equally safe to acknowledge without inserting again.

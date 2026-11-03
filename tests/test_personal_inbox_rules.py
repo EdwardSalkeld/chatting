@@ -97,6 +97,34 @@ class RulesRepositoryTests(unittest.TestCase):
         self.assertEqual(rules.instructions, "")
         self.assertEqual(rules.ids, ())
 
+    def test_notification_profile_has_its_own_fixed_path_and_ref(self):
+        from app.worker.owner_rules import load_rules as owner_rules
+
+        path = self.source / "notifications/rules.json"
+        path.parent.mkdir()
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "rules": [
+                        {
+                            "id": "preview-updates",
+                            "instruction": "Preserve new useful previews.",
+                        }
+                    ],
+                }
+            )
+        )
+        self.git(self.source, "add", ".")
+        self.git(self.source, "commit", "-m", "Notification policy")
+        rules = owner_rules(str(self.checkout), profile="notifications")
+        self.assertEqual(rules.ids, ("preview-updates",))
+        self.assertIn("Preserve new useful previews", rules.instructions)
+        self.assertNotIn("direct debit", rules.instructions)
+        self.assertEqual(load_rules(str(self.checkout)).ids, ("example-invoices",))
+        with self.assertRaises(ValueError):
+            owner_rules(str(self.checkout), profile="../../untrusted")
+
 
 class RulesRuntimeTests(unittest.TestCase):
     def test_same_trusted_context_reaches_both_models_and_trace(self):

@@ -53,6 +53,11 @@ func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter,
 				buildErr = err
 				return err
 			}
+			var p filterPayload
+			_ = json.Unmarshal(body, &p)
+			if d.NewWatch || (p.Comment != nil && mention(p.Comment.Body, filter.Login)) {
+				delete(task.Envelope.ReplyChannel.Metadata, "notification_candidate")
+			}
 			err = tx.StageGitHub(ctx, &task.Envelope, filter.DeliveryEnabled)
 			if err != nil {
 				return err
