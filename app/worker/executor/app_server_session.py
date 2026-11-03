@@ -134,6 +134,16 @@ class AppServer:
         emit: Callable[[str, str], None],
     ) -> None:
         payload = request["payload"]
+        emit(
+            "stdout",
+            json.dumps(
+                {
+                    "method": "chatting/modelSelected",
+                    "params": {"model": MODELS[request["model_tier"] or "high"]},
+                }
+            )
+            + "\n",
+        )
         started = self.rpc(
             "turn/start",
             {
