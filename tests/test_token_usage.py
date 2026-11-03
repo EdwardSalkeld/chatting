@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,3 +130,39 @@ class TokenUsageTests(unittest.TestCase):
             )
         self.assertEqual([r["attempt"] for r in self.rows()], [1, 2])
         self.assertEqual([r["model"] for r in self.rows()], ["first", "second"])
+
+    def test_backfill_and_live_writer_can_share_wal_database(self):
+        self.usage()
+        done = threading.Event()
+        errors = []
+
+        def write_live_activity():
+            try:
+                self.append("executor_stderr", {"content": "live output"})
+            except Exception as error:
+                errors.append(error)
+            finally:
+                done.set()
+
+        writer = threading.Thread(target=write_live_activity)
+        started = False
+
+        def overlap_write(statement):
+            nonlocal started
+            if not started and "SELECT * FROM worker_activity_events" in statement:
+                started = True
+                writer.start()
+                # With a deferred transaction the other writer commits here,
+                # invalidating the backfill's snapshot before its first insert.
+                # With a reserved writer it waits until this batch commits.
+                done.wait(0.2)
+
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("DELETE FROM model_token_usage")
+            connection.commit()
+            connection.set_trace_callback(overlap_write)
+            self.assertEqual(backfill(connection, since="2000"), 1)
+        writer.join(timeout=5)
+        self.assertTrue(done.is_set())
+        self.assertEqual(errors, [])
