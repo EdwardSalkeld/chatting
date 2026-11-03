@@ -249,6 +249,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
 	}, func(mux *http.ServeMux) {
 		workitems.RegisterRoutes(mux, store)
+		webhooks.RegisterStatusRoutes(mux, store)
 		if personal != nil {
 			personal.RegisterRoutes(mux)
 		}
