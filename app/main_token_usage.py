@@ -19,30 +19,40 @@ def backfill(connection: sqlite3.Connection, *, since: str) -> int:
         task_id TEXT PRIMARY KEY, attempt INTEGER, model TEXT, model_source TEXT
     )""")
     connection.execute("DELETE FROM temp.model_usage_context")
-    before = connection.execute("SELECT count(*) FROM model_token_usage").fetchone()[0]
+    connection.commit()
     high_water = connection.execute(
         "SELECT COALESCE(max(activity_id), 0) FROM worker_activity_events"
     ).fetchone()[0]
     after_id = 0
+    inserted = 0
     while True:
-        rows = connection.execute(
-            """SELECT * FROM worker_activity_events
-               WHERE activity_id > ? AND activity_id <= ? AND occurred_at >= ?
-               AND phase IN ('executor_started', 'executor_stdout', 'task_finished')
-               ORDER BY activity_id LIMIT 500""",
-            (after_id, high_water, since),
-        ).fetchall()
-        if not rows:
-            break
         with connection:
+            # Reserve the writer before reading. Upgrading an older WAL read
+            # snapshot after a live worker commit fails immediately with BUSY.
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """SELECT * FROM worker_activity_events
+                   WHERE activity_id > ? AND activity_id <= ? AND occurred_at >= ?
+                   AND phase IN ('executor_started', 'executor_stdout', 'task_finished')
+                   ORDER BY activity_id LIMIT 500""",
+                (after_id, high_water, since),
+            ).fetchall()
+            if not rows:
+                break
+            before = connection.execute(
+                "SELECT count(*) FROM model_token_usage"
+            ).fetchone()[0]
             for event in rows:
                 token_usage.project(connection, event)
+            inserted += (
+                connection.execute("SELECT count(*) FROM model_token_usage").fetchone()[
+                    0
+                ]
+                - before
+            )
         after_id = rows[-1]["activity_id"]
     connection.execute("DROP TABLE temp.model_usage_context")
-    return (
-        connection.execute("SELECT count(*) FROM model_token_usage").fetchone()[0]
-        - before
-    )
+    return inserted
 
 
 def main() -> None:
