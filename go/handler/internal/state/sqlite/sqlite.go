@@ -214,6 +214,13 @@ func (store *Store) initialize(ctx context.Context) error {
 			work_item_id TEXT NOT NULL,
 			PRIMARY KEY (route_kind, route_key)
 		)`,
+		`CREATE TABLE IF NOT EXISTS work_item_telegram_topics (
+			work_item_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			topic_id INTEGER,
+			UNIQUE(chat_id,topic_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS work_item_artifacts (
 			kind TEXT NOT NULL,
 			artifact_key TEXT NOT NULL,

@@ -638,6 +638,23 @@ def _task_payload(
                 "link it with register_command."
             ),
         },
+        "telegram_topic_contract": {
+            "ensure_command": f"python3 -P -m app.main_work_items ensure-telegram-topic task:{envelope.id} --name <short-descriptive-title>",
+            "instructions": (
+                "When a useful update, question or result belongs on Telegram, reuse an attached "
+                "Telegram conversation from associated_conversations. If none is attached, use "
+                "ensure-telegram-topic to create a topic and attach it to THIS workspace. This "
+                "applies to any kind of work, including PRs, emails and scheduled tasks. The "
+                "handler uses its configured forum group; --chat-id can explicitly choose another "
+                "allowed forum. The command returns a conversation: use its target and "
+                "metadata.message_thread_id as telegram_topic_id when sending with main_reply. "
+                "Creating a topic sends no user-facing update by itself. Do not create topics "
+                "for events with nothing useful to report. Repeated ensure calls reuse the "
+                "workspace's conversation; replies there continue this same workspace. If "
+                "creation is pending or uncertain, inspect the forum and attach the known "
+                "--topic-id with --chat-id instead of making another creation request."
+            ),
+        },
         "github_actions_contract": {
             "register_run_command": (
                 "python3 -P -m app.main_work_items register-run "
