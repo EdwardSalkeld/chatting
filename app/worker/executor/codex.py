@@ -561,7 +561,12 @@ def _task_payload(
                 "on Telegram, use several destinations, or say nothing when no response is useful. "
                 "Set channel and target explicitly for each send. For an inline GitHub review reply, "
                 "use channel github and the review comment's URL ending #discussion_r<comment-id>. "
-                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment."
+                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment. "
+                "For Telegram, target is the chat/group ID. To send into a topic, also set "
+                "telegram_topic_id to the chosen conversation's metadata.message_thread_id. "
+                "When answering within a topic, preserve that topic ID on every send, including "
+                "attachments and multiple message parts. Omit telegram_topic_id for General or "
+                "a chat without topics. A Telegram message ID is not a topic ID."
             ),
             # -P (safe path) stops Python prepending the cwd to sys.path, so this
             # always runs the deployed app.main_reply even when the cwd is a
@@ -574,7 +579,7 @@ def _task_payload(
                 "Never put the reply text on the command line: the shell mangles backticks, "
                 "quotes, $, and newlines, which corrupts or splits the reply. Spec fields: "
                 "task_id, channel, target, message, and optionally attachment_path, "
-                "attachment_name, telegram_reaction, telegram_message_id, event_id. "
+                "attachment_name, telegram_reaction, telegram_message_id, telegram_topic_id, event_id. "
                 "If telegram_reaction is supplied with message or attachment, main_reply "
                 "sends both."
             ),
