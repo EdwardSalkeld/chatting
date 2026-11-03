@@ -91,8 +91,8 @@ func TestActionRulesAndWorkflowRecovery(t *testing.T) {
 	} {
 		check(tc.event, tc.action, map[string]any{"pull_request": pr, "review": textObject{}}, tc.want, tc.reason)
 	}
-	check("issue_comment", "edited", map[string]any{"issue": pr, "comment": textObject{" hello  world "}, "changes": map[string]any{"body": map[string]any{"from": "hello world"}}}, "drop", "cosmetic_edit")
-	check("issue_comment", "edited", map[string]any{"issue": pr, "comment": textObject{"new request"}, "changes": map[string]any{"body": map[string]any{"from": "old request"}}}, "keep", "meaningful_edit")
+	check("issue_comment", "edited", map[string]any{"issue": pr, "comment": textObject{Body: " hello  world "}, "changes": map[string]any{"body": map[string]any{"from": "hello world"}}}, "drop", "cosmetic_edit")
+	check("issue_comment", "edited", map[string]any{"issue": pr, "comment": textObject{Body: "new request"}, "changes": map[string]any{"body": map[string]any{"from": "old request"}}}, "keep", "meaningful_edit")
 	check("issues", "edited", map[string]any{"issue": pr}, "needs_context", "missing_edit_history")
 	check("release", "published", map[string]any{"release": map[string]any{"draft": false, "prerelease": false}}, "keep", "published_release")
 	check("release", "published", map[string]any{"release": map[string]any{"prerelease": true}}, "drop", "release_noise")

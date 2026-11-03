@@ -47,6 +47,24 @@ Signatures and other headers are not logged. All receipts, including drops and
 retries, are logged with a `filter` decision (`keep`, `drop`, `needs_context`)
 and a reason.
 
+Recognised Cloudflare Pages deployment comments on watched subjects receive
+special handling. Building/queued progress does not start agent work. The first
+successful preview for a commit, a deployment failure, and recovery after a
+failure do; repeated results for the same comment/commit do not. An older
+comment timestamp cannot replace a newer result. This state survives handler
+restarts in the subject's existing watch record and does not change CI run
+registration or PR head tracking. On rollout, the first recognised terminal
+result has no previous preview state and can produce one notification.
+
+This applies only to `cloudflare-workers-and-pages[bot]`, the recognised
+deployment table, a commit id and valid comment id/timestamp. Human comments,
+unknown statuses and provider format changes keep the ordinary watch/edit
+rules so requests or failures are not silently discarded. Decision reasons
+are `preview_progress`, `preview_unchanged`, `preview_outdated`, `preview_ready`
+and `preview_failed`. Preview URLs alone changing after the same successful
+commit do not start another turn; an explicitly awaited CI run still follows
+the separate completion rules below.
+
 With delivery disabled, each accepted GitHub receipt includes `mode: log_only`; **only keeps** include a structured
 `task_preview` using the existing `chatting.task.v1` BBMB ingress contract
 (`TaskQueueMessage`, with a `TaskEnvelope`). This is a preview only: the public

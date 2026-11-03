@@ -53,7 +53,9 @@ type subject struct {
 	} `json:"head"`
 }
 type textObject struct {
-	Body string `json:"body"`
+	Body      string `json:"body"`
+	ID        int64  `json:"id,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 type workflow struct {
 	Event        string    `json:"event"`
@@ -87,7 +89,8 @@ type filterPayload struct {
 	} `json:"release"`
 }
 type watchState struct {
-	HeadSHA string `json:"head_sha,omitempty"`
+	HeadSHA         string                  `json:"head_sha,omitempty"`
+	PreviewComments map[string]previewState `json:"preview_comments,omitempty"`
 }
 
 func decision(disposition, reason string) Decision {
@@ -258,6 +261,9 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 	if self {
 		d.Disposition, d.Reason = "drop", "self_action"
 		return d, nil
+	}
+	if handled, err := f.cloudflarePreviewDecision(ctx, p, event, key, &state, &d); handled || err != nil {
+		return d, err
 	}
 	if d.NewWatch {
 		if assignedToUs {
