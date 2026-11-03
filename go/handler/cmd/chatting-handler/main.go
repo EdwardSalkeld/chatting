@@ -249,6 +249,14 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
 	}, func(mux *http.ServeMux) {
 		workitems.RegisterRoutes(mux, store)
+		var creator workitems.TopicCreator
+		if concrete, ok := dispatcher.(dispatch.Dispatcher); ok {
+			creator, _ = concrete.TelegramSender.(workitems.TopicCreator)
+		}
+		(workitems.TelegramTopics{Store: store, Creator: creator,
+			DefaultChatID:  config.TelegramWorkspaceForumChatID,
+			AllowedChatIDs: config.TelegramAllowedChatIDs,
+		}).RegisterRoutes(mux)
 		webhooks.RegisterStatusRoutes(mux, store)
 		if personal != nil {
 			personal.RegisterRoutes(mux)

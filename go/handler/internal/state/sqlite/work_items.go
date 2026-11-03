@@ -227,5 +227,14 @@ func (store *Store) addConversationContext(ctx context.Context, task contracts.T
 		origin.Metadata = metadata
 		task.Envelope.ConversationChannels = []contracts.ReplyChannel{origin}
 	}
+	if origin.Type != "telegram" {
+		conversation, err := store.TelegramConversation(ctx, task.TaskID)
+		if err != nil {
+			return task, err
+		}
+		if conversation != nil {
+			task.Envelope.ConversationChannels = append(task.Envelope.ConversationChannels, *conversation)
+		}
+	}
 	return task, nil
 }

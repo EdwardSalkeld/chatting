@@ -16,6 +16,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_allowed_chat_ids` (optional list)
 - `telegram_allowed_channel_ids` (optional list, required to ingest `channel_post`)
 - `telegram_context_refs` (optional list; falls back to `context_refs`)
+- `telegram_workspace_forum_chat_id` (optional): default allowed forum group for new workspace topics
 
 ## Output mapping
 
@@ -81,9 +82,45 @@ Successful sends return the actual `message_id` and, when present,
 than guessing from the incoming task. Legacy `final` notices preserve their
 event's topic. Native reactions continue to address chat plus message ID.
 
-Existing topic conversations retain their workspace on later messages. Creating
-a topic on behalf of a PR and binding it to that PR's existing workspace is a
-separate capability; this change implements delivery into existing topics.
+## Creating a conversation for a workspace
+
+When the agent has something useful to communicate on Telegram and its workspace
+has no Telegram conversation, it can create and attach one:
+
+```sh
+python3 -P -m app.main_work_items ensure-telegram-topic <task-id> --name 'Investigate the build failure'
+```
+
+The handler uses `telegram_workspace_forum_chat_id`, or the agent can pass
+`--chat-id <allowed-forum-id>`. The bot must be an administrator with permission
+to manage topics in that forum. This is independent of the source of the work:
+PRs, emails, scheduled tasks and other work all use the same operation.
+
+The command returns a `conversation` with a `target` and
+`metadata.message_thread_id`. Use those as `target` and `telegram_topic_id` in
+`main_reply`. The operation creates no explanatory message; the agent sends its
+update separately. Existing Telegram conversations are reused, including an
+existing General/DM conversation, and background events with nothing to report
+do not need a topic.
+
+The handler attaches the route to the current work item before the command
+succeeds. Subsequent inbound messages in that topic are assigned to the same
+workspace and get its associated conversation context. Concurrent requests reuse
+the reservation and cannot create a second topic. Another workspace's existing
+route cannot be reassigned by this operation.
+
+Telegram's creation API has no idempotency key. A pending reservation is retained
+after a lost/uncertain response or a crash; another creation is blocked. Inspect
+the forum and recover by attaching the known topic instead:
+
+```sh
+python3 -P -m app.main_work_items ensure-telegram-topic <task-id> --chat-id <forum-id> --topic-id <existing-id> --name 'Recovered work'
+```
+
+A confirmed Telegram rejection releases the reservation so corrected settings
+can be retried. A failed binding after a successful creation reports the created
+topic ID for recovery. Deleted topics and workspace reassignment are not silently
+repaired by creating another conversation.
 
 - Telegram egress supports:
   - plain text replies through `sendMessage`

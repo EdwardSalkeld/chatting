@@ -172,6 +172,23 @@ func (sender *TelegramMessageSender) React(ctx context.Context, target string, m
 	return nil
 }
 
+func (sender *TelegramMessageSender) CreateForumTopic(ctx context.Context, chatID, name string) (int64, bool, error) {
+	response, err := sender.postJSON(ctx, "createForumTopic", map[string]string{"chat_id": chatID, "name": name})
+	if err != nil {
+		return 0, false, fmt.Errorf("Telegram creation response unavailable")
+	}
+	if !response.OK {
+		return 0, response.ErrorCode >= 400 && response.ErrorCode < 500, errors.New(describeTelegramResponseError("telegram_topic_create_failed", response))
+	}
+	var result struct {
+		TopicID int64 `json:"message_thread_id"`
+	}
+	if json.Unmarshal(response.Result, &result) != nil || result.TopicID <= 0 {
+		return 0, false, fmt.Errorf("Telegram creation response has no topic ID")
+	}
+	return result.TopicID, false, nil
+}
+
 func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string, topicID *int64) (TelegramSendResult, error) {
 	normalizedBody := normalizeTelegramOutboundText(body)
 	payload := map[string]any{
@@ -208,6 +225,7 @@ type TelegramSendResult struct {
 
 type telegramAPIResponse struct {
 	OK          bool            `json:"ok"`
+	ErrorCode   int             `json:"error_code"`
 	Description string          `json:"description"`
 	Result      json.RawMessage `json:"result,omitempty"`
 }
