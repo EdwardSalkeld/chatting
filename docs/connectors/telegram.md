@@ -23,6 +23,7 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `id` / `dedupe_key`: `telegram:<update_id>`
 - `reply_channel`: `telegram:<chat_id>`
 - `reply_channel.metadata.message_id`: original Telegram `message_id` for native reactions
+- `reply_channel.metadata.message_thread_id`: forum topic ID when present; the chat and topic together identify the conversation/workspace
 - `reply_channel.metadata.reply_to_message_id`: quoted Telegram message id when the inbound message uses Telegram's native Reply gesture
 - `reply_channel.metadata.location`: normalized Telegram location metadata when the inbound update includes a `location`
 - `reply_channel.metadata.sender`: human-readable sender label — `@username`, else first/last name, else the numeric id; suffixed with ` (bot)` when the sender is a bot. Falls back to the sending chat (title/username) for channel posts.
@@ -52,6 +53,37 @@ Long-poll Telegram Bot API `getUpdates` and normalize DM/group `message` updates
 - `telegram_attachment_dir` must be readable by the worker, which runs as a different user, so the executor can open downloaded files.
 
 ## Outbound egress
+
+When choosing a Telegram topic as the destination, include `telegram_topic_id`
+in the `app.main_reply` spec alongside the group's `target`:
+
+```json
+{
+  "task_id": "task:telegram:123",
+  "channel": "telegram",
+  "target": "-1004372890338",
+  "telegram_topic_id": 3,
+  "message": "Reply inside the chosen topic"
+}
+```
+
+Use the chosen conversation's `metadata.message_thread_id`, not its message ID.
+Keep the topic on every message part and attachment. Omit the field for General
+or chats without topics. Explicit agent sends choose their destination; the
+handler does not infer a topic from another conversation or force replies back
+to the incoming one. Topic IDs must be positive integers. An invalid or deleted
+topic returns a delivery error rather than retrying in General.
+
+The worker maps this field to `OutboundMessage.metadata.message_thread_id`.
+Text, photos, documents and formatting retries forward it to Telegram.
+Successful sends return the actual `message_id` and, when present,
+`message_thread_id` from Telegram; history records that destination topic rather
+than guessing from the incoming task. Legacy `final` notices preserve their
+event's topic. Native reactions continue to address chat plus message ID.
+
+Existing topic conversations retain their workspace on later messages. Creating
+a topic on behalf of a PR and binding it to that PR's existing workspace is a
+separate capability; this change implements delivery into existing topics.
 
 - Telegram egress supports:
   - plain text replies through `sendMessage`

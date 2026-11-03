@@ -65,8 +65,21 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		if dispatcher.TelegramSender == nil {
 			return nil, nil
 		}
+		// Copy metadata before attaching delivery results. Explicit agent sends
+		// select their own topic; legacy final replies use the event address.
+		normalized.Metadata = map[string]any{}
+		for key, value := range message.Metadata {
+			normalized.Metadata[key] = value
+		}
+		if message.Channel == "final" {
+			if _, present := normalized.Metadata["message_thread_id"]; !present {
+				if topic, ok := envelope.ReplyChannel.Metadata["message_thread_id"]; ok {
+					normalized.Metadata["message_thread_id"] = topic
+				}
+			}
+		}
 		if sender, ok := dispatcher.TelegramSender.(telegramResultSender); ok {
-			result, err := sender.SendWithResult(ctx, target, message)
+			result, err := sender.SendWithResult(ctx, target, normalized)
 			if err != nil {
 				return nil, MessageDispatchError{ReasonCode: telegramDispatchReasonCode(message, err)}
 			}
@@ -74,9 +87,13 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 				normalized.Metadata = map[string]any{}
 			}
 			normalized.Metadata["message_id"] = result.MessageID
+			delete(normalized.Metadata, "message_thread_id")
+			if result.TopicID != nil {
+				normalized.Metadata["message_thread_id"] = *result.TopicID
+			}
 			return &normalized, nil
 		}
-		if err := dispatcher.TelegramSender.Send(ctx, target, message); err != nil {
+		if err := dispatcher.TelegramSender.Send(ctx, target, normalized); err != nil {
 			return nil, MessageDispatchError{ReasonCode: telegramDispatchReasonCode(message, err)}
 		}
 		return &normalized, nil

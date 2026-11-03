@@ -56,6 +56,7 @@ _SPEC_FIELDS = (
     "attachment_name",
     "telegram_reaction",
     "telegram_message_id",
+    "telegram_topic_id",
     "event_id",
     "envelope_id",
     "trace_id",
@@ -83,6 +84,15 @@ def _parse_args() -> argparse.Namespace:
     args = argparse.Namespace(**{field: spec.get(field) for field in _SPEC_FIELDS})
     if isinstance(args.telegram_message_id, str) and args.telegram_message_id.strip():
         args.telegram_message_id = int(args.telegram_message_id)
+    topic_id = args.telegram_topic_id
+    if topic_id is not None:
+        if isinstance(topic_id, str) and topic_id.isdecimal():
+            topic_id = int(topic_id)
+        if type(topic_id) is not int or topic_id <= 0:
+            raise ValueError("telegram_topic_id must be a positive integer")
+        if args.channel != "telegram":
+            raise ValueError("telegram_topic_id requires channel telegram")
+        args.telegram_topic_id = topic_id
     for field in ("task_id", "channel", "target"):
         if not getattr(args, field):
             parser.error(f"{field} is required in --spec-file")
@@ -225,6 +235,9 @@ def _resolve_reply_messages(
                 target=args.target,
                 body=body,
                 attachment=attachment,
+                metadata={"message_thread_id": args.telegram_topic_id}
+                if args.telegram_topic_id is not None
+                else {},
             )
         )
 
@@ -321,6 +334,13 @@ def main() -> int:
             if isinstance(response_metadata, dict)
             else None
         )
+        sent_topic_id = (
+            response_metadata.get("message_thread_id")
+            if isinstance(response_metadata, dict)
+            else None
+        )
+        if type(sent_topic_id) is not int or sent_topic_id <= 0:
+            sent_topic_id = None
 
         if (
             delivered
@@ -332,6 +352,7 @@ def main() -> int:
         ):
             SQLiteStateStore(db_path).record_telegram_outbound(
                 target=outbound_message.target,
+                topic_id=sent_topic_id,
                 message_id=sent_message_id,
                 content=outbound_message.body,
                 attachment=outbound_message.attachment,
@@ -356,6 +377,7 @@ def main() -> int:
                 detail={
                     "channel": egress_message.message.channel,
                     "target": egress_message.message.target,
+                    "metadata": response_metadata,
                     "body": egress_message.message.body,
                     "event_id": egress_message.event_id,
                     "event_kind": egress_message.event_kind,
@@ -378,6 +400,8 @@ def main() -> int:
         }
         if isinstance(sent_message_id, int) and sent_message_id > 0:
             result_payload["telegram_message_id"] = sent_message_id
+        if sent_topic_id is not None:
+            result_payload["telegram_topic_id"] = sent_topic_id
         results.append(result_payload)
 
     if claimed_followups:
