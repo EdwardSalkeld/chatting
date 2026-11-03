@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from app.broker import EgressQueueMessage, TaskQueueMessage
-from app.state import work_items
+from app.state import token_usage, work_items
 from app.timefmt import format_utc, parse_utc
 from app.models import (
     AttachmentRef,
@@ -195,6 +195,7 @@ class SQLiteStateStore:
             connection.executescript(_SCHEMA)
             work_items.initialize(connection)
             work_items.migrate_identity(connection)
+            token_usage.initialize(connection)
 
     def stage_inbox_task(
         self, task_message: TaskQueueMessage, *, broker_guid: str | None = None
@@ -1237,7 +1238,7 @@ class SQLiteStateStore:
             raise ValueError("summary is required")
         payload = _json_safe_dict(detail)
         with self._transaction() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO worker_activity_events (
                     occurred_at,
@@ -1273,6 +1274,12 @@ class SQLiteStateStore:
                     run_id,
                 ),
             )
+            if phase in {"executor_started", "executor_stdout", "task_finished"}:
+                event = connection.execute(
+                    "SELECT * FROM worker_activity_events WHERE activity_id = ?",
+                    (cursor.lastrowid,),
+                ).fetchone()
+                token_usage.project(connection, event)
 
     def count_conversation_bundle_main_reply_egress_events(
         self, *, parent_task_id: str
