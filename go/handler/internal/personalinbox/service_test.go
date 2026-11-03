@@ -61,19 +61,54 @@ type filing struct {
 }
 
 type fakeMail struct {
-	boxes    []jmap.Mailbox
-	emails   map[string]jmap.Email
-	state    string
-	created  []string
-	stale    bool
-	failGet  bool
-	failFile bool
-	filed    []filing
+	boxes     []jmap.Mailbox
+	emails    map[string]jmap.Email
+	state     string
+	created   []string
+	stale     bool
+	failGet   bool
+	failFile  bool
+	failBoxes bool
+	filed     []filing
 }
 
 func (mail *fakeMail) AccountID(context.Context) (string, error) { return "ub8884168", nil }
 func (mail *fakeMail) Mailboxes(context.Context) ([]jmap.Mailbox, error) {
+	if mail.failBoxes {
+		return nil, errors.New("mail server unavailable")
+	}
 	return mail.boxes, nil
+}
+
+func TestCycleWaitsForFoldersAndRecoversWithoutRestart(t *testing.T) {
+	for _, problem := range []string{"offline", "missing", "ambiguous"} {
+		t.Run(problem, func(t *testing.T) {
+			service, mail, broker, performer := fixture(t)
+			boxes := append([]jmap.Mailbox(nil), mail.boxes...)
+			switch problem {
+			case "offline":
+				mail.failBoxes = true
+			case "missing":
+				mail.boxes = boxes[:2]
+			case "ambiguous":
+				mail.boxes = append(mail.boxes, jmap.Mailbox{ID: "duplicate", Name: "News", ParentID: "T1"})
+			}
+			if err := service.Cycle(context.Background()); err == nil {
+				t.Fatal("expected destination validation to pause mail processing")
+			}
+			messages, err := service.Store.messages(context.Background(), "1=1")
+			if err != nil || len(messages) != 0 || broker.publications[TasksQueue] != 0 || len(performer.calls) != 0 {
+				t.Fatalf("mail advanced while folders unavailable: %v %v", messages, err)
+			}
+			mail.failBoxes, mail.boxes = false, boxes
+			if err := service.Cycle(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if oneMessage(t, service).ID != "Stm4" || broker.publications[TasksQueue] != 1 {
+				t.Fatal("inbox did not resume after folder recovery")
+			}
+		})
+	}
 }
 func (mail *fakeMail) EmailState(context.Context) (string, error) { return mail.state, nil }
 func (mail *fakeMail) Changes(_ context.Context, since string, _ int) (jmap.Changes, error) {
