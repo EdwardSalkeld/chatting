@@ -30,6 +30,9 @@ from app.worker.activity import (
 from app.worker.executor import CodexExecutor, Executor
 from app.state import SQLiteStateStore
 from app.worker.inbox import InboxCollector
+from app.worker.notification_triage import (
+    from_environment as notification_triage_from_environment,
+)
 from app.worker.personal_inbox import collector_from_environment
 from app.worker.pr_registration import register_pr
 from app.worker.supervisor import SupervisorPool
@@ -297,6 +300,7 @@ def main() -> int:
         store=store,
         activity_monitor=activity_monitor,
         pickup_timeout_seconds=poll_timeout_seconds,
+        notification_triage=notification_triage_from_environment(db_path),
     )
     collector.start()
     # Personal mail is classified in this process but never reaches the
