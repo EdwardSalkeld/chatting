@@ -122,6 +122,30 @@ and redeliver the event through GitHub. A successful redelivery clears the held
 record. Workflows linked to several PRs are held rather than guessing an owner,
 unless that exact run has an explicit destination.
 
+### Inspect events waiting for an owner or more context
+
+`GET /github/webhooks/status` on the **loopback worker/egress API** (default
+port 9467) reports the current held-event count, counts by reason, pending
+notification count, registered workflow owners, and a page of held records:
+
+```sh
+curl --fail-with-body 'http://127.0.0.1:9467/github/webhooks/status?limit=50&offset=0'
+```
+
+Each record contains its event key, delivery id, reason, original receipt time,
+body size, repository and available issue/PR/run URLs. Raw request bodies and
+comment text are omitted. External metadata remains untrusted data. The page
+is ordered by receipt time then event key; `limit` is 1–100 (default 50), and
+`offset` is 0–1000000. Counts and the page share one database read transaction;
+later pages can change if new events arrive or held records clear meanwhile.
+
+This endpoint is not registered on public webhook ingress or the metrics
+listener. It is GET-only, does not register an owner, retry a delivery or clear
+a held record, and makes no GitHub API calls. Use it to distinguish logged hold
+decisions from the actual current backlog. A registered workflow is listed with
+its owning work item, so an audit can check whether unattended failures have
+a destination rather than inferring one from a branch name.
+
 ### CI ownership without a PR link
 
 When GitHub omits a PR-triggered run's `pull_requests`, match its repository and
