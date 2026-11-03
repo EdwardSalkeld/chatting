@@ -157,8 +157,12 @@ destination before explicitly resolving or retrying an uncertain send.
 
 ## Mailbox names
 
-Folder names in `folders` are resolved to mailbox ids at startup and again
-whenever a lookup fails, in case you have just created one. Names are not unique
+Folder names in `folders` are resolved before the first mail-processing cycle
+and again whenever a lookup fails, in case you have just created one. An outage,
+missing folder or ambiguous name pauses inbox processing and is reported in
+the inbox status; the existing ten-second loop retries, with each initial
+folder check limited to thirty seconds. The handler's webhook, Telegram and
+reply services can start while this check is unavailable. Names are not unique
 in a real account — an account can hold two mailboxes both called `Archive` — so
 an ambiguous name is refused rather than guessed at. Use a full path such as
 `Triage/News` to disambiguate. A nested mailbox is also addressable by its leaf
@@ -290,7 +294,9 @@ The `personal_inbox` object in the handler config enables the workflow. Its
 keys are defined in
 [`personalinbox/config.go`](../../go/handler/internal/personalinbox/config.go).
 Defaults are disabled, dry-run, no backfill and no folders. Folders in
-the `folders` map must exist before startup.
+the `folders` map must exist before mail processing can begin. Missing local
+credentials, invalid configuration and database failures still fail handler
+setup; remote folder availability does not.
 
 The handler alone receives:
 

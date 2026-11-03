@@ -96,8 +96,8 @@ func (resolver *Resolver) ID(ctx context.Context, name string) (string, error) {
 	}
 }
 
-// CheckConfigured resolves every configured folder once, so a typo fails at
-// startup rather than silently holding mail as pending forever.
+// CheckConfigured validates destinations before an inbox cycle can ingest mail.
+// A failed lookup is retried by the inbox service, without stopping the handler.
 func (resolver *Resolver) CheckConfigured(ctx context.Context, config Config) error {
 	for _, category := range Categories {
 		folder := config.Folder(category)

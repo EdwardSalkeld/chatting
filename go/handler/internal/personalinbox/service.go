@@ -247,6 +247,16 @@ func (service *Service) Run(ctx context.Context) {
 func (service *Service) Cycle(ctx context.Context) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	// Validate destinations before ingesting or classifying mail. Retry through
+	// Run's existing paced loop, while leaving the rest of the handler alive.
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	err := service.Folders.CheckConfigured(checkCtx, service.Config)
+	cancel()
+	if err != nil {
+		// A missing/ambiguous folder may have been corrected since this pass.
+		service.Folders.Forget()
+		return err
+	}
 	if _, err := service.Store.db.ExecContext(ctx, `UPDATE inbox_effects SET data=json_set(data,'$.status','uncertain','$.note','interrupted before durable receipt') WHERE json_extract(data,'$.status')='inflight'`); err != nil {
 		return err
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -50,14 +49,9 @@ func newPersonalInbox(config handlerconfig.Config, broker *bbmb.Adapter) (*perso
 		Token:      token,
 		SessionURL: personal.SessionURL,
 	}
-	// Fail startup on a folder that does not exist or whose name is ambiguous,
-	// rather than holding mail as pending forever once it is classified.
+	// Resolve remote folders in the inbox cycle. A mail-server outage must not
+	// prevent the independent webhook, Telegram and egress servers from starting.
 	resolver := &personalinbox.Resolver{Mail: mail}
-	checkCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := resolver.CheckConfigured(checkCtx, personal); err != nil {
-		return nil, err
-	}
 	store, err := personalinbox.Open(personalPath)
 	if err != nil {
 		return nil, err
