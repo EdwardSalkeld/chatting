@@ -142,6 +142,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		return nil, err
 	}
 	metricRecorder := metrics.New(time.Time{}, nil)
+	metricRecorder.SetSQLitePath(config.DBPath)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
 	if config.GitHubWebhookDeliveryEnabled {
 		connectors = append(connectors, webhooks.Connector{Store: store})
