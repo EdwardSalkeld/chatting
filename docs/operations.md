@@ -114,3 +114,23 @@ sqlite3 /path/to/worker.db "select dead_letter_id, status, created_at from dead_
 Useful worker log lines: `worker_processed` (per-task outcome, including
 `execution_error` and `dead_letter`), `worker_egress_dropped_by_handler`,
 `worker_egress_delivery_deferred` and `supervisor_task_failed`.
+## SQLite size metrics
+
+The handler exposes SQLite file metrics on its existing `/metrics` listener.
+The worker exposes `/metrics` on its activity HTTP listener (default port 9465).
+Configure Prometheus to scrape both processes. No new listener or credentials
+are needed; apply the same network access controls as for their existing pages.
+
+`chatting_sqlite_file_size_bytes{component="handler|worker",file="database|wal|shm"}`
+is the apparent size of each process's configured SQLite database and sidecars.
+Absent WAL/SHM files report zero. Other stat failures omit the size sample and
+set `chatting_sqlite_file_stat_success` to zero for that file; success is one.
+The main database being absent is a failure, rather than a zero-byte database.
+Collection only stats files: it does not open SQLite, run queries or lock writers.
+These gauges exclude attachments, backups, other databases and free filesystem
+space. Database sizes include reusable pages and do not measure live row bytes.
+
+For total apparent bytes, use `sum by (instance, component) (chatting_sqlite_file_size_bytes)`;
+divide by `1024^2` for MiB. Alert on `chatting_sqlite_file_stat_success == 0`
+alongside the usual Prometheus `up` check. File samples are collected separately,
+so a concurrent checkpoint can change the files between measurements.

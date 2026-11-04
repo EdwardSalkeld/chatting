@@ -32,6 +32,24 @@ type Recorder struct {
 	reminderLate      int64
 	reminderFired     int64
 	lastLoopAt        time.Time
+	sqlitePath        string
+}
+
+// SetSQLitePath configures the database owned by this handler instance.
+func (recorder *Recorder) SetSQLitePath(path string) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.sqlitePath = path
+}
+
+func (recorder *Recorder) renderSQLite() string {
+	recorder.mu.Lock()
+	path := recorder.sqlitePath
+	recorder.mu.Unlock()
+	if path == "" {
+		return ""
+	}
+	return RenderSQLite(path)
 }
 
 func New(startedAt time.Time, now func() time.Time) *Recorder {
@@ -182,7 +200,7 @@ func StartServer(recorder *Recorder, host string, port int, routeRegistrars ...f
 			writer.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		payload := []byte(RenderPrometheus(recorder.Snapshot()))
+		payload := []byte(RenderPrometheus(recorder.Snapshot()) + recorder.renderSQLite())
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		writer.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		writer.WriteHeader(http.StatusOK)

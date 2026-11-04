@@ -178,6 +178,10 @@ class SQLiteStateStore:
         self._db_path = db_path
         self._initialize()
 
+    @property
+    def db_path(self) -> str:
+        return self._db_path
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
