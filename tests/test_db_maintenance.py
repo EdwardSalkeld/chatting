@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.main_db_maintenance import prune_worker_diagnostics, strip_audit_transcripts
+from app.state.maintenance import (
+    prune_worker_diagnostics,
+    strip_audit_transcripts,
+    maintain_worker,
+)
 from app.state import SQLiteStateStore
 
 
@@ -147,3 +151,30 @@ def test_invalid_windows_do_not_delete_data(database, days, batch):
     with pytest.raises(ValueError):
         prune_worker_diagnostics(database, retention_days=days, batch_size=batch)
     assert database.execute("SELECT count(*) FROM run_records").fetchone()[0] == 1
+
+
+def test_worker_delivery_cleanup_keeps_pending_recent_and_active_sends(database):
+    old = "2020-01-01T00:00:00Z"
+    add_run(database, "active", old, "active")
+    for event, task, state, updated in (
+        ("expire", "done", "acked", old),
+        ("pending", "done", "pending", old),
+        ("active", "active", "acked", old),
+        ("recent", "done", "acked", "2099-01-01T00:00:00Z"),
+    ):
+        database.execute(
+            """INSERT INTO egress_outbox
+            (event_id,task_id,sequence,event_kind,payload_json,publish_state,created_at,updated_at)
+            VALUES (?,?,1,'incremental','{}',?,?,?)""",
+            (event, task, state, old, updated),
+        )
+    database.commit()
+    assert (
+        maintain_worker(database, retention_days=14, delivery_retention_days=30)[
+            "egress_outbox"
+        ]
+        == 1
+    )
+    assert {
+        row[0] for row in database.execute("SELECT event_id FROM egress_outbox")
+    } == {"pending", "active", "recent"}

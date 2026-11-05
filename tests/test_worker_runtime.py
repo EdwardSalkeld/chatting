@@ -266,6 +266,37 @@ class ReplyFromClaimedFollowupExecutor(TestExecutor):
 
 
 class WorkerRuntimeTests(unittest.TestCase):
+    def test_database_maintenance_is_builtin_and_never_calls_executor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            original = self._build_task_message()
+            envelope = replace(
+                original.envelope,
+                source="internal",
+                reply_channel=ReplyChannel(
+                    type="internal", target="database-maintenance"
+                ),
+                content=json.dumps(
+                    {"retention_days": 14, "delivery_retention_days": 30}
+                ),
+            )
+            task = replace(original, envelope=envelope)
+            # TestExecutor has no execute(): entering the model path would fail.
+            result = process_task_message(
+                store=store,
+                task_message=task,
+                executor_impl=TestExecutor(),
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+            self.assertEqual(result.reason_codes, ["database_maintenance"])
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(
+                [msg.event_kind for msg in result.egress_messages], ["completion"]
+            )
+            detail = store.list_audit_events()[0].detail
+            self.assertEqual(detail["maintenance"]["audit_transcripts_removed"], 0)
+
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
 

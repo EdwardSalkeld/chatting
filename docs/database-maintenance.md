@@ -6,8 +6,52 @@ and task links, without another stdout/stderr copy. The full execution result
 remains available in memory to recovery logic. App-server request journals are
 separate files used for retry safety; these commands do not modify them.
 
-Maintenance is explicit: the app does not start a cleanup scheduler. Run these
-commands as the database's owning user, and configure scheduling in the deployment.
+## Scheduled maintenance
+
+Enable built-in maintenance in the handler configuration:
+
+```json
+{
+  "maintenance_enabled": true,
+  "maintenance_cron": "0 4 * * *",
+  "maintenance_timezone": "UTC",
+  "diagnostic_retention_days": 14,
+  "delivery_retention_days": 30
+}
+```
+
+Maintenance is disabled by default. The remaining values above are the defaults;
+retention days must be positive integers. Cron syntax and timezones are validated
+at startup when maintenance is enabled. The existing cron connector determines
+due times, including timezone handling; no external timer or model is involved.
+On restart it schedules from the current time, using the same semantics as other
+cron jobs rather than replaying missed days.
+
+At the scheduled time the handler prunes its own database using its state-store
+code, then publishes a built-in internal maintenance task with the configured
+retention policy. The worker recognizes that task before executor selection and
+uses its own configured database, without launching Codex. The handler never
+opens the worker database. Paths and policy are configuration; schema knowledge
+and all cleanup SQL belong to this repository.
+
+Worker maintenance strips duplicate audit transcripts, expires old run/audit/
+activity diagnostics, and deletes acknowledged outbox entries whose last update
+is older than the delivery window. Unacknowledged sends and unfinished inbox
+work are protected. Handler delivery and deduplication records use the separate
+delivery window, protecting active task-ledger entries. Its optional legacy
+diagnostic tables are handled when present; a fresh Go handler database works too.
+Conversation history, workspaces/routes, inbox state and token accounting are
+preserved.
+
+Cleanup counts and failures are logged by each process. A failed handler cleanup
+is retried on the next ingress poll without stopping normal polling. Worker task
+failures use the ordinary supervisor failure reporting; the next scheduled task
+can safely repeat maintenance. Broker delivery, task IDs and deduplication use
+the normal internal task path.
+
+## Explicit maintenance commands
+
+Run these commands as the database's owning user when a one-off cleanup is useful.
 Both commands require an existing worker database and use small transactions with
 a 60-second SQLite busy timeout. Each committed batch is restartable; repeated
 runs are safe. JSON output reports the number of rows changed per operation.
@@ -33,13 +77,14 @@ are terminal outcomes; their audit task links are consulted before deletion.
 Unfinished inbox state is rechecked within each deletion transaction.
 
 No conversation history, work item/routing state, inbox payloads, token usage,
-dead letters or delivery outbox records are removed by these commands. Those
+dead letters or delivery outbox records are removed by these two commands. Those
 have separate operational lifetimes. Diagnostic retention does not remove the
 conversation or external actions such as comments and pull requests.
 
 Deploy the writer change before stripping transcripts. The strip command can be
 repeated after supervisors running older code finish, to catch any late audit
-copies. A deployment may run it before each daily prune for this reason.
+copies. The built-in worker maintenance task repeats it before each prune for
+this reason.
 Use `--batch-size` to adjust the default 100 rows per transaction; it and the
 retention period must be positive integers.
 

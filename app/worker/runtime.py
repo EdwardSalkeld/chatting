@@ -24,6 +24,7 @@ from app.model_command import MODELS, parse_model_command
 from app.worker.model_router import choose_model
 from app.state import SQLiteStateStore
 from app.worker.pr_registration import created_pr_url
+from app.worker.maintenance import is_maintenance, run_maintenance
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
@@ -55,6 +56,18 @@ def process_task_message(
         raise ValueError("max_attempts must be positive")
 
     envelope = task_message.envelope
+    if is_maintenance(envelope):
+        counts = run_maintenance(store.db_path, envelope.content)
+        emitted_at = datetime.now(timezone.utc)
+        return _finish_local_task(
+            store=store,
+            task_message=task_message,
+            created_at=emitted_at,
+            latency_ms=_latency_since_emitted(task_message, emitted_at),
+            reason_code="database_maintenance",
+            detail={**_local_execution_detail(task_message), "maintenance": counts},
+            egress_messages=[_internal_completion(task_message, emitted_at=emitted_at)],
+        )
     if is_internal_telegram_channel_not_enabled_envelope(envelope):
         return _process_internal_telegram_channel_not_enabled_notice(
             store=store,
