@@ -15,8 +15,7 @@ Enable built-in maintenance in the handler configuration:
   "maintenance_enabled": true,
   "maintenance_cron": "0 4 * * *",
   "maintenance_timezone": "UTC",
-  "diagnostic_retention_days": 14,
-  "delivery_retention_days": 30
+  "retention_days": 14
 }
 ```
 
@@ -34,11 +33,12 @@ uses its own configured database, without launching Codex. The handler never
 opens the worker database. Paths and policy are configuration; schema knowledge
 and all cleanup SQL belong to this repository.
 
-Worker maintenance strips duplicate audit transcripts, expires old run/audit/
-activity diagnostics, and deletes acknowledged outbox entries whose last update
-is older than the delivery window. Unacknowledged sends and unfinished inbox
-work are protected. Handler delivery and deduplication records use the separate
-delivery window, protecting active task-ledger entries. Its optional legacy
+One retention window applies to run/audit/activity diagnostics, acknowledged
+outbox entries, and handler delivery/deduplication history. Worker maintenance
+strips duplicate audit transcripts, expires old diagnostics, and deletes
+acknowledged outbox entries whose last update is older than that window.
+Unacknowledged sends, unfinished inbox work and active handler task-ledger
+entries are protected regardless of age. The handler's optional legacy
 diagnostic tables are handled when present; a fresh Go handler database works too.
 Conversation history, workspaces/routes, inbox state and token accounting are
 preserved.
@@ -76,10 +76,10 @@ diagnostics, including pending, attached, active and closing work. Run records
 are terminal outcomes; their audit task links are consulted before deletion.
 Unfinished inbox state is rechecked within each deletion transaction.
 
-No conversation history, work item/routing state, inbox payloads, token usage,
-dead letters or delivery outbox records are removed by these two commands. Those
-have separate operational lifetimes. Diagnostic retention does not remove the
-conversation or external actions such as comments and pull requests.
+These two explicit commands only modify diagnostics. Scheduled maintenance also
+prunes acknowledged outbox history using the same retention window. Conversation
+history, work item/routing state, inbox payloads, token usage and dead letters
+are preserved, as are external actions such as comments and pull requests.
 
 Deploy the writer change before stripping transcripts. The strip command can be
 repeated after supervisors running older code finish, to catch any late audit

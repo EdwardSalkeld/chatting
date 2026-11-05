@@ -30,8 +30,7 @@ type Config struct {
 	MaintenanceEnabled               bool
 	MaintenanceCron                  string
 	MaintenanceTimezone              string
-	DiagnosticRetentionDays          int
-	DeliveryRetentionDays            int
+	RetentionDays                    int
 	PersonalInbox                    *personalinbox.Config
 	BBMBAddress                      string
 	DBPath                           string
@@ -82,8 +81,7 @@ func Defaults() Config {
 	return Config{
 		MaintenanceCron:             "0 4 * * *",
 		MaintenanceTimezone:         "UTC",
-		DiagnosticRetentionDays:     14,
-		DeliveryRetentionDays:       30,
+		RetentionDays:               14,
 		BBMBAddress:                 DefaultBBMBAddress,
 		DBPath:                      filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
 		MaxLoops:                    0,
@@ -237,8 +235,7 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		boolean(&c.MaintenanceEnabled, "maintenance_enabled"),
 		str(&c.MaintenanceCron, "maintenance_cron"),
 		str(&c.MaintenanceTimezone, "maintenance_timezone"),
-		posInt(&c.DiagnosticRetentionDays, "diagnostic_retention_days"),
-		posInt(&c.DeliveryRetentionDays, "delivery_retention_days"),
+		posInt(&c.RetentionDays, "retention_days"),
 		{key: "personal_inbox", keepNull: true, decode: func(raw json.RawMessage) error {
 			parsed, err := personalinbox.Decode(raw)
 			if err != nil {

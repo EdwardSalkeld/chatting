@@ -12,7 +12,7 @@ func TestCronRunsLocalCleanupAndEmitsBuiltinWorkerTask(t *testing.T) {
 	now := time.Date(2026, 11, 5, 3, 59, 0, 0, time.UTC)
 	calls := 0
 	fail := true
-	connector, err := New("0 4 * * *", "UTC", 21, 30, func(context.Context) error {
+	connector, err := New("0 4 * * *", "UTC", 21, func(context.Context) error {
 		calls++
 		if fail {
 			return errors.New("temporarily busy")
@@ -44,7 +44,7 @@ func TestCronRunsLocalCleanupAndEmitsBuiltinWorkerTask(t *testing.T) {
 	if err := json.Unmarshal([]byte(task.Content), &policy); err != nil {
 		t.Fatal(err)
 	}
-	if policy["retention_days"] != 21 || policy["delivery_retention_days"] != 30 {
+	if policy["retention_days"] != 21 || len(policy) != 1 {
 		t.Fatal(policy)
 	}
 	if tasks, err := connector.Poll(ctx); err != nil || len(tasks) != 0 || calls != 2 {
@@ -64,7 +64,7 @@ func TestInvalidMaintenanceScheduleIsRejected(t *testing.T) {
 	}{
 		{"broken", "UTC", 14}, {"0 4 * * *", "No/SuchZone", 14}, {"0 4 * * *", "UTC", 0},
 	} {
-		if _, err := New(value.cron, value.timezone, value.days, 30, cleanup, nil); err == nil {
+		if _, err := New(value.cron, value.timezone, value.days, cleanup, nil); err == nil {
 			t.Fatalf("accepted %+v", value)
 		}
 	}

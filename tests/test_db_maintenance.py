@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -154,7 +154,8 @@ def test_invalid_windows_do_not_delete_data(database, days, batch):
 
 
 def test_worker_delivery_cleanup_keeps_pending_recent_and_active_sends(database):
-    old = "2020-01-01T00:00:00Z"
+    # Twenty-day-old delivery records expire under the same 14-day policy.
+    old = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
     add_run(database, "active", old, "active")
     for event, task, state, updated in (
         ("expire", "done", "acked", old),
@@ -169,12 +170,7 @@ def test_worker_delivery_cleanup_keeps_pending_recent_and_active_sends(database)
             (event, task, state, old, updated),
         )
     database.commit()
-    assert (
-        maintain_worker(database, retention_days=14, delivery_retention_days=30)[
-            "egress_outbox"
-        ]
-        == 1
-    )
+    assert maintain_worker(database, retention_days=14)["egress_outbox"] == 1
     assert {
         row[0] for row in database.execute("SELECT event_id FROM egress_outbox")
     } == {"pending", "active", "recent"}

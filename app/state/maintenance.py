@@ -100,15 +100,13 @@ def prune_worker_diagnostics(
 
 
 def maintain_worker(
-    connection: sqlite3.Connection, *, retention_days: int, delivery_retention_days: int
+    connection: sqlite3.Connection, *, retention_days: int
 ) -> dict[str, int]:
-    if retention_days <= 0 or delivery_retention_days <= 0:
+    if retention_days <= 0:
         raise ValueError("retention days must be positive")
     counts = {"audit_transcripts_removed": strip_audit_transcripts(connection)}
     counts.update(prune_worker_diagnostics(connection, retention_days=retention_days))
-    cutoff = format_utc(
-        datetime.now(timezone.utc) - timedelta(days=delivery_retention_days)
-    )
+    cutoff = format_utc(datetime.now(timezone.utc) - timedelta(days=retention_days))
     counts["egress_outbox"] = 0
     while True:
         with connection:

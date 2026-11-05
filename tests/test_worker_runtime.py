@@ -276,9 +276,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 reply_channel=ReplyChannel(
                     type="internal", target="database-maintenance"
                 ),
-                content=json.dumps(
-                    {"retention_days": 14, "delivery_retention_days": 30}
-                ),
+                content=json.dumps({"retention_days": 14}),
             )
             task = replace(original, envelope=envelope)
             # TestExecutor has no execute(): entering the model path would fail.

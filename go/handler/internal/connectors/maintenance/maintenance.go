@@ -26,11 +26,11 @@ type Connector struct {
 	pending []contracts.TaskEnvelope
 }
 
-func New(expression, timezone string, days, deliveryDays int, cleanup func(context.Context) error, now schedule.NowFunc) (*Connector, error) {
-	if days <= 0 || deliveryDays <= 0 || cleanup == nil {
+func New(expression, timezone string, days int, cleanup func(context.Context) error, now schedule.NowFunc) (*Connector, error) {
+	if days <= 0 || cleanup == nil {
 		return nil, errors.New("positive retention days and cleanup callback are required")
 	}
-	content, _ := json.Marshal(map[string]int{"retention_days": days, "delivery_retention_days": deliveryDays})
+	content, _ := json.Marshal(map[string]int{"retention_days": days})
 	job := schedule.Job{
 		JobName: Target, Content: string(content), Cron: expression, TimezoneName: timezone,
 		ReplyChannelType: "internal", ReplyChannelTarget: Target,

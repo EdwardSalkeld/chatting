@@ -23,19 +23,14 @@ def run_maintenance(db_path: str, content: str) -> dict[str, int]:
     policy = json.loads(content)
     if not isinstance(policy, dict):
         raise ValueError("maintenance policy must be an object")
-    values: list[int] = []
-    for key in ("retention_days", "delivery_retention_days"):
-        value = policy.get(key)
-        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-            raise ValueError("maintenance retention days must be positive integers")
-        values.append(value)
+    days = policy.get("retention_days")
+    if not isinstance(days, int) or isinstance(days, bool) or days <= 0:
+        raise ValueError("maintenance retention days must be a positive integer")
     connection = sqlite3.connect(
         Path(db_path).resolve().as_uri() + "?mode=rw", uri=True, timeout=60
     )
     try:
-        counts = maintain_worker(
-            connection, retention_days=values[0], delivery_retention_days=values[1]
-        )
+        counts = maintain_worker(connection, retention_days=days)
     finally:
         connection.close()
     logging.getLogger(__name__).info("worker_database_maintenance counts=%s", counts)

@@ -11,7 +11,7 @@ func TestMaintenanceHandlesFreshAndLegacySchemasAndPreservesActiveDelivery(t *te
 	store := openTestStore(t)
 	old := "2020-01-01T00:00:00Z"
 	cutoff := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	if _, err := store.PruneDiagnostics(ctx, cutoff, cutoff); err != nil {
+	if _, err := store.PruneDiagnostics(ctx, cutoff); err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{
@@ -44,7 +44,7 @@ func TestMaintenanceHandlesFreshAndLegacySchemasAndPreservesActiveDelivery(t *te
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO audit_events VALUES (?, '{}')`, cutoff.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
-	counts, err := store.PruneDiagnostics(ctx, cutoff, cutoff)
+	counts, err := store.PruneDiagnostics(ctx, cutoff)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestMaintenanceHandlesFreshAndLegacySchemasAndPreservesActiveDelivery(t *te
 			t.Fatalf("%s: %d %v", table, n, err)
 		}
 	}
-	counts, err = store.PruneDiagnostics(ctx, cutoff, cutoff)
+	counts, err = store.PruneDiagnostics(ctx, cutoff)
 	if err != nil {
 		t.Fatal(err)
 	}

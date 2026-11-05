@@ -155,12 +155,11 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	connectors = append(connectors, scheduleConnector)
 	if config.MaintenanceEnabled {
 		connector, err := maintenance.New(config.MaintenanceCron, config.MaintenanceTimezone,
-			config.DiagnosticRetentionDays, config.DeliveryRetentionDays,
+			config.RetentionDays,
 			func(ctx context.Context) error {
 				now := time.Now().UTC()
 				counts, err := store.PruneDiagnostics(ctx,
-					now.AddDate(0, 0, -config.DiagnosticRetentionDays),
-					now.AddDate(0, 0, -config.DeliveryRetentionDays))
+					now.AddDate(0, 0, -config.RetentionDays))
 				if err == nil {
 					log.Printf("handler_database_maintenance counts=%v", counts)
 				}

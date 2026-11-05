@@ -101,7 +101,7 @@ slots.
 ## Inspecting state
 
 The handler can schedule built-in [database maintenance](database-maintenance.md)
-with configurable diagnostic and delivery retention periods. It cleans its own
+with one configurable retention period. It cleans its own
 database and issues a worker task that runs directly without Codex. Maintenance
 is disabled by default; configure policy and scheduling for each installation.
 The worker also provides explicit maintenance commands for one-off cleanup.

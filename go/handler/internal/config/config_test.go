@@ -23,6 +23,21 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestMaintenanceUsesOneConfigurableRetentionWindow(t *testing.T) {
+	if Defaults().RetentionDays != 14 {
+		t.Fatal("expected 14-day default")
+	}
+	cfg, err := Load([]byte(`{"maintenance_enabled":true,"retention_days":21}`))
+	if err != nil || cfg.RetentionDays != 21 || !cfg.MaintenanceEnabled {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+	for _, value := range []string{"0", "-1", "true"} {
+		if _, err := Load([]byte(`{"retention_days":` + value + `}`)); err == nil {
+			t.Fatalf("accepted %s", value)
+		}
+	}
+}
+
 func TestWebhookFilterConfiguration(t *testing.T) {
 	defaults, err := Load([]byte(`{}`))
 	if err != nil || defaults.GitHubWebhookLogin != "BillyAcachofa" || len(defaults.GitHubWebhookReleaseRepositories) != 0 {
