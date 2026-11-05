@@ -266,6 +266,35 @@ class ReplyFromClaimedFollowupExecutor(TestExecutor):
 
 
 class WorkerRuntimeTests(unittest.TestCase):
+    def test_database_maintenance_is_builtin_and_never_calls_executor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            original = self._build_task_message()
+            envelope = replace(
+                original.envelope,
+                source="internal",
+                reply_channel=ReplyChannel(
+                    type="internal", target="database-maintenance"
+                ),
+                content=json.dumps({"retention_days": 14}),
+            )
+            task = replace(original, envelope=envelope)
+            # TestExecutor has no execute(): entering the model path would fail.
+            result = process_task_message(
+                store=store,
+                task_message=task,
+                executor_impl=TestExecutor(),
+                max_attempts=2,
+                activity_monitor=self._build_monitor(store),
+            )
+            self.assertEqual(result.reason_codes, ["database_maintenance"])
+            self.assertEqual(result.run_record.result_status, "success")
+            self.assertEqual(
+                [msg.event_kind for msg in result.egress_messages], ["completion"]
+            )
+            detail = store.list_audit_events()[0].detail
+            self.assertEqual(detail["maintenance"]["audit_transcripts_removed"], 0)
+
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
         return WorkerActivityMonitor(store=store, history_limit=10)
 
@@ -415,17 +444,16 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(terminal.message.target, "task")
             self.assertEqual(terminal.sequence, 0)
             audit_event = store.list_audit_events()[0]
-            self.assertEqual(
-                audit_event.detail["execution_result"]["stdout"], "executor stdout"
-            )
-            self.assertEqual(
-                audit_event.detail["execution_result"]["stderr"], "executor stderr"
-            )
+            self.assertNotIn("stdout", audit_event.detail["execution_result"])
+            self.assertNotIn("stderr", audit_event.detail["execution_result"])
+            self.assertEqual(audit_event.detail["execution_result"]["errors"], [])
             activity = store.list_recent_worker_activity(
                 limit=10, include_internal=True
             )
             self.assertEqual(activity[1]["phase"], "executor_stderr")
             self.assertEqual(activity[2]["phase"], "executor_stdout")
+            self.assertEqual(activity[1]["detail"]["content"], "executor stderr")
+            self.assertEqual(activity[2]["detail"]["content"], "executor stdout")
 
     def test_reports_pull_requests_the_executor_creates(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -650,11 +678,8 @@ class WorkerRuntimeTests(unittest.TestCase):
             audit_event = store.list_audit_events()[0]
             self.assertEqual(audit_event.detail["executor_launch_count"], 2)
             self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
-            self.assertEqual(
-                audit_event.detail["execution_result"]["stdout"],
-                "First pass stdout:\nfirst pass transcript\n\n"
-                "Recovery pass stdout:\nsecond pass transcript",
-            )
+            self.assertNotIn("stdout", audit_event.detail["execution_result"])
+            self.assertNotIn("stderr", audit_event.detail["execution_result"])
 
     def test_process_task_message_supervised_recovery_can_publish_reply_and_succeed(
         self,

@@ -100,9 +100,12 @@ slots.
 
 ## Inspecting state
 
-The handler and worker databases have no built-in retention. Choose retention
-and backup policies for each installation, including the personal inbox
-database and cache.
+The handler can schedule built-in [database maintenance](database-maintenance.md)
+with one configurable retention period. It cleans its own
+database and issues a worker task that runs directly without Codex. Maintenance
+is disabled by default; configure policy and scheduling for each installation.
+The worker also provides explicit maintenance commands for one-off cleanup.
+Personal inbox database/cache retention and backups have separate policies.
 
 Run records, audit events and dead letters live in the worker database:
 

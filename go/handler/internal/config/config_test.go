@@ -23,6 +23,35 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestMaintenanceUsesOneConfigurableRetentionWindow(t *testing.T) {
+	if Defaults().RetentionDays != 14 {
+		t.Fatal("expected 14-day default")
+	}
+	cfg, err := Load([]byte(`{"maintenance_cron":"0 4 * * *","retention_days":21}`))
+	if err != nil || cfg.RetentionDays != 21 || cfg.MaintenanceCron != "0 4 * * *" {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+	for _, value := range []string{"0", "-1", "true"} {
+		if _, err := Load([]byte(`{"retention_days":` + value + `}`)); err == nil {
+			t.Fatalf("accepted %s", value)
+		}
+	}
+}
+
+func TestMaintenanceIsDisabledWithoutCron(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"maintenance_cron":null}`} {
+		cfg, err := Load([]byte(payload))
+		if err != nil || cfg.MaintenanceCron != "" {
+			t.Fatalf("%s: %+v %v", payload, cfg, err)
+		}
+	}
+	for _, payload := range []string{`{"maintenance_cron":""}`, `{"maintenance_cron":true}`} {
+		if _, err := Load([]byte(payload)); err == nil {
+			t.Fatalf("accepted %s", payload)
+		}
+	}
+}
+
 func TestWebhookFilterConfiguration(t *testing.T) {
 	defaults, err := Load([]byte(`{}`))
 	if err != nil || defaults.GitHubWebhookLogin != "BillyAcachofa" || len(defaults.GitHubWebhookReleaseRepositories) != 0 {
