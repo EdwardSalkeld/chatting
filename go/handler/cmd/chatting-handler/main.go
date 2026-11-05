@@ -153,8 +153,8 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		return nil, err
 	}
 	connectors = append(connectors, scheduleConnector)
-	if config.MaintenanceEnabled {
-		connector, err := maintenance.New(config.MaintenanceCron, config.MaintenanceTimezone,
+	if config.MaintenanceCron != "" {
+		connector, err := maintenance.New(config.MaintenanceCron,
 			config.RetentionDays,
 			func(ctx context.Context) error {
 				now := time.Now().UTC()

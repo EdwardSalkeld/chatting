@@ -9,10 +9,13 @@ import (
 )
 
 func TestCronRunsLocalCleanupAndEmitsBuiltinWorkerTask(t *testing.T) {
+	previous := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previous })
 	now := time.Date(2026, 11, 5, 3, 59, 0, 0, time.UTC)
 	calls := 0
 	fail := true
-	connector, err := New("0 4 * * *", "UTC", 21, func(context.Context) error {
+	connector, err := New("0 4 * * *", 21, func(context.Context) error {
 		calls++
 		if fail {
 			return errors.New("temporarily busy")
@@ -59,13 +62,41 @@ func TestCronRunsLocalCleanupAndEmitsBuiltinWorkerTask(t *testing.T) {
 func TestInvalidMaintenanceScheduleIsRejected(t *testing.T) {
 	cleanup := func(context.Context) error { return nil }
 	for _, value := range []struct {
-		cron, timezone string
-		days           int
+		cron string
+		days int
 	}{
-		{"broken", "UTC", 14}, {"0 4 * * *", "No/SuchZone", 14}, {"0 4 * * *", "UTC", 0},
+		{"broken", 14}, {"0 4 * * *", 0},
 	} {
-		if _, err := New(value.cron, value.timezone, value.days, cleanup, nil); err == nil {
+		if _, err := New(value.cron, value.days, cleanup, nil); err == nil {
 			t.Fatalf("accepted %+v", value)
+		}
+	}
+}
+
+func TestMaintenanceFollowsGlobalServerTimezoneInWinterAndSummer(t *testing.T) {
+	previous := time.Local
+	location, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Local = location
+	t.Cleanup(func() { time.Local = previous })
+	for _, date := range []struct {
+		month   time.Month
+		utcHour int
+	}{{time.January, 4}, {time.July, 3}} {
+		now := time.Date(2026, date.month, 5, date.utcHour-1, 59, 0, 0, time.UTC)
+		calls := 0
+		connector, err := New("0 4 * * *", 14, func(context.Context) error { calls++; return nil }, func() time.Time { return now })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tasks, err := connector.Poll(context.Background()); err != nil || len(tasks) != 0 {
+			t.Fatalf("before local 04:00: %v %v", tasks, err)
+		}
+		now = now.Add(time.Minute)
+		if tasks, err := connector.Poll(context.Background()); err != nil || len(tasks) != 1 || calls != 1 {
+			t.Fatalf("local 04:00 in %s: %v %v", date.month, tasks, err)
 		}
 	}
 }

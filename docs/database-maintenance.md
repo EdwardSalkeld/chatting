@@ -8,21 +8,23 @@ separate files used for retry safety; these commands do not modify them.
 
 ## Scheduled maintenance
 
-Enable built-in maintenance in the handler configuration:
+Set a cron expression in the handler configuration to enable built-in maintenance:
 
 ```json
 {
-  "maintenance_enabled": true,
   "maintenance_cron": "0 4 * * *",
-  "maintenance_timezone": "UTC",
   "retention_days": 14
 }
 ```
 
-Maintenance is disabled by default. The remaining values above are the defaults;
-retention days must be positive integers. Cron syntax and timezones are validated
-at startup when maintenance is enabled. The existing cron connector determines
-due times, including timezone handling; no external timer or model is involved.
+Omitting `maintenance_cron` or setting it to `null` disables maintenance. A supplied
+expression must be valid; an empty string or malformed cron fails startup.
+`retention_days` defaults to 14 and must be a positive integer.
+
+The cron expression uses the server/process timezone (`TZ` or `/etc/localtime`),
+including its daylight saving rules. Timezone is a global server setting, with no
+maintenance-specific override. The example runs at 04:00 server local time.
+The existing cron connector determines due times; no external timer or model is involved.
 On restart it schedules from the current time, using the same semantics as other
 cron jobs rather than replaying missed days.
 

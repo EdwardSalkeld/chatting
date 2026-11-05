@@ -26,13 +26,14 @@ type Connector struct {
 	pending []contracts.TaskEnvelope
 }
 
-func New(expression, timezone string, days int, cleanup func(context.Context) error, now schedule.NowFunc) (*Connector, error) {
+func New(expression string, days int, cleanup func(context.Context) error, now schedule.NowFunc) (*Connector, error) {
 	if days <= 0 || cleanup == nil {
 		return nil, errors.New("positive retention days and cleanup callback are required")
 	}
 	content, _ := json.Marshal(map[string]int{"retention_days": days})
 	job := schedule.Job{
-		JobName: Target, Content: string(content), Cron: expression, TimezoneName: timezone,
+		// Local is Go's process/server timezone, derived from TZ or /etc/localtime.
+		JobName: Target, Content: string(content), Cron: expression, TimezoneName: "Local",
 		ReplyChannelType: "internal", ReplyChannelTarget: Target,
 	}
 	if err := schedule.Validate(job); err != nil {
