@@ -100,9 +100,11 @@ slots.
 
 ## Inspecting state
 
-The handler and worker databases have no built-in retention. Choose retention
-and backup policies for each installation, including the personal inbox
-database and cache.
+The app does not automatically schedule database retention. The worker provides
+[maintenance commands](database-maintenance.md) to remove duplicate audit
+transcripts and expire run diagnostics with a configurable retention period.
+Choose scheduling and backup policies for each installation, including the
+personal inbox database and cache.
 
 Run records, audit events and dead letters live in the worker database:
 

@@ -1,6 +1,7 @@
 # Documentation
 
 - [Operations](operations.md): runtime requirements, process interfaces and the worker's supervisors
+- [Database maintenance](database-maintenance.md): duplicate transcript cleanup and configurable diagnostic retention
 - [Message flow](bbmb-message-flow.md): how tasks and replies move between handler and worker
 - [Testing](testing.md)
 - [Connectors](connectors/README.md)

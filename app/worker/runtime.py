@@ -189,7 +189,13 @@ def process_task_message(
             elif isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                 executor_launch_count = active_executor.last_launch_count
                 used_supervised_recovery = active_executor.last_recovery_attempted
-            execution_payload = execution_result.to_dict()
+            # Activity events already persist the streamed transcript. Keep the
+            # in-memory result intact for recovery, but audit only its outcome.
+            execution_payload = {
+                key: value
+                for key, value in execution_result.to_dict().items()
+                if key not in {"stdout", "stderr"}
+            }
 
             published_incremental_reply_count = (
                 store.count_conversation_bundle_main_reply_egress_events(
