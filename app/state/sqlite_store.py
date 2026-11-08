@@ -1280,7 +1280,12 @@ class SQLiteStateStore:
                     run_id,
                 ),
             )
-            if phase in {"executor_started", "executor_stdout", "task_finished"}:
+            if phase in {
+                "executor_started",
+                "executor_stdout",
+                "task_finished",
+                "personal_model_usage",
+            }:
                 event = connection.execute(
                     "SELECT * FROM worker_activity_events WHERE activity_id = ?",
                     (cursor.lastrowid,),

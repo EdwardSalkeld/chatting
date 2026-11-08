@@ -306,7 +306,7 @@ def main() -> int:
     # Personal mail is classified in this process but never reaches the
     # executor: it has its own queue, and the only thing this thread can do
     # with an email is ask two fixed endpoints about it.
-    personal = collector_from_environment(broker)
+    personal = collector_from_environment(broker, store)
     if personal is not None:
         personal.start()
     try:

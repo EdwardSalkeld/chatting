@@ -12,6 +12,8 @@ import hashlib
 import json
 import logging
 import os
+from datetime import datetime, timezone
+from uuid import uuid4
 from dataclasses import dataclass, field
 from pathlib import Path
 import sqlite3
@@ -21,6 +23,8 @@ from typing import Any
 
 from app.broker.bbmb_client import BBMBQueueAdapter
 from app.worker.personal_inbox_rules import load_rules
+from app.codex_usage import usage_sink
+from app.state import SQLiteStateStore
 from app.personal_inbox import (
     DEAD_QUEUE,
     RESULTS_QUEUE,
@@ -71,6 +75,7 @@ def process_one(
     jev_key: str,
     summary_model: str,
     rules_repo: str = "",
+    store: SQLiteStateStore | None = None,
 ) -> bool:
     picked = broker.pickup_json(TASKS_QUEUE, timeout_seconds=120, wait_seconds=1)
     if picked is None:
@@ -103,7 +108,26 @@ def process_one(
         # cache saves a model call, it does not decide identity — the handler
         # does that, by keeping only the first classification per message. So
         # answer the question actually asked and replace the stale row.
-        result = work()
+        def record_usage(detail: dict) -> None:
+            if store is not None:
+                store.append_worker_activity(
+                    occurred_at=datetime.now(timezone.utc),
+                    phase="personal_model_usage",
+                    summary="Personal inbox Codex call",
+                    detail={
+                        **detail,
+                        "call_id": str(uuid4()),
+                        "kind": picked.payload["kind"],
+                    },
+                    task_id="personal-inbox:" + task_id,
+                    source="personal_email",
+                )
+
+        token = usage_sink.set(record_usage)
+        try:
+            result = work()
+        finally:
+            usage_sink.reset(token)
         with cache:
             cache.execute(
                 "INSERT INTO classifications VALUES (?,?,?) ON CONFLICT(id) "
@@ -137,6 +161,7 @@ class PersonalInboxCollector:
     jev_key: str
     summary_model: str
     rules_repo: str = ""
+    store: SQLiteStateStore | None = None
     _stop: Event = field(init=False, default_factory=Event)
     _thread: Thread | None = field(init=False, default=None)
 
@@ -162,6 +187,7 @@ class PersonalInboxCollector:
                     jev_key=self.jev_key,
                     summary_model=self.summary_model,
                     rules_repo=self.rules_repo,
+                    store=self.store,
                 )
             except Exception as error:  # noqa: BLE001
                 # Never log request bodies, mail, credentials or URLs with
@@ -172,6 +198,7 @@ class PersonalInboxCollector:
 
 def collector_from_environment(
     broker: BBMBQueueAdapter,
+    store: SQLiteStateStore | None = None,
 ) -> PersonalInboxCollector | None:
     """None when the personal inbox is not configured, which is the default."""
     jev_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
@@ -186,6 +213,7 @@ def collector_from_environment(
         jev_key=jev_key,
         summary_model=os.environ.get("CHATTING_PERSONAL_SUMMARY_MODEL", "").strip(),
         rules_repo=os.environ.get("CHATTING_PERSONAL_RULES_REPO", "").strip(),
+        store=store,
     )
 
 

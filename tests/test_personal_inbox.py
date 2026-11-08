@@ -29,6 +29,7 @@ from app.personal_inbox import (
     validate_task,
 )
 from app.worker.personal_inbox import collector_from_environment, process_one
+from app.codex_usage import usage_sink
 from app.broker.bbmb_client import PickedMessage
 from app.broker.bbmb_client import BBMBQueueAdapter
 
@@ -681,6 +682,52 @@ if __name__ == "__main__":
 
 
 class CodexInvocationTests(unittest.TestCase):
+    def test_usage_survives_failure_and_timeout_without_retaining_mail(self):
+        counters = {"input_tokens": 101, "cached_input_tokens": 80, "output_tokens": 12}
+        output = (
+            json.dumps({"type": "item.completed", "text": "PRIVATE MAIL"})
+            + "\n"
+            + json.dumps({"type": "turn.completed", "usage": counters})
+            + "\n"
+        )
+        for outcome, status in (
+            (0, "completed"),
+            (1, "failed"),
+            ("timeout", "timeout"),
+        ):
+            records = []
+
+            def fake_run(command, **kwargs):
+                self.assertIn("--json", command)
+                if outcome == "timeout":
+                    raise subprocess.TimeoutExpired(
+                        command, 180, output=output.encode()
+                    )
+                Path(command[command.index("--output-last-message") + 1]).write_text(
+                    '{"ok":true}'
+                )
+                return subprocess.CompletedProcess(
+                    command, outcome, output, "PRIVATE ERROR"
+                )
+
+            token = usage_sink.set(records.append)
+            try:
+                with patch("app.personal_inbox.subprocess.run", side_effect=fake_run):
+                    if outcome == 0:
+                        codex_structured("PRIVATE PROMPT", {}, {}, model="configured")
+                    else:
+                        with self.assertRaises((ValueError, subprocess.TimeoutExpired)):
+                            codex_structured(
+                                "PRIVATE PROMPT", {}, {}, model="configured"
+                            )
+            finally:
+                usage_sink.reset(token)
+            self.assertEqual(
+                records,
+                [{"status": status, "model": "configured", "usage": [counters]}],
+            )
+            self.assertNotIn("PRIVATE", json.dumps(records))
+
     def test_codex_runs_sandboxed_with_a_scrubbed_environment(self):
         captured = {}
 

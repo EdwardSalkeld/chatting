@@ -101,6 +101,11 @@ type PendingStore interface {
 type Connector struct{ Store PendingStore }
 
 func (c Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
+	if batched, ok := c.Store.(interface {
+		PendingGitHubBatched(context.Context, time.Time, time.Duration) ([]contracts.TaskEnvelope, error)
+	}); ok {
+		return batched.PendingGitHubBatched(ctx, time.Now(), time.Minute)
+	}
 	return c.Store.PendingGitHub(ctx)
 }
 

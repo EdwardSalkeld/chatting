@@ -305,6 +305,25 @@ the entire accepted body up to the existing 64 KiB request limit.
 
 ## Optional automated notification triage
 
+### Successful tracked-run collection
+
+The native connector waits one minute from the first pending successful tracked
+run before publishing it. Successful runs for the same work item, repository and
+commit are delivered together, with every run's metadata in `completed_runs`.
+The worker can check all outcomes and perform the follow-up once. A single run
+is released after the same window. Failures, cancellations, comments and PR
+events remain immediate; unrelated owners or commits are never combined.
+Unregistered routine successes continue to be dropped by the existing filter.
+
+The batch is frozen in SQLite before publication, including singleton releases.
+Broker retries and handler restarts reuse its identity and contents. Later
+completions form another collection window. Run-attempt delivery markers remain
+intact, including late registration, so grouping cannot create a second delivery
+of a member. This does not assert that every workflow for a commit has finished:
+the list contains only the completions received during that window.
+
+### Semantic comment triage
+
 The worker can assess automated issue comments before admitting them to its
 executor inbox, including comments that would otherwise become active-session
 follow-ups. Chatting contains no notification author names or message parsers.

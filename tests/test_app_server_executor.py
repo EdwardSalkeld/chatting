@@ -64,6 +64,20 @@ class AppServerExecutorTests(unittest.TestCase):
             if entry.get("method") == method
         ]
 
+    def test_background_occurrences_get_fresh_threads_and_retry_journals(self):
+        first, second = _telegram_task(901), _telegram_task(902)
+        for task in (first, second):
+            executor = self.executor.for_background_task(task.task_id)
+            result = executor.execute(task.envelope)
+            self.assertEqual(result.errors, [])
+            self.assertEqual(executor.execute(task.envelope), result)
+        # Interactive work continues separately in the same workspace.
+        self.assertEqual(self.executor.execute(_telegram_task(903).envelope).errors, [])
+        turns = self.calls("turn/start")
+        self.assertEqual(len(turns), 3)
+        self.assertEqual(len({t["params"]["threadId"] for t in turns}), 3)
+        self.assertEqual(len({t["params"]["cwd"] for t in turns}), 1)
+
     def test_reuses_process_and_thread_changes_cwd_and_model_and_caches_retry(self):
         first = _telegram_task(1)
         self.store.stage_inbox_task(first)

@@ -65,6 +65,10 @@ class AppServerExecutor(CodexExecutor):
     session_root: str | None = None
     conversation_id: str | None = None
     idle_seconds: float = 300
+    background_task_id: str | None = None
+
+    def for_background_task(self, task_id: str) -> AppServerExecutor:
+        return replace(self, background_task_id=task_id)
 
     def for_workspace(self, *, work_item_id: str) -> AppServerExecutor:
         return cast(AppServerExecutor, super().for_workspace(work_item_id=work_item_id))
@@ -84,6 +88,8 @@ class AppServerExecutor(CodexExecutor):
         identity = self.work_item_id or self.conversation_id
         if identity is None or self.session_root is None:
             return ExecutionResult(errors=["app_server_conversation_missing"])
+        if self.background_task_id:
+            identity = f"{identity}/background/{self.background_task_id}"
         directory = (
             Path(self.session_root) / hashlib.sha256(identity.encode()).hexdigest()[:24]
         )
@@ -200,7 +206,12 @@ class AppServerExecutor(CodexExecutor):
             )
 
     def _migrate_session(self, directory: Path) -> None:
-        if not self.work_item_id or not self.history_store or not self.session_root:
+        if (
+            self.background_task_id
+            or not self.work_item_id
+            or not self.history_store
+            or not self.session_root
+        ):
             return
         # Once the item has its own thread, old sessions are history.
         if (directory / "thread.json").exists() or (

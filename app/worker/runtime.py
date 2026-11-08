@@ -130,7 +130,9 @@ def process_task_message(
         else "high"
     )
     model_decision = None
-    if model_tier == "auto":
+    # Scheduled occurrences are independent jobs, not continuations of the
+    # workspace's interactive model choice. The bounded router fails to Sol.
+    if model_tier == "auto" or envelope.source == "cron":
         model_decision = choose_model(store=store, envelope=envelope)
         model_tier = model_decision.tier
     escalation_reason: str | None = None
@@ -699,6 +701,9 @@ def _executor_chain(
     model_selector = getattr(executor, "for_model", None)
     if callable(model_selector):
         executor = cast(Executor, model_selector(model_tier))
+    background_selector = getattr(executor, "for_background_task", None)
+    if task_message.envelope.source == "cron" and callable(background_selector):
+        executor = cast(Executor, background_selector(task_message.task_id))
     output_callback_setter = getattr(executor, "with_output_callback", None)
     if callable(output_callback_setter):
         # Exec output arrives in arbitrary chunks, so events are read by line.

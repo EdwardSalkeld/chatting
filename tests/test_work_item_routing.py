@@ -356,6 +356,35 @@ class WorkItemRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "escapes workspace root"):
             executor.for_workspace(work_item_id="ws_link")
 
+    def test_cron_routes_independently_without_changing_interactive_model(self):
+        message = replace(task(70, "cron", "weather"), work_item_id="item_cron")
+        self.stage(message)
+        self.store.set_work_model_tier(work_item_id="item_cron", tier="high")
+        with (
+            patch(
+                "app.worker.runtime.choose_model",
+                return_value=ModelDecision("low", "jev_confident_low"),
+            ) as route,
+            patch(
+                "app.worker.executor.codex._run_streaming",
+                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            ) as run,
+        ):
+            process_task_message(
+                store=self.store,
+                task_message=message,
+                executor_impl=CodexExecutor(
+                    workspace_root=str(Path(self.tmp.name) / "workspaces")
+                ),
+                max_attempts=1,
+                activity_monitor=WorkerActivityMonitor(store=self.store),
+            )
+        route.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["command"][-1], "gpt-6-luna")
+        self.assertEqual(
+            self.store.get_work_model_tier(work_item_id="item_cron"), "high"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

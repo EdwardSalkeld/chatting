@@ -38,6 +38,33 @@ does not reconstruct unreported usage, auxiliary classifiers or legacy backends.
 The source activity log remains the audit record. This table stores counts, not
 another copy of prompts or model output.
 
+## Personal mail
+
+The personal inbox collector also meters its isolated, subscription-authenticated
+`codex exec --json` summaries and digests. These rows have
+`usage_source='codex_exec_personal'`. Each row contains the counters reported by
+one CLI `turn.completed`, rather than an app-server response snapshot; a call can
+report multiple completed turns. `model_source='cli_request'` records the requested
+model, not proof of the model ultimately served. The existing export includes
+these rows. CLI `thread_id` and `turn_id` are local call IDs and turn ordinals,
+not provider thread identifiers. No email body, prompt, answer or CLI diagnostic is copied into usage
+activity. CLI sandbox and credential scrubbing remain in effect.
+
+`personal_model_calls` records each invocation, including nonzero exits and
+timeouts, with status and `metered_turns`. A failed call can still report usage;
+reported counters are retained. Zero metered turns means **unknown usage**, not
+free execution. Counters lost on abrupt process death cannot be reconstructed.
+Cache replays and messages screened out before Codex do not create calls. Each
+retry that invokes Codex gets its own call ID. Historical calls cannot be backfilled
+because their CLI counters were discarded. TypeSafe screening remains separate.
+
+```sql
+SELECT kind, status, COUNT(*) AS calls,
+       SUM(metered_turns = 0) AS calls_without_counters
+FROM personal_model_calls
+GROUP BY kind, status;
+```
+
 Example SQLite query:
 
 ```sql

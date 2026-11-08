@@ -34,3 +34,7 @@ prompt. The work item's setting remains low for the next task. The worker
 records the initial and executed tier plus the handoff reason in its audit
 event. This is an optional request by Luna, not a guarantee that it will
 recognize every task that needs Sol.
+
+Scheduled occurrences route independently through auto even when their
+workspace's interactive setting is high or low; they do not change that setting.
+See [background usage](background-usage.md) for scheduled-thread isolation.
