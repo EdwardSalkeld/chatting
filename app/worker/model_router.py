@@ -55,6 +55,9 @@ def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDec
             for turn in history
         ],
         "current_request": envelope.content[:8000],
+        "task_instructions": "\n".join(envelope.prompt_context.task_instructions)[
+            :8000
+        ],
         "source": envelope.source,
         "attachment_count": len(envelope.attachments),
     }

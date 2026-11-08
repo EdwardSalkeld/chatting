@@ -60,6 +60,35 @@ class TokenUsageTests(unittest.TestCase):
                 )
             ]
 
+    def test_personal_calls_keep_failed_attempts_and_unknown_usage(self):
+        for call_id, usage in (
+            (
+                "failed",
+                [{"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 10}],
+            ),
+            ("unknown", []),
+        ):
+            detail = {
+                "call_id": call_id,
+                "kind": "personal_inbox.digest.v1",
+                "model": "configured",
+                "status": "failed",
+                "usage": usage,
+            }
+            self.append("personal_model_usage", detail, source="personal_email")
+            self.append("personal_model_usage", detail, source="personal_email")
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["input_tokens"], 100)
+        self.assertEqual(rows[0]["usage_source"], "codex_exec_personal")
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*), sum(metered_turns) FROM personal_model_calls"
+                ).fetchone(),
+                (2, 1),
+            )
+
     def test_duplicate_snapshots_equal_responses_reroute_and_run(self):
         self.append("executor_started", {"attempt": 2})
         self.stdout("chatting/modelSelected", {"model": "selected"})
