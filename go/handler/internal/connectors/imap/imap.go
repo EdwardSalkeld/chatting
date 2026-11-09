@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
@@ -28,6 +29,22 @@ import (
 )
 
 const Source = "email"
+
+type responseError struct{ status string }
+
+func (err *responseError) Error() string { return "imap_response_" + err.status }
+
+func safeResponseError(line string) error {
+	fields := strings.Fields(line)
+	status := "unknown"
+	if len(fields) > 1 {
+		switch fields[1] {
+		case "NO", "BAD", "BYE":
+			status = strings.ToLower(fields[1])
+		}
+	}
+	return &responseError{status: status}
+}
 
 type Client interface {
 	Login(username string, password string) error
@@ -64,6 +81,8 @@ type Connector struct {
 	clientFactory ClientFactory
 	now           func() time.Time
 	attachmentDir string
+	pollDelay     time.Duration
+	nextPollAt    time.Time
 }
 
 func New(config Config) (*Connector, error) {
@@ -105,38 +124,84 @@ func New(config Config) (*Connector, error) {
 	}, nil
 }
 
-func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
+func (connector *Connector) Poll(ctx context.Context) (envelopes []contracts.TaskEnvelope, pollErr error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if connector.now().Before(connector.nextPollAt) {
+		return nil, nil
+	}
+	stage := "connect"
+	defer func() {
+		if ctx.Err() != nil {
+			pollErr = ctx.Err()
+			return
+		}
+		if pollErr != nil {
+			if connector.pollDelay == 0 {
+				connector.pollDelay = time.Second
+			} else {
+				connector.pollDelay = min(connector.pollDelay*2, time.Minute)
+			}
+			connector.nextPollAt = connector.now().Add(connector.pollDelay)
+			// Do not log server text, credentials, mailbox names or message data.
+			kind := "server_or_protocol"
+			var response *responseError
+			if errors.As(pollErr, &response) {
+				kind = "server_" + response.status
+			}
+			var netError net.Error
+			if errors.As(pollErr, &netError) {
+				kind = "network"
+				if netError.Timeout() {
+					kind = "timeout"
+				}
+			}
+			log.Printf("IMAP polling failed: stage=%s kind=%s retry_in=%s", stage, kind, connector.pollDelay)
+			pollErr = nil
+			return
+		}
+		if connector.pollDelay != 0 {
+			log.Print("IMAP polling recovered")
+		}
+		connector.pollDelay = 0
+		connector.nextPollAt = time.Time{}
+	}()
 	client, err := connector.clientFactory(ctx, ClientConfig{
-		Host:    connector.config.Host,
-		Port:    connector.config.Port,
-		UseSSL:  connector.config.UseSSL,
-		Timeout: 10 * time.Second,
+		Host: connector.config.Host, Port: connector.config.Port,
+		UseSSL: connector.config.UseSSL, Timeout: 10 * time.Second,
 	})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = client.Logout() }()
+	stage = "login"
 	if err := client.Login(connector.config.Username, connector.config.Password); err != nil {
-		return nil, errors.New("imap_login_failed")
+		return nil, err
 	}
+	stage = "select"
 	if err := client.Select(connector.config.Mailbox); err != nil {
-		return nil, fmt.Errorf("imap_select_failed:%s", connector.config.Mailbox)
+		return nil, err
 	}
+	stage = "search"
 	uids, err := client.Search(connector.config.SearchCriterion)
 	if err != nil {
-		return nil, errors.New("imap_search_failed")
+		return nil, err
 	}
-	envelopes := make([]contracts.TaskEnvelope, 0, len(uids))
+	envelopes = make([]contracts.TaskEnvelope, 0, len(uids))
 	for _, uid := range uids {
+		stage = "fetch"
 		raw, err := client.FetchRFC822(uid)
-		if err != nil || len(raw) == 0 {
-			continue
+		// Return already-fetched envelopes even if a later fetch fails.
+		if err != nil {
+			return envelopes, err
+		}
+		if len(raw) == 0 {
+			return envelopes, errors.New("imap_empty_message")
 		}
 		envelope, err := connector.toEnvelope(uid, raw)
 		if err != nil {
+			log.Print("IMAP message skipped: stage=decode kind=invalid_message")
 			continue
 		}
 		envelopes = append(envelopes, envelope)
@@ -470,7 +535,7 @@ func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 			if strings.Contains(line, " OK") {
 				return payload, nil
 			}
-			return nil, errors.New(line)
+			return nil, safeResponseError(line)
 		}
 		size, ok := literalSize(line)
 		if !ok {
@@ -507,7 +572,7 @@ func (client *NetClient) commandOK(format string, args ...any) ([]string, error)
 			if strings.Contains(line, " OK") {
 				return lines, nil
 			}
-			return lines, errors.New(line)
+			return lines, safeResponseError(line)
 		}
 		lines = append(lines, line)
 	}
