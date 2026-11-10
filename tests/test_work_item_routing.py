@@ -266,7 +266,7 @@ class WorkItemRoutingTests(unittest.TestCase):
         )
         self.assertIn("Jev selects per task", shown.egress_messages[0].message.body)
 
-    def test_low_task_handoff_runs_terra_once_without_changing_setting(self):
+    def test_low_task_handoff_runs_high_once_without_changing_setting(self):
         message = replace(task(40, "email", "alice@example.com"), work_item_id="item_a")
         self.stage(message)
         self.store.set_work_model_tier(work_item_id="item_a", tier="low")
@@ -298,9 +298,7 @@ class WorkItemRoutingTests(unittest.TestCase):
                 max_attempts=1,
                 activity_monitor=WorkerActivityMonitor(store=self.store),
             )
-        self.assertEqual(
-            [call[0][-1] for call in calls], ["gpt-6-luna", "gpt-6.1-terra"]
-        )
+        self.assertEqual([call[0][-1] for call in calls], ["gpt-6-luna", "gpt-6.1-sol"])
         self.assertIn(
             "Needs a broad migration",
             calls[1][1]["task"]["prompt_context"]["task_instructions"][-1],

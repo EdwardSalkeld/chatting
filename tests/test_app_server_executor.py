@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from app.model_command import parse_model_command
+from app.model_command import MODELS, models_from_environment, parse_model_command
 from app.models import ExecutionResult
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
@@ -64,6 +64,38 @@ class AppServerExecutorTests(unittest.TestCase):
             if entry.get("method") == method
         ]
 
+    def test_configured_models_reach_session_owner_payload_and_usage_events(self):
+        environment = {
+            "CHATTING_MODEL_HIGH": "configured-high",
+            "CHATTING_MODEL_LOW": "configured-low",
+        }
+        with (
+            patch.dict(os.environ, environment),
+            patch.dict(MODELS, models_from_environment(environment)),
+        ):
+            for number, tier in ((911, "high"), (912, "low")):
+                task = _telegram_task(number)
+                result = self.executor.for_model(tier).execute(task.envelope)
+                self.assertEqual(result.errors, [])
+                events = [json.loads(line) for line in result.stdout.splitlines()]
+                selected = [
+                    e["params"]["model"]
+                    for e in events
+                    if e.get("method") == "chatting/modelSelected"
+                ]
+                self.assertEqual(
+                    selected, [environment[f"CHATTING_MODEL_{tier.upper()}"]]
+                )
+        turns = self.calls("turn/start")
+        for turn, expected in zip(
+            turns, ("configured-high", "configured-low"), strict=True
+        ):
+            self.assertEqual(turn["params"]["model"], expected)
+            payload = json.loads(turn["params"]["input"][0]["text"])
+            self.assertEqual(payload["task"]["model_selection"]["model"], expected)
+        self.assertIn("configured-high", payload["escalation_contract"]["instructions"])
+        self.assertIn("configured-low", payload["escalation_contract"]["instructions"])
+
     def test_background_occurrences_get_fresh_threads_and_retry_journals(self):
         first, second = _telegram_task(901), _telegram_task(902)
         for task in (first, second):
@@ -102,7 +134,7 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(turns[0]["pid"], turns[1]["pid"])
         self.assertEqual(turns[0]["params"]["threadId"], turns[1]["params"]["threadId"])
         self.assertTrue(turns[1]["params"]["cwd"].endswith("item_a"))
-        self.assertEqual(turns[0]["params"]["model"], "gpt-6.1-terra")
+        self.assertEqual(turns[0]["params"]["model"], "gpt-6.1-sol")
         self.assertEqual(turns[1]["params"]["model"], "gpt-6-luna")
         payload = json.loads(turns[1]["params"]["input"][0]["text"])
         self.assertNotIn("termination_contract", payload)

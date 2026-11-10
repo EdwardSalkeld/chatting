@@ -2,9 +2,9 @@
 
 Scheduled (`source=cron`) tasks are routed per occurrence through the existing
 bounded TypeSafe model router. Only a confident routine classification selects
-Luna; complex work, ambiguity, missing credentials and routing errors select Terra.
+the configured low tier; complex work, ambiguity, missing credentials and routing errors select high.
 Task instructions are included alongside the request so a short schedule title
-cannot hide substantive work. Luna retains its existing handoff to Terra before a
+cannot hide substantive work. The low tier retains its existing handoff to high before a
 visible reply. The workspace's interactive `/set` choice is unchanged and still
 governs interactive work and its GitHub follow-ups.
 

@@ -188,7 +188,7 @@ def process_task_message(
                         context,
                         task_instructions=[
                             *context.task_instructions,
-                            "Luna requested a task-only handoff to Terra. Its findings: "
+                            f"{MODELS['low']} requested a task-only handoff to {MODELS['high']}. Its findings: "
                             + escalation_reason,
                         ],
                     ),
