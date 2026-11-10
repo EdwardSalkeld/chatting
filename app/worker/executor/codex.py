@@ -733,8 +733,8 @@ def _task_payload(
             "instructions": (
                 "If this task needs sustained judgement or broad changes beyond Luna's scope, "
                 "write a JSON object to request_path with task_id and reason (brief findings "
-                "and why Sol is needed), using your file editing tool. Then stop without a final "
-                "visible reply. The worker will rerun this same task on Sol. Request this before "
+                "and why Terra is needed), using your file editing tool. Then stop without a final "
+                "visible reply. The worker will rerun this same task on Terra. Request this before "
                 "sending any visible answer. The work item's low setting stays unchanged."
             ),
         }

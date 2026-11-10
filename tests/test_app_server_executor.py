@@ -102,6 +102,7 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(turns[0]["pid"], turns[1]["pid"])
         self.assertEqual(turns[0]["params"]["threadId"], turns[1]["params"]["threadId"])
         self.assertTrue(turns[1]["params"]["cwd"].endswith("item_a"))
+        self.assertEqual(turns[0]["params"]["model"], "gpt-6.1-terra")
         self.assertEqual(turns[1]["params"]["model"], "gpt-6-luna")
         payload = json.loads(turns[1]["params"]["input"][0]["text"])
         self.assertNotIn("termination_contract", payload)

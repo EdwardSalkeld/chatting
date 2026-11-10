@@ -7,7 +7,7 @@ import re
 from app.models import TaskEnvelope
 from app.usage_command import _THREAD_PREFIX_RE
 
-MODELS = {"high": "gpt-6.1-sol", "low": "gpt-6-luna"}
+MODELS = {"high": "gpt-6.1-terra", "low": "gpt-6-luna"}
 
 
 def parse_model_command(envelope: TaskEnvelope) -> tuple[str, str | None] | None:

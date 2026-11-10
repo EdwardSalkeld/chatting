@@ -28,7 +28,7 @@ class ModelDecision:
 
 
 def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDecision:
-    """Select Luna only for a confident low-risk choice; otherwise use Sol."""
+    """Select Luna only for a confident low-risk choice; otherwise use Terra."""
     key = os.environ.get("TYPESAFE_API_KEY", "").strip()
     if not key:
         return ModelDecision("high", "jev_key_missing")
@@ -76,7 +76,7 @@ def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDec
                 ),
                 "criteria": {
                     "low": "Luna can reliably finish this clear, bounded, routine task.",
-                    "high": "Sol is warranted by complexity, risk, ambiguity, or breadth.",
+                    "high": "Terra is warranted by complexity, risk, ambiguity, or breadth.",
                 },
             }
         },

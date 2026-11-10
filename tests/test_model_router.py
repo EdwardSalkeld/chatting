@@ -30,7 +30,7 @@ class ModelRouterTests(unittest.TestCase):
             dedupe_key="test:1",
         )
 
-    def test_missing_key_uses_sol_without_network_call(self):
+    def test_missing_key_uses_high_without_network_call(self):
         with (
             patch.dict(os.environ, {}, clear=True),
             patch("app.worker.model_router.typesafe.post") as call,
@@ -66,7 +66,7 @@ class ModelRouterTests(unittest.TestCase):
         self.assertEqual(call.call_args.kwargs["timeout"], 5)
         self.assertFalse(call.call_args.kwargs["retry_429"])
 
-    def test_uncertain_or_failed_choice_uses_sol(self):
+    def test_uncertain_or_failed_choice_uses_high(self):
         answer = {
             "model": "jev-1.14.0",
             "answers": {
