@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   open-pr:
-    name: Update lab flake.lock
+    name: Update Lab Chatting package
     if: >
       github.event_name == 'workflow_dispatch' ||
       (
@@ -32,6 +32,7 @@ jobs:
         github.event.workflow_run.head_branch == 'main'
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Resolve target SHA
@@ -58,7 +59,7 @@ jobs:
           esac
 
           echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${target_sha%${target_sha#????????}}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${target_sha:0:8}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout lab
         uses: actions/checkout@v7
@@ -77,6 +78,10 @@ jobs:
             --override-input chatting github:EdwardSalkeld/chatting/${{ steps.target.outputs.sha }} \
             --update-input chatting
 
+      - name: Refresh and verify Lab Go dependency hash
+        working-directory: lab
+        run: python3 scripts/update-chatting-vendor-hash.py
+
       - name: Compose PR body
         working-directory: lab
         env:
@@ -85,10 +90,11 @@ jobs:
           cat > /tmp/lab-pr-body.md <<EOF
           ## Summary
           - bump the chatting flake input to ${TARGET_SHA}
+          - refresh the Go dependency hash when dependencies change
           - deploy the merged chatting main commit via lab-controlled rollout
 
           ## Testing
-          - not run (automation-only flake.lock update)
+          - Nix dependency hash recalculated and chatting-handler package built successfully
           EOF
 
       - name: Create or update lab PR
