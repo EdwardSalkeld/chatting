@@ -123,7 +123,7 @@ topic ID for recovery. Deleted topics and workspace reassignment are not silentl
 repaired by creating another conversation.
 
 - Telegram egress supports:
-  - plain text replies through `sendMessage`
+  - Markdown replies rendered to Telegram HTML through `sendMessage`
   - image attachments through `sendPhoto`
   - PDFs and other files through `sendDocument`
 - Outbound attachment messages use the normal `OutboundMessage` contract with:
@@ -138,3 +138,23 @@ repaired by creating another conversation.
   - upload/API failures surface deterministic Telegram reason codes such as `telegram_attachment_missing` and `telegram_attachment_send_failed`
 - Outbound attachments under `telegram_attachment_dir` are tracked in the same cleanup ledger as inbound downloads and become cleanup-eligible after task completion.
 - Successful send responses retain Telegram's returned `message_id`; `app.main_reply` stores that id in the worker history ledger.
+
+Outbound text and attachment captions use CommonMark Markdown by default. The Go
+sender parses it and emits only Telegram-supported HTML: bold, italic, inline
+code, code blocks and links. For example, `**Number 24!**` becomes bold and
+`[details](https://example.com)` becomes a labelled link. Headings become bold;
+lists become readable numbered or bullet lines. Raw HTML is displayed literally,
+and unsupported link schemes are displayed as text rather than active links.
+Code inside emphasis or links stays literal text within the enclosing formatting
+because Telegram does not allow code entities inside other entities.
+
+Use actual newlines in the reply JSON, not double-escaped newline sequences.
+The default sender preserves literal backslashes in code. If Telegram rejects
+the formatted payload as invalid entities, it retries the original text without
+parse mode, preserving the topic and attachment. This fallback does not retry
+unrelated failures. Explicit legacy Markdown/MarkdownV2 sender configurations
+retain their escaped literal-text behavior; the application uses the default
+HTML renderer.
+
+Telegram's supported formatting is documented at
+https://core.telegram.org/bots/api#formatting-options.
