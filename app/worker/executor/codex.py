@@ -731,10 +731,10 @@ def _task_payload(
         payload["escalation_contract"] = {
             "request_path": str(escalation_path),
             "instructions": (
-                "If this task needs sustained judgement or broad changes beyond Luna's scope, "
+                f"If this task needs sustained judgement or broad changes beyond {MODELS['low']}'s scope, "
                 "write a JSON object to request_path with task_id and reason (brief findings "
-                "and why Sol is needed), using your file editing tool. Then stop without a final "
-                "visible reply. The worker will rerun this same task on Sol. Request this before "
+                f"and why {MODELS['high']} is needed), using your file editing tool. Then stop without a final "
+                f"visible reply. The worker will rerun this same task on {MODELS['high']}. Request this before "
                 "sending any visible answer. The work item's low setting stays unchanged."
             ),
         }
