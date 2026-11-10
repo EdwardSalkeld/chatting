@@ -51,7 +51,7 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	}
 	parseMode := config.ParseMode
 	if parseMode == nil {
-		defaultParseMode := "Markdown"
+		defaultParseMode := "HTML"
 		parseMode = &defaultParseMode
 	}
 	if parseMode != nil && *parseMode != "Markdown" && *parseMode != "MarkdownV2" && *parseMode != "HTML" {
@@ -190,7 +190,10 @@ func (sender *TelegramMessageSender) CreateForumTopic(ctx context.Context, chatI
 }
 
 func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string, topicID *int64) (TelegramSendResult, error) {
-	normalizedBody := normalizeTelegramOutboundText(body)
+	normalizedBody := strings.ReplaceAll(body, "\r\n", "\n")
+	if sender.parseMode == nil || *sender.parseMode != "HTML" {
+		normalizedBody = normalizeTelegramOutboundText(body)
+	}
 	payload := map[string]any{
 		"chat_id": target,
 		"text":    normalizeTelegramTextForParseMode(normalizedBody, sender.parseMode),
@@ -405,7 +408,7 @@ func normalizeTelegramTextForParseMode(text string, parseMode *string) string {
 	}
 	switch *parseMode {
 	case "HTML":
-		return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(text)
+		return renderTelegramMarkdown(text)
 	case "MarkdownV2":
 		return escapeWithBackslashPrefix(text, "\\_*[]()~`>#+-=|{}.!")
 	case "Markdown":

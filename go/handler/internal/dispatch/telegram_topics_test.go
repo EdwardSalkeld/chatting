@@ -18,7 +18,7 @@ func TestTelegramTopicsAcrossTextMediaAndFormattingFallback(t *testing.T) {
 		for _, media := range []string{"text", "photo.png", "report.pdf"} {
 			t.Run(fmt.Sprintf("%d/%s", topic, media), func(t *testing.T) {
 				dir := t.TempDir()
-				body := "part of an answer"
+				body := "**part** of [an answer](https://example.com)"
 				message := contracts.OutboundMessage{Channel: "telegram", Target: "-100", Body: &body}
 				if topic != 0 {
 					message.Metadata = map[string]any{"message_thread_id": topic}
@@ -34,13 +34,16 @@ func TestTelegramTopicsAcrossTextMediaAndFormattingFallback(t *testing.T) {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls++
 					var got string
+					var gotBody, mode any
 					if media == "text" {
 						call := recordTelegramJSONCall(t, r)
+						gotBody, mode = call.payload["text"], call.payload["parse_mode"]
 						if v, ok := call.payload["message_thread_id"]; ok {
 							got = fmt.Sprint(v)
 						}
 					} else {
 						call := recordTelegramMultipartCall(t, r)
+						gotBody, mode = call.fields["caption"], call.fields["parse_mode"]
 						got = call.fields["message_thread_id"]
 						wantMethod := "/bottoken/sendDocument"
 						if media == "photo.png" {
@@ -56,6 +59,13 @@ func TestTelegramTopicsAcrossTextMediaAndFormattingFallback(t *testing.T) {
 					}
 					if got != want {
 						t.Errorf("topic = %q, want %q", got, want)
+					}
+					if calls == 1 {
+						if mode != "HTML" || gotBody != `<b>part</b> of <a href="https://example.com">an answer</a>` {
+							t.Errorf("formatted payload: mode=%v body=%v", mode, gotBody)
+						}
+					} else if gotBody != body || (mode != nil && mode != "") {
+						t.Errorf("plain fallback: mode=%v body=%v", mode, gotBody)
 					}
 					if calls == 1 {
 						_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities"})
