@@ -131,7 +131,7 @@ def process_task_message(
     )
     model_decision = None
     # Scheduled occurrences are independent jobs, not continuations of the
-    # workspace's interactive model choice. The bounded router fails to Sol.
+    # workspace's interactive model choice. The bounded router fails to high.
     if model_tier == "auto" or envelope.source == "cron":
         model_decision = choose_model(store=store, envelope=envelope)
         model_tier = model_decision.tier
@@ -171,7 +171,7 @@ def process_task_message(
                 model_tier = "high"
                 if isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                     executor_launch_count = active_executor.last_launch_count
-                sol_executor = _executor_chain(
+                high_executor = _executor_chain(
                     executor_impl,
                     store=store,
                     task_message=task_message,
@@ -182,13 +182,13 @@ def process_task_message(
                     on_pr_created=on_pr_created,
                 )
                 context = envelope.prompt_context
-                sol_envelope = replace(
+                high_envelope = replace(
                     envelope,
                     prompt_context=replace(
                         context,
                         task_instructions=[
                             *context.task_instructions,
-                            "Luna requested a task-only handoff to Sol. Its findings: "
+                            f"{MODELS['low']} requested a task-only handoff to {MODELS['high']}. Its findings: "
                             + escalation_reason,
                         ],
                     ),
@@ -197,10 +197,10 @@ def process_task_message(
                 activity_monitor.record_executor_started(
                     task_message=task_message, attempt=executor_launch_count
                 )
-                execution_result = sol_executor.execute(sol_envelope)
-                if isinstance(sol_executor, SupervisedReplyRecoveryExecutor):
-                    executor_launch_count += sol_executor.last_launch_count - 1
-                    used_supervised_recovery = sol_executor.last_recovery_attempted
+                execution_result = high_executor.execute(high_envelope)
+                if isinstance(high_executor, SupervisedReplyRecoveryExecutor):
+                    executor_launch_count += high_executor.last_launch_count - 1
+                    used_supervised_recovery = high_executor.last_recovery_attempted
             elif isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                 executor_launch_count = active_executor.last_launch_count
                 used_supervised_recovery = active_executor.last_recovery_attempted
