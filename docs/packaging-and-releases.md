@@ -1,8 +1,9 @@
 # Nix packages and releases
 
-Chatting owns its build definition and dependency hash. Deployments consume a
-tested source release; this repository does not open PRs in deployment
-repositories or require their credentials.
+Chatting owns its build definition and dependency hash. The release flow makes
+tested source releases available for deployments to consume. The existing Lab
+deployment PR workflow remains active during the transition; it still needs its
+configured cross-repository credentials.
 
 ## Package interface
 
@@ -82,9 +83,10 @@ the tested SHA; tags are never moved. A retry leaves an existing release
 unchanged, or completes publication if the tag exists but release creation
 previously failed. API errors other than an explicit 404 stop publication.
 
-The workflow uses only this repository's `GITHUB_TOKEN` with `contents: write`
-in the release job. It neither checks out nor writes another repository.
-Consumers manage their own dependency update schedule and deployment approvals.
+The release workflow uses only this repository's `GITHUB_TOKEN` with
+`contents: write` in the release job. It neither checks out nor writes another
+repository. The existing Lab deployment PR workflow runs separately until the
+release-based consumption path has been observed and adopted.
 
 The release API policy is covered by:
 
