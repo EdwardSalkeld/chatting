@@ -42,7 +42,7 @@ func RegisterHTTPRoutes(mux *http.ServeMux, engine *Engine, onResult func(Result
 		result, err := engine.HandleRaw(request.Context(), raw)
 		if err != nil {
 			// Infrastructure/state error: the send did not happen and the caller
-			// should retry. Mirrors the BBMB path leaving the message un-acked.
+			// should retry.
 			writeSubmitJSON(writer, http.StatusServiceUnavailable, submitResponse{Status: "error", Reason: err.Error()})
 			return
 		}

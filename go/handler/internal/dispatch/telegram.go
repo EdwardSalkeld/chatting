@@ -13,17 +13,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
+const telegramParseMode = "HTML"
+
 type TelegramConfig struct {
 	BotToken   string
 	APIBaseURL string
-	ParseMode  *string
 	Timeout    time.Duration
 	HTTPClient *http.Client
 	// AttachmentAllowedDirs constrains which local files may be sent as
@@ -37,7 +37,6 @@ type TelegramConfig struct {
 type TelegramMessageSender struct {
 	botToken              string
 	apiBaseURL            string
-	parseMode             *string
 	client                *http.Client
 	attachmentAllowedDirs []string
 }
@@ -48,14 +47,6 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	}
 	if strings.TrimSpace(config.APIBaseURL) == "" {
 		return nil, errors.New("api_base_url is required")
-	}
-	parseMode := config.ParseMode
-	if parseMode == nil {
-		defaultParseMode := "HTML"
-		parseMode = &defaultParseMode
-	}
-	if parseMode != nil && *parseMode != "Markdown" && *parseMode != "MarkdownV2" && *parseMode != "HTML" {
-		return nil, errors.New("parse_mode must be one of Markdown, MarkdownV2, HTML, or nil")
 	}
 	timeout := config.Timeout
 	if timeout == 0 {
@@ -79,7 +70,6 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	return &TelegramMessageSender{
 		botToken:              config.BotToken,
 		apiBaseURL:            strings.TrimRight(config.APIBaseURL, "/"),
-		parseMode:             parseMode,
 		client:                client,
 		attachmentAllowedDirs: allowedDirs,
 	}, nil
@@ -126,16 +116,14 @@ func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target 
 		payload["message_thread_id"] = fmt.Sprint(*topicID)
 	}
 	if message.Body != nil {
-		payload["caption"] = normalizeTelegramTextForParseMode(*message.Body, sender.parseMode)
-		if sender.parseMode != nil {
-			payload["parse_mode"] = *sender.parseMode
-		}
+		payload["caption"] = renderTelegramMarkdown(*message.Body)
+		payload["parse_mode"] = telegramParseMode
 	}
 	response, err := sender.postMultipart(ctx, method, payload, fileField, filePath)
 	if err == nil && response.OK {
 		return telegramSendResult(response)
 	}
-	if err == nil && sender.parseMode != nil && message.Body != nil && isTelegramParseModeError(response) {
+	if err == nil && message.Body != nil && isTelegramParseModeError(response) {
 		fallback := map[string]string{"chat_id": target, "caption": *message.Body}
 		if topicID != nil {
 			fallback["message_thread_id"] = fmt.Sprint(*topicID)
@@ -191,24 +179,19 @@ func (sender *TelegramMessageSender) CreateForumTopic(ctx context.Context, chatI
 
 func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string, topicID *int64) (TelegramSendResult, error) {
 	normalizedBody := strings.ReplaceAll(body, "\r\n", "\n")
-	if sender.parseMode == nil || *sender.parseMode != "HTML" {
-		normalizedBody = normalizeTelegramOutboundText(body)
-	}
 	payload := map[string]any{
-		"chat_id": target,
-		"text":    normalizeTelegramTextForParseMode(normalizedBody, sender.parseMode),
+		"chat_id":    target,
+		"text":       renderTelegramMarkdown(normalizedBody),
+		"parse_mode": telegramParseMode,
 	}
 	if topicID != nil {
 		payload["message_thread_id"] = *topicID
-	}
-	if sender.parseMode != nil {
-		payload["parse_mode"] = *sender.parseMode
 	}
 	response, err := sender.postJSON(ctx, "sendMessage", payload)
 	if err == nil && response.OK {
 		return telegramSendResult(response)
 	}
-	if err == nil && sender.parseMode != nil && isTelegramParseModeError(response) {
+	if err == nil && isTelegramParseModeError(response) {
 		fallback := map[string]any{"chat_id": target, "text": normalizedBody}
 		if topicID != nil {
 			fallback["message_thread_id"] = *topicID
@@ -400,55 +383,4 @@ func describeTelegramResponseError(prefix string, response telegramAPIResponse) 
 		return prefix + " description=" + description
 	}
 	return prefix
-}
-
-func normalizeTelegramTextForParseMode(text string, parseMode *string) string {
-	if parseMode == nil {
-		return text
-	}
-	switch *parseMode {
-	case "HTML":
-		return renderTelegramMarkdown(text)
-	case "MarkdownV2":
-		return escapeWithBackslashPrefix(text, "\\_*[]()~`>#+-=|{}.!")
-	case "Markdown":
-		return escapeWithBackslashPrefix(text, "\\_*`[")
-	default:
-		return text
-	}
-}
-
-func escapeWithBackslashPrefix(text string, specials string) string {
-	var builder strings.Builder
-	for _, character := range text {
-		if strings.ContainsRune(specials, character) {
-			builder.WriteRune('\\')
-		}
-		builder.WriteRune(character)
-	}
-	return builder.String()
-}
-
-func normalizeTelegramOutboundText(text string) string {
-	normalized := strings.ReplaceAll(text, "\r\n", "\n")
-	patterns := []struct {
-		expression  *regexp.Regexp
-		replacement string
-	}{
-		{regexp.MustCompile(`(?:\\)+r(?:\\)+n`), "\n"},
-		{regexp.MustCompile(`(?:\\)+n`), "\n"},
-		{regexp.MustCompile(`(?:\\)+r`), "\n"},
-		{regexp.MustCompile(`(?:\\)+([\\_*` + "`" + `\[\]\(\)~>#\+\-=|{}.!])`), "$1"},
-	}
-	for range 3 {
-		previous := normalized
-		for _, pattern := range patterns {
-			normalized = pattern.expression.ReplaceAllString(normalized, pattern.replacement)
-		}
-		normalized = strings.ReplaceAll(normalized, `\t`, "\t")
-		if normalized == previous {
-			break
-		}
-	}
-	return normalized
 }

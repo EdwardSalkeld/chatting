@@ -127,20 +127,6 @@ func (email Email) Sender() string {
 	return strings.TrimSpace(email.From[0].Email)
 }
 
-func (email Email) FromAddress() string {
-	if len(email.From) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(email.From[0].Email)
-}
-
-func (email Email) HeaderMessageID() string {
-	if len(email.MessageID) == 0 {
-		return ""
-	}
-	return email.MessageID[0]
-}
-
 // Body is a message rendered for reading: markup stripped, and the two ways it
 // can fall short kept apart. Truncated means the part was longer than we asked
 // for, which is our limit rather than a fault in the mail. Degraded means the
