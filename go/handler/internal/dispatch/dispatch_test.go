@@ -425,6 +425,117 @@ func TestTelegramMessageSenderRejectsAttachmentOutsideAllowedDirs(t *testing.T) 
 	}
 }
 
+func TestTelegramMessageSenderRejectsSymlinksLeadingOutOfAllowedDirs(t *testing.T) {
+	tempDir := t.TempDir()
+	allowedDir := filepath.Join(tempDir, "allowed")
+	outsideDir := filepath.Join(tempDir, "outside")
+	for _, dir := range []string{allowedDir, outsideDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secretPath := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"file-link.txt":     secretPath,
+		"relative-link.txt": filepath.Join("..", "outside", "secret.txt"),
+		"dir-link":          outsideDir,
+		"dangling-link.txt": filepath.Join(outsideDir, "absent.txt"),
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(allowedDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		t.Errorf("unexpected Telegram call: %s", request.URL.Path)
+	}))
+	defer server.Close()
+	sender := newTestTelegramSender(t, server.URL, allowedDir)
+
+	for _, name := range []string{"file-link.txt", "relative-link.txt", filepath.Join("dir-link", "secret.txt"), "dangling-link.txt"} {
+		err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+			Channel:    "telegram",
+			Target:     "12345",
+			Attachment: &contracts.AttachmentRef{URI: "file://" + filepath.Join(allowedDir, name)},
+		})
+		if err == nil || err.Error() != "telegram_attachment_path_not_allowed" {
+			t.Errorf("%s: err = %v, want telegram_attachment_path_not_allowed", name, err)
+		}
+	}
+}
+
+func TestTelegramMessageSenderFollowsSymlinksThatStayInsideAllowedDirs(t *testing.T) {
+	tempDir := t.TempDir()
+	realDir := filepath.Join(tempDir, "real")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "report.txt"), []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("report.txt", filepath.Join(realDir, "latest.txt")); err != nil {
+		t.Fatal(err)
+	}
+	// The allowed directory may itself be reached through a link.
+	allowedDir := filepath.Join(tempDir, "allowed")
+	if err := os.Symlink(realDir, allowedDir); err != nil {
+		t.Fatal(err)
+	}
+	var multipartCall telegramMultipartCall
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		multipartCall = recordTelegramMultipartCall(t, request)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 505}})
+	}))
+	defer server.Close()
+	sender := newTestTelegramSender(t, server.URL, allowedDir)
+
+	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+		Channel:    "telegram",
+		Target:     "12345",
+		Attachment: &contracts.AttachmentRef{URI: "file://" + filepath.Join(allowedDir, "latest.txt")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if multipartCall.fileName != "latest.txt" || multipartCall.fileBody != "report" {
+		t.Fatalf("multipart call = %#v", multipartCall)
+	}
+}
+
+func TestTelegramMessageSenderResendsWholeAttachmentWhenCaptionFailsToParse(t *testing.T) {
+	tempDir := t.TempDir()
+	documentPath := filepath.Join(tempDir, "report.txt")
+	if err := os.WriteFile(documentPath, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []telegramMultipartCall
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls = append(calls, recordTelegramMultipartCall(t, request))
+		if len(calls) == 1 {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities"})
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 506}})
+	}))
+	defer server.Close()
+	sender := newTestTelegramSender(t, server.URL, tempDir)
+	caption := "Report"
+
+	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
+		Channel:    "telegram",
+		Target:     "12345",
+		Body:       &caption,
+		Attachment: &contracts.AttachmentRef{URI: "file://" + documentPath},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[0].fileBody != "report" || calls[1].fileBody != "report" {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
 func TestTelegramMessageSenderRejectsUnsupportedAttachmentURI(t *testing.T) {
 	sender := newTestTelegramSender(t, "http://127.0.0.1")
 	err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
@@ -519,6 +630,7 @@ type telegramMultipartCall struct {
 	fields    map[string]string
 	fileField string
 	fileName  string
+	fileBody  string
 }
 
 func newTestTelegramSender(t *testing.T, apiBaseURL string, allowedDirs ...string) *TelegramMessageSender {
@@ -571,6 +683,11 @@ func recordTelegramMultipartCall(t *testing.T, request *http.Request) telegramMu
 		}
 		call.fileField = part.FormName()
 		call.fileName = part.FileName()
+		raw, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		call.fileBody = string(raw)
 	}
 	return call
 }
