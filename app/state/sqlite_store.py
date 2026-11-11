@@ -178,6 +178,10 @@ class SQLiteStateStore:
         self._db_path = db_path
         self._initialize()
 
+    @property
+    def db_path(self) -> str:
+        return self._db_path
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
@@ -419,7 +423,10 @@ class SQLiteStateStore:
         task_id: str,
         event_id: str,
         occurred_at: datetime,
+        topic_id: int | None = None,
     ) -> None:
+        if topic_id is not None and (type(topic_id) is not int or topic_id <= 0):
+            raise ValueError("topic_id must be a positive integer")
         if not target.strip():
             raise ValueError("target is required")
         if message_id <= 0:
@@ -442,14 +449,13 @@ class SQLiteStateStore:
                     target, topic_id, message_id, reply_to_message_id, role, sender,
                     content, attachments_json, task_id, event_id,
                     occurred_at, created_at, work_item_id
-                ) VALUES (?, (SELECT topic_id FROM worker_telegram_history
-                              WHERE task_id = ? AND role = 'user' LIMIT 1),
+                ) VALUES (?, ?,
                     ?, NULL, 'assistant', NULL, ?, ?, ?, ?, ?, ?,
                     (SELECT work_item_id FROM work_item_events WHERE task_id = ?))
                 """,
                 (
                     target,
-                    task_id,
+                    topic_id,
                     message_id,
                     normalized_content or None,
                     _serialize_attachments(attachments),
@@ -1274,7 +1280,12 @@ class SQLiteStateStore:
                     run_id,
                 ),
             )
-            if phase in {"executor_started", "executor_stdout", "task_finished"}:
+            if phase in {
+                "executor_started",
+                "executor_stdout",
+                "task_finished",
+                "personal_model_usage",
+            }:
                 event = connection.execute(
                     "SELECT * FROM worker_activity_events WHERE activity_id = ?",
                     (cursor.lastrowid,),

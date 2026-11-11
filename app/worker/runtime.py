@@ -24,6 +24,7 @@ from app.model_command import MODELS, parse_model_command
 from app.worker.model_router import choose_model
 from app.state import SQLiteStateStore
 from app.worker.pr_registration import created_pr_url
+from app.worker.maintenance import is_maintenance, run_maintenance
 
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
@@ -55,6 +56,18 @@ def process_task_message(
         raise ValueError("max_attempts must be positive")
 
     envelope = task_message.envelope
+    if is_maintenance(envelope):
+        counts = run_maintenance(store.db_path, envelope.content)
+        emitted_at = datetime.now(timezone.utc)
+        return _finish_local_task(
+            store=store,
+            task_message=task_message,
+            created_at=emitted_at,
+            latency_ms=_latency_since_emitted(task_message, emitted_at),
+            reason_code="database_maintenance",
+            detail={**_local_execution_detail(task_message), "maintenance": counts},
+            egress_messages=[_internal_completion(task_message, emitted_at=emitted_at)],
+        )
     if is_internal_telegram_channel_not_enabled_envelope(envelope):
         return _process_internal_telegram_channel_not_enabled_notice(
             store=store,
@@ -117,7 +130,9 @@ def process_task_message(
         else "high"
     )
     model_decision = None
-    if model_tier == "auto":
+    # Scheduled occurrences are independent jobs, not continuations of the
+    # workspace's interactive model choice. The bounded router fails to high.
+    if model_tier == "auto" or envelope.source == "cron":
         model_decision = choose_model(store=store, envelope=envelope)
         model_tier = model_decision.tier
     escalation_reason: str | None = None
@@ -156,7 +171,7 @@ def process_task_message(
                 model_tier = "high"
                 if isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                     executor_launch_count = active_executor.last_launch_count
-                sol_executor = _executor_chain(
+                high_executor = _executor_chain(
                     executor_impl,
                     store=store,
                     task_message=task_message,
@@ -167,13 +182,13 @@ def process_task_message(
                     on_pr_created=on_pr_created,
                 )
                 context = envelope.prompt_context
-                sol_envelope = replace(
+                high_envelope = replace(
                     envelope,
                     prompt_context=replace(
                         context,
                         task_instructions=[
                             *context.task_instructions,
-                            "Luna requested a task-only handoff to Sol. Its findings: "
+                            f"{MODELS['low']} requested a task-only handoff to {MODELS['high']}. Its findings: "
                             + escalation_reason,
                         ],
                     ),
@@ -182,14 +197,20 @@ def process_task_message(
                 activity_monitor.record_executor_started(
                     task_message=task_message, attempt=executor_launch_count
                 )
-                execution_result = sol_executor.execute(sol_envelope)
-                if isinstance(sol_executor, SupervisedReplyRecoveryExecutor):
-                    executor_launch_count += sol_executor.last_launch_count - 1
-                    used_supervised_recovery = sol_executor.last_recovery_attempted
+                execution_result = high_executor.execute(high_envelope)
+                if isinstance(high_executor, SupervisedReplyRecoveryExecutor):
+                    executor_launch_count += high_executor.last_launch_count - 1
+                    used_supervised_recovery = high_executor.last_recovery_attempted
             elif isinstance(active_executor, SupervisedReplyRecoveryExecutor):
                 executor_launch_count = active_executor.last_launch_count
                 used_supervised_recovery = active_executor.last_recovery_attempted
-            execution_payload = execution_result.to_dict()
+            # Activity events already persist the streamed transcript. Keep the
+            # in-memory result intact for recovery, but audit only its outcome.
+            execution_payload = {
+                key: value
+                for key, value in execution_result.to_dict().items()
+                if key not in {"stdout", "stderr"}
+            }
 
             published_incremental_reply_count = (
                 store.count_conversation_bundle_main_reply_egress_events(
@@ -680,6 +701,9 @@ def _executor_chain(
     model_selector = getattr(executor, "for_model", None)
     if callable(model_selector):
         executor = cast(Executor, model_selector(model_tier))
+    background_selector = getattr(executor, "for_background_task", None)
+    if task_message.envelope.source == "cron" and callable(background_selector):
+        executor = cast(Executor, background_selector(task_message.task_id))
     output_callback_setter = getattr(executor, "with_output_callback", None)
     if callable(output_callback_setter):
         # Exec output arrives in arbitrary chunks, so events are read by line.

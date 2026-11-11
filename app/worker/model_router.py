@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from app.models import TaskEnvelope
 from app.state import SQLiteStateStore
 from app import typesafe
+from app.model_command import MODELS
 
 _ENDPOINT = typesafe.ENDPOINT
 _MODEL = typesafe.ROUTING_MODEL
@@ -28,7 +29,7 @@ class ModelDecision:
 
 
 def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDecision:
-    """Select Luna only for a confident low-risk choice; otherwise use Sol."""
+    """Select the low tier only for a confident low-risk choice."""
     key = os.environ.get("TYPESAFE_API_KEY", "").strip()
     if not key:
         return ModelDecision("high", "jev_key_missing")
@@ -55,6 +56,9 @@ def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDec
             for turn in history
         ],
         "current_request": envelope.content[:8000],
+        "task_instructions": "\n".join(envelope.prompt_context.task_instructions)[
+            :8000
+        ],
         "source": envelope.source,
         "attachment_count": len(envelope.attachments),
     }
@@ -72,8 +76,8 @@ def choose_model(*, store: SQLiteStateStore, envelope: TaskEnvelope) -> ModelDec
                     "Choose low only for clear, bounded, routine work."
                 ),
                 "criteria": {
-                    "low": "Luna can reliably finish this clear, bounded, routine task.",
-                    "high": "Sol is warranted by complexity, risk, ambiguity, or breadth.",
+                    "low": f"{MODELS['low']} can reliably finish this clear, bounded, routine task.",
+                    "high": f"{MODELS['high']} is warranted by complexity, risk, ambiguity, or breadth.",
                 },
             }
         },

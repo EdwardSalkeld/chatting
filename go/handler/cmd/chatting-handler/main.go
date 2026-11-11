@@ -20,6 +20,7 @@ import (
 	githubconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/heartbeat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/imap"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/maintenance"
 	reminderconnector "github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/reminder"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/schedule"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/telegram"
@@ -142,6 +143,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		return nil, err
 	}
 	metricRecorder := metrics.New(time.Time{}, nil)
+	metricRecorder.SetSQLitePath(config.DBPath)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
 	if config.GitHubWebhookDeliveryEnabled {
 		connectors = append(connectors, webhooks.Connector{Store: store})
@@ -151,6 +153,23 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		return nil, err
 	}
 	connectors = append(connectors, scheduleConnector)
+	if config.MaintenanceCron != "" {
+		connector, err := maintenance.New(config.MaintenanceCron,
+			config.RetentionDays,
+			func(ctx context.Context) error {
+				now := time.Now().UTC()
+				counts, err := store.PruneDiagnostics(ctx,
+					now.AddDate(0, 0, -config.RetentionDays))
+				if err == nil {
+					log.Printf("handler_database_maintenance counts=%v", counts)
+				}
+				return err
+			}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("maintenance schedule: %w", err)
+		}
+		connectors = append(connectors, connector)
+	}
 	reminderConnector, err := reminderconnector.New(
 		reminderconnector.NewStoreSource(store),
 		[]string{"This task was created as a one-off reminder. Carry out the stored prompt at the requested time and reply through the supplied channel."},
@@ -249,6 +268,14 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
 	}, func(mux *http.ServeMux) {
 		workitems.RegisterRoutes(mux, store)
+		var creator workitems.TopicCreator
+		if concrete, ok := dispatcher.(dispatch.Dispatcher); ok {
+			creator, _ = concrete.TelegramSender.(workitems.TopicCreator)
+		}
+		(workitems.TelegramTopics{Store: store, Creator: creator,
+			DefaultChatID:  config.TelegramWorkspaceForumChatID,
+			AllowedChatIDs: config.TelegramAllowedChatIDs,
+		}).RegisterRoutes(mux)
 		webhooks.RegisterStatusRoutes(mux, store)
 		if personal != nil {
 			personal.RegisterRoutes(mux)

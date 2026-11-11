@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import urllib.error
+import urllib.request
 
 from app.egress_client import DEFAULT_HANDLER_EGRESS_URL
 from app.state import SQLiteStateStore
@@ -40,7 +41,31 @@ def main() -> int:
         artifact = commands.add_parser(f"register-{command}")
         artifact.add_argument("task_id")
         artifact.add_argument("value")
+    topic = commands.add_parser(
+        "ensure-telegram-topic",
+        help="Reuse or create and attach a Telegram conversation to this workspace",
+    )
+    topic.add_argument("task_id")
+    topic.add_argument(
+        "--name", default="", help="Title for a new topic, 1–128 characters"
+    )
+    topic.add_argument(
+        "--chat-id",
+        default="",
+        help="Allowed forum group; otherwise use the handler's configured forum",
+    )
+    topic.add_argument(
+        "--topic-id",
+        type=int,
+        help="Attach a known existing topic, including recovery after an uncertain creation",
+    )
     args = parser.parse_args()
+    if (
+        args.command == "ensure-telegram-topic"
+        and args.topic_id is not None
+        and args.topic_id <= 0
+    ):
+        parser.error("--topic-id must be positive")
     config = (
         _load_config(None, os.environ)
         if os.environ.get(WORKER_CONFIG_PATH_ENV_VAR)
@@ -55,6 +80,32 @@ def main() -> int:
     assignment = store.get_work_assignment(task_id=args.task_id)
     if assignment is None:
         parser.error("unknown task")
+    if args.command == "ensure-telegram-topic":
+        request = urllib.request.Request(
+            handler_url.rstrip("/") + "/work-items/telegram-topic",
+            data=json.dumps(
+                {
+                    "task_id": args.task_id,
+                    "name": args.name,
+                    "chat_id": args.chat_id,
+                    "topic_id": args.topic_id or 0,
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                print(json.dumps(json.load(response)))
+        except urllib.error.HTTPError as error:
+            parser.error(
+                f"handler rejected Telegram topic request: {error.read().decode()}"
+            )
+        except urllib.error.URLError:
+            parser.error(
+                "handler unavailable; creation outcome may be unknown; rerun ensure to check existing state"
+            )
+        return 0
     inbox_task = store.get_inbox_task(task_id=args.task_id)
     if args.command == "executor" and args.mode != "show":
         if inbox_task is None:

@@ -33,7 +33,8 @@ def backfill(connection: sqlite3.Connection, *, since: str) -> int:
             rows = connection.execute(
                 """SELECT * FROM worker_activity_events
                    WHERE activity_id > ? AND activity_id <= ? AND occurred_at >= ?
-                   AND phase IN ('executor_started', 'executor_stdout', 'task_finished')
+                   AND phase IN ('executor_started', 'executor_stdout', 'task_finished',
+                                 'personal_model_usage')
                    ORDER BY activity_id LIMIT 500""",
                 (after_id, high_water, since),
             ).fetchall()

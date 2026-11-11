@@ -53,6 +53,11 @@ class WorkerActivityMonitor:
         with self._lock:
             self._supervisor_executors = executors
 
+    def prometheus_metrics(self) -> bytes:
+        from app.worker.metrics import render_sqlite_metrics
+
+        return render_sqlite_metrics(self._store.db_path)
+
     @property
     def history_limit(self) -> int:
         return self._history_limit

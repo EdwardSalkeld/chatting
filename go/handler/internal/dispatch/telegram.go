@@ -51,7 +51,7 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	}
 	parseMode := config.ParseMode
 	if parseMode == nil {
-		defaultParseMode := "Markdown"
+		defaultParseMode := "HTML"
 		parseMode = &defaultParseMode
 	}
 	if parseMode != nil && *parseMode != "Markdown" && *parseMode != "MarkdownV2" && *parseMode != "HTML" {
@@ -97,11 +97,19 @@ func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target 
 	if strings.TrimSpace(target) == "" {
 		return TelegramSendResult{}, errors.New("target is required")
 	}
+	var topicID *int64
+	if raw, present := message.Metadata["message_thread_id"]; present && raw != nil {
+		value, ok := metadataPositiveInt(message.Metadata, "message_thread_id")
+		if !ok {
+			return TelegramSendResult{}, errors.New("telegram_topic_id_invalid")
+		}
+		topicID = &value
+	}
 	if message.Attachment == nil {
 		if message.Body == nil || strings.TrimSpace(*message.Body) == "" {
 			return TelegramSendResult{}, errors.New("body is required")
 		}
-		return sender.sendText(ctx, target, *message.Body)
+		return sender.sendText(ctx, target, *message.Body, topicID)
 	}
 
 	filePath, err := resolveTelegramAttachmentPath(message.Attachment.URI, sender.attachmentAllowedDirs)
@@ -114,6 +122,9 @@ func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target 
 		fileField = "photo"
 	}
 	payload := map[string]string{"chat_id": target}
+	if topicID != nil {
+		payload["message_thread_id"] = fmt.Sprint(*topicID)
+	}
 	if message.Body != nil {
 		payload["caption"] = normalizeTelegramTextForParseMode(*message.Body, sender.parseMode)
 		if sender.parseMode != nil {
@@ -126,6 +137,9 @@ func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target 
 	}
 	if err == nil && sender.parseMode != nil && message.Body != nil && isTelegramParseModeError(response) {
 		fallback := map[string]string{"chat_id": target, "caption": *message.Body}
+		if topicID != nil {
+			fallback["message_thread_id"] = fmt.Sprint(*topicID)
+		}
 		response, err = sender.postMultipart(ctx, method, fallback, fileField, filePath)
 		if err == nil && response.OK {
 			return telegramSendResult(response)
@@ -158,11 +172,34 @@ func (sender *TelegramMessageSender) React(ctx context.Context, target string, m
 	return nil
 }
 
-func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string) (TelegramSendResult, error) {
-	normalizedBody := normalizeTelegramOutboundText(body)
+func (sender *TelegramMessageSender) CreateForumTopic(ctx context.Context, chatID, name string) (int64, bool, error) {
+	response, err := sender.postJSON(ctx, "createForumTopic", map[string]string{"chat_id": chatID, "name": name})
+	if err != nil {
+		return 0, false, fmt.Errorf("Telegram creation response unavailable")
+	}
+	if !response.OK {
+		return 0, response.ErrorCode >= 400 && response.ErrorCode < 500, errors.New(describeTelegramResponseError("telegram_topic_create_failed", response))
+	}
+	var result struct {
+		TopicID int64 `json:"message_thread_id"`
+	}
+	if json.Unmarshal(response.Result, &result) != nil || result.TopicID <= 0 {
+		return 0, false, fmt.Errorf("Telegram creation response has no topic ID")
+	}
+	return result.TopicID, false, nil
+}
+
+func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string, topicID *int64) (TelegramSendResult, error) {
+	normalizedBody := strings.ReplaceAll(body, "\r\n", "\n")
+	if sender.parseMode == nil || *sender.parseMode != "HTML" {
+		normalizedBody = normalizeTelegramOutboundText(body)
+	}
 	payload := map[string]any{
 		"chat_id": target,
 		"text":    normalizeTelegramTextForParseMode(normalizedBody, sender.parseMode),
+	}
+	if topicID != nil {
+		payload["message_thread_id"] = *topicID
 	}
 	if sender.parseMode != nil {
 		payload["parse_mode"] = *sender.parseMode
@@ -173,6 +210,9 @@ func (sender *TelegramMessageSender) sendText(ctx context.Context, target string
 	}
 	if err == nil && sender.parseMode != nil && isTelegramParseModeError(response) {
 		fallback := map[string]any{"chat_id": target, "text": normalizedBody}
+		if topicID != nil {
+			fallback["message_thread_id"] = *topicID
+		}
 		response, err = sender.postJSON(ctx, "sendMessage", fallback)
 		if err == nil && response.OK {
 			return telegramSendResult(response)
@@ -183,16 +223,19 @@ func (sender *TelegramMessageSender) sendText(ctx context.Context, target string
 
 type TelegramSendResult struct {
 	MessageID int64
+	TopicID   *int64
 }
 
 type telegramAPIResponse struct {
 	OK          bool            `json:"ok"`
+	ErrorCode   int             `json:"error_code"`
 	Description string          `json:"description"`
 	Result      json.RawMessage `json:"result,omitempty"`
 }
 
 type telegramAPIMessage struct {
-	MessageID int64 `json:"message_id"`
+	MessageID int64  `json:"message_id"`
+	TopicID   *int64 `json:"message_thread_id"`
 }
 
 func telegramSendResult(response telegramAPIResponse) (TelegramSendResult, error) {
@@ -200,7 +243,7 @@ func telegramSendResult(response telegramAPIResponse) (TelegramSendResult, error
 	if len(response.Result) == 0 || json.Unmarshal(response.Result, &result) != nil || result.MessageID <= 0 {
 		return TelegramSendResult{}, errors.New("telegram_response_missing_message_id")
 	}
-	return TelegramSendResult{MessageID: result.MessageID}, nil
+	return TelegramSendResult{MessageID: result.MessageID, TopicID: result.TopicID}, nil
 }
 
 func (sender *TelegramMessageSender) postJSON(ctx context.Context, method string, payload any) (telegramAPIResponse, error) {
@@ -365,7 +408,7 @@ func normalizeTelegramTextForParseMode(text string, parseMode *string) string {
 	}
 	switch *parseMode {
 	case "HTML":
-		return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(text)
+		return renderTelegramMarkdown(text)
 	case "MarkdownV2":
 		return escapeWithBackslashPrefix(text, "\\_*[]()~`>#+-=|{}.!")
 	case "Markdown":

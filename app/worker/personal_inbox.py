@@ -12,6 +12,9 @@ import hashlib
 import json
 import logging
 import os
+import time
+from datetime import datetime, timezone
+from uuid import uuid4
 from dataclasses import dataclass, field
 from pathlib import Path
 import sqlite3
@@ -20,7 +23,10 @@ from threading import Event, Thread
 from typing import Any
 
 from app.broker.bbmb_client import BBMBQueueAdapter
+from app import personal_inbox_diagnostics as diagnostics
 from app.worker.personal_inbox_rules import load_rules
+from app.codex_usage import usage_sink
+from app.state import SQLiteStateStore
 from app.personal_inbox import (
     DEAD_QUEUE,
     RESULTS_QUEUE,
@@ -45,8 +51,10 @@ def prepare(
         validate_task(task)
 
         def classify_with_rules():
-            rules = load_rules(rules_repo)
-            return classify(
+            rules = diagnostics.at_stage("rules_load", load_rules, rules_repo)
+            return diagnostics.at_stage(
+                "classify",
+                classify,
                 task,
                 jev_key=jev_key,
                 summary_model=summary_model,
@@ -58,8 +66,8 @@ def prepare(
         return task["message_id"], classify_with_rules
     if kind == "personal_inbox.digest.v1":
         validate_digest_task(task)
-        return task["digest_id"], lambda: digest_lines(
-            task, summary_model=summary_model
+        return task["digest_id"], lambda: diagnostics.at_stage(
+            "digest", digest_lines, task, summary_model=summary_model
         )
     return None
 
@@ -71,10 +79,63 @@ def process_one(
     jev_key: str,
     summary_model: str,
     rules_repo: str = "",
+    store: SQLiteStateStore | None = None,
+) -> bool:
+    context = diagnostics.ProcessingContext()
+    token = diagnostics.current.set(context)
+    started = time.monotonic()
+    try:
+        processed = _process_one(
+            broker,
+            cache,
+            jev_key=jev_key,
+            summary_model=summary_model,
+            rules_repo=rules_repo,
+            store=store,
+        )
+    except Exception as error:
+        reason, location = diagnostics.failure_details(error)
+        LOGGER.error(
+            "personal_inbox_failed kind=%s task_ref=%s stage=%s type=%s reason=%s source=%s cached=%s elapsed_ms=%d retry=lease",
+            context.kind,
+            context.task_ref,
+            context.stage,
+            type(error).__name__,
+            reason,
+            location,
+            context.cached,
+            (time.monotonic() - started) * 1000,
+        )
+        raise
+    else:
+        if processed:
+            LOGGER.info(
+                "personal_inbox_completed kind=%s task_ref=%s stage=%s cached=%s elapsed_ms=%d",
+                context.kind,
+                context.task_ref,
+                context.stage,
+                context.cached,
+                (time.monotonic() - started) * 1000,
+            )
+        return processed
+    finally:
+        diagnostics.current.reset(token)
+
+
+def _process_one(
+    broker: BBMBQueueAdapter,
+    cache: sqlite3.Connection,
+    *,
+    jev_key: str,
+    summary_model: str,
+    rules_repo: str = "",
+    store: SQLiteStateStore | None = None,
 ) -> bool:
     picked = broker.pickup_json(TASKS_QUEUE, timeout_seconds=120, wait_seconds=1)
     if picked is None:
         return False
+    diagnostics.identify(picked.payload)
+    diagnostics.mark_stage("validate_task")
     try:
         prepared = prepare(
             picked.payload,
@@ -82,20 +143,33 @@ def process_one(
             summary_model=summary_model,
             rules_repo=rules_repo,
         )
-    except ValueError, TypeError, KeyError:
+    except (ValueError, TypeError, KeyError) as error:
+        reason, location = diagnostics.failure_details(error)
+        context = diagnostics.current.get()
+        LOGGER.warning(
+            "personal_inbox_invalid task_ref=%s reason=%s source=%s",
+            context.task_ref if context else "unknown",
+            reason,
+            location,
+        )
         prepared = None
     if prepared is None:
+        diagnostics.mark_stage("invalid_task_publish")
         broker.publish_json(DEAD_QUEUE, {"guid": picked.guid, "reason": "invalid_task"})
+        diagnostics.mark_stage("invalid_task_ack")
         broker.ack(TASKS_QUEUE, picked.guid)
         return True
     task_id, work = prepared
     fingerprint = hashlib.sha256(
         json.dumps(picked.payload, sort_keys=True).encode()
     ).hexdigest()
+    diagnostics.mark_stage("cache_read")
     row = cache.execute(
         "SELECT fingerprint, result FROM classifications WHERE id=?", (task_id,)
     ).fetchone()
     if row is not None and row[0] == fingerprint:
+        if context := diagnostics.current.get():
+            context.cached = True
         result = json.loads(row[1])
     else:
         # A cached answer to a different question is stale, not suspicious:
@@ -103,7 +177,27 @@ def process_one(
         # cache saves a model call, it does not decide identity — the handler
         # does that, by keeping only the first classification per message. So
         # answer the question actually asked and replace the stale row.
-        result = work()
+        def record_usage(detail: dict) -> None:
+            if store is not None:
+                store.append_worker_activity(
+                    occurred_at=datetime.now(timezone.utc),
+                    phase="personal_model_usage",
+                    summary="Personal inbox Codex call",
+                    detail={
+                        **detail,
+                        "call_id": str(uuid4()),
+                        "kind": picked.payload["kind"],
+                    },
+                    task_id="personal-inbox:" + task_id,
+                    source="personal_email",
+                )
+
+        token = usage_sink.set(record_usage)
+        try:
+            result = work()
+        finally:
+            usage_sink.reset(token)
+        diagnostics.mark_stage("cache_write")
         with cache:
             cache.execute(
                 "INSERT INTO classifications VALUES (?,?,?) ON CONFLICT(id) "
@@ -112,7 +206,9 @@ def process_one(
             )
     # A publish/ACK failure replays the saved result rather than calling models
     # again. The handler accepts exactly one classification per mail identity.
+    diagnostics.mark_stage("result_publish")
     broker.publish_json(RESULTS_QUEUE, result)
+    diagnostics.mark_stage("result_ack")
     broker.ack(TASKS_QUEUE, picked.guid)
     return True
 
@@ -137,6 +233,7 @@ class PersonalInboxCollector:
     jev_key: str
     summary_model: str
     rules_repo: str = ""
+    store: SQLiteStateStore | None = None
     _stop: Event = field(init=False, default_factory=Event)
     _thread: Thread | None = field(init=False, default=None)
 
@@ -162,16 +259,18 @@ class PersonalInboxCollector:
                     jev_key=self.jev_key,
                     summary_model=self.summary_model,
                     rules_repo=self.rules_repo,
+                    store=self.store,
                 )
-            except Exception as error:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 # Never log request bodies, mail, credentials or URLs with
                 # tokens. An unacked task is leased for a later retry.
-                LOGGER.error("personal_inbox_failed type=%s", type(error).__name__)
+                # process_one already emitted safe stage/correlation diagnostics.
                 self._stop.wait(5)
 
 
 def collector_from_environment(
     broker: BBMBQueueAdapter,
+    store: SQLiteStateStore | None = None,
 ) -> PersonalInboxCollector | None:
     """None when the personal inbox is not configured, which is the default."""
     jev_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
@@ -186,6 +285,7 @@ def collector_from_environment(
         jev_key=jev_key,
         summary_model=os.environ.get("CHATTING_PERSONAL_SUMMARY_MODEL", "").strip(),
         rules_repo=os.environ.get("CHATTING_PERSONAL_RULES_REPO", "").strip(),
+        store=store,
     )
 
 

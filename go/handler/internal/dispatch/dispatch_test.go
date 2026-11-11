@@ -264,7 +264,7 @@ func TestTelegramMessageSenderSendsTextAndFallsBackWithoutParseMode(t *testing.T
 	}))
 	defer server.Close()
 	sender := newTestTelegramSender(t, server.URL)
-	body := `Line 1.\nNeeds *escaping*.`
+	body := "Line 1.\nNeeds **formatting**."
 
 	err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{Channel: "telegram", Target: "12345", Body: &body})
 	if err != nil {
@@ -273,16 +273,16 @@ func TestTelegramMessageSenderSendsTextAndFallsBackWithoutParseMode(t *testing.T
 	if len(calls) != 2 {
 		t.Fatalf("calls = %#v", calls)
 	}
-	if calls[0].path != "/bottoken/sendMessage" || calls[0].payload["parse_mode"] != "Markdown" {
+	if calls[0].path != "/bottoken/sendMessage" || calls[0].payload["parse_mode"] != "HTML" {
 		t.Fatalf("first call = %#v", calls[0])
 	}
-	if calls[0].payload["text"] != "Line 1.\nNeeds \\*escaping\\*." {
+	if calls[0].payload["text"] != "Line 1.\nNeeds <b>formatting</b>." {
 		t.Fatalf("first text = %#v", calls[0].payload["text"])
 	}
 	if _, ok := calls[1].payload["parse_mode"]; ok {
 		t.Fatalf("fallback still has parse_mode: %#v", calls[1].payload)
 	}
-	if calls[1].payload["text"] != "Line 1.\nNeeds *escaping*." {
+	if calls[1].payload["text"] != body {
 		t.Fatalf("fallback text = %#v", calls[1].payload["text"])
 	}
 }
@@ -353,7 +353,7 @@ func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
 	}))
 	defer server.Close()
 	sender := newTestTelegramSender(t, server.URL, tempDir)
-	body := "what is this?"
+	body := "**Photo** & [details](https://example.com)"
 
 	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
 		Channel: "telegram",
@@ -367,6 +367,9 @@ func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
 	}
 	if multipartCall.path != "/bottoken/sendPhoto" || multipartCall.fields["chat_id"] != "12345" || multipartCall.fileField != "photo" {
 		t.Fatalf("multipart call = %#v", multipartCall)
+	}
+	if multipartCall.fields["parse_mode"] != "HTML" || multipartCall.fields["caption"] != `<b>Photo</b> &amp; <a href="https://example.com">details</a>` {
+		t.Fatalf("caption = %#v", multipartCall.fields)
 	}
 }
 

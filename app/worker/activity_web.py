@@ -21,6 +21,13 @@ def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
+            if path == "/metrics":
+                self._send(
+                    200,
+                    "text/plain; version=0.0.4; charset=utf-8",
+                    monitor.prometheus_metrics(),
+                )
+                return
             if path == "/api/items":
                 self._json(monitor.list_items_snapshot())
                 return

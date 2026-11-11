@@ -70,6 +70,78 @@ def _telegram_task_message(
 
 
 class MainReplyCliTests(unittest.TestCase):
+    def test_topic_sends_and_history_use_chosen_destination_not_inbound_topic(self):
+        for topic in (7, 8, None):
+            with self.subTest(topic=topic), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                db_path = directory / "worker.db"
+                config_path = directory / "worker.json"
+                config_path.write_text(json.dumps({"db_path": str(db_path)}))
+                store = SQLiteStateStore(str(db_path))
+                task = _telegram_task_message(53, content="In topic seven")
+                task.envelope.reply_channel.metadata["message_thread_id"] = 7
+                store.stage_inbox_task(task)
+                for part in (1, 2):
+                    spec = _write_spec(
+                        directory,
+                        {
+                            "task_id": task.task_id,
+                            "channel": "telegram",
+                            "target": "8605042448",
+                            "telegram_topic_id": topic,
+                            "message": f"part {part}",
+                            "event_id": f"evt:part:{part}",
+                        },
+                    )
+                    metadata = {"message_id": 9000 + part}
+                    if topic is not None:
+                        metadata["message_thread_id"] = topic
+                    submit = _FakeSubmit(
+                        response={"status": "dispatched", "metadata": metadata}
+                    )
+                    with (
+                        patch("app.main_reply.submit_egress", submit),
+                        patch("sys.stdout", io.StringIO()),
+                        patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                        patch.dict(
+                            "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
+                        ),
+                    ):
+                        self.assertEqual(main(), 0)
+                    self.assertEqual(
+                        submit.calls[0][1]["message"].get("metadata", {}),
+                        {"message_thread_id": topic} if topic is not None else {},
+                    )
+                history = store.list_telegram_history_around(
+                    target="8605042448",
+                    topic_id=topic,
+                    message_id=9002,
+                    before=1,
+                    after=0,
+                )
+                self.assertEqual([h.content for h in history], ["part 1", "part 2"])
+                other = store.list_telegram_history_around(
+                    target="8605042448", topic_id=9, message_id=9002, before=2, after=0
+                )
+                self.assertEqual(other, [])
+
+    def test_topic_validation_prevents_accidental_general_send(self):
+        for topic in (True, 0, -1, 2.5, "oops"):
+            with self.subTest(topic=topic), tempfile.TemporaryDirectory() as tmp:
+                spec = _write_spec(
+                    Path(tmp),
+                    {
+                        "task_id": "task:telegram:1",
+                        "channel": "telegram",
+                        "target": "-100",
+                        "telegram_topic_id": topic,
+                        "message": "hello",
+                    },
+                )
+                with patch("sys.argv", ["main_reply.py", "--spec-file", spec]):
+                    with self.assertRaisesRegex(ValueError, "positive integer"):
+                        main()
+
     def test_reaction_only_does_not_hide_task_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)

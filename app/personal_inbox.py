@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from app import mail_text, typesafe
 from app.typesafe import post
+from app.codex_usage import cli_usage, usage_sink
 
 TASKS_QUEUE = "chatting.personal-inbox.tasks.v1"
 RESULTS_QUEUE = "chatting.personal-inbox.results.v1"
@@ -285,6 +286,7 @@ def codex_structured(
         command = [
             "codex",
             *CODEX_FLAGS,
+            "--json",
             "--cd",
             str(workspace),
             "--output-schema",
@@ -295,24 +297,40 @@ def codex_structured(
         if model:
             command += ["-m", model]
         command.append("-")
-        completed = subprocess.run(
-            command,
-            input=instructions + "\n\n" + json.dumps(payload),
-            env=codex_environment(),
-            capture_output=True,
-            text=True,
-            timeout=CODEX_TIMEOUT_SECONDS,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise ValueError("codex exited non-zero")
-        raw = answer_path.read_text() if answer_path.exists() else ""
-    if len(raw) > 1_000_000:
-        raise ValueError("codex result too large")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise ValueError("codex result must be an object")
-    return value
+        status, output = "failed", ""
+        try:
+            completed = subprocess.run(
+                command,
+                input=instructions + "\n\n" + json.dumps(payload),
+                env=codex_environment(),
+                capture_output=True,
+                text=True,
+                timeout=CODEX_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout
+            if completed.returncode != 0:
+                raise ValueError("codex exited non-zero")
+            raw = answer_path.read_text() if answer_path.exists() else ""
+            if len(raw) > 1_000_000:
+                raise ValueError("codex result too large")
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError("codex result must be an object")
+            status = "completed"
+            return value
+        except subprocess.TimeoutExpired as error:
+            status, output = "timeout", error.stdout
+            raise
+        finally:
+            if sink := usage_sink.get():
+                sink(
+                    {
+                        "status": status,
+                        "model": model or None,
+                        "usage": cli_usage(output),
+                    }
+                )
 
 
 DIGEST_INSTRUCTIONS = (

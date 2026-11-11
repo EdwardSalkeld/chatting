@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -56,6 +57,8 @@ type Connector struct {
 	allowedChatIDs    map[string]bool
 	allowedChannelIDs map[string]bool
 	nextOffset        *int64
+	pollDelay         time.Duration
+	nextPollAt        time.Time
 }
 
 func New(config Config) (*Connector, error) {
@@ -92,13 +95,33 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if connector.now().Before(connector.nextPollAt) {
+		return nil, nil
+	}
 	response, err := connector.getUpdates(ctx)
-	if err != nil {
-		return nil, err
+	if err != nil || !response.OK {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err == nil {
+			err = fmt.Errorf("telegram_get_updates_failed code=%d", response.ErrorCode)
+		}
+		if connector.pollDelay == 0 {
+			connector.pollDelay = time.Second
+		} else {
+			connector.pollDelay = min(connector.pollDelay*2, time.Minute)
+		}
+		delay := connector.pollDelay
+		if response.Parameters.RetryAfter > 0 {
+			delay = max(delay, time.Duration(response.Parameters.RetryAfter)*time.Second)
+		}
+		connector.nextPollAt = connector.now().Add(delay)
+		// Do not log request URLs, tokens, response bodies or upstream descriptions.
+		log.Printf("Telegram polling failed: %v; retry in %s", err, delay)
+		return nil, nil
 	}
-	if !response.OK {
-		return nil, errors.New("telegram_get_updates_failed")
-	}
+	connector.pollDelay = 0
+	connector.nextPollAt = time.Time{}
 	envelopes := make([]contracts.TaskEnvelope, 0, len(response.Result))
 	var highestUpdateID *int64
 	for _, update := range response.Result {
@@ -129,13 +152,19 @@ func (connector *Connector) getUpdates(ctx context.Context) (getUpdatesResponse,
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 	if err != nil {
-		return getUpdatesResponse{}, err
+		return getUpdatesResponse{}, errors.New("telegram_request_invalid")
 	}
 	resp, err := connector.client.Do(req)
 	if err != nil {
 		return getUpdatesResponse{}, errors.New("telegram_http_error")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var decoded getUpdatesResponse
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&decoded)
+		decoded.OK = false
+		return decoded, fmt.Errorf("telegram_http_status=%d", resp.StatusCode)
+	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return getUpdatesResponse{}, errors.New("telegram_http_error")
@@ -589,8 +618,12 @@ func (connector *Connector) actorFromChat(chat *telegramChat) *string {
 }
 
 type getUpdatesResponse struct {
-	OK     bool             `json:"ok"`
-	Result []telegramUpdate `json:"result"`
+	OK         bool             `json:"ok"`
+	Result     []telegramUpdate `json:"result"`
+	ErrorCode  int              `json:"error_code"`
+	Parameters struct {
+		RetryAfter int `json:"retry_after"`
+	} `json:"parameters"`
 }
 
 type getFileResponse struct {

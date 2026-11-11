@@ -561,7 +561,12 @@ def _task_payload(
                 "on Telegram, use several destinations, or say nothing when no response is useful. "
                 "Set channel and target explicitly for each send. For an inline GitHub review reply, "
                 "use channel github and the review comment's URL ending #discussion_r<comment-id>. "
-                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment."
+                "For an ordinary GitHub comment, use the issue/PR URL without a review fragment. "
+                "For Telegram, target is the chat/group ID. To send into a topic, also set "
+                "telegram_topic_id to the chosen conversation's metadata.message_thread_id. "
+                "When answering within a topic, preserve that topic ID on every send, including "
+                "attachments and multiple message parts. Omit telegram_topic_id for General or "
+                "a chat without topics. A Telegram message ID is not a topic ID."
             ),
             # -P (safe path) stops Python prepending the cwd to sys.path, so this
             # always runs the deployed app.main_reply even when the cwd is a
@@ -574,7 +579,7 @@ def _task_payload(
                 "Never put the reply text on the command line: the shell mangles backticks, "
                 "quotes, $, and newlines, which corrupts or splits the reply. Spec fields: "
                 "task_id, channel, target, message, and optionally attachment_path, "
-                "attachment_name, telegram_reaction, telegram_message_id, event_id. "
+                "attachment_name, telegram_reaction, telegram_message_id, telegram_topic_id, event_id. "
                 "If telegram_reaction is supplied with message or attachment, main_reply "
                 "sends both."
             ),
@@ -631,6 +636,23 @@ def _task_payload(
                 "automatically, so its comments, reviews and notifications come back "
                 "here. If you open a PR any other way, or take over an existing one, "
                 "link it with register_command."
+            ),
+        },
+        "telegram_topic_contract": {
+            "ensure_command": f"python3 -P -m app.main_work_items ensure-telegram-topic task:{envelope.id} --name <short-descriptive-title>",
+            "instructions": (
+                "When a useful update, question or result belongs on Telegram, reuse an attached "
+                "Telegram conversation from associated_conversations. If none is attached, use "
+                "ensure-telegram-topic to create a topic and attach it to THIS workspace. This "
+                "applies to any kind of work, including PRs, emails and scheduled tasks. The "
+                "handler uses its configured forum group; --chat-id can explicitly choose another "
+                "allowed forum. The command returns a conversation: use its target and "
+                "metadata.message_thread_id as telegram_topic_id when sending with main_reply. "
+                "Creating a topic sends no user-facing update by itself. Do not create topics "
+                "for events with nothing useful to report. Repeated ensure calls reuse the "
+                "workspace's conversation; replies there continue this same workspace. If "
+                "creation is pending or uncertain, inspect the forum and attach the known "
+                "--topic-id with --chat-id instead of making another creation request."
             ),
         },
         "github_actions_contract": {
@@ -709,10 +731,10 @@ def _task_payload(
         payload["escalation_contract"] = {
             "request_path": str(escalation_path),
             "instructions": (
-                "If this task needs sustained judgement or broad changes beyond Luna's scope, "
+                f"If this task needs sustained judgement or broad changes beyond {MODELS['low']}'s scope, "
                 "write a JSON object to request_path with task_id and reason (brief findings "
-                "and why Sol is needed), using your file editing tool. Then stop without a final "
-                "visible reply. The worker will rerun this same task on Sol. Request this before "
+                f"and why {MODELS['high']} is needed), using your file editing tool. Then stop without a final "
+                f"visible reply. The worker will rerun this same task on {MODELS['high']}. Request this before "
                 "sending any visible answer. The work item's low setting stays unchanged."
             ),
         }

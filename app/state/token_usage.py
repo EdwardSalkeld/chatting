@@ -41,6 +41,15 @@ def initialize(connection: sqlite3.Connection) -> None:
             model TEXT,
             model_source TEXT
         );
+        CREATE TABLE IF NOT EXISTS personal_model_calls (
+            call_id TEXT PRIMARY KEY,
+            occurred_at TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            model TEXT,
+            status TEXT NOT NULL,
+            metered_turns INTEGER NOT NULL
+        );
     """)
 
 
@@ -57,6 +66,46 @@ def project(connection: sqlite3.Connection, event: sqlite3.Row) -> None:
     task_id = event["task_id"]
     detail = _object(json.loads(event["detail_json"]))
     phase = event["phase"]
+    if phase == "personal_model_usage":
+        call_id = detail["call_id"]
+        usages = detail["usage"]
+        connection.execute(
+            "INSERT OR IGNORE INTO personal_model_calls VALUES (?,?,?,?,?,?,?)",
+            (
+                call_id,
+                event["occurred_at"],
+                task_id,
+                detail["kind"],
+                detail["model"],
+                detail["status"],
+                len(usages),
+            ),
+        )
+        for index, usage in enumerate(usages):
+            connection.execute(
+                """INSERT OR IGNORE INTO model_token_usage
+                (usage_key, activity_id, occurred_at, task_id, thread_id, turn_id,
+                 model, model_source, input_tokens, cached_input_tokens,
+                 output_tokens, reasoning_output_tokens, cumulative_json, usage_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    f"personal:{call_id}:{index}",
+                    event["activity_id"],
+                    event["occurred_at"],
+                    task_id,
+                    call_id,
+                    str(index),
+                    detail["model"],
+                    "cli_request",
+                    usage["input_tokens"],
+                    usage.get("cached_input_tokens"),
+                    usage["output_tokens"],
+                    usage.get("reasoning_output_tokens"),
+                    "{}",
+                    "codex_exec_personal",
+                ),
+            )
+        return
     if phase == "executor_started":
         connection.execute(
             "INSERT OR REPLACE INTO model_usage_context(task_id, attempt) VALUES (?, ?)",

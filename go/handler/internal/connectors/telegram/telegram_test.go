@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,86 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
+
+func TestPollingFailuresBackOffWithoutExitingAndResetAfterRecovery(t *testing.T) {
+	now := time.Now()
+	calls := 0
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("secret upstream URL")
+		}
+		if calls == 2 {
+			r := jsonResponse(`{"ok":false}`)
+			r.StatusCode = 503
+			return r, nil
+		}
+		if calls == 3 {
+			return jsonResponse(`not json`), nil
+		}
+		if calls == 4 {
+			return jsonResponse(`{"ok":true,"result":[{"update_id":42}]}`), nil
+		}
+		if req.URL.Query().Get("offset") != "43" {
+			t.Fatal("lost update offset")
+		}
+		return jsonResponse(`{"ok":false,"error_code":429,"parameters":{"retry_after":20}}`), nil
+	}}
+	c, err := New(Config{BotToken: "token", HTTPClient: client, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delay := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+		if _, err := c.Poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if c.pollDelay != delay {
+			t.Fatalf("delay = %s, want %s", c.pollDelay, delay)
+		}
+		before := calls
+		if _, err := c.Poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if calls != before {
+			t.Fatal("polled during backoff")
+		}
+		now = now.Add(delay)
+	}
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c.pollDelay != 0 {
+		t.Fatal("backoff did not reset")
+	}
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c.pollDelay != time.Second || !c.nextPollAt.Equal(now.Add(20*time.Second)) {
+		t.Fatal("rate limit not honoured")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Poll(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation = %v", err)
+	}
+}
+
+func TestPollingBackoffCapsAtOneMinute(t *testing.T) {
+	now := time.Now()
+	c, _ := New(Config{BotToken: "token", Now: func() time.Time { return now }, HTTPClient: &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) { return nil, errors.New("offline") }}})
+	for i := 0; i < 12; i++ {
+		if _, err := c.Poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if c.pollDelay > time.Minute {
+			t.Fatal("unbounded backoff")
+		}
+		now = c.nextPollAt
+	}
+	if c.pollDelay != time.Minute {
+		t.Fatal("cap not reached")
+	}
+}
 
 func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T) {
 	var requestedURL string

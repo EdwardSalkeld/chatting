@@ -27,6 +27,8 @@ const (
 )
 
 type Config struct {
+	MaintenanceCron                  string
+	RetentionDays                    int
 	PersonalInbox                    *personalinbox.Config
 	BBMBAddress                      string
 	DBPath                           string
@@ -59,14 +61,15 @@ type Config struct {
 	SMTPStartTLS                     bool
 	SMTPUseSSL                       bool
 
-	TelegramEnabled            bool
-	TelegramBotTokenEnv        string
-	TelegramAPIBaseURL         string
-	TelegramPollTimeoutSeconds int
-	TelegramAllowedChatIDs     []string
-	TelegramAllowedChannelIDs  []string
-	TelegramAttachmentDir      string
-	TelegramContextRefs        []string
+	TelegramEnabled              bool
+	TelegramBotTokenEnv          string
+	TelegramAPIBaseURL           string
+	TelegramPollTimeoutSeconds   int
+	TelegramAllowedChatIDs       []string
+	TelegramAllowedChannelIDs    []string
+	TelegramAttachmentDir        string
+	TelegramContextRefs          []string
+	TelegramWorkspaceForumChatID string
 
 	GitHubRepositories  []string
 	GitHubAssigneeLogin string
@@ -74,6 +77,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
+		RetentionDays:               14,
 		BBMBAddress:                 DefaultBBMBAddress,
 		DBPath:                      filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
 		MaxLoops:                    0,
@@ -224,6 +228,8 @@ func list(dst *[]string, key string) field    { return bind(dst, key, decodeStri
 // the order validation errors are reported in.
 func (c *Config) fields(payload map[string]json.RawMessage) []field {
 	return []field{
+		str(&c.MaintenanceCron, "maintenance_cron"),
+		posInt(&c.RetentionDays, "retention_days"),
 		{key: "personal_inbox", keepNull: true, decode: func(raw json.RawMessage) error {
 			parsed, err := personalinbox.Decode(raw)
 			if err != nil {
@@ -285,6 +291,7 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		list(&c.TelegramAllowedChatIDs, "telegram_allowed_chat_ids"),
 		list(&c.TelegramAllowedChannelIDs, "telegram_allowed_channel_ids"),
 		str(&c.TelegramAttachmentDir, "telegram_attachment_dir"),
+		str(&c.TelegramWorkspaceForumChatID, "telegram_workspace_forum_chat_id"),
 		list(&c.TelegramContextRefs, "telegram_context_refs"),
 		bind(&c.GitHubRepositories, "github_repositories", decodeGitHubRepositories),
 		str(&c.GitHubAssigneeLogin, "github_assignee_login"),

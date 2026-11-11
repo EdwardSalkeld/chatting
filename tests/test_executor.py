@@ -142,6 +142,7 @@ class CodexExecutorTests(unittest.TestCase):
             store.stage_inbox_task(earlier_task)
             store.record_telegram_outbound(
                 target="-123",
+                topic_id=7,
                 message_id=11,
                 content="On it",
                 attachment=None,
@@ -314,6 +315,9 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertIn(
             "Neither is a required or preferred",
             payload["reply_contract"]["destination_choice"],
+        )
+        self.assertIn(
+            "telegram_topic_id", payload["reply_contract"]["destination_choice"]
         )
         self.assertEqual(
             payload["reply_contract"]["visible_replies_must_use"],
