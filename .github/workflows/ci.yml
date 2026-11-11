@@ -54,6 +54,14 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Set up Node.js for release policy tests
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Check release publication policy
+        run: node --test .github/scripts/release.test.cjs
+
       - name: Build Go handler test binary
         run: |
           mkdir -p "${{ runner.temp }}/chatting-e2e"
@@ -75,3 +83,15 @@ jobs:
       - name: Run go vet
         working-directory: go/handler
         run: go vet ./...
+
+  nix:
+    name: Nix packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - name: Check package formatting
+        run: nix fmt -- --check flake.nix nix/handler.nix nix/worker.nix
+      - name: Build and check the packaged handler and worker
+        run: nix flake check --no-update-lock-file --print-build-logs

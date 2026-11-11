@@ -13,6 +13,7 @@
 - Format: `uv run ruff format app tests`; check with `uv run ruff format --check app tests`.
 - Use Ruff's Python 3.14 formatting, including unparenthesized multi-exception handlers where permitted. CI enforces this; handlers with `as` still require parentheses.
 - E2E setup: [docs/testing.md](docs/testing.md)
+- Nix packages: `nix flake check --no-update-lock-file`; update `nix/handler.nix` vendorHash alongside Go dependency changes. Release policy tests: `node --test .github/scripts/release.test.cjs`.
 
 ## Entry points
 
