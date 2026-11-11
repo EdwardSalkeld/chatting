@@ -11,6 +11,8 @@ The flake exports these packages for `x86_64-linux` and `aarch64-linux`:
 
 - `chatting-handler`: the Go handler, with its Go dependency hash in
   `nix/handler.nix` and the full Go test suite run during the Nix build.
+  `chatting-handler --version` prints the base version and source revision,
+  such as `0.1.0+ace9313`; builds outside Nix print `dev`.
 - `chatting-worker`: a wrapper with Python 3.14. The worker has no
   third-party runtime dependencies. Its build compiles the application and
   runs the installed entry point's `--help` command.

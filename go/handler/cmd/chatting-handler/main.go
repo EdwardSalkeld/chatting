@@ -37,11 +37,11 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
 
-const (
-	version = "go-handler-bootstrap"
-	// Completed tasks keep their Telegram attachments this long before cleanup.
-	telegramAttachmentCleanupGrace = 7 * 24 * time.Hour
-)
+// Completed tasks keep their Telegram attachments this long before cleanup.
+const telegramAttachmentCleanupGrace = 7 * 24 * time.Hour
+
+// version is stamped by the Nix build with -X; other builds report "dev".
+var version = "dev"
 
 var ghLookPath = exec.LookPath
 
