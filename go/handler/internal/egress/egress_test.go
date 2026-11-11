@@ -620,24 +620,6 @@ func testTaskMessage(t *testing.T) contracts.TaskQueueMessage {
 	}, "trace:email:1", testutil.MustTime(t, "2026-03-06T11:00:01Z"))
 }
 
-func telegramTaskMessage(t *testing.T) contracts.TaskQueueMessage {
-	t.Helper()
-	actor := "8605042448"
-	return contracts.NewTaskQueueMessage(contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:1",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-03-06T11:00:00Z")),
-		Actor:         &actor,
-		Content:       "hello from telegram",
-		ReplyChannel: contracts.ReplyChannel{
-			Type:   "telegram",
-			Target: "12345",
-		},
-		DedupeKey: "telegram:1",
-	}, "trace:telegram:1", testutil.MustTime(t, "2026-03-06T11:00:01Z"))
-}
-
 func testEgressMessage(t *testing.T, task contracts.TaskQueueMessage, sequence *int, eventID string, eventKind string) contracts.EgressQueueMessage {
 	t.Helper()
 	body := "hello"

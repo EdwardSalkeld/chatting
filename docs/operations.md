@@ -4,8 +4,8 @@
 
 Local development and CI use Python 3.14.x (`.python-version` and
 `actions/setup-python`); `pyproject.toml` requires Python 3.14 or newer.
-Install the worker dependencies declared in `pyproject.toml`; `uv.lock` pins
-the development and CI environment. The Go handler is compiled separately
+The worker has no third-party runtime dependencies; `uv.lock` pins the
+development and CI environment. The Go handler is compiled separately
 from `go/handler`. Run a compatible handler and worker together with a BBMB
 broker and configuration files supplied to each process.
 

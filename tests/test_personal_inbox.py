@@ -3,10 +3,8 @@ import io
 import json
 import sqlite3
 import os
-import socket
 import subprocess
 import tempfile
-import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -31,6 +29,7 @@ from app.personal_inbox import (
 from app.worker.personal_inbox import collector_from_environment, process_one
 from app.codex_usage import usage_sink
 from app.broker.bbmb_client import PickedMessage
+from tests.e2e.servers import require_bbmb_server, reserve_port, wait_for_port
 from app.broker.bbmb_client import BBMBQueueAdapter
 
 
@@ -596,35 +595,21 @@ class PersonalInboxTests(unittest.TestCase):
 
 class PersonalInboxBrokerTests(unittest.TestCase):
     def test_real_broker_and_restarted_worker_replay_cached_classification(self):
-        server_path = os.environ.get("CHATTING_BBMB_SERVER_BIN", "")
-        if not server_path or not Path(server_path).is_file():
-            self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
-
-        def port():
-            with socket.socket() as listener:
-                listener.bind(("127.0.0.1", 0))
-                return listener.getsockname()[1]
-
-        broker_port = port()
+        server_path = str(require_bbmb_server(self))
+        broker_port = reserve_port()
         with tempfile.TemporaryDirectory() as directory:
             process = subprocess.Popen(
-                [server_path, f"--port={broker_port}", f"--metrics-port={port()}"],
+                [
+                    server_path,
+                    f"--port={broker_port}",
+                    f"--metrics-port={reserve_port()}",
+                ],
                 cwd=directory,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             try:
-                deadline = time.monotonic() + 5
-                while True:
-                    try:
-                        with socket.create_connection(
-                            ("127.0.0.1", broker_port), timeout=0.2
-                        ):
-                            break
-                    except OSError:
-                        if time.monotonic() > deadline:
-                            self.fail("test broker did not start")
-                        time.sleep(0.05)
+                wait_for_port("127.0.0.1", broker_port)
                 broker = BBMBQueueAdapter(address=f"127.0.0.1:{broker_port}")
                 broker.ensure_queue(RESULTS_QUEUE)
                 broker.publish_json(TASKS_QUEUE, mail_task())

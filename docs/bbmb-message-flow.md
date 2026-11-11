@@ -252,6 +252,7 @@ Set these values in the handler and worker configuration files for each installa
   heartbeat pong on `log` and internal completion events are the only exceptions.
 - `egress_http_port`: the loopback egress endpoint's port (default `9467`).
 - `egress_attachment_allowed_dirs`: the only directories an outbound attachment may come from.
+  A symlink inside one that is absolute or leads outside it is refused.
 - `metrics_host`, `metrics_port`: the metrics/admin listener.
 - `context_refs`: default context refs for ingress tasks.
 - Connector settings are listed on each [connector page](connectors/README.md).

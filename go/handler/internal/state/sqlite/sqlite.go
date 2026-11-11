@@ -1374,13 +1374,6 @@ func nullableString(value *string) any {
 	return *value
 }
 
-func nullIfEmpty(value string) any {
-	if value == "" {
-		return nil
-	}
-	return value
-}
-
 func nullStringPointer(value sql.NullString) *string {
 	if !value.Valid {
 		return nil

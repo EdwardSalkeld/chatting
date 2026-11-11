@@ -113,9 +113,6 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 	if !strings.Contains(stderr.String(), "config error: config db_path must be a non-empty string") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
-	if strings.Contains(stderr.String(), "runtime not implemented yet") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
 }
 
 func TestRunReportsRuntimeSetupError(t *testing.T) {

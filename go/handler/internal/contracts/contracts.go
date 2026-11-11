@@ -111,13 +111,6 @@ func (value PromptContext) Validate() error {
 	return validateStringList(value.TaskInstructions, "prompt_context.task_instructions")
 }
 
-func (value PromptContext) HasContent() bool {
-	return len(value.GlobalInstructions) > 0 ||
-		len(value.SourceInstructions) > 0 ||
-		len(value.ReplyChannelInstructions) > 0 ||
-		len(value.TaskInstructions) > 0
-}
-
 func (value PromptContext) AssembledInstructions() []string {
 	result := make([]string, 0,
 		len(value.GlobalInstructions)+
