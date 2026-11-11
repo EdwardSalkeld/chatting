@@ -24,7 +24,7 @@ from typing import Any
 
 from app.broker.bbmb_client import BBMBQueueAdapter
 from app import personal_inbox_diagnostics as diagnostics
-from app.worker.personal_inbox_rules import load_rules
+from app.worker.owner_rules import load_rules
 from app.codex_usage import usage_sink
 from app.state import SQLiteStateStore
 from app.personal_inbox import (

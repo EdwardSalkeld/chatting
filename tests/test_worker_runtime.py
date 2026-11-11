@@ -608,9 +608,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertEqual(result.egress_messages[0].event_kind, "completion")
             audit_event = store.list_audit_events()[0]
             self.assertEqual(
-                audit_event.detail["incremental_reply_send_requested_count"], 0
-            )
-            self.assertEqual(
                 audit_event.detail["incremental_reply_send_published_count"], 0
             )
 

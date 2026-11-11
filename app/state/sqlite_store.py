@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS worker_telegram_history (
     work_item_id TEXT,
     UNIQUE (target, message_id)
 );
-CREATE INDEX IF NOT EXISTS worker_telegram_history_target_message
-    ON worker_telegram_history (target, message_id);
+-- The UNIQUE constraint above already indexes (target, message_id).
+DROP INDEX IF EXISTS worker_telegram_history_target_message;
 CREATE INDEX IF NOT EXISTS worker_telegram_history_scope
     ON worker_telegram_history (target, topic_id, message_id);
 CREATE INDEX IF NOT EXISTS run_records_work_item_created
@@ -270,10 +270,8 @@ class SQLiteStateStore:
             ).fetchone()
             if row is None:
                 return None
-            return work_items._result(
-                connection,
-                row["work_item_id"],
-                row["route_reason"],
+            return work_items.WorkAssignment(
+                str(row["work_item_id"]), str(row["route_reason"])
             )
 
     def get_work_model_tier(self, *, work_item_id: str) -> str:

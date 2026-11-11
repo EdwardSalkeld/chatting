@@ -106,7 +106,7 @@ def failure_details(error: Exception) -> tuple[str, str]:
         if module in {
             "app.personal_inbox",
             "app.worker.personal_inbox",
-            "app.worker.personal_inbox_rules",
+            "app.worker.owner_rules",
         }:
             location = f"{module}:{trace.tb_frame.f_code.co_name}:{trace.tb_lineno}"
         trace = trace.tb_next

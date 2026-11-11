@@ -58,10 +58,6 @@ class WorkerActivityMonitor:
 
         return render_sqlite_metrics(self._store.db_path)
 
-    @property
-    def history_limit(self) -> int:
-        return self._history_limit
-
     def record_task_received(self, *, task_message: TaskQueueMessage) -> None:
         envelope = task_message.envelope
         self._append(

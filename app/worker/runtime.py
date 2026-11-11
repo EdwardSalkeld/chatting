@@ -306,7 +306,6 @@ def process_task_message(
                 if model_decision is not None
                 else None,
                 "escalation_reason": escalation_reason,
-                "incremental_reply_send_requested_count": 0,
                 "incremental_reply_send_published_count": (
                     store.count_conversation_bundle_main_reply_egress_events(
                         parent_task_id=task_message.task_id
@@ -674,7 +673,6 @@ def _local_execution_detail(task_message: TaskQueueMessage) -> dict[str, object]
         "last_error": None,
         "last_error_stage": None,
         "execution_result": {"errors": []},
-        "incremental_reply_send_requested_count": 0,
         "incremental_reply_send_published_count": 0,
         "egress_message_count": 2,
     }
