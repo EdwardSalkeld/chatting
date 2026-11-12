@@ -2,6 +2,7 @@ import io
 import json
 import tempfile
 import unittest
+import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ from app.main_work_items import main
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
+from tests.test_egress_client import READ_TIMEOUT_SECONDS, egress_server
 
 
 class RegisterPRTests(unittest.TestCase):
@@ -146,6 +148,85 @@ class RegisterPRTests(unittest.TestCase):
             task_id=task.task_id,
             pr_url="https://github.com/o/r/pull/9",
         )
+
+
+def _staged_task(db_path: Path) -> TaskQueueMessage:
+    task = replace(
+        TaskQueueMessage.from_envelope(
+            TaskEnvelope(
+                id="email:1",
+                source="email",
+                actor="alice",
+                received_at=datetime.now(timezone.utc),
+                content="Investigate this",
+                attachments=[],
+                context_refs=[],
+                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
+                dedupe_key="email:1",
+            ),
+            trace_id="trace:1",
+        ),
+        work_item_id="item_1",
+    )
+    SQLiteStateStore(str(db_path)).stage_inbox_task(task)
+    return task
+
+
+class HandlerTransportFailureTests(unittest.TestCase):
+    def _run(self, mode: str, command: list[str]) -> tuple[object, str]:
+        real_urlopen = urllib.request.urlopen
+
+        def short_urlopen(request, timeout):
+            return real_urlopen(request, timeout=READ_TIMEOUT_SECONDS)
+
+        stderr = io.StringIO()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            egress_server(mode) as (url, received),
+        ):
+            db_path = Path(tmp) / "worker.db"
+            task = _staged_task(db_path)
+            argv = [
+                "main_work_items.py",
+                "--db",
+                str(db_path),
+                "--handler-url",
+                url.removesuffix("/egress"),
+                command[0],
+                task.task_id,
+                *command[1:],
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch("urllib.request.urlopen", short_urlopen),
+                patch("sys.stdout", io.StringIO()),
+                patch("sys.stderr", stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                main()
+            self.assertEqual(len(received), 1)
+        return raised.exception.code, stderr.getvalue()
+
+    def test_ensure_topic_reports_unknown_outcome(self) -> None:
+        for mode in ("stall", "close_before_response", "close_mid_body", "reset"):
+            with self.subTest(mode=mode):
+                code, stderr = self._run(
+                    mode,
+                    ["ensure-telegram-topic", "--name", "Work", "--chat-id", "-100"],
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("creation outcome may be unknown", stderr)
+
+    def test_register_reports_handler_unavailable(self) -> None:
+        # register only checks the status line, so a truncated body is a
+        # success there and is not covered.
+        for mode in ("stall", "close_before_response", "reset"):
+            with self.subTest(mode=mode):
+                code, stderr = self._run(
+                    mode, ["register-pr", "https://github.com/o/r/pull/9"]
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("handler unavailable", stderr)
 
 
 if __name__ == "__main__":
