@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -224,6 +225,34 @@ func TestBuildDispatcherSkipsGitHubWhenGHUnavailable(t *testing.T) {
 	}
 	if typed.GitHubSender != nil {
 		t.Fatal("GitHubSender should be nil when gh is unavailable")
+	}
+}
+
+func TestBuildDispatcherLogsAllowedChannelsWithoutSender(t *testing.T) {
+	originalLookPath := ghLookPath
+	ghLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	defer func() {
+		ghLookPath = originalLookPath
+	}()
+
+	var buffer bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&buffer)
+	defer log.SetOutput(previousWriter)
+
+	if _, _, err := buildDispatcher(handlerconfig.Config{AllowedEgressChannels: []string{"email", "telegram", "log"}}); err != nil {
+		t.Fatal(err)
+	}
+	if logged := buffer.String(); !strings.Contains(logged, "handler_egress_channels_unconfigured channels=email,telegram:") {
+		t.Fatalf("log = %q", logged)
+	}
+
+	buffer.Reset()
+	if _, _, err := buildDispatcher(handlerconfig.Config{AllowedEgressChannels: []string{"log"}}); err != nil {
+		t.Fatal(err)
+	}
+	if buffer.Len() != 0 {
+		t.Fatalf("expected no warning, got %q", buffer.String())
 	}
 }
 

@@ -347,6 +347,12 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.E
 	if _, err := ghLookPath("gh"); err == nil {
 		dispatcher.GitHubSender = dispatch.NewGitHubIssueCommentSender(nil)
 	}
+	// A warning rather than a startup failure: the default allowlist names
+	// channels most deployments never configure.
+	if missing := dispatcher.UnconfiguredChannels(config.AllowedEgressChannels); len(missing) > 0 {
+		log.Printf("handler_egress_channels_unconfigured channels=%s: allowed but no sender is configured; sends to them will be dropped as %s",
+			strings.Join(missing, ","), dispatch.ReasonChannelNotConfigured)
+	}
 	return dispatcher, dispatcher.EmailSender, nil
 }
 
