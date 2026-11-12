@@ -61,7 +61,10 @@ CATEGORIES = {
     "news_or_marketing": (
         "Newsletters, informational updates, routine notices of terms or "
         "policy, and promotional mail selling something: an offer, discount, "
-        "sale, voucher, loyalty perk or product launch. Still this however "
+        "sale, voucher, loyalty perk or product launch. A rate or benefit "
+        "change with an optional renewal or opt-in is news, even if taking "
+        "the offer would keep a better rate. The change date is information, "
+        "not a required-action deadline. Still this however "
         "urgent it sounds, however personally addressed, and however soon an "
         "offer ends. Also any request for feedback, a review, a rating, a "
         "survey response or an opinion."
@@ -102,7 +105,10 @@ TRIAGE_QUESTIONS = {
             "A failed payment or required response is action. "
             "A paid booking with travel times, seating instructions or issued "
             "tickets is order unless a separate outstanding task is required. "
-            "An optional marketing offer is news. Use review when uncertain."
+            "An optional marketing offer or optional renewal of a rate or "
+            "benefit is news. Its expiry date is not a required-action deadline. "
+            "Actual required payments, corrections and confirmations still "
+            "take precedence. Use review when uncertain."
         ),
         "criteria": CATEGORIES,
     },
@@ -116,7 +122,8 @@ TRIAGE_QUESTIONS = {
             "tickets already issued do not create an outstanding task. "
             "Required check-in, a failed payment, an unpaid balance or a "
             "request for missing details needed to complete the booking is yes. "
-            "An optional marketing offer, "
+            "An optional marketing offer or choice to renew a bonus rate or "
+            "benefit is no, even if taking it would retain a better rate. "
             "a receipt and a notice of a change already made are all no. So is "
             "any request for feedback, a review, a rating, a survey response "
             "or an opinion: nothing happens to the recipient if they ignore "
@@ -146,7 +153,8 @@ TRIAGE_QUESTIONS = {
             "recipient must complete an outstanding task? Travel, departure, "
             "arrival or event times on a confirmed booking are not deadlines. "
             "An explicit required check-in or payment cutoff is a deadline. "
-            "A marketing offer end date is not a deadline."
+            "An optional offer, rate or bonus expiry date is not a deadline "
+            "for a required action."
         ),
     },
 }
@@ -431,7 +439,13 @@ def summarize(
             "action each applies to without dropping a deadline. "
             "Keep distinct required actions and essential facts even when being "
             "concise. summary and action must each be <=600 characters. "
-            "action: only an action actually required "
+            "Optional renewal of a bonus rate, offer or benefit is not a "
+            "required action, even if the recipient could retain a better rate. "
+            "Summarize the rate or benefit change and its effective date; an "
+            "optional renewal may be mentioned briefly in summary if material. "
+            "Do not put optional renewal or its expiry in action or deadline. "
+            "Actual required payments, account corrections and confirmations "
+            "remain actions. action: only an action actually required "
             "from the recipient, otherwise empty. Optional sales offers are "
             "not required actions, and neither is any request for feedback, a "
             "review, a rating or a survey response. For a paid booking, ordinary "
