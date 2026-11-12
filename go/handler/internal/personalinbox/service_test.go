@@ -361,6 +361,38 @@ func TestReviewIsLeftInTheInboxAndAlerted(t *testing.T) {
 	}
 }
 
+func TestReviewShowsRepeatedDeadlineOnceWithoutLosingAction(t *testing.T) {
+	service, _, broker, performer := fixture(t)
+	ctx := context.Background()
+	if err := service.ingest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	broker.result("Stm4", Classification{Category: "review", Summary: "The bonus expires on 19 November 2026.", Action: "Renew the bonus in your account.", Deadline: "19 November 2026", Confidence: .99})
+	if err := service.Cycle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(performer.calls) != 1 {
+		t.Fatalf("expected one review alert: %+v", performer.calls)
+	}
+	body := performer.calls[0].Body
+	if strings.Count(body, "19 November 2026") != 1 || !strings.Contains(body, "19 November 2026 (deadline)") || !strings.Contains(body, "Action: Renew the bonus in your account.") || !strings.HasPrefix(body, "review: ") {
+		t.Fatalf("date, category or action lost: %s", body)
+	}
+}
+
+func TestDistinctOrPartialDatesKeepSeparateDeadline(t *testing.T) {
+	for _, summary := range []string{"The event is on 18 November 2026.", "The event is on 19 November 2026."} {
+		annotated, changed := annotateDeadline(summary, "19 November")
+		if changed || annotated != summary {
+			t.Fatalf("ambiguous date unexpectedly changed: %q", annotated)
+		}
+	}
+	annotated, changed := annotateDeadline("Respond by 19 November.", "19 November")
+	if !changed || annotated != "Respond by 19 November (deadline)." {
+		t.Fatalf("deadline not annotated: %q", annotated)
+	}
+}
+
 func TestIncompleteContentDoesNotOverrideJev(t *testing.T) {
 	service, mail, broker, _ := fixture(t)
 	ctx := context.Background()

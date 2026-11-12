@@ -576,12 +576,26 @@ func (service *Service) link(message Message, folder string) string {
 func (service *Service) plan(message Message) []Effect {
 	classification := message.Classification
 	folder := service.Config.Folder(classification.Category)
-	body := classification.Category + ": " + message.Mail.Subject + "\nFrom: " + message.Mail.From + "\n" + classification.Summary
-	if classification.Action != "" {
-		body += "\nAction: " + classification.Action
+	summary, action, deadline := classification.Summary, classification.Action, strings.TrimSpace(classification.Deadline)
+	// Keep the date's meaning visible without printing the exact same value
+	// twice. Only annotate a whole value at a sentence boundary; ambiguous or
+	// differently formatted dates retain the separate deadline line.
+	if deadline != "" {
+		var annotated bool
+		summary, annotated = annotateDeadline(summary, deadline)
+		if !annotated {
+			action, annotated = annotateDeadline(action, deadline)
+		}
+		if annotated {
+			deadline = ""
+		}
 	}
-	if classification.Deadline != "" {
-		body += "\nDeadline: " + classification.Deadline
+	body := classification.Category + ": " + message.Mail.Subject + "\nFrom: " + message.Mail.From + "\n" + summary
+	if action != "" {
+		body += "\nAction: " + action
+	}
+	if deadline != "" {
+		body += "\nDeadline: " + deadline
 	}
 	if len([]rune(body)) > 1800 {
 		body = limitRunes(body, 1800)
@@ -616,6 +630,18 @@ func (service *Service) plan(message Message) []Effect {
 		add("file", folder)
 	}
 	return effects
+}
+
+func annotateDeadline(text, deadline string) (string, bool) {
+	index := strings.Index(text, deadline)
+	if index < 0 || (index > 0 && !strings.ContainsRune(" \t\n(", rune(text[index-1]))) {
+		return text, false
+	}
+	end := index + len(deadline)
+	if end < len(text) && !strings.ContainsRune(".,;:!?)", rune(text[end])) {
+		return text, false
+	}
+	return text[:end] + " (deadline)" + text[end:], true
 }
 
 // latestOccurrence is the most recent daily boundary at or before now.
