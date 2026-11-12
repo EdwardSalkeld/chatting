@@ -7,6 +7,7 @@ of publishing fire-and-forget. This is the shared transport both use.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -26,9 +27,11 @@ def submit_egress(
 ) -> tuple[int, dict[str, object]]:
     """POST an egress payload to the handler.
 
-    Returns (http_status, response_body). http_status is 0 when the handler was
-    unreachable (connection refused, DNS, timeout) — i.e. it never processed the
-    message and a retry may succeed.
+    Returns (http_status, response_body). http_status is 0 for any transport
+    failure (connection refused, DNS, timeout, connection dropped mid-request):
+    a retry may succeed. When the failure came after the request was sent the
+    handler may already have delivered the message, so a retry must reuse the
+    same event_id for the handler to dedupe it.
     """
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -41,9 +44,18 @@ def submit_egress(
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return response.status, _decode_body(response.read())
     except urllib.error.HTTPError as error:
-        return error.code, _decode_body(error.read())
+        try:
+            raw = error.read()
+        except (OSError, http.client.HTTPException) as read_error:
+            # The status already carries the outcome; the body is only detail.
+            return error.code, {"reason": f"unreadable response body: {read_error!r}"}
+        return error.code, _decode_body(raw)
     except urllib.error.URLError as error:
         return 0, {"reason": f"egress endpoint unreachable: {error.reason}"}
+    # urllib wraps only failures while connecting; a timeout or dropped
+    # connection while waiting for or reading the response surfaces raw.
+    except (OSError, http.client.HTTPException) as error:
+        return 0, {"reason": f"egress endpoint transport error: {error!r}"}
 
 
 def _decode_body(raw: bytes) -> dict[str, object]:
