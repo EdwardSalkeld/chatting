@@ -699,6 +699,7 @@ class SQLiteStateStore:
     def claim_conversation_followups(self, *, parent_task_id: str) -> list[InboxTask]:
         """Attach all currently pending Telegram turns in the parent's conversation."""
         from app.model_command import parse_model_command
+        from app.usage_command import is_usage_command_envelope
 
         if not parent_task_id:
             raise ValueError("parent_task_id is required")
@@ -726,10 +727,10 @@ class SQLiteStateStore:
                 )
                 if message.envelope.reply_channel.type != "telegram":
                     continue
-                command = parse_model_command(message.envelope)
-                if command and command[0] == "executor":
-                    # Apply backend changes deterministically as a queued task,
-                    # before any subsequent messages enter a model turn.
+                if parse_model_command(message.envelope) or is_usage_command_envelope(
+                    message.envelope
+                ):
+                    # Process commands in order as separate deterministic tasks.
                     break
                 connection.execute(
                     """
