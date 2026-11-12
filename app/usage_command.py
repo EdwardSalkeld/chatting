@@ -18,7 +18,7 @@ _THREAD_PREFIX_RE = re.compile(r"^\[thread_id=\d+\]\s*")
 def is_usage_command_envelope(envelope: TaskEnvelope) -> bool:
     """True when the message body is nothing but the /usage command."""
     content = _THREAD_PREFIX_RE.sub("", envelope.content.strip(), count=1)
-    return content.strip().lower() == USAGE_COMMAND
+    return re.fullmatch(r"/usage(?:@\w+)?", content.strip(), re.IGNORECASE) is not None
 
 
 def format_usage_report(report: UsageReport, *, now: datetime) -> str:
