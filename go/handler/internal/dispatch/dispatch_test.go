@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,20 +42,52 @@ func TestDispatcherSendsEmailMessage(t *testing.T) {
 	}
 }
 
-func TestDispatcherDropsEmailWhenSenderNotConfigured(t *testing.T) {
+func TestDispatcherRejectsChannelWithoutConfiguredSender(t *testing.T) {
 	body := "Done."
-	message := contracts.OutboundMessage{
-		Channel: "email",
-		Target:  "alice@example.com",
-		Body:    &body,
+	for _, test := range []struct {
+		name     string
+		message  contracts.OutboundMessage
+		envelope contracts.TaskEnvelope
+	}{
+		{name: "email", message: contracts.OutboundMessage{Channel: "email", Target: "alice@example.com", Body: &body}},
+		{name: "telegram", message: contracts.OutboundMessage{Channel: "telegram", Target: "123", Body: &body}},
+		{name: "telegram_reaction", message: contracts.OutboundMessage{Channel: "telegram_reaction", Target: "123", Body: &body, Metadata: map[string]any{"message_id": 7}}},
+		{name: "github", message: contracts.OutboundMessage{Channel: "github", Target: "owner/repo#1", Body: &body}},
+		{name: "final resolving to email", message: contracts.OutboundMessage{Channel: "final", Body: &body}, envelope: emailEnvelope("Question", "Body")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dispatched, err := (Dispatcher{}).Dispatch(context.Background(), test.message, test.envelope)
+			if !errors.Is(err, ErrChannelNotConfigured) {
+				t.Fatalf("err = %v, want ErrChannelNotConfigured", err)
+			}
+			if dispatched != nil {
+				t.Fatalf("dispatched = %#v", dispatched)
+			}
+		})
 	}
+}
 
-	dispatched, err := (Dispatcher{}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	if err != nil {
-		t.Fatal(err)
+func TestDispatcherLogAndDropNeedNoSender(t *testing.T) {
+	body := "noted"
+	for _, channel := range []string{"log", "drop"} {
+		dispatched, err := (Dispatcher{}).Dispatch(context.Background(), contracts.OutboundMessage{Channel: channel, Body: &body}, contracts.TaskEnvelope{})
+		if err != nil {
+			t.Fatalf("%s: err = %v", channel, err)
+		}
+		if dispatched == nil || dispatched.Channel != channel {
+			t.Fatalf("%s: dispatched = %#v", channel, dispatched)
+		}
 	}
-	if dispatched != nil {
-		t.Fatalf("dispatched = %#v", dispatched)
+}
+
+func TestUnconfiguredChannels(t *testing.T) {
+	channels := []string{"email", "telegram", "telegram_reaction", "github", "log"}
+	if got, want := (Dispatcher{}).UnconfiguredChannels(channels), []string{"email", "telegram", "telegram_reaction", "github"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("UnconfiguredChannels = %#v, want %#v", got, want)
+	}
+	configured := Dispatcher{EmailSender: &recordingEmailSender{}, TelegramSender: &recordingTelegramSender{}}
+	if got, want := configured.UnconfiguredChannels(channels), []string{"github"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("UnconfiguredChannels = %#v, want %#v", got, want)
 	}
 }
 

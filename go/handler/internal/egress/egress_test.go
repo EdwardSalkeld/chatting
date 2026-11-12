@@ -261,6 +261,60 @@ func TestHandleDropsAndNotifiesOnUnsequencedDispatchFailure(t *testing.T) {
 	}
 }
 
+func TestHandleDropsUnsequencedSendToUnconfiguredChannel(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	var notified []string
+	engine := newTestEngineWithState(t, state, &recordingDispatcher{err: dispatch.ErrChannelNotConfigured},
+		func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+			notified = append(notified, message.EventID+"|"+reasonCode)
+		},
+	)
+
+	logged := captureLog(t, func() {
+		result, err := engine.Handle(context.Background(), testEgressMessage(t, task, nil, "evt:incremental:1", "incremental"))
+		if err != nil {
+			t.Fatalf("unconfigured channel must be a drop, not an infrastructure error: %v", err)
+		}
+		if result.Status != StatusDropped || result.Reason != dispatch.ReasonChannelNotConfigured {
+			t.Fatalf("result = %#v", result)
+		}
+	})
+
+	if want := []string{"evt:incremental:1|channel_not_configured"}; !reflect.DeepEqual(notified, want) {
+		t.Fatalf("notified = %#v, want %#v", notified, want)
+	}
+	if !strings.Contains(logged, "egress_message_dropped") || !strings.Contains(logged, "reason=channel_not_configured") {
+		t.Fatalf("loud drop log missing, got %q", logged)
+	}
+	if state.dispatched[task.TaskID]["evt:incremental:1"] {
+		t.Fatal("undelivered event must not be marked dispatched")
+	}
+}
+
+func TestFlushDropsAndContinuesOnStagedUnconfiguredChannel(t *testing.T) {
+	ctx := context.Background()
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	engine := newTestEngineWithState(t, state, &recordingDispatcher{err: dispatch.ErrChannelNotConfigured}, nil)
+
+	result, err := engine.Handle(ctx, testEgressMessage(t, task, intPtr(0), "evt:0", "message"))
+	if err != nil {
+		t.Fatalf("staged unconfigured channel must not crash the flush: %v", err)
+	}
+	if result.Status != StatusDropped || result.Reason != dispatch.ReasonChannelNotConfigured {
+		t.Fatalf("result = %#v", result)
+	}
+	if state.dispatched[task.TaskID]["evt:0"] {
+		t.Fatal("undelivered event must not be marked dispatched")
+	}
+	if got, _ := state.ExpectedSequence(ctx, task.TaskID); got != 1 {
+		t.Fatalf("expected sequence = %d, want 1 (must advance past the dropped event)", got)
+	}
+}
+
 func TestSurfacedDropsFireHookAndLogLoudly(t *testing.T) {
 	names := []string{"disallowed_channel", "unknown_task", "invalid_payload"}
 

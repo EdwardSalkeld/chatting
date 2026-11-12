@@ -153,6 +153,9 @@ func (engine *Engine) handleLocked(ctx context.Context, message contracts.Egress
 			return engine.surfaceDrop(ctx, message, "invalid_payload")
 		}
 		dispatchedMessage, err := engine.dispatchAndMark(ctx, task, message)
+		if errors.Is(err, dispatch.ErrChannelNotConfigured) {
+			return engine.surfaceDrop(ctx, message, dispatch.ReasonChannelNotConfigured)
+		}
 		if err != nil {
 			if reason, ok := dispatchFailureReason(err); ok {
 				return engine.dropFailedDispatch(ctx, message, reason)
@@ -243,6 +246,17 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			continue
 		}
 		dispatchedMessage, err := engine.dispatchAndMark(ctx, task, message)
+		if errors.Is(err, dispatch.ErrChannelNotConfigured) {
+			result, err := engine.surfaceDrop(ctx, message, dispatch.ReasonChannelNotConfigured)
+			if err != nil {
+				return Result{}, err
+			}
+			if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
+				return Result{}, err
+			}
+			last = result
+			continue
+		}
 		if err != nil {
 			reason, ok := dispatchFailureReason(err)
 			if !ok {
