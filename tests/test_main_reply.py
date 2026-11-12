@@ -1,4 +1,5 @@
 import io
+from argparse import Namespace
 import json
 import tempfile
 import unittest
@@ -12,11 +13,39 @@ from app.main_reply import (
     EXIT_DROPPED,
     EXIT_FOLLOWUPS,
     EXIT_TRANSIENT,
+    _resolve_reply_messages,
     main,
 )
 from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
+
+
+class ChannelNormalizationTests(unittest.TestCase):
+    def test_non_telegram_replies_preserve_literal_backslashes(self):
+        text = r"C:\new\table and regex \d+\.\d+"
+        for channel in ("email", "github", "log"):
+            with self.subTest(channel=channel):
+                args = Namespace(
+                    channel=channel,
+                    target="target",
+                    message=text,
+                    telegram_reaction=None,
+                    attachment_path=None,
+                    telegram_topic_id=None,
+                )
+                self.assertEqual(_resolve_reply_messages(args, {})[0].body, text)
+
+    def test_telegram_normalization_remains_enabled(self):
+        args = Namespace(
+            channel="telegram",
+            target="target",
+            message=r"first\nsecond",
+            telegram_reaction=None,
+            attachment_path=None,
+            telegram_topic_id=None,
+        )
+        self.assertEqual(_resolve_reply_messages(args, {})[0].body, "first\nsecond")
 
 
 class _FakeSubmit:
