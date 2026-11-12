@@ -249,7 +249,9 @@ Set these values in the handler and worker configuration files for each installa
 
 - `poll_interval_seconds`: how often connectors are polled.
 - `allowed_egress_channels`: the main control over what the worker can cause externally. The
-  heartbeat pong on `log` and internal completion events are the only exceptions.
+  heartbeat pong on `log` and internal completion events are the only exceptions. An allowed
+  channel with no sender configured is logged at startup (`handler_egress_channels_unconfigured`)
+  and sends to it are dropped with reason `channel_not_configured`.
 - `egress_http_port`: the loopback egress endpoint's port (default `9467`).
 - `egress_attachment_allowed_dirs`: the only directories an outbound attachment may come from.
   A symlink inside one that is absolute or leads outside it is refused.
