@@ -1,9 +1,8 @@
 # Nix packages and releases
 
 Chatting owns its build definition and dependency hash. The release flow makes
-tested source releases available for deployments to consume. The existing Lab
-deployment PR workflow remains active during the transition; it still needs its
-configured cross-repository credentials.
+tested source releases available for deployments to consume, and a separate
+workflow proposes each new release to the Lab deployment.
 
 ## Package interface
 
@@ -84,8 +83,25 @@ previously failed. API errors other than an explicit 404 stop publication.
 
 The release workflow uses only this repository's `GITHUB_TOKEN` with
 `contents: write` in the release job. It neither checks out nor writes another
-repository. The existing Lab deployment PR workflow runs separately until the
-release-based consumption path has been observed and adopted.
+repository.
+
+## Proposing a release to Lab
+
+`Open Lab Deploy PR` runs when the `Release` workflow finishes. It looks up this
+repository's latest release, and if the Lab repository pins an older release tag
+it moves that tag, relocks the input and opens or updates a "Deploy chatting
+vX.Y.Z" pull request there. It needs the `LAB_REPO_TOKEN` secret, which is its
+only cross-repository credential.
+
+- The release is looked up here, never taken from the triggering event, and a
+  triggered run only moves Lab forwards.
+- It does nothing while Lab does not pin a release tag.
+- Run it by hand with a release tag to propose that release instead, including
+  an older one to roll back.
+
+Because the deployment builds the packages from this flake at a released tag,
+a stale dependency hash or broken package fails this repository's CI before a
+release exists, not the deployment's CI afterwards.
 
 The release API policy is covered by:
 
