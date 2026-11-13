@@ -9,3 +9,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # Deployments build these packages with this repository's nixpkgs pin, so
+  # nothing else brings the toolchain's security updates in.
+  - package-ecosystem: "nix"
+    directory: "/"
+    schedule:
+      interval: "weekly"
