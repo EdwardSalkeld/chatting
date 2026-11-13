@@ -96,6 +96,10 @@ task, disallowed channel, dispatch failure such as a missing attachment), 503 wh
 unreachable. `app.main_reply` maps this to an exit code (0 delivered, 1 dropped, 3 transient, 4
 same-conversation follow-ups claimed and the drafted content withheld) so the
 executor learns immediately whether a reply landed instead of publishing fire-and-forget.
+A timeout or dropped connection after the request was sent is also transient, but the handler may
+already have delivered the reply. The exit-3 output therefore carries `retry_event_id`: a resend
+with that `event_id` in its spec is deduped by the handler, whereas a resend without it gets a fresh
+id and may send the reply twice.
 
 The worker still writes each of its own egress events to the SQLite egress outbox first, as a
 write-ahead log: on a 2xx the row is acked; a 422 is logged loudly and acked (a permanent drop is an
@@ -249,9 +253,12 @@ Set these values in the handler and worker configuration files for each installa
 
 - `poll_interval_seconds`: how often connectors are polled.
 - `allowed_egress_channels`: the main control over what the worker can cause externally. The
-  heartbeat pong on `log` and internal completion events are the only exceptions.
+  heartbeat pong on `log` and internal completion events are the only exceptions. An allowed
+  channel with no sender configured is logged at startup (`handler_egress_channels_unconfigured`)
+  and sends to it are dropped with reason `channel_not_configured`.
 - `egress_http_port`: the loopback egress endpoint's port (default `9467`).
 - `egress_attachment_allowed_dirs`: the only directories an outbound attachment may come from.
+  A symlink inside one that is absolute or leads outside it is refused.
 - `metrics_host`, `metrics_port`: the metrics/admin listener.
 - `context_refs`: default context refs for ingress tasks.
 - Connector settings are listed on each [connector page](connectors/README.md).

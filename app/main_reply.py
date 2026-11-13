@@ -222,7 +222,11 @@ def _resolve_reply_messages(
 
     body: str | None = None
     if args.message is not None:
-        body = normalize_telegram_outbound_text(args.message).strip()
+        body = (
+            normalize_telegram_outbound_text(args.message)
+            if args.channel == "telegram"
+            else args.message
+        ).strip()
         if not body and not messages and attachment is None:
             raise ValueError("message must not be empty")
         if not body:
@@ -433,6 +437,16 @@ def main() -> int:
     if all_delivered:
         print(json.dumps(payload, sort_keys=True))
         return 0
+
+    if has_transient_failure:
+        # A send that timed out may still have been delivered. The default
+        # event id is new on every run, so only a resend that reuses this one
+        # lets the handler dedupe it.
+        payload["retry_event_id"] = base_event_id
+        payload["retry_instruction"] = (
+            "Retry with event_id set to retry_event_id in the spec file so the "
+            "handler skips anything already delivered."
+        )
 
     # Not fully delivered: surface loudly on stderr so the executor transcript
     # shows every outcome. Both sends are attempted even if the first one fails.

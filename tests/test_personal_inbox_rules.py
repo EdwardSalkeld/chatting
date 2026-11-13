@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.personal_inbox import TRIAGE_QUESTIONS, classify
 from app.worker.personal_inbox import process_one
-from app.worker.personal_inbox_rules import RulesSnapshot, load_rules
+from app.worker.owner_rules import RulesSnapshot, load_rules
 from tests.test_personal_inbox import jev_answer, mail_task, summary_answer
 from app.broker.bbmb_client import PickedMessage
 

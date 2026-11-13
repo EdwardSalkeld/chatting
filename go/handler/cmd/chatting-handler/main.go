@@ -37,11 +37,11 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
 
-const (
-	version = "go-handler-bootstrap"
-	// Completed tasks keep their Telegram attachments this long before cleanup.
-	telegramAttachmentCleanupGrace = 7 * 24 * time.Hour
-)
+// Completed tasks keep their Telegram attachments this long before cleanup.
+const telegramAttachmentCleanupGrace = 7 * 24 * time.Hour
+
+// version is stamped by the Nix build with -X; other builds report "dev".
+var version = "dev"
 
 var ghLookPath = exec.LookPath
 
@@ -346,6 +346,12 @@ func buildDispatcher(config handlerconfig.Config) (egress.Dispatcher, dispatch.E
 	}
 	if _, err := ghLookPath("gh"); err == nil {
 		dispatcher.GitHubSender = dispatch.NewGitHubIssueCommentSender(nil)
+	}
+	// A warning rather than a startup failure: the default allowlist names
+	// channels most deployments never configure.
+	if missing := dispatcher.UnconfiguredChannels(config.AllowedEgressChannels); len(missing) > 0 {
+		log.Printf("handler_egress_channels_unconfigured channels=%s: allowed but no sender is configured; sends to them will be dropped as %s",
+			strings.Join(missing, ","), dispatch.ReasonChannelNotConfigured)
 	}
 	return dispatcher, dispatcher.EmailSender, nil
 }

@@ -3,7 +3,6 @@
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -17,22 +16,7 @@ from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.worker.supervisor import request
 from tests.e2e.exec_backend import use_exec_backend
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _wait_for_port(port: int) -> None:
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        with socket.socket() as sock:
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                return
-        time.sleep(0.05)
-    raise TimeoutError(f"BBMB did not open port {port}")
+from tests.e2e.servers import require_bbmb_server, reserve_port, wait_for_port
 
 
 def _task(number: int, item: str, duration: float) -> TaskQueueMessage:
@@ -61,14 +45,12 @@ def _task(number: int, item: str, duration: float) -> TaskQueueMessage:
 
 class ParallelWorkerE2ETests(unittest.TestCase):
     def test_two_items_overlap_and_same_item_serializes(self) -> None:
-        server_bin = os.environ.get("CHATTING_BBMB_SERVER_BIN")
-        if not server_bin:
-            self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
+        server_bin = str(require_bbmb_server(self))
         repo_root = Path(__file__).resolve().parents[2]
         fake = repo_root / "tests/e2e/parallel_fake_codex.py"
-        port, metrics_port = _free_port(), _free_port()
+        port, metrics_port = reserve_port(), reserve_port()
         while metrics_port == port:
-            metrics_port = _free_port()
+            metrics_port = reserve_port()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db = root / "worker.db"
@@ -99,7 +81,7 @@ class ParallelWorkerE2ETests(unittest.TestCase):
             )
             worker = None
             try:
-                _wait_for_port(port)
+                wait_for_port("127.0.0.1", port)
                 broker = BBMBQueueAdapter(address=f"127.0.0.1:{port}")
                 broker.ensure_queue(TASK_QUEUE_NAME)
                 for task in (

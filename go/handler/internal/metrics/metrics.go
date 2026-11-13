@@ -3,7 +3,6 @@ package metrics
 import (
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -270,13 +269,4 @@ var definitions = []metricDefinition{
 	{"chatting_message_handler_egress_incremental_dispatched_total", "counter", "Incremental egress events dispatched in order.", "incremental_dispatched_total"},
 	{"chatting_message_handler_egress_message_dispatched_total", "counter", "Task-scoped visible egress messages dispatched in order.", "message_dispatched_total"},
 	{"chatting_message_handler_egress_completion_applied_total", "counter", "Internal completion events applied in order.", "completion_applied_total"},
-}
-
-func MetricNames() []string {
-	names := make([]string, 0, len(definitions))
-	for _, definition := range definitions {
-		names = append(names, definition.name)
-	}
-	sort.Strings(names)
-	return names
 }

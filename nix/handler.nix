@@ -3,6 +3,7 @@
   buildGoModule,
   src ? ../.,
   version ? (builtins.fromTOML (builtins.readFile ../pyproject.toml)).project.version,
+  revision ? "unknown",
 }:
 buildGoModule {
   pname = "chatting-handler";
@@ -10,6 +11,7 @@ buildGoModule {
   modRoot = "go/handler";
   vendorHash = "sha256-JSdSizwhJKUMTLw8NqgTilkEWHf27gJWSweBd6DtJuE=";
   subPackages = [ "cmd/chatting-handler" ];
+  ldflags = [ "-X main.version=${version}+${revision}" ];
   checkPhase = ''
     runHook preCheck
     # Contract fixtures locate the repository via runtime.Caller. Nix's normal

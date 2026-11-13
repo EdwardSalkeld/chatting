@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import urllib.error
@@ -101,7 +102,7 @@ def main() -> int:
             parser.error(
                 f"handler rejected Telegram topic request: {error.read().decode()}"
             )
-        except urllib.error.URLError:
+        except OSError, http.client.HTTPException:
             parser.error(
                 "handler unavailable; creation outcome may be unknown; rerun ensure to check existing state"
             )
@@ -132,8 +133,8 @@ def main() -> int:
             parser.error(
                 f"handler rejected GitHub registration: {error.read().decode()}"
             )
-        except urllib.error.URLError as error:
-            parser.error(f"handler unavailable: {error.reason}")
+        except (OSError, http.client.HTTPException) as error:
+            parser.error(f"handler unavailable: {error!r}")
     origin_channel = store.work_origin_channel(work_item_id=assignment.work_item_id)
     print(
         json.dumps(

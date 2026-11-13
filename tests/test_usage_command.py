@@ -116,6 +116,12 @@ class UsageCommandDetectionTests(unittest.TestCase):
     def test_bare_command_matches(self) -> None:
         self.assertTrue(is_usage_command_envelope(_envelope("/usage")))
 
+    def test_bot_suffix_and_topic_prefix_match(self) -> None:
+        self.assertTrue(
+            is_usage_command_envelope(_envelope("[thread_id=42] /Usage@MyBot"))
+        )
+        self.assertFalse(is_usage_command_envelope(_envelope("/usage@MyBot please")))
+
     def test_surrounding_whitespace_and_case_match(self) -> None:
         self.assertTrue(is_usage_command_envelope(_envelope("  /Usage\n")))
 

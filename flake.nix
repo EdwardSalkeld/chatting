@@ -12,6 +12,7 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
+      revision = self.shortRev or self.dirtyShortRev or "unknown";
     in
     {
       packages = forAllSystems (
@@ -22,7 +23,7 @@
         rec {
           chatting-handler = pkgs.callPackage ./nix/handler.nix {
             src = self;
-            inherit version;
+            inherit version revision;
           };
           chatting-worker = pkgs.callPackage ./nix/worker.nix {
             src = self;

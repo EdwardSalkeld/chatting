@@ -3,7 +3,6 @@
 import json
 import os
 import smtplib
-import socket
 import subprocess
 import sys
 import tempfile
@@ -14,28 +13,12 @@ from pathlib import Path
 
 from tests.e2e.exec_backend import use_exec_backend
 from tests.e2e.handler_command import message_handler_command
-
-
-def _is_port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.2)
-        return probe.connect_ex((host, port)) == 0
-
-
-def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if _is_port_open(host, port):
-            return
-        time.sleep(0.05)
-    raise TimeoutError(f"timed out waiting for {host}:{port}")
-
-
-def _reserve_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        return int(listener.getsockname()[1])
+from tests.e2e.servers import (
+    is_port_open,
+    require_bbmb_server,
+    reserve_port,
+    wait_for_port,
+)
 
 
 def _send_test_email(
@@ -60,24 +43,19 @@ def _send_test_email(
 
 class EmailE2ETests(unittest.TestCase):
     def test_email_roundtrip_with_real_codex_executor_and_greenmail(self) -> None:
-        server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
-        if not server_bin_raw:
-            self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
-        server_bin = Path(server_bin_raw)
-        if not server_bin.exists():
-            self.skipTest(f"bbmb server binary not found: {server_bin}")
+        server_bin = require_bbmb_server(self)
 
         # GreenMail IMAP (3143) and SMTP (3025) must be running
-        if not _is_port_open("127.0.0.1", 3143):
+        if not is_port_open("127.0.0.1", 3143):
             self.skipTest("GreenMail IMAP not available on 127.0.0.1:3143")
-        if not _is_port_open("127.0.0.1", 3025):
+        if not is_port_open("127.0.0.1", 3025):
             self.skipTest("GreenMail SMTP not available on 127.0.0.1:3025")
 
         repo_root = Path(__file__).resolve().parent.parent.parent
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
-        bbmb_port = _reserve_port()
-        bbmb_metrics_port = _reserve_port()
-        egress_http_port = _reserve_port()
+        bbmb_port = reserve_port()
+        bbmb_metrics_port = reserve_port()
+        egress_http_port = reserve_port()
         bbmb_address = f"127.0.0.1:{bbmb_port}"
 
         server_proc = None
@@ -158,7 +136,7 @@ class EmailE2ETests(unittest.TestCase):
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                _wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
+                wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
 
                 worker_proc = subprocess.Popen(
                     [

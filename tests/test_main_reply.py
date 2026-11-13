@@ -1,22 +1,54 @@
 import io
+from argparse import Namespace
 import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
+from app.egress_client import submit_egress
 from app.main_reply import (
     DEFAULT_HANDLER_EGRESS_URL,
     EXIT_DROPPED,
     EXIT_FOLLOWUPS,
     EXIT_TRANSIENT,
+    _resolve_reply_messages,
     main,
 )
 from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
+from tests.test_egress_client import READ_TIMEOUT_SECONDS, egress_server
+
+
+class ChannelNormalizationTests(unittest.TestCase):
+    def test_non_telegram_replies_preserve_literal_backslashes(self):
+        text = r"C:\new\table and regex \d+\.\d+"
+        for channel in ("email", "github", "log"):
+            with self.subTest(channel=channel):
+                args = Namespace(
+                    channel=channel,
+                    target="target",
+                    message=text,
+                    telegram_reaction=None,
+                    attachment_path=None,
+                    telegram_topic_id=None,
+                )
+                self.assertEqual(_resolve_reply_messages(args, {})[0].body, text)
+
+    def test_telegram_normalization_remains_enabled(self):
+        args = Namespace(
+            channel="telegram",
+            target="target",
+            message=r"first\nsecond",
+            telegram_reaction=None,
+            attachment_path=None,
+            telegram_topic_id=None,
+        )
+        self.assertEqual(_resolve_reply_messages(args, {})[0].body, "first\nsecond")
 
 
 class _FakeSubmit:
@@ -523,6 +555,96 @@ class MainReplyCliTests(unittest.TestCase):
                 exit_code = main()
 
         self.assertEqual(exit_code, EXIT_TRANSIENT)
+
+    def test_handler_transport_failure_after_send_is_transient(self) -> None:
+        for mode in ("stall", "close_before_response", "close_mid_body", "reset"):
+            stderr = io.StringIO()
+            with (
+                self.subTest(mode=mode),
+                tempfile.TemporaryDirectory() as tmpdir,
+                egress_server(mode) as (url, received),
+            ):
+                config_path = Path(tmpdir) / "worker.json"
+                config_path.write_text(
+                    json.dumps({"handler_egress_url": url}), encoding="utf-8"
+                )
+                spec = _write_spec(
+                    Path(tmpdir),
+                    {
+                        "task_id": "task:email:53",
+                        "channel": "email",
+                        "target": "alice@example.com",
+                        "message": "working on it",
+                    },
+                )
+                with (
+                    patch(
+                        "app.main_reply.submit_egress",
+                        partial(submit_egress, timeout_seconds=READ_TIMEOUT_SECONDS),
+                    ),
+                    patch("sys.stderr", stderr),
+                    patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                    patch.dict(
+                        "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
+                    ),
+                ):
+                    exit_code = main()
+
+                self.assertEqual(exit_code, EXIT_TRANSIENT)
+                printed = json.loads(stderr.getvalue())
+                self.assertEqual(printed["http_status"], 0)
+                self.assertEqual(printed["retry_event_id"], received[0]["event_id"])
+
+    def test_transient_retry_event_id_is_the_base_for_combined_replies(self) -> None:
+        submit = _FakeSubmit(status=0, response={"reason": "transport error"})
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:telegram:53",
+                    "channel": "telegram",
+                    "target": "8605042448",
+                    "message": "I found the problem.",
+                    "telegram_reaction": "👀",
+                    "telegram_message_id": 123,
+                    "event_id": "evt:custom:both",
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stderr", stderr),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, EXIT_TRANSIENT)
+        printed = json.loads(stderr.getvalue())
+        self.assertEqual(printed["retry_event_id"], "evt:custom:both")
+        self.assertEqual(len(printed["results"]), 2)
+
+    def test_dropped_reply_has_no_retry_event_id(self) -> None:
+        submit = _FakeSubmit(status=422, response={"status": "dropped"})
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                },
+            )
+            with (
+                patch("app.main_reply.submit_egress", submit),
+                patch("sys.stderr", stderr),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+            ):
+                exit_code = main()
+
+        self.assertEqual(exit_code, EXIT_DROPPED)
+        self.assertNotIn("retry_event_id", json.loads(stderr.getvalue()))
 
     def test_requires_envelope_id_for_non_prefixed_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

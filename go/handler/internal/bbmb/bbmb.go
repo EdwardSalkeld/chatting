@@ -14,10 +14,7 @@ import (
 	"strings"
 )
 
-const (
-	DefaultAddress = "localhost:9876"
-	MaxMessageSize = 1024 * 1024
-)
+const MaxMessageSize = 1024 * 1024
 
 const (
 	commandEnsureQueue   byte = 0x01

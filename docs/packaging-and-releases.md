@@ -11,12 +11,11 @@ The flake exports these packages for `x86_64-linux` and `aarch64-linux`:
 
 - `chatting-handler`: the Go handler, with its Go dependency hash in
   `nix/handler.nix` and the full Go test suite run during the Nix build.
-- `chatting-worker`: a wrapper with Python 3.14 and croniter. Its build compiles
-  the application and runs the installed entry point's `--help` command.
-- The worker pins croniter 6.2.2 from the wheel and SHA-256 recorded in
-  `uv.lock`: the current nixpkgs package is older than Chatting's requirement.
-  The recipe checks its pin against `uv.lock`; update the wheel URL and hash
-  there when the lock changes.
+  `chatting-handler --version` prints the base version and source revision,
+  such as `0.1.0+ace9313`; builds outside Nix print `dev`.
+- `chatting-worker`: a wrapper with Python 3.14. The worker has no
+  third-party runtime dependencies. Its build compiles the application and
+  runs the installed entry point's `--help` command.
 - `chatting` and `default`: both executables together.
 
 Build and check on the current system:

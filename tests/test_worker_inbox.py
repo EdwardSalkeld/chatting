@@ -300,6 +300,36 @@ class WorkerInboxTests(unittest.TestCase):
 
             self.assertEqual(claimed, [])
 
+    def test_commands_stop_followup_claiming_without_overtaking(self) -> None:
+        for command in (
+            "/executor",
+            "/set low",
+            "/model",
+            "/finish off",
+            "/usage@MyBot",
+        ):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmpdir:
+                store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+                parent = _telegram_task(1)
+                before = _telegram_task(2, content="before")
+                barrier = _telegram_task(3, content=command)
+                after = _telegram_task(4, content="after")
+                for task in (parent, before, barrier, after):
+                    self.assertTrue(store.stage_inbox_task(task))
+                store.claim_next_inbox_task()
+                claimed = store.claim_conversation_followups(
+                    parent_task_id=parent.task_id
+                )
+                self.assertEqual(
+                    [item.task_message.task_id for item in claimed], [before.task_id]
+                )
+                self.assertEqual(
+                    store.get_inbox_task(task_id=barrier.task_id).state, "pending"
+                )
+                self.assertEqual(
+                    store.get_inbox_task(task_id=after.task_id).state, "pending"
+                )
+
     def test_early_reaction_does_not_close_the_peek_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))

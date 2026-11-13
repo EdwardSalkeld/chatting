@@ -1,7 +1,5 @@
 import json
-import os
 import signal
-import socket
 import sqlite3
 import subprocess
 import sys
@@ -14,6 +12,7 @@ from pathlib import Path
 from app.state import SQLiteStateStore
 from tests.e2e.exec_backend import use_exec_backend
 from tests.e2e.handler_command import message_handler_command
+from tests.e2e.servers import require_bbmb_server, reserve_port, wait_for_port
 
 
 def _seed_schedule(
@@ -150,44 +149,16 @@ def _seed_due_reminder(handler_db_path: Path, *, context_refs: list[str]) -> Non
         connection.close()
 
 
-def _is_port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.2)
-        return probe.connect_ex((host, port)) == 0
-
-
-def _wait_for_port(host: str, port: int, timeout_seconds: float) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if _is_port_open(host, port):
-            return
-        time.sleep(0.05)
-    raise TimeoutError(f"timed out waiting for {host}:{port}")
-
-
-def _reserve_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        return int(listener.getsockname()[1])
-
-
 class SplitModeE2ETests(unittest.TestCase):
     def test_split_mode_roundtrip_with_real_bbmb_server(self) -> None:
-        server_bin_raw = os.environ.get("CHATTING_BBMB_SERVER_BIN", "").strip()
-        if not server_bin_raw:
-            self.skipTest("CHATTING_BBMB_SERVER_BIN is not set")
+        server_bin = require_bbmb_server(self)
 
-        server_bin = Path(server_bin_raw)
-        if not server_bin.exists():
-            self.skipTest(f"bbmb server binary not found: {server_bin}")
-
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parents[2]
         fake_codex = str(repo_root / "tests" / "e2e" / "fake_codex.py")
-        bbmb_port = _reserve_port()
-        bbmb_metrics_port = _reserve_port()
-        handler_metrics_port = _reserve_port()
-        egress_http_port = _reserve_port()
+        bbmb_port = reserve_port()
+        bbmb_metrics_port = reserve_port()
+        handler_metrics_port = reserve_port()
+        egress_http_port = reserve_port()
         bbmb_address = f"127.0.0.1:{bbmb_port}"
         server_proc: subprocess.Popen[str] | None = None
         worker_proc: subprocess.Popen[str] | None = None
@@ -264,7 +235,7 @@ class SplitModeE2ETests(unittest.TestCase):
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                _wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
+                wait_for_port("127.0.0.1", bbmb_port, timeout_seconds=5.0)
 
                 handler_proc = subprocess.Popen(
                     message_handler_command(handler_config_path),
@@ -273,7 +244,7 @@ class SplitModeE2ETests(unittest.TestCase):
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                _wait_for_port("127.0.0.1", egress_http_port, timeout_seconds=30.0)
+                wait_for_port("127.0.0.1", egress_http_port, timeout_seconds=30.0)
 
                 worker_proc = subprocess.Popen(
                     [

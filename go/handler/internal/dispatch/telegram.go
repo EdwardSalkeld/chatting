@@ -7,23 +7,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
+const telegramParseMode = "HTML"
+
 type TelegramConfig struct {
 	BotToken   string
 	APIBaseURL string
-	ParseMode  *string
 	Timeout    time.Duration
 	HTTPClient *http.Client
 	// AttachmentAllowedDirs constrains which local files may be sent as
@@ -37,7 +38,6 @@ type TelegramConfig struct {
 type TelegramMessageSender struct {
 	botToken              string
 	apiBaseURL            string
-	parseMode             *string
 	client                *http.Client
 	attachmentAllowedDirs []string
 }
@@ -48,14 +48,6 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	}
 	if strings.TrimSpace(config.APIBaseURL) == "" {
 		return nil, errors.New("api_base_url is required")
-	}
-	parseMode := config.ParseMode
-	if parseMode == nil {
-		defaultParseMode := "HTML"
-		parseMode = &defaultParseMode
-	}
-	if parseMode != nil && *parseMode != "Markdown" && *parseMode != "MarkdownV2" && *parseMode != "HTML" {
-		return nil, errors.New("parse_mode must be one of Markdown, MarkdownV2, HTML, or nil")
 	}
 	timeout := config.Timeout
 	if timeout == 0 {
@@ -79,7 +71,6 @@ func NewTelegramMessageSender(config TelegramConfig) (*TelegramMessageSender, er
 	return &TelegramMessageSender{
 		botToken:              config.BotToken,
 		apiBaseURL:            strings.TrimRight(config.APIBaseURL, "/"),
-		parseMode:             parseMode,
 		client:                client,
 		attachmentAllowedDirs: allowedDirs,
 	}, nil
@@ -112,11 +103,12 @@ func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target 
 		return sender.sendText(ctx, target, *message.Body, topicID)
 	}
 
-	filePath, err := resolveTelegramAttachmentPath(message.Attachment.URI, sender.attachmentAllowedDirs)
+	file, fileName, err := openTelegramAttachment(message.Attachment.URI, sender.attachmentAllowedDirs)
 	if err != nil {
 		return TelegramSendResult{}, err
 	}
-	method := telegramAPIMethodForAttachment(filePath)
+	defer file.Close()
+	method := telegramAPIMethodForAttachment(fileName)
 	fileField := "document"
 	if method == "sendPhoto" {
 		fileField = "photo"
@@ -126,21 +118,19 @@ func (sender *TelegramMessageSender) SendWithResult(ctx context.Context, target 
 		payload["message_thread_id"] = fmt.Sprint(*topicID)
 	}
 	if message.Body != nil {
-		payload["caption"] = normalizeTelegramTextForParseMode(*message.Body, sender.parseMode)
-		if sender.parseMode != nil {
-			payload["parse_mode"] = *sender.parseMode
-		}
+		payload["caption"] = renderTelegramMarkdown(*message.Body)
+		payload["parse_mode"] = telegramParseMode
 	}
-	response, err := sender.postMultipart(ctx, method, payload, fileField, filePath)
+	response, err := sender.postMultipart(ctx, method, payload, fileField, fileName, file)
 	if err == nil && response.OK {
 		return telegramSendResult(response)
 	}
-	if err == nil && sender.parseMode != nil && message.Body != nil && isTelegramParseModeError(response) {
+	if err == nil && message.Body != nil && isTelegramParseModeError(response) {
 		fallback := map[string]string{"chat_id": target, "caption": *message.Body}
 		if topicID != nil {
 			fallback["message_thread_id"] = fmt.Sprint(*topicID)
 		}
-		response, err = sender.postMultipart(ctx, method, fallback, fileField, filePath)
+		response, err = sender.postMultipart(ctx, method, fallback, fileField, fileName, file)
 		if err == nil && response.OK {
 			return telegramSendResult(response)
 		}
@@ -191,24 +181,19 @@ func (sender *TelegramMessageSender) CreateForumTopic(ctx context.Context, chatI
 
 func (sender *TelegramMessageSender) sendText(ctx context.Context, target string, body string, topicID *int64) (TelegramSendResult, error) {
 	normalizedBody := strings.ReplaceAll(body, "\r\n", "\n")
-	if sender.parseMode == nil || *sender.parseMode != "HTML" {
-		normalizedBody = normalizeTelegramOutboundText(body)
-	}
 	payload := map[string]any{
-		"chat_id": target,
-		"text":    normalizeTelegramTextForParseMode(normalizedBody, sender.parseMode),
+		"chat_id":    target,
+		"text":       renderTelegramMarkdown(normalizedBody),
+		"parse_mode": telegramParseMode,
 	}
 	if topicID != nil {
 		payload["message_thread_id"] = *topicID
-	}
-	if sender.parseMode != nil {
-		payload["parse_mode"] = *sender.parseMode
 	}
 	response, err := sender.postJSON(ctx, "sendMessage", payload)
 	if err == nil && response.OK {
 		return telegramSendResult(response)
 	}
-	if err == nil && sender.parseMode != nil && isTelegramParseModeError(response) {
+	if err == nil && isTelegramParseModeError(response) {
 		fallback := map[string]any{"chat_id": target, "text": normalizedBody}
 		if topicID != nil {
 			fallback["message_thread_id"] = *topicID
@@ -259,7 +244,7 @@ func (sender *TelegramMessageSender) postJSON(ctx context.Context, method string
 	return sender.do(request)
 }
 
-func (sender *TelegramMessageSender) postMultipart(ctx context.Context, method string, payload map[string]string, fileField string, filePath string) (telegramAPIResponse, error) {
+func (sender *TelegramMessageSender) postMultipart(ctx context.Context, method string, payload map[string]string, fileField string, fileName string, file io.ReadSeeker) (telegramAPIResponse, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	for key, value := range payload {
@@ -267,17 +252,16 @@ func (sender *TelegramMessageSender) postMultipart(ctx context.Context, method s
 			return telegramAPIResponse{}, err
 		}
 	}
-	file, err := os.Open(filePath)
-	if err != nil {
+	// The caption fallback sends the same file a second time.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return telegramAPIResponse{}, err
 	}
-	defer file.Close()
-	mimeType := mime.TypeByExtension(filepath.Ext(filePath))
+	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
 	part, err := writer.CreatePart(map[string][]string{
-		"Content-Disposition": {fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fileField, filepath.Base(filePath))},
+		"Content-Disposition": {fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fileField, fileName)},
 		"Content-Type":        {mimeType},
 	})
 	if err != nil {
@@ -321,10 +305,12 @@ func (sender *TelegramMessageSender) methodURL(method string) string {
 	return sender.apiBaseURL + "/bot" + sender.botToken + "/" + method
 }
 
-func resolveTelegramAttachmentPath(rawURI string, allowedDirs []string) (string, error) {
+// openTelegramAttachment opens the file an attachment URI names and returns it
+// with its base name, provided it sits inside one of allowedDirs.
+func openTelegramAttachment(rawURI string, allowedDirs []string) (*os.File, string, error) {
 	parsed, err := url.Parse(rawURI)
 	if err != nil {
-		return "", errors.New("telegram_attachment_unsupported_uri")
+		return nil, "", errors.New("telegram_attachment_unsupported_uri")
 	}
 	var path string
 	switch parsed.Scheme {
@@ -333,51 +319,76 @@ func resolveTelegramAttachmentPath(rawURI string, allowedDirs []string) (string,
 	case "file":
 		unescaped, err := url.PathUnescape(parsed.Path)
 		if err != nil {
-			return "", errors.New("telegram_attachment_unsupported_uri")
+			return nil, "", errors.New("telegram_attachment_unsupported_uri")
 		}
 		path = unescaped
 		if parsed.Host != "" {
 			path = "//" + parsed.Host + path
 		}
 	default:
-		return "", errors.New("telegram_attachment_unsupported_uri")
+		return nil, "", errors.New("telegram_attachment_unsupported_uri")
 	}
 	if !filepath.IsAbs(path) {
-		return "", errors.New("telegram_attachment_path_not_absolute")
+		return nil, "", errors.New("telegram_attachment_path_not_absolute")
 	}
 	// The path is caller-controlled, so confine it to an allowlisted directory
 	// before touching the filesystem — otherwise a caller could have the handler
 	// read and send an arbitrary file. Cleaning first collapses any ".." so the
 	// containment check can't be walked out of.
 	cleaned := filepath.Clean(path)
-	if !pathWithinAllowedDir(cleaned, allowedDirs) {
-		return "", errors.New("telegram_attachment_path_not_allowed")
+	reason := "telegram_attachment_path_not_allowed"
+	for _, dir := range allowedDirs {
+		rel, ok := relativeToAllowedDir(cleaned, dir)
+		if !ok {
+			continue
+		}
+		file, err := openWithinDir(dir, rel)
+		if err == nil {
+			return file, filepath.Base(cleaned), nil
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			reason = "telegram_attachment_missing"
+		}
 	}
-	info, err := os.Stat(cleaned)
-	if err != nil || info.IsDir() {
-		return "", errors.New("telegram_attachment_missing")
-	}
-	return cleaned, nil
+	return nil, "", errors.New(reason)
 }
 
-// pathWithinAllowedDir reports whether cleaned (already filepath.Clean'd and
-// absolute) sits inside one of allowedDirs. Empty allowedDirs denies everything
-// (fail closed).
-func pathWithinAllowedDir(cleaned string, allowedDirs []string) bool {
-	for _, dir := range allowedDirs {
-		rel, err := filepath.Rel(dir, cleaned)
-		if err != nil {
-			continue
-		}
-		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		if filepath.IsAbs(rel) {
-			continue
-		}
-		return true
+// openWithinDir opens rel beneath dir. A lexical check alone would let a
+// symlink inside dir expose a file elsewhere; os.Root refuses any link that
+// leads out of dir, and holds that through the open itself, so swapping a
+// path component after the check gains nothing. Directories report as missing.
+func openWithinDir(dir string, rel string) (*os.File, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
 	}
-	return false
+	defer root.Close()
+	file, err := root.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		file.Close()
+		return nil, fs.ErrNotExist
+	}
+	return file, nil
+}
+
+// relativeToAllowedDir returns cleaned (already filepath.Clean'd and absolute)
+// relative to dir, and whether it sits inside dir.
+func relativeToAllowedDir(cleaned string, dir string) (string, bool) {
+	rel, err := filepath.Rel(dir, cleaned)
+	if err != nil {
+		return "", false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if filepath.IsAbs(rel) {
+		return "", false
+	}
+	return rel, true
 }
 
 func telegramAPIMethodForAttachment(filePath string) string {
@@ -400,55 +411,4 @@ func describeTelegramResponseError(prefix string, response telegramAPIResponse) 
 		return prefix + " description=" + description
 	}
 	return prefix
-}
-
-func normalizeTelegramTextForParseMode(text string, parseMode *string) string {
-	if parseMode == nil {
-		return text
-	}
-	switch *parseMode {
-	case "HTML":
-		return renderTelegramMarkdown(text)
-	case "MarkdownV2":
-		return escapeWithBackslashPrefix(text, "\\_*[]()~`>#+-=|{}.!")
-	case "Markdown":
-		return escapeWithBackslashPrefix(text, "\\_*`[")
-	default:
-		return text
-	}
-}
-
-func escapeWithBackslashPrefix(text string, specials string) string {
-	var builder strings.Builder
-	for _, character := range text {
-		if strings.ContainsRune(specials, character) {
-			builder.WriteRune('\\')
-		}
-		builder.WriteRune(character)
-	}
-	return builder.String()
-}
-
-func normalizeTelegramOutboundText(text string) string {
-	normalized := strings.ReplaceAll(text, "\r\n", "\n")
-	patterns := []struct {
-		expression  *regexp.Regexp
-		replacement string
-	}{
-		{regexp.MustCompile(`(?:\\)+r(?:\\)+n`), "\n"},
-		{regexp.MustCompile(`(?:\\)+n`), "\n"},
-		{regexp.MustCompile(`(?:\\)+r`), "\n"},
-		{regexp.MustCompile(`(?:\\)+([\\_*` + "`" + `\[\]\(\)~>#\+\-=|{}.!])`), "$1"},
-	}
-	for range 3 {
-		previous := normalized
-		for _, pattern := range patterns {
-			normalized = pattern.expression.ReplaceAllString(normalized, pattern.replacement)
-		}
-		normalized = strings.ReplaceAll(normalized, `\t`, "\t")
-		if normalized == previous {
-			break
-		}
-	}
-	return normalized
 }

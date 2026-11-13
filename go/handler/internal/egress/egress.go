@@ -34,15 +34,9 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error)
 }
 
-type DispatcherFunc func(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error)
-
-func (fn DispatcherFunc) Dispatch(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error) {
-	return fn(ctx, message, envelope)
-}
-
 type Engine struct {
-	// mu serializes handling so the BBMB drain loop and the synchronous HTTP
-	// submit endpoint can share one engine without racing on the state store.
+	// mu serializes handling so concurrent HTTP submits cannot race on the
+	// state store.
 	mu              sync.Mutex
 	state           State
 	dispatcher      Dispatcher
@@ -99,8 +93,7 @@ const (
 )
 
 // HandleRaw decodes a raw egress payload and dispatches it. Safe for concurrent
-// callers: handling is serialized so the BBMB drain loop and the HTTP submit
-// endpoint can share one engine.
+// callers: handling is serialized.
 func (engine *Engine) HandleRaw(ctx context.Context, raw []byte) (Result, error) {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
@@ -160,6 +153,9 @@ func (engine *Engine) handleLocked(ctx context.Context, message contracts.Egress
 			return engine.surfaceDrop(ctx, message, "invalid_payload")
 		}
 		dispatchedMessage, err := engine.dispatchAndMark(ctx, task, message)
+		if errors.Is(err, dispatch.ErrChannelNotConfigured) {
+			return engine.surfaceDrop(ctx, message, dispatch.ReasonChannelNotConfigured)
+		}
 		if err != nil {
 			if reason, ok := dispatchFailureReason(err); ok {
 				return engine.dropFailedDispatch(ctx, message, reason)
@@ -250,6 +246,17 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			continue
 		}
 		dispatchedMessage, err := engine.dispatchAndMark(ctx, task, message)
+		if errors.Is(err, dispatch.ErrChannelNotConfigured) {
+			result, err := engine.surfaceDrop(ctx, message, dispatch.ReasonChannelNotConfigured)
+			if err != nil {
+				return Result{}, err
+			}
+			if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
+				return Result{}, err
+			}
+			last = result
+			continue
+		}
 		if err != nil {
 			reason, ok := dispatchFailureReason(err)
 			if !ok {

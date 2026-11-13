@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 )
 
 func submitEgress(t *testing.T, engine *Engine, method string, body []byte) *httptest.ResponseRecorder {
@@ -87,6 +88,32 @@ func TestSubmitEndpointReturns422OnDrop(t *testing.T) {
 	// A drop must stay loud, same as the BBMB path.
 	if !bytes.Contains([]byte(logs), []byte("egress_message_dropped")) {
 		t.Fatalf("expected a loud drop log, got %q", logs)
+	}
+}
+
+func TestSubmitEndpointReturns422ForUnconfiguredChannel(t *testing.T) {
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	engine := newTestEngine(t, state, &recordingDispatcher{err: dispatch.ErrChannelNotConfigured})
+	raw, err := json.Marshal(testEgressMessage(t, task, nil, "evt:http:3", "incremental"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var recorder *httptest.ResponseRecorder
+	captureLog(t, func() {
+		recorder = submitEgress(t, engine, http.MethodPost, raw)
+	})
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if response := decodeSubmit(t, recorder); response.Status != StatusDropped || response.Reason != "channel_not_configured" {
+		t.Fatalf("response = %#v", response)
+	}
+	if state.dispatched[task.TaskID]["evt:http:3"] {
+		t.Fatal("undelivered event must not be marked dispatched")
 	}
 }
 

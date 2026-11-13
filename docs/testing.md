@@ -27,7 +27,7 @@ start-up on every test:
 (cd go/handler && go build -o /tmp/chatting-handler ./cmd/chatting-handler)
 CHATTING_E2E_HANDLER_BINARY=/tmp/chatting-handler \
 CHATTING_BBMB_SERVER_BIN=/path/to/bbmb-server \
-uv run pytest tests/test_split_mode_e2e.py
+uv run pytest tests/e2e/test_split_mode_e2e.py
 ```
 
 On macOS, set a short `TMPDIR` (for example `/tmp/chatting`) for these: the

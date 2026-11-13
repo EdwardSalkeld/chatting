@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS worker_telegram_history (
     work_item_id TEXT,
     UNIQUE (target, message_id)
 );
-CREATE INDEX IF NOT EXISTS worker_telegram_history_target_message
-    ON worker_telegram_history (target, message_id);
+-- The UNIQUE constraint above already indexes (target, message_id).
+DROP INDEX IF EXISTS worker_telegram_history_target_message;
 CREATE INDEX IF NOT EXISTS worker_telegram_history_scope
     ON worker_telegram_history (target, topic_id, message_id);
 CREATE INDEX IF NOT EXISTS run_records_work_item_created
@@ -270,10 +270,8 @@ class SQLiteStateStore:
             ).fetchone()
             if row is None:
                 return None
-            return work_items._result(
-                connection,
-                row["work_item_id"],
-                row["route_reason"],
+            return work_items.WorkAssignment(
+                str(row["work_item_id"]), str(row["route_reason"])
             )
 
     def get_work_model_tier(self, *, work_item_id: str) -> str:
@@ -701,6 +699,7 @@ class SQLiteStateStore:
     def claim_conversation_followups(self, *, parent_task_id: str) -> list[InboxTask]:
         """Attach all currently pending Telegram turns in the parent's conversation."""
         from app.model_command import parse_model_command
+        from app.usage_command import is_usage_command_envelope
 
         if not parent_task_id:
             raise ValueError("parent_task_id is required")
@@ -728,10 +727,10 @@ class SQLiteStateStore:
                 )
                 if message.envelope.reply_channel.type != "telegram":
                     continue
-                command = parse_model_command(message.envelope)
-                if command and command[0] == "executor":
-                    # Apply backend changes deterministically as a queued task,
-                    # before any subsequent messages enter a model turn.
+                if parse_model_command(message.envelope) or is_usage_command_envelope(
+                    message.envelope
+                ):
+                    # Process commands in order as separate deterministic tasks.
                     break
                 connection.execute(
                     """

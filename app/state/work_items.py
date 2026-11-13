@@ -59,7 +59,7 @@ def assign(
         (task.task_id,),
     ).fetchone()
     if row:
-        return _result(connection, str(row[0]), str(row[1]))
+        return WorkAssignment(str(row[0]), str(row[1]))
 
     item_id = task.work_item_id or "item_legacy_general"
     reason = "handler_assignment" if task.work_item_id else "legacy_general"
@@ -109,7 +109,7 @@ def assign(
            VALUES (?, ?, ?, ?, ?)""",
         (task.task_id, item_id, conversation_id, reason, created_at),
     )
-    return _result(connection, item_id, reason)
+    return WorkAssignment(item_id, reason)
 
 
 def migrate_identity(connection: sqlite3.Connection) -> None:
@@ -156,9 +156,3 @@ def migrate_identity(connection: sqlite3.Connection) -> None:
              AND conversation_id != work_item_id"""
     )
     connection.execute("INSERT INTO worker_schema_migrations VALUES (?)", (migration,))
-
-
-def _result(
-    connection: sqlite3.Connection, item_id: str, reason: str
-) -> WorkAssignment:
-    return WorkAssignment(item_id, reason)
