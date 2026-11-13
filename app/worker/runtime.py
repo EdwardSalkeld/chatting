@@ -65,8 +65,12 @@ def process_task_message(
             created_at=emitted_at,
             latency_ms=_latency_since_emitted(task_message, emitted_at),
             reason_code="database_maintenance",
-            detail={**_local_execution_detail(task_message), "maintenance": counts},
-            egress_messages=[_internal_completion(task_message, emitted_at=emitted_at)],
+            detail={
+                **_local_execution_detail(task_message),
+                "egress_message_count": 1,
+                "maintenance": counts,
+            },
+            egress_messages=_build_completion_egress_messages(task_message=task_message),
         )
     if is_internal_telegram_channel_not_enabled_envelope(envelope):
         return _process_internal_telegram_channel_not_enabled_notice(
