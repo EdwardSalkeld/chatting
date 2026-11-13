@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 )
 
@@ -71,8 +70,8 @@ type Config struct {
 	TelegramContextRefs          []string
 	TelegramWorkspaceForumChatID string
 
-	GitHubRepositories  []string
-	GitHubAssigneeLogin string
+	// RetiredKeys lists keys present in the file that no longer do anything.
+	RetiredKeys []string
 }
 
 func Defaults() Config {
@@ -115,9 +114,6 @@ func Defaults() Config {
 		TelegramAllowedChannelIDs:  []string{},
 		TelegramAttachmentDir:      "",
 		TelegramContextRefs:        []string{},
-
-		GitHubRepositories:  []string{},
-		GitHubAssigneeLogin: "",
 	}
 }
 
@@ -182,9 +178,6 @@ func Load(raw []byte) (Config, error) {
 		if config.IMAPPasswordEnv == "" {
 			return Config{}, errors.New("imap_password_env is required when imap_host is set")
 		}
-	}
-	if len(config.GitHubRepositories) > 0 && config.GitHubAssigneeLogin == "" {
-		return Config{}, errors.New("github_assignee_login is required when github_repositories is set")
 	}
 	if config.SMTPHost != "" {
 		if config.SMTPFrom == "" {
@@ -293,9 +286,18 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		str(&c.TelegramAttachmentDir, "telegram_attachment_dir"),
 		str(&c.TelegramWorkspaceForumChatID, "telegram_workspace_forum_chat_id"),
 		list(&c.TelegramContextRefs, "telegram_context_refs"),
-		bind(&c.GitHubRepositories, "github_repositories", decodeGitHubRepositories),
-		str(&c.GitHubAssigneeLogin, "github_assignee_login"),
+		// GitHub polling was removed. Its keys are still accepted, with any
+		// value, so a deployed config that names them keeps loading.
+		c.retired("github_repositories"),
+		c.retired("github_assignee_login"),
 	}
+}
+
+func (c *Config) retired(key string) field {
+	return field{key: key, decode: func(json.RawMessage) error {
+		c.RetiredKeys = append(c.RetiredKeys, key)
+		return nil
+	}}
 }
 
 func isNull(raw json.RawMessage) bool {
@@ -349,28 +351,6 @@ func decodeAllowedEgressChannels(raw json.RawMessage, name string) ([]string, er
 		return Defaults().AllowedEgressChannels, nil
 	}
 	return values, nil
-}
-
-func decodeGitHubRepositories(raw json.RawMessage, name string) ([]string, error) {
-	values, err := decodeStringList(raw, name)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]string, 0, len(values))
-	seen := map[string]bool{}
-	for _, value := range values {
-		owner, name, err := github.ParseRepositoryPattern(value)
-		if err != nil {
-			return nil, errors.New("github_repositories entries must be owner/repo or owner/*")
-		}
-		normalized := owner + "/" + name
-		if seen[normalized] {
-			continue
-		}
-		seen[normalized] = true
-		result = append(result, normalized)
-	}
-	return result, nil
 }
 
 func decodeStringList(raw json.RawMessage, name string) ([]string, error) {

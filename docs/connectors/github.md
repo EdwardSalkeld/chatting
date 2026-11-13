@@ -1,18 +1,13 @@
 # Connector: GitHub
 
-Package: `go/handler/internal/connectors/github`
+GitHub events reach the handler by webhook; see
+[webhook ingress](../webhook-ingress.md) for the endpoint and its
+`github_webhook_*` config keys. The handler no longer polls GitHub.
+`go/handler/internal/connectors/github` now holds only the workflow-run lookup
+described below.
 
-When `github_repositories` is set, the handler polls `gh api graphql` for two
-kinds of event, without exposing a webhook endpoint. `gh` must be
-authenticated as the handler user.
-
-- **Issue assignments**: `AssignedEvent` timeline items assigning an issue to
-  the configured login. Dedupe key
-  `github:{repo_id}:{issue_id}:{assigned_event_id}`.
-- **Pull request reviews**: reviews on open pull requests authored by that
-  login. Dedupe key `github-review:{repo_id}:{pr_id}:{review_id}`.
-
-Both reply by GitHub comment on the issue or pull request.
+Replies go out as a GitHub comment on the issue or pull request. `gh` must be
+authenticated as the handler user for those comments and for the run lookup.
 
 When an executor opens a pull request with `gh pr create`, the worker sees the
 command complete in the executor's event stream and registers the PR against
@@ -28,17 +23,9 @@ executor resumes the same Codex thread.
 CI failure emails link only the workflow run, so the handler asks GitHub which
 pull request the run, or failing that its head commit, belongs to.
 
-## Config keys
+## Retired config keys
 
-- `github_repositories`: `owner/repo` and/or `owner/*` selectors to scan.
-- `github_assignee_login` (required with `github_repositories`): the login to
-  watch.
-
-Each poll reads at most 25 issues or pull requests per repository, and 10
-timeline events or reviews per item.
-
-## Checkpointing
-
-Processed dedupe keys go in the handler's idempotency table. Poll progress
-(`created_at` and event id) goes in `github_assignment_checkpoints`, one row
-per stream, so restarts do not replay old events.
+`github_repositories` and `github_assignee_login` configured the polling
+connector. They are still accepted, with any value, so an existing config keeps
+loading, but they do nothing: the handler logs `handler_config_retired_keys` at
+startup when either is present. Remove them from the config.

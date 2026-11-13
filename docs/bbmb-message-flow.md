@@ -57,7 +57,7 @@ Examples:
 - IMAP email
 - Telegram update
 - schedule or reminder trigger
-- GitHub issue assignment or pull request review
+- GitHub webhook delivery
 - internal heartbeat ping
 
 `message-handler` then:

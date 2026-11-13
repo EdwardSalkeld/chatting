@@ -112,38 +112,41 @@ func TestTelegramChatRegistryUpsertsObservedMetadata(t *testing.T) {
 	}
 }
 
-func TestGitHubAssignmentCheckpointRoundTripUsesPythonCompatibleTable(t *testing.T) {
-	ctx := context.Background()
+func TestOpenDropsRetiredGitHubCheckpointTable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store := openStoreAt(t, dbPath)
-	scopeKey := "assignments:billyacachofa:EdwardSalkeld/chatting"
-	checkpoint := GitHubAssignmentCheckpoint{
-		EventCreatedAt: testutil.MustTime(t, "2026-05-30T12:34:56.123456789Z"),
-		EventID:        "AE_lADOB9Rs6s4A9fxGzwAAAAAB",
-	}
-
-	empty, err := store.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if empty != nil {
-		t.Fatalf("unexpected checkpoint before set: %#v", empty)
-	}
-	if err := store.SetGitHubAssignmentCheckpoint(ctx, scopeKey, checkpoint); err != nil {
+	if _, err := db.Exec(`CREATE TABLE github_assignment_checkpoints (
+		scope_key TEXT PRIMARY KEY,
+		event_created_at TEXT NOT NULL,
+		event_id TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := store.GetGitHubAssignmentCheckpoint(ctx, scopeKey)
+	if _, err := db.Exec(`INSERT INTO github_assignment_checkpoints VALUES ('scope', '2026-05-30T12:34:56Z', 'AE_1', '2026-05-30T12:34:56Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	openStoreAt(t, dbPath)
+
+	db, err = sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded == nil {
-		t.Fatal("checkpoint was not persisted")
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'github_assignment_checkpoints'`).Scan(&count); err != nil {
+		t.Fatal(err)
 	}
-	if !loaded.EventCreatedAt.Equal(checkpoint.EventCreatedAt) || loaded.EventID != checkpoint.EventID {
-		t.Fatalf("loaded checkpoint = %#v", loaded)
+	if count != 0 {
+		t.Fatal("github_assignment_checkpoints still exists")
 	}
-
-	assertGitHubAssignmentCheckpointSchemaAndPayload(t, dbPath, scopeKey, checkpoint)
 }
 
 func TestRecordTaskRoundTrips(t *testing.T) {
@@ -174,31 +177,6 @@ func TestRecordTaskRoundTrips(t *testing.T) {
 	}
 
 	assertTaskLedgerSchemaAndPayload(t, dbPath, taskMessage)
-}
-
-func assertGitHubAssignmentCheckpointSchemaAndPayload(t *testing.T, dbPath string, scopeKey string, checkpoint GitHubAssignmentCheckpoint) {
-	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	row := db.QueryRow(
-		`SELECT event_created_at, event_id, updated_at
-		FROM github_assignment_checkpoints
-		WHERE scope_key = ?`,
-		scopeKey,
-	)
-	var eventCreatedAt, eventID, updatedAt string
-	if err := row.Scan(&eventCreatedAt, &eventID, &updatedAt); err != nil {
-		t.Fatal(err)
-	}
-	if eventCreatedAt != formatTimestamp(checkpoint.EventCreatedAt) || eventID != checkpoint.EventID {
-		t.Fatalf("checkpoint row = event_created_at:%q event_id:%q", eventCreatedAt, eventID)
-	}
-	if _, err := parseTimestamp(updatedAt); err != nil {
-		t.Fatalf("updated_at is not RFC3339Nano: %q", updatedAt)
-	}
 }
 
 func TestCompletionBlocksSameEnvelopeAndRemovesOpenTask(t *testing.T) {

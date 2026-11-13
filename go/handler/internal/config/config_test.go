@@ -114,9 +114,7 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 		"telegram_allowed_chat_ids": ["12345"],
 		"telegram_allowed_channel_ids": ["-100999"],
 		"telegram_attachment_dir": "/tmp/telegram-attachments",
-		"telegram_context_refs": ["repo:/workspace/telegram"],
-		"github_repositories": ["EdwardSalkeld/chatting", "EdwardSalkeld/*", "EdwardSalkeld/chatting"],
-		"github_assignee_login": "BillyAcachofa"
+		"telegram_context_refs": ["repo:/workspace/telegram"]
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -211,12 +209,6 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config.TelegramContextRefs, []string{"repo:/workspace/telegram"}) {
 		t.Fatalf("TelegramContextRefs = %#v", config.TelegramContextRefs)
-	}
-	if !reflect.DeepEqual(config.GitHubRepositories, []string{"EdwardSalkeld/chatting", "EdwardSalkeld/*"}) {
-		t.Fatalf("GitHubRepositories = %#v", config.GitHubRepositories)
-	}
-	if config.GitHubAssigneeLogin != "BillyAcachofa" {
-		t.Fatalf("GitHubAssigneeLogin = %q", config.GitHubAssigneeLogin)
 	}
 }
 
@@ -330,16 +322,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			raw:     `{"smtp_starttls": "yes"}`,
 			message: "config smtp_starttls must be a boolean",
 		},
-		{
-			name:    "invalid github repository selector",
-			raw:     `{"github_repositories": ["EdwardSalkeld/chat*"]}`,
-			message: "github_repositories entries must be owner/repo or owner/*",
-		},
-		{
-			name:    "github repositories without assignee",
-			raw:     `{"github_repositories": ["EdwardSalkeld/chatting"]}`,
-			message: "github_assignee_login is required when github_repositories is set",
-		},
 	}
 
 	for _, tt := range tests {
@@ -369,5 +351,35 @@ func TestLoadFile(t *testing.T) {
 	}
 	if _, err := LoadFile(" "); err == nil {
 		t.Fatal("expected error for a blank path")
+	}
+}
+
+func TestLoadAcceptsRetiredGitHubPollingKeys(t *testing.T) {
+	// The shape a deployment that had already switched to webhooks still carries.
+	config, err := Load([]byte(`{
+		"github_repositories": [],
+		"github_assignee_login": "billyacachofa"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.RetiredKeys, []string{"github_repositories", "github_assignee_login"}) {
+		t.Fatalf("RetiredKeys = %#v", config.RetiredKeys)
+	}
+
+	config, err = Load([]byte(`{"github_repositories": ["EdwardSalkeld/chatting"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.RetiredKeys, []string{"github_repositories"}) {
+		t.Fatalf("RetiredKeys = %#v", config.RetiredKeys)
+	}
+
+	config, err = Load([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.RetiredKeys) != 0 {
+		t.Fatalf("RetiredKeys = %#v", config.RetiredKeys)
 	}
 }
