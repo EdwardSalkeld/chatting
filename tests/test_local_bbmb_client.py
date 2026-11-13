@@ -1,7 +1,16 @@
+import socket
 import struct
+import threading
+import time
 import unittest
 
-from app.broker.local_bbmb_client import BBMBError, Client, QueueEmptyError
+from app.broker.bbmb_client import BBMBQueueAdapter, BrokerOperationError
+from app.broker.local_bbmb_client import (
+    BBMBError,
+    BrokerTimeoutError,
+    Client,
+    QueueEmptyError,
+)
 
 
 def _encode_string(value: str) -> bytes:
@@ -22,6 +31,9 @@ class _FakeSocket:
         self.sent: list[bytes] = []
         self.connected_to: tuple[str, int] | None = None
         self.closed = False
+
+    def settimeout(self, value: float | None) -> None:
+        del value
 
     def connect(self, address: tuple[str, int]) -> None:
         self.connected_to = address
@@ -123,6 +135,81 @@ class LocalBBMBClientTests(unittest.TestCase):
         )
         with self.assertRaises(BBMBError):
             client.ensure_queue("chatting.tasks.v1")
+
+
+class _LocalServer:
+    """Accepts connections, reads one request, then optionally replies late."""
+
+    def __init__(self, *, reply: bytes | None = None, delay: float = 0.0) -> None:
+        self._reply = reply
+        self._delay = delay
+        self._stop = threading.Event()
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen()
+        self._listener.settimeout(0.05)
+        self.address = f"127.0.0.1:{self._listener.getsockname()[1]}"
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        connections: list[socket.socket] = []
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._listener.accept()
+            except TimeoutError:
+                continue
+            connections.append(conn)
+            conn.recv(65536)
+            if self._reply is not None:
+                time.sleep(self._delay)
+                conn.sendall(self._reply)
+        for conn in connections:
+            conn.close()
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+        self._listener.close()
+
+
+class LocalBBMBClientTimeoutTests(unittest.TestCase):
+    def test_stalled_broker_times_out_and_drops_the_connection(self) -> None:
+        server = _LocalServer()
+        self.addCleanup(server.close)
+        client = Client(address=server.address, io_timeout_seconds=0.1)
+
+        started = time.monotonic()
+        with client:
+            with self.assertRaises(BrokerTimeoutError):
+                client.ensure_queue("chatting.tasks.v1")
+            self.assertIsNone(client.sock)
+
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_pickup_timeout_covers_the_broker_wait(self) -> None:
+        server = _LocalServer(reply=_frame(0x03, struct.pack("B", 0x01)), delay=0.3)
+        self.addCleanup(server.close)
+        client = Client(address=server.address, io_timeout_seconds=0.1)
+
+        with client:
+            with self.assertRaises(QueueEmptyError):
+                client.pickup_message(
+                    "chatting.tasks.v1", timeout_seconds=30, wait_seconds=1
+                )
+
+    def test_adapter_reports_stalled_pickup_as_failure(self) -> None:
+        server = _LocalServer()
+        self.addCleanup(server.close)
+        adapter = BBMBQueueAdapter(
+            address=server.address,
+            client_factory=lambda address: Client(
+                address=address, io_timeout_seconds=0.1
+            ),
+        )
+
+        with self.assertRaises(BrokerOperationError):
+            adapter.pickup_json("chatting.tasks.v1", timeout_seconds=30)
 
 
 if __name__ == "__main__":

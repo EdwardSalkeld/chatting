@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/idleconn"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/mailtext"
 )
 
@@ -57,10 +58,14 @@ type Client interface {
 type ClientFactory func(ctx context.Context, config ClientConfig) (Client, error)
 
 type ClientConfig struct {
-	Host    string
-	Port    int
-	UseSSL  bool
+	Host   string
+	Port   int
+	UseSSL bool
+	// Timeout bounds connecting and the TLS handshake.
 	Timeout time.Duration
+	// IOTimeout bounds each read and write after that; zero means
+	// DefaultIOTimeout.
+	IOTimeout time.Duration
 }
 
 type Config struct {
@@ -457,38 +462,58 @@ func parseReceivedAt(value string, fallback time.Time) time.Time {
 	return parsed.UTC()
 }
 
+// DefaultIOTimeout is how long the server may stay silent mid-command before
+// the poll gives up. It is per read or write, so a large FETCH that keeps
+// streaming is never cut short.
+const DefaultIOTimeout = 60 * time.Second
+
 type NetClient struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
-	nextID atomic.Uint64
+	conn       net.Conn
+	reader     *bufio.Reader
+	writer     *bufio.Writer
+	nextID     atomic.Uint64
+	stopCancel func() bool
+	broken     bool
 }
 
 func DialClient(ctx context.Context, config ClientConfig) (Client, error) {
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Second
 	}
+	if config.IOTimeout <= 0 {
+		config.IOTimeout = DefaultIOTimeout
+	}
 	address := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
 	dialer := net.Dialer{Timeout: config.Timeout}
-	var conn net.Conn
-	var err error
+	rawConn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	conn := idleconn.Wrap(rawConn, config.IOTimeout)
 	if config.UseSSL {
-		conn, err = tls.DialWithDialer(&dialer, "tcp", address, &tls.Config{
+		tlsConn := tls.Client(conn, &tls.Config{
 			ServerName: config.Host,
 			MinVersion: tls.VersionTLS12,
 		})
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", address)
-	}
-	if err != nil {
-		return nil, err
+		handshakeCtx, cancel := context.WithTimeout(ctx, config.Timeout)
+		err := tlsConn.HandshakeContext(handshakeCtx)
+		cancel()
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
+		conn = tlsConn
 	}
 	client := &NetClient{
 		conn:   conn,
 		reader: bufio.NewReader(conn),
 		writer: bufio.NewWriter(conn),
+		// Closing on cancellation unblocks a stalled command at shutdown
+		// instead of waiting out the I/O timeout.
+		stopCancel: context.AfterFunc(ctx, func() { _ = rawConn.Close() }),
 	}
 	if _, err := client.reader.ReadString('\n'); err != nil {
+		client.stopCancel()
 		_ = conn.Close()
 		return nil, err
 	}
@@ -522,13 +547,13 @@ func (client *NetClient) Search(criterion string) ([]string, error) {
 func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 	tag := client.nextTag()
 	if err := client.writeCommand(tag, "FETCH %s (RFC822)", uid); err != nil {
-		return nil, err
+		return nil, client.ioFailed(err)
 	}
 	var payload []byte
 	for {
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
-			return nil, err
+			return nil, client.ioFailed(err)
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if strings.HasPrefix(line, tag+" ") {
@@ -543,12 +568,16 @@ func (client *NetClient) FetchRFC822(uid string) ([]byte, error) {
 		}
 		payload = make([]byte, size)
 		if _, err := io.ReadFull(client.reader, payload); err != nil {
-			return nil, err
+			return nil, client.ioFailed(err)
 		}
 	}
 }
 
 func (client *NetClient) Logout() error {
+	defer client.stopCancel()
+	if client.broken {
+		return client.conn.Close()
+	}
 	_, err := client.commandOK("LOGOUT")
 	if closeErr := client.conn.Close(); err == nil {
 		err = closeErr
@@ -559,13 +588,13 @@ func (client *NetClient) Logout() error {
 func (client *NetClient) commandOK(format string, args ...any) ([]string, error) {
 	tag := client.nextTag()
 	if err := client.writeCommand(tag, format, args...); err != nil {
-		return nil, err
+		return nil, client.ioFailed(err)
 	}
 	lines := []string{}
 	for {
 		line, err := client.reader.ReadString('\n')
 		if err != nil {
-			return lines, err
+			return lines, client.ioFailed(err)
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if strings.HasPrefix(line, tag+" ") {
@@ -576,6 +605,14 @@ func (client *NetClient) commandOK(format string, args ...any) ([]string, error)
 		}
 		lines = append(lines, line)
 	}
+}
+
+// ioFailed marks the session unusable: after a timeout or short read the
+// stream position is unknown, so Logout must close rather than send LOGOUT
+// and wait out another timeout.
+func (client *NetClient) ioFailed(err error) error {
+	client.broken = true
+	return err
 }
 
 func (client *NetClient) writeCommand(tag string, format string, args ...any) error {
