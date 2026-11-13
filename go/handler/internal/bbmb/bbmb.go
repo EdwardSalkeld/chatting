@@ -12,9 +12,15 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const MaxMessageSize = 1024 * 1024
+
+// DefaultIOTimeout bounds one request/response exchange with the broker. A
+// pickup that asks the broker to wait gets the wait added on top, so an idle
+// long poll never trips it.
+const DefaultIOTimeout = 30 * time.Second
 
 const (
 	commandEnsureQueue   byte = 0x01
@@ -75,8 +81,9 @@ type Message struct {
 type DialFunc func(ctx context.Context, network string, address string) (net.Conn, error)
 
 type Client struct {
-	address string
-	dial    DialFunc
+	address   string
+	dial      DialFunc
+	ioTimeout time.Duration
 }
 
 func NewClient(address string) (*Client, error) {
@@ -90,14 +97,22 @@ func NewClientWithDialer(address string, dial DialFunc) (*Client, error) {
 	if dial == nil {
 		return nil, errors.New("dial is required")
 	}
-	return &Client{address: normalizeAddress(address), dial: dial}, nil
+	return &Client{address: normalizeAddress(address), dial: dial, ioTimeout: DefaultIOTimeout}, nil
+}
+
+// SetIOTimeout overrides DefaultIOTimeout; a non-positive value restores it.
+func (client *Client) SetIOTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = DefaultIOTimeout
+	}
+	client.ioTimeout = timeout
 }
 
 func (client *Client) EnsureQueue(ctx context.Context, queueName string) error {
 	if err := validateQueueName(queueName); err != nil {
 		return err
 	}
-	response, err := client.roundTrip(ctx, commandEnsureQueue, writeString(queueName))
+	response, err := client.roundTrip(ctx, commandEnsureQueue, writeString(queueName), 0)
 	if err != nil {
 		return err
 	}
@@ -122,7 +137,7 @@ func (client *Client) AddMessage(ctx context.Context, queueName string, content 
 	payload := writeString(queueName)
 	payload = append(payload, writeString(content)...)
 	payload = append(payload, writeString(checksum)...)
-	response, err := client.roundTrip(ctx, commandAddMessage, payload)
+	response, err := client.roundTrip(ctx, commandAddMessage, payload, 0)
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +178,7 @@ func (client *Client) PickupMessage(ctx context.Context, queueName string, timeo
 	if waitSeconds > 0 {
 		payload = binary.BigEndian.AppendUint32(payload, uint32(waitSeconds))
 	}
-	response, err := client.roundTrip(ctx, commandPickupMessage, payload)
+	response, err := client.roundTrip(ctx, commandPickupMessage, payload, time.Duration(waitSeconds)*time.Second)
 	if err != nil {
 		return Message{}, err
 	}
@@ -204,7 +219,7 @@ func (client *Client) DeleteMessage(ctx context.Context, queueName string, guid 
 	}
 	payload := writeString(queueName)
 	payload = append(payload, writeString(guid)...)
-	response, err := client.roundTrip(ctx, commandDeleteMessage, payload)
+	response, err := client.roundTrip(ctx, commandDeleteMessage, payload, 0)
 	if err != nil {
 		return err
 	}
@@ -224,21 +239,37 @@ func (client *Client) DeleteMessage(ctx context.Context, queueName string, guid 
 	}
 }
 
-func (client *Client) roundTrip(ctx context.Context, command byte, payload []byte) ([]byte, error) {
-	ctx = contextOrBackground(ctx)
+// roundTrip uses a fresh connection per request, so a timed-out or cancelled
+// exchange never leaves a half-read connection behind for the next call.
+func (client *Client) roundTrip(ctx context.Context, command byte, payload []byte, brokerWait time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(contextOrBackground(ctx), client.ioTimeout+brokerWait)
+	defer cancel()
 	conn, err := client.dial(ctx, "tcp", client.address)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
+	// Closing the connection when ctx ends covers both the I/O timeout and
+	// cancellation on shutdown, which a socket deadline alone would not notice.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	if err := writeFrame(conn, command, payload); err != nil {
-		return nil, err
+		return nil, contextError(ctx, err)
 	}
 	_, response, err := readFrame(conn)
-	return response, err
+	if err != nil {
+		return nil, contextError(ctx, err)
+	}
+	return response, nil
+}
+
+// contextError reports why the context ended instead of the "use of closed
+// network connection" error the AfterFunc close produces.
+func contextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w: %w", ctxErr, err)
+	}
+	return err
 }
 
 type Adapter struct {

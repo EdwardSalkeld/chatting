@@ -289,10 +289,13 @@ class WorkerRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(result.reason_codes, ["database_maintenance"])
             self.assertEqual(result.run_record.result_status, "success")
+            # The handler flushes from sequence 0, so a lone completion must take it.
             self.assertEqual(
-                [msg.event_kind for msg in result.egress_messages], ["completion"]
+                [(msg.event_kind, msg.sequence) for msg in result.egress_messages],
+                [("completion", 0)],
             )
             detail = store.list_audit_events()[0].detail
+            self.assertEqual(detail["egress_message_count"], 1)
             self.assertEqual(detail["maintenance"]["audit_transcripts_removed"], 0)
 
     def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:

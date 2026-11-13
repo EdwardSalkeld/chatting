@@ -5,9 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestAdapterPublishJSONEnsuresQueueAndPublishesEncodedPayload(t *testing.T) {
@@ -296,4 +299,96 @@ func parseRequest(command byte, payload []byte) (bbmbRequest, error) {
 		return request, errors.New("unknown command")
 	}
 	return request, nil
+}
+
+func TestClientTimesOutWhenBrokerStalls(t *testing.T) {
+	address := newStallingServer(t)
+	client := newTimeoutTestClient(t, address, 100*time.Millisecond)
+
+	started := time.Now()
+	err := client.EnsureQueue(context.Background(), "chatting.tasks.v1")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("returned after %s", elapsed)
+	}
+}
+
+func TestClientCancellationUnblocksStalledRequest(t *testing.T) {
+	address := newStallingServer(t)
+	client := newTimeoutTestClient(t, address, time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	started := time.Now()
+	_, err := client.AddMessage(ctx, "chatting.tasks.v1", "{}")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("returned after %s", elapsed)
+	}
+}
+
+func TestClientPickupTimeoutCoversBrokerWait(t *testing.T) {
+	server := newFakeServer(t, func(request bbmbRequest) []byte {
+		time.Sleep(300 * time.Millisecond)
+		return []byte{statusEmptyQueue}
+	})
+	defer server.close()
+	client := newTimeoutTestClient(t, server.address, 100*time.Millisecond)
+	adapter, err := NewAdapterWithClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	picked, err := adapter.PickupJSON(context.Background(), "chatting.tasks.v1", 30, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked != nil {
+		t.Fatalf("picked = %#v", picked)
+	}
+}
+
+func newTimeoutTestClient(t *testing.T, address string, timeout time.Duration) *Client {
+	t.Helper()
+	client, err := NewClient(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetIOTimeout(timeout)
+	return client
+}
+
+// newStallingServer accepts connections and reads requests but never replies.
+func newStallingServer(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		_ = listener.Close()
+		wg.Wait()
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer conn.Close()
+				_, _ = io.Copy(io.Discard, conn)
+			}()
+		}
+	}()
+	return listener.Addr().String()
 }

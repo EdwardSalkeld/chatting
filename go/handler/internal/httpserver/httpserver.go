@@ -5,7 +5,23 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 )
+
+// serverTimeouts stop a client that connects and stalls from holding a
+// connection open forever. WriteTimeout is deliberately generous: it runs
+// from the end of the request headers to the end of the response, so it must
+// outlast the slowest synchronous handler (/egress waits on an upstream send),
+// and a handler that overruns it loses its response even if the send worked.
+// A var so tests can shorten it.
+var serverTimeouts = struct {
+	readHeader, read, write, idle time.Duration
+}{
+	readHeader: 5 * time.Second,
+	read:       30 * time.Second,
+	write:      5 * time.Minute,
+	idle:       60 * time.Second,
+}
 
 type Server struct {
 	server *http.Server
@@ -20,7 +36,13 @@ func Start(host string, port int, handler http.Handler) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server := &http.Server{Handler: handler}
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: serverTimeouts.readHeader,
+		ReadTimeout:       serverTimeouts.read,
+		WriteTimeout:      serverTimeouts.write,
+		IdleTimeout:       serverTimeouts.idle,
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
