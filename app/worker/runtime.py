@@ -65,8 +65,12 @@ def process_task_message(
             created_at=emitted_at,
             latency_ms=_latency_since_emitted(task_message, emitted_at),
             reason_code="database_maintenance",
-            detail={**_local_execution_detail(task_message), "maintenance": counts},
-            egress_messages=[_internal_completion(task_message, emitted_at=emitted_at)],
+            detail={
+                **_local_execution_detail(task_message),
+                "egress_message_count": 1,
+                "maintenance": counts,
+            },
+            egress_messages=build_completion_egress_messages(task_message=task_message),
         )
     if is_internal_telegram_channel_not_enabled_envelope(envelope):
         return _process_internal_telegram_channel_not_enabled_notice(
@@ -233,7 +237,7 @@ def process_task_message(
                 reason_codes.append("unresolved_conversation_followups")
             result_status = _result_status(reason_codes)
 
-            egress_messages = _build_completion_egress_messages(
+            egress_messages = build_completion_egress_messages(
                 task_message=task_message,
                 visible_error_body=_build_visible_error_body(
                     task_message=task_message,
@@ -254,7 +258,7 @@ def process_task_message(
             if attempt == max_attempts:
                 reason_codes = ["retry_exhausted"]
                 result_status = "dead_letter"
-                egress_messages = _build_completion_egress_messages(
+                egress_messages = build_completion_egress_messages(
                     task_message=task_message,
                     visible_error_body=_build_visible_error_body(
                         task_message=task_message,
@@ -390,7 +394,7 @@ def build_coalesced_task_result(
             "coalesced_into_run_id": parent_run_id,
             "egress_message_count": 1,
         },
-        egress_messages=_build_completion_egress_messages(task_message=task_message),
+        egress_messages=build_completion_egress_messages(task_message=task_message),
         attempt_count=0,
     )
     store.append_worker_activity(
@@ -429,7 +433,7 @@ def build_recovered_delivered_task_result(
             "executor_launch_count": 0,
             "egress_message_count": 1,
         },
-        egress_messages=_build_completion_egress_messages(task_message=task_message),
+        egress_messages=build_completion_egress_messages(task_message=task_message),
         attempt_count=0,
     )
 
@@ -732,7 +736,7 @@ def _with_work_item(
     return replace(record, work_item_id=assignment.work_item_id if assignment else None)
 
 
-def _build_completion_egress_messages(
+def build_completion_egress_messages(
     *,
     task_message: TaskQueueMessage,
     visible_error_body: str | None = None,
@@ -888,6 +892,7 @@ __all__ = [
     "WorkerProcessResult",
     "_build_error_summary",
     "build_coalesced_task_result",
+    "build_completion_egress_messages",
     "build_recovered_delivered_task_result",
     "process_task_message",
 ]

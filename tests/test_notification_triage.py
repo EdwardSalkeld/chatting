@@ -169,3 +169,49 @@ class NotificationTriageTests(unittest.TestCase):
         self.assertTrue(collector.collect_once())
         self.assertIsNone(store.claim_next_inbox_task())
         self.assertEqual(self.post.call_count, 1)
+        self.assertEqual(len(store.list_replayable_egress_outbox_events()), 1)
+
+    def test_enforced_suppression_closes_the_task_on_the_handler(self):
+        from app.broker import PickedMessage
+        from app.state import SQLiteStateStore
+        from app.worker.activity import WorkerActivityMonitor
+        from app.worker.inbox import InboxCollector
+        from app.worker.main import _replay_egress_outbox
+        from unittest.mock import Mock
+
+        suppressed = task()
+        broker = Mock()
+        broker.pickup_json.return_value = PickedMessage(
+            guid="guid", payload=suppressed.to_dict()
+        )
+        store = SQLiteStateStore(self.path + ".worker")
+        monitor = WorkerActivityMonitor(store=store)
+        collector = InboxCollector(broker, store, monitor, 1, self.triage())
+        self.assertTrue(collector.collect_once())
+        self.assertIsNone(store.claim_next_inbox_task())
+
+        with patch(
+            "app.worker.main.submit_egress",
+            return_value=(200, {"status": "completed"}),
+        ) as submit:
+            _replay_egress_outbox(
+                store=store,
+                handler_egress_url="http://handler.invalid/egress",
+                activity_monitor=monitor,
+            )
+        submitted = [call.args[1] for call in submit.call_args_list]
+        self.assertEqual(
+            [
+                (p["task_id"], p["envelope_id"], p["event_kind"], p["sequence"])
+                for p in submitted
+            ],
+            [
+                (
+                    suppressed.task_id,
+                    suppressed.envelope.id,
+                    "completion",
+                    0,
+                )
+            ],
+        )
+        self.assertEqual(store.list_replayable_egress_outbox_events(), [])
