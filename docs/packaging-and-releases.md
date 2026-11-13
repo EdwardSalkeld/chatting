@@ -47,8 +47,11 @@ inputs.chatting = {
 # chatting.packages.${system}.chatting-worker
 ```
 
-The recipe files can also be used with `pkgs.callPackage` directly. A consumer
-overriding nixpkgs should build/check the package with its own pin before rollout.
+Leaving out the `follows` line builds the packages with this repository's
+locked nixpkgs, which is what CI built and tested; Dependabot keeps that pin
+current. The recipe files can also be used with `pkgs.callPackage` directly. A
+consumer overriding nixpkgs should build/check the package with its own pin
+before rollout.
 GitHub's release source archives include the flake, lock and recipes; there are
 no separate binary assets in this source-release flow.
 
