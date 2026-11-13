@@ -3,10 +3,12 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type GitHubCommandRunner func(ctx context.Context, command []string) error
@@ -63,12 +65,27 @@ func (sender *GitHubIssueCommentSender) Send(ctx context.Context, target string,
 	return nil
 }
 
+// gitHubCommandTimeout bounds one gh invocation; egress requests carry no
+// deadline of their own. A var so tests can shorten it.
+var gitHubCommandTimeout = 60 * time.Second
+
 func defaultGitHubCommandRunner(ctx context.Context, command []string) error {
 	if len(command) == 0 {
 		return errors.New("missing command")
 	}
+	ctx, cancel := context.WithTimeout(ctx, gitHubCommandTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
-	return cmd.Run()
+	// Without this, a child process holding gh's output open would keep Run
+	// waiting after gh itself is killed.
+	cmd.WaitDelay = 5 * time.Second
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("%w: %w", ctxErr, err)
+		}
+		return err
+	}
+	return nil
 }
 
 func parseGitHubIssueTarget(target string) (string, int, error) {

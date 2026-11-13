@@ -452,7 +452,18 @@ func (connector *EventConnector[E]) flushPendingCheckpoint(ctx context.Context) 
 	return nil
 }
 
+// graphQLTimeout bounds one gh invocation so a stalled GitHub connection cannot
+// hold up the ingress loop shared by every connector. A var so tests can
+// shorten it.
+var graphQLTimeout = 60 * time.Second
+
+// ghWaitDelay caps how long to wait for gh's output pipes after it is killed,
+// in case a child process it started still holds them open.
+const ghWaitDelay = 5 * time.Second
+
 func DefaultGraphQLRunner(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, graphQLTimeout)
+	defer cancel()
 	args := []string{"api", "graphql", "-f", "query=" + query}
 	keys := make([]string, 0, len(variables))
 	for key := range variables {
@@ -471,10 +482,14 @@ func DefaultGraphQLRunner(ctx context.Context, query string, variables map[strin
 		}
 	}
 	command := exec.CommandContext(ctx, "gh", args...)
+	command.WaitDelay = ghWaitDelay
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if len(bytes.TrimSpace(output)) == 0 && err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("github_graphql_failed:%w", ctxErr)
+		}
 		if strings.TrimSpace(stderr.String()) != "" {
 			return nil, fmt.Errorf("github_graphql_failed:%s", strings.TrimSpace(stderr.String()))
 		}

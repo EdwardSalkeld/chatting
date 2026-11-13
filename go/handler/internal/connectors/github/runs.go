@@ -17,6 +17,7 @@ type RESTRunner func(ctx context.Context, path string) ([]byte, error)
 
 func DefaultRESTRunner(ctx context.Context, path string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "gh", "api", path)
+	command.WaitDelay = ghWaitDelay
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
