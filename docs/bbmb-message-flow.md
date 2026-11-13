@@ -245,6 +245,12 @@ handler path.
 
 Set these values in the handler and worker configuration files for each installation.
 
+A key that a process does not recognise is ignored and logged as an error at startup
+(`handler_config_unknown_keys`, `worker_config_unknown_keys`), so a config written for a different
+release still starts the service. A mistyped key therefore leaves its setting at the default: check
+the startup log after changing a config. The nested `personal_inbox` block is stricter and still
+rejects unknown keys.
+
 ### Shared
 
 - `bbmb_address`: must match on `message-handler` and `worker`.

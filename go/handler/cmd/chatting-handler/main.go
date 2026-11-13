@@ -76,9 +76,9 @@ func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr
 		fmt.Fprintf(stderr, "config error: %v\n", err)
 		return 2
 	}
-	if len(config.RetiredKeys) > 0 {
-		log.Printf("handler_config_retired_keys keys=%s: these no longer do anything and can be removed from the config",
-			strings.Join(config.RetiredKeys, ","))
+	if len(config.UnknownKeys) > 0 {
+		log.Printf("ERROR handler_config_unknown_keys keys=%s: IGNORED. A mistyped key leaves its setting at the default; fix or remove these",
+			strings.Join(config.UnknownKeys, ","))
 	}
 
 	runner, err := newRunner(ctx, config)

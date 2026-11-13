@@ -23,9 +23,8 @@ executor resumes the same Codex thread.
 CI failure emails link only the workflow run, so the handler asks GitHub which
 pull request the run, or failing that its head commit, belongs to.
 
-## Retired config keys
+## Removed config keys
 
 `github_repositories` and `github_assignee_login` configured the polling
-connector. They are still accepted, with any value, so an existing config keeps
-loading, but they do nothing: the handler logs `handler_config_retired_keys` at
-startup when either is present. Remove them from the config.
+connector and are no longer recognised. Like any unknown key they are ignored
+and reported at startup; remove them from the config.

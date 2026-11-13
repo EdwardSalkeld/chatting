@@ -17,6 +17,7 @@ from app.worker.main import (
     _load_config,
     _replay_egress_outbox,
     _resolve_int,
+    unknown_config_keys,
 )
 from app.worker.runtime import WorkerProcessResult
 from tests.test_egress_client import READ_TIMEOUT_SECONDS, egress_server
@@ -116,6 +117,20 @@ class MainWorkerTests(unittest.TestCase):
             payload = _load_config(str(config_path))
 
         self.assertEqual(payload["activity_port"], 0)
+
+    def test_load_config_keeps_unknown_keys_for_the_worker_to_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "worker.json"
+            config_path.write_text(
+                json.dumps({"bbmb_address": "127.0.0.1:9876", "surprise": True}),
+                encoding="utf-8",
+            )
+
+            payload = _load_config(str(config_path))
+
+        self.assertEqual(payload["bbmb_address"], "127.0.0.1:9876")
+        self.assertEqual(unknown_config_keys(payload), ["surprise"])
+        self.assertEqual(unknown_config_keys({"bbmb_address": "127.0.0.1:9876"}), [])
 
     def test_resolve_non_negative_int_accepts_zero(self) -> None:
         resolved = _resolve_int(

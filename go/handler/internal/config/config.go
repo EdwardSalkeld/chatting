@@ -70,8 +70,11 @@ type Config struct {
 	TelegramContextRefs          []string
 	TelegramWorkspaceForumChatID string
 
-	// RetiredKeys lists keys present in the file that no longer do anything.
-	RetiredKeys []string
+	// UnknownKeys lists keys in the file that the handler does not recognise.
+	// They are ignored rather than rejected so that a config written for a
+	// newer or older release still starts the service; the caller must make
+	// them loud, because a mistyped key leaves its setting at the default.
+	UnknownKeys []string
 }
 
 func Defaults() Config {
@@ -151,16 +154,12 @@ func Load(raw []byte) (Config, error) {
 	for _, field := range fields {
 		known[field.key] = true
 	}
-	unknownKeys := make([]string, 0)
 	for key := range payload {
 		if !known[key] {
-			unknownKeys = append(unknownKeys, key)
+			config.UnknownKeys = append(config.UnknownKeys, key)
 		}
 	}
-	if len(unknownKeys) > 0 {
-		sort.Strings(unknownKeys)
-		return Config{}, errors.New("config contains unknown keys: " + strings.Join(unknownKeys, ", "))
-	}
+	sort.Strings(config.UnknownKeys)
 
 	for _, field := range fields {
 		rawValue, ok := payload[field.key]
@@ -286,18 +285,7 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		str(&c.TelegramAttachmentDir, "telegram_attachment_dir"),
 		str(&c.TelegramWorkspaceForumChatID, "telegram_workspace_forum_chat_id"),
 		list(&c.TelegramContextRefs, "telegram_context_refs"),
-		// GitHub polling was removed. Its keys are still accepted, with any
-		// value, so a deployed config that names them keeps loading.
-		c.retired("github_repositories"),
-		c.retired("github_assignee_login"),
 	}
-}
-
-func (c *Config) retired(key string) field {
-	return field{key: key, decode: func(json.RawMessage) error {
-		c.RetiredKeys = append(c.RetiredKeys, key)
-		return nil
-	}}
 }
 
 func isNull(raw json.RawMessage) bool {

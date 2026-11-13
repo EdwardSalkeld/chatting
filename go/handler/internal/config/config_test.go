@@ -212,13 +212,24 @@ func TestLoadAcceptsMinimalRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnknownKeys(t *testing.T) {
-	_, err := Load([]byte(`{"db_path": "/tmp/handler.db", "surprise": true}`))
-	if err == nil {
-		t.Fatal("expected error")
+func TestLoadIgnoresAndReportsUnknownKeys(t *testing.T) {
+	config, err := Load([]byte(`{"db_path": "/tmp/handler.db", "surprise": true, "another": [1]}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "config contains unknown keys: surprise") {
-		t.Fatalf("error = %v", err)
+	if config.DBPath != "/tmp/handler.db" {
+		t.Fatalf("DBPath = %q", config.DBPath)
+	}
+	if !reflect.DeepEqual(config.UnknownKeys, []string{"another", "surprise"}) {
+		t.Fatalf("UnknownKeys = %#v", config.UnknownKeys)
+	}
+
+	config, err = Load([]byte(`{"db_path": "/tmp/handler.db"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.UnknownKeys) != 0 {
+		t.Fatalf("UnknownKeys = %#v", config.UnknownKeys)
 	}
 }
 
@@ -354,7 +365,7 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsRetiredGitHubPollingKeys(t *testing.T) {
+func TestLoadTreatsRemovedGitHubPollingKeysAsUnknown(t *testing.T) {
 	// The shape a deployment that had already switched to webhooks still carries.
 	config, err := Load([]byte(`{
 		"github_repositories": [],
@@ -363,23 +374,7 @@ func TestLoadAcceptsRetiredGitHubPollingKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(config.RetiredKeys, []string{"github_repositories", "github_assignee_login"}) {
-		t.Fatalf("RetiredKeys = %#v", config.RetiredKeys)
-	}
-
-	config, err = Load([]byte(`{"github_repositories": ["EdwardSalkeld/chatting"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(config.RetiredKeys, []string{"github_repositories"}) {
-		t.Fatalf("RetiredKeys = %#v", config.RetiredKeys)
-	}
-
-	config, err = Load([]byte(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(config.RetiredKeys) != 0 {
-		t.Fatalf("RetiredKeys = %#v", config.RetiredKeys)
+	if !reflect.DeepEqual(config.UnknownKeys, []string{"github_assignee_login", "github_repositories"}) {
+		t.Fatalf("UnknownKeys = %#v", config.UnknownKeys)
 	}
 }
