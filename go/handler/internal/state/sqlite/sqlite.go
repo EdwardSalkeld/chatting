@@ -96,11 +96,6 @@ type TelegramAttachmentCleanupResult struct {
 	ReclaimedBytes int64
 }
 
-type GitHubAssignmentCheckpoint struct {
-	EventCreatedAt time.Time
-	EventID        string
-}
-
 type ScheduleRecord struct {
 	ScheduleID         string
 	Version            int
@@ -278,12 +273,8 @@ func (store *Store) initialize(ctx context.Context) error {
 			cleanup_attempts INTEGER NOT NULL,
 			last_cleanup_error TEXT
 		)`,
-		`CREATE TABLE IF NOT EXISTS github_assignment_checkpoints (
-			scope_key TEXT PRIMARY KEY,
-			event_created_at TEXT NOT NULL,
-			event_id TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
+		// Poll cursors for the removed GitHub polling connector.
+		`DROP TABLE IF EXISTS github_assignment_checkpoints`,
 		`CREATE TABLE IF NOT EXISTS schedules (
 			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			schedule_id TEXT NOT NULL,
@@ -346,64 +337,6 @@ func (store *Store) ensureColumn(ctx context.Context, table string, column strin
 		return err
 	}
 	_, err = store.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+columnType)
-	return err
-}
-
-func (store *Store) GetGitHubAssignmentCheckpoint(ctx context.Context, scopeKey string) (*GitHubAssignmentCheckpoint, error) {
-	if strings.TrimSpace(scopeKey) == "" {
-		return nil, errors.New("scope_key is required")
-	}
-	var eventCreatedAt string
-	checkpoint := GitHubAssignmentCheckpoint{}
-	err := store.db.QueryRowContext(
-		ctx,
-		`SELECT event_created_at, event_id
-		FROM github_assignment_checkpoints
-		WHERE scope_key = ?`,
-		scopeKey,
-	).Scan(&eventCreatedAt, &checkpoint.EventID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	parsed, err := parseTimestamp(eventCreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	checkpoint.EventCreatedAt = parsed
-	return &checkpoint, nil
-}
-
-func (store *Store) SetGitHubAssignmentCheckpoint(ctx context.Context, scopeKey string, checkpoint GitHubAssignmentCheckpoint) error {
-	if strings.TrimSpace(scopeKey) == "" {
-		return errors.New("scope_key is required")
-	}
-	if strings.TrimSpace(checkpoint.EventID) == "" {
-		return errors.New("event_id is required")
-	}
-	if checkpoint.EventCreatedAt.IsZero() {
-		return errors.New("event_created_at is required")
-	}
-	_, err := store.db.ExecContext(
-		ctx,
-		`INSERT INTO github_assignment_checkpoints (
-			scope_key,
-			event_created_at,
-			event_id,
-			updated_at
-		)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(scope_key) DO UPDATE SET
-			event_created_at = excluded.event_created_at,
-			event_id = excluded.event_id,
-			updated_at = excluded.updated_at`,
-		scopeKey,
-		formatTimestamp(checkpoint.EventCreatedAt),
-		checkpoint.EventID,
-		formatTimestamp(time.Now()),
-	)
 	return err
 }
 

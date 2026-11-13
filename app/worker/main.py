@@ -118,10 +118,11 @@ def _load_config(
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("config file must contain a JSON object")
-    unknown_keys = sorted(set(payload.keys()) - ALLOWED_WORKER_CONFIG_KEYS)
-    if unknown_keys:
-        raise ValueError("config contains unknown keys: " + ", ".join(unknown_keys))
     return payload
+
+
+def unknown_config_keys(config: dict[str, object]) -> list[str]:
+    return sorted(set(config) - ALLOWED_WORKER_CONFIG_KEYS)
 
 
 def _resolve_str(config_value: object, *, default_value: str, setting_name: str) -> str:
@@ -212,6 +213,17 @@ def main() -> int:
     _configure_logging()
     args = _parse_args()
     config = _load_config(args.config, os.environ)
+    # Unknown keys are ignored rather than rejected so that a config written
+    # for a newer or older release still starts the worker. Only the worker
+    # reports them: the reply and work-item commands load the same file on
+    # every call and would repeat this in each executor transcript.
+    unknown_keys = unknown_config_keys(config)
+    if unknown_keys:
+        LOGGER.error(
+            "worker_config_unknown_keys keys=%s: IGNORED. A mistyped key leaves "
+            "its setting at the default; fix or remove these",
+            ",".join(unknown_keys),
+        )
 
     db_path = _resolve_str(
         config.get("db_path"),

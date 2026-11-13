@@ -232,8 +232,6 @@ relationships from issue text or summarize reviews.
 
 The deployed configuration lives in Lab's
 `nixos/hosts/magpie/chatting-config.nix`; this PR does not enable delivery there.
-Before enabling it, turn off the older GitHub assignment/review polling inputs
-for the same repositories to avoid receiving the same feedback from two sources.
 
 ## Tag-to-watch filtering
 

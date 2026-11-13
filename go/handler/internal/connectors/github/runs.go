@@ -12,6 +12,10 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/routing"
 )
 
+// ghWaitDelay caps how long to wait for gh's output pipes after it is killed,
+// in case a child process it started still holds them open.
+const ghWaitDelay = 5 * time.Second
+
 // RESTRunner returns the JSON body of a GitHub REST API path.
 type RESTRunner func(ctx context.Context, path string) ([]byte, error)
 

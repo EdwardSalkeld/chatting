@@ -76,6 +76,10 @@ func runWithFactory(ctx context.Context, args []string, stdout io.Writer, stderr
 		fmt.Fprintf(stderr, "config error: %v\n", err)
 		return 2
 	}
+	if len(config.UnknownKeys) > 0 {
+		log.Printf("ERROR handler_config_unknown_keys keys=%s: IGNORED. A mistyped key leaves its setting at the default; fix or remove these",
+			strings.Join(config.UnknownKeys, ","))
+	}
 
 	runner, err := newRunner(ctx, config)
 	if err != nil {
@@ -223,25 +227,6 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 			return nil, err
 		}
 		connectors = append(connectors, connector)
-	}
-	if len(config.GitHubRepositories) > 0 {
-		assignmentConnector, err := githubconnector.NewIssueAssignmentConnector(githubconnector.IssueAssignmentConfig{
-			RepositoryPatterns: config.GitHubRepositories,
-			AssigneeLogin:      config.GitHubAssigneeLogin,
-			CheckpointStore:    store,
-		})
-		if err != nil {
-			return nil, err
-		}
-		reviewConnector, err := githubconnector.NewPullRequestReviewConnector(githubconnector.PullRequestReviewConfig{
-			RepositoryPatterns: config.GitHubRepositories,
-			AuthorLogin:        config.GitHubAssigneeLogin,
-			CheckpointStore:    store,
-		})
-		if err != nil {
-			return nil, err
-		}
-		connectors = append(connectors, assignmentConnector, reviewConnector)
 	}
 	scheduleService := schedules.NewService(store)
 	reminderService := reminders.NewService(store, metricRecorder)

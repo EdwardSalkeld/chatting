@@ -37,7 +37,7 @@ through `/api/tasks/<task_id>/events`; raw activity JSON is at
 
 The handler owns every integration secret and is the only process that sends
 anything externally. The worker reads no integration secrets. `gh` must be
-authenticated as the handler user for GitHub polling and issue comments, and
+authenticated as the handler user for GitHub comments and run lookups, and
 Codex must be logged in as the worker user.
 
 ## Worker

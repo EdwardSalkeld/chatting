@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EdwardSalkeld/chatting/go/handler/internal/connectors/github"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 )
 
@@ -71,8 +70,11 @@ type Config struct {
 	TelegramContextRefs          []string
 	TelegramWorkspaceForumChatID string
 
-	GitHubRepositories  []string
-	GitHubAssigneeLogin string
+	// UnknownKeys lists keys in the file that the handler does not recognise.
+	// They are ignored rather than rejected so that a config written for a
+	// newer or older release still starts the service; the caller must make
+	// them loud, because a mistyped key leaves its setting at the default.
+	UnknownKeys []string
 }
 
 func Defaults() Config {
@@ -115,9 +117,6 @@ func Defaults() Config {
 		TelegramAllowedChannelIDs:  []string{},
 		TelegramAttachmentDir:      "",
 		TelegramContextRefs:        []string{},
-
-		GitHubRepositories:  []string{},
-		GitHubAssigneeLogin: "",
 	}
 }
 
@@ -155,16 +154,12 @@ func Load(raw []byte) (Config, error) {
 	for _, field := range fields {
 		known[field.key] = true
 	}
-	unknownKeys := make([]string, 0)
 	for key := range payload {
 		if !known[key] {
-			unknownKeys = append(unknownKeys, key)
+			config.UnknownKeys = append(config.UnknownKeys, key)
 		}
 	}
-	if len(unknownKeys) > 0 {
-		sort.Strings(unknownKeys)
-		return Config{}, errors.New("config contains unknown keys: " + strings.Join(unknownKeys, ", "))
-	}
+	sort.Strings(config.UnknownKeys)
 
 	for _, field := range fields {
 		rawValue, ok := payload[field.key]
@@ -182,9 +177,6 @@ func Load(raw []byte) (Config, error) {
 		if config.IMAPPasswordEnv == "" {
 			return Config{}, errors.New("imap_password_env is required when imap_host is set")
 		}
-	}
-	if len(config.GitHubRepositories) > 0 && config.GitHubAssigneeLogin == "" {
-		return Config{}, errors.New("github_assignee_login is required when github_repositories is set")
 	}
 	if config.SMTPHost != "" {
 		if config.SMTPFrom == "" {
@@ -293,8 +285,6 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		str(&c.TelegramAttachmentDir, "telegram_attachment_dir"),
 		str(&c.TelegramWorkspaceForumChatID, "telegram_workspace_forum_chat_id"),
 		list(&c.TelegramContextRefs, "telegram_context_refs"),
-		bind(&c.GitHubRepositories, "github_repositories", decodeGitHubRepositories),
-		str(&c.GitHubAssigneeLogin, "github_assignee_login"),
 	}
 }
 
@@ -349,28 +339,6 @@ func decodeAllowedEgressChannels(raw json.RawMessage, name string) ([]string, er
 		return Defaults().AllowedEgressChannels, nil
 	}
 	return values, nil
-}
-
-func decodeGitHubRepositories(raw json.RawMessage, name string) ([]string, error) {
-	values, err := decodeStringList(raw, name)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]string, 0, len(values))
-	seen := map[string]bool{}
-	for _, value := range values {
-		owner, name, err := github.ParseRepositoryPattern(value)
-		if err != nil {
-			return nil, errors.New("github_repositories entries must be owner/repo or owner/*")
-		}
-		normalized := owner + "/" + name
-		if seen[normalized] {
-			continue
-		}
-		seen[normalized] = true
-		result = append(result, normalized)
-	}
-	return result, nil
 }
 
 func decodeStringList(raw json.RawMessage, name string) ([]string, error) {

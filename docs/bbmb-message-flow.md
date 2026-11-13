@@ -57,7 +57,7 @@ Examples:
 - IMAP email
 - Telegram update
 - schedule or reminder trigger
-- GitHub issue assignment or pull request review
+- GitHub webhook delivery
 - internal heartbeat ping
 
 `message-handler` then:
@@ -244,6 +244,12 @@ handler path.
 ## Config That Changes The Flow
 
 Set these values in the handler and worker configuration files for each installation.
+
+A key that a process does not recognise is ignored and logged as an error at startup
+(`handler_config_unknown_keys`, `worker_config_unknown_keys`), so a config written for a different
+release still starts the service. A mistyped key therefore leaves its setting at the default: check
+the startup log after changing a config. The nested `personal_inbox` block is stricter and still
+rejects unknown keys.
 
 ### Shared
 
