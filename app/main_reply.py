@@ -438,6 +438,16 @@ def main() -> int:
         print(json.dumps(payload, sort_keys=True))
         return 0
 
+    if has_transient_failure:
+        # A send that timed out may still have been delivered. The default
+        # event id is new on every run, so only a resend that reuses this one
+        # lets the handler dedupe it.
+        payload["retry_event_id"] = base_event_id
+        payload["retry_instruction"] = (
+            "Retry with event_id set to retry_event_id in the spec file so the "
+            "handler skips anything already delivered."
+        )
+
     # Not fully delivered: surface loudly on stderr so the executor transcript
     # shows every outcome. Both sends are attempted even if the first one fails.
     print(json.dumps(payload, sort_keys=True), file=sys.stderr)

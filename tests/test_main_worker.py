@@ -2,10 +2,12 @@ import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
 from app.broker import EgressQueueMessage
+from app.egress_client import submit_egress
 from app.models import OutboundMessage, RunRecord
 from app.state import SQLiteStateStore
 from app.worker.main import (
@@ -17,6 +19,7 @@ from app.worker.main import (
     _resolve_int,
 )
 from app.worker.runtime import WorkerProcessResult
+from tests.test_egress_client import READ_TIMEOUT_SECONDS, egress_server
 
 
 class _RecordingMonitor:
@@ -78,6 +81,27 @@ class ReplayEgressOutboxTests(unittest.TestCase):
         self.assertTrue(
             any("worker_egress_dropped_by_handler" in line for line in captured.output)
         )
+
+    def test_handler_transport_failures_leave_event_pending(self) -> None:
+        for mode in ("stall", "close_before_response", "close_mid_body", "reset"):
+            with self.subTest(mode=mode), egress_server(mode) as (url, received):
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                store = SQLiteStateStore(str(Path(tmp.name) / "worker.db"))
+                monitor = _RecordingMonitor()
+                store.queue_egress_outbox_event(_completion_egress())
+                with patch(
+                    "app.worker.main.submit_egress",
+                    partial(submit_egress, timeout_seconds=READ_TIMEOUT_SECONDS),
+                ):
+                    _replay_egress_outbox(
+                        store=store,
+                        handler_egress_url=url,
+                        activity_monitor=monitor,
+                    )
+                self.assertEqual(len(received), 1)
+                self.assertEqual(len(store.list_replayable_egress_outbox_events()), 1)
+                self.assertEqual(monitor.egress_calls, [])
 
 
 class MainWorkerTests(unittest.TestCase):

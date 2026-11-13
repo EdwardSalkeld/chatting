@@ -96,6 +96,10 @@ task, disallowed channel, dispatch failure such as a missing attachment), 503 wh
 unreachable. `app.main_reply` maps this to an exit code (0 delivered, 1 dropped, 3 transient, 4
 same-conversation follow-ups claimed and the drafted content withheld) so the
 executor learns immediately whether a reply landed instead of publishing fire-and-forget.
+A timeout or dropped connection after the request was sent is also transient, but the handler may
+already have delivered the reply. The exit-3 output therefore carries `retry_event_id`: a resend
+with that `event_id` in its spec is deduped by the handler, whereas a resend without it gets a fresh
+id and may send the reply twice.
 
 The worker still writes each of its own egress events to the SQLite egress outbox first, as a
 write-ahead log: on a 2xx the row is acked; a 422 is logged loudly and acked (a permanent drop is an
