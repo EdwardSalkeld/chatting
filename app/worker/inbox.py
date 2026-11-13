@@ -10,6 +10,7 @@ from app.broker import BBMBQueueAdapter, TASK_QUEUE_NAME, TaskQueueMessage
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
 from app.worker.notification_triage import NotificationTriage
+from app.worker.runtime import build_completion_egress_messages
 
 LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +53,12 @@ class InboxCollector:
             self.notification_triage is not None
             and not self.notification_triage.forward(task_message)
         ):
+            # The handler still holds the task open; without a completion its
+            # ledger row would never close.
+            for egress_message in build_completion_egress_messages(
+                task_message=task_message
+            ):
+                self.store.queue_egress_outbox_event(egress_message)
             self.broker.ack(TASK_QUEUE_NAME, picked.guid)
             return True
         inserted = self.store.stage_inbox_task(task_message, broker_guid=picked.guid)
