@@ -137,7 +137,14 @@ func (engine *Engine) handleLocked(ctx context.Context, message contracts.Egress
 	}
 
 	if !engine.channelAllowed(message, task) {
-		return engine.surfaceDrop(ctx, message, "disallowed_channel")
+		result, err := engine.surfaceDrop(ctx, message, "disallowed_channel")
+		if err != nil || message.Sequence == nil {
+			return result, err
+		}
+		if err := engine.skipSequencedEvent(ctx, message); err != nil {
+			return Result{}, err
+		}
+		return result, nil
 	}
 
 	dispatched, err := engine.state.HasDispatchedEventID(ctx, message.TaskID, message.EventID)
@@ -307,6 +314,29 @@ func egressBodyPreview(message contracts.EgressQueueMessage) string {
 		body = string(runes[:maxLen]) + "..."
 	}
 	return fmt.Sprintf(" body=%q", body)
+}
+
+// skipSequencedEvent consumes the sequence slot of an event dropped before staging, so
+// later events for the task (including its completion) are not left waiting on it. The
+// event is recorded as dispatched and staged, and the flush then steps over it as a
+// duplicate without sending it or alerting a second time.
+func (engine *Engine) skipSequencedEvent(ctx context.Context, message contracts.EgressQueueMessage) error {
+	if err := engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID); err != nil {
+		return err
+	}
+	expected, err := engine.state.ExpectedSequence(ctx, message.TaskID)
+	if err != nil {
+		return err
+	}
+	// A retry of an already-skipped event must not re-stage it behind the cursor,
+	// where nothing would ever remove it.
+	if *message.Sequence >= expected {
+		if err := engine.state.StageEgressEvent(ctx, message); err != nil {
+			return err
+		}
+	}
+	_, err = engine.Flush(ctx, message.TaskID)
+	return err
 }
 
 // dropFailedDispatch handles a permanent per-message dispatch failure: it surfaces the

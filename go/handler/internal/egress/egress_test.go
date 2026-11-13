@@ -442,6 +442,102 @@ func TestFlushDropsAndContinuesOnStagedDisallowedChannel(t *testing.T) {
 	}
 }
 
+func TestHandleClosesTaskWhenStagedCompletionFollowsDisallowedDrop(t *testing.T) {
+	ctx := context.Background()
+	task := testTaskMessage(t)
+	state := newFakeState()
+	state.addTask(task)
+	dispatcher := &recordingDispatcher{}
+	var notified []string
+	engine := newTestEngineWithState(t, state, dispatcher,
+		func(_ context.Context, message contracts.EgressQueueMessage, reasonCode string) {
+			notified = append(notified, message.EventID+"|"+reasonCode)
+		},
+	)
+	completion := testEgressMessage(t, task, intPtr(1), "evt:completion", "completion")
+	disallowed := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
+	disallowed.Message.Channel = "telegram"
+
+	result, err := engine.Handle(ctx, completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusStaged {
+		t.Fatalf("completion result = %#v", result)
+	}
+
+	logged := captureLog(t, func() {
+		result, err = engine.Handle(ctx, disallowed)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusDropped || result.Reason != "disallowed_channel" {
+		t.Fatalf("disallowed result = %#v", result)
+	}
+	if want := []string{"evt:0|disallowed_channel"}; !reflect.DeepEqual(notified, want) {
+		t.Fatalf("notified = %#v, want %#v", notified, want)
+	}
+	if strings.Count(logged, "egress_message_dropped") != 1 {
+		t.Fatalf("want exactly one loud drop line, got %q", logged)
+	}
+	if state.completed[task.TaskID] != task.Envelope.ID {
+		t.Fatal("staged completion must close the task once the dropped sequence is skipped")
+	}
+	if len(dispatcher.messages) != 0 {
+		t.Fatalf("dispatch count = %d, want 0", len(dispatcher.messages))
+	}
+}
+
+func TestSQLiteBackedEngineClosesTaskAfterDisallowedSequenceZero(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitestate.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	task := testTaskMessage(t)
+	if err := store.RecordTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	notified := 0
+	engine := newTestEngineWithState(t, store, &recordingDispatcher{},
+		func(_ context.Context, _ contracts.EgressQueueMessage, _ string) { notified++ },
+	)
+	disallowed := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
+	disallowed.Message.Channel = "telegram"
+
+	for attempt := range 2 {
+		result, err := engine.Handle(ctx, disallowed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != StatusDropped || result.Reason != "disallowed_channel" {
+			t.Fatalf("attempt %d result = %#v", attempt, result)
+		}
+	}
+	if notified != 2 {
+		t.Fatalf("notified = %d, want 2 (each submit is a loud drop)", notified)
+	}
+	if got, _ := store.ExpectedSequence(ctx, task.TaskID); got != 1 {
+		t.Fatalf("expected sequence = %d, want 1", got)
+	}
+	if staged, _ := store.GetStagedEventBySequence(ctx, task.TaskID, 0); staged != nil {
+		t.Fatalf("retried drop left a staged row behind the cursor: %#v", staged)
+	}
+
+	result, err := engine.Handle(ctx, testEgressMessage(t, task, intPtr(1), "evt:completion", "completion"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("completion result = %#v", result)
+	}
+	if completed, _ := store.IsTaskCompleted(ctx, task.TaskID, task.Envelope.ID); !completed {
+		t.Fatal("task must be completed")
+	}
+}
+
 func TestFlushDropsAndContinuesOnSequencedDispatchFailure(t *testing.T) {
 	task := testTaskMessage(t)
 	state := newFakeState()
