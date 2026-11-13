@@ -40,6 +40,36 @@ func (err MessageDispatchError) Error() string {
 	return err.ReasonCode
 }
 
+// ReasonChannelNotConfigured is the drop reason reported to the egress caller
+// when the resolved channel has no sender built at startup.
+const ReasonChannelNotConfigured = "channel_not_configured"
+
+// ErrChannelNotConfigured is deliberately not a MessageDispatchError: it is a
+// deployment mismatch rather than a failed send, so the engine reports its own
+// reason instead of the generic dispatch_failed bucket.
+var ErrChannelNotConfigured = errors.New(ReasonChannelNotConfigured)
+
+// UnconfiguredChannels returns the channels in channels that Dispatch would
+// reject with ErrChannelNotConfigured.
+func (dispatcher Dispatcher) UnconfiguredChannels(channels []string) []string {
+	var missing []string
+	for _, channel := range channels {
+		configured := true
+		switch channel {
+		case "email":
+			configured = dispatcher.EmailSender != nil
+		case "telegram", "telegram_reaction":
+			configured = dispatcher.TelegramSender != nil
+		case "github":
+			configured = dispatcher.GitHubSender != nil
+		}
+		if !configured {
+			missing = append(missing, channel)
+		}
+	}
+	return missing
+}
+
 func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.OutboundMessage, envelope contracts.TaskEnvelope) (*contracts.OutboundMessage, error) {
 	channel, target := resolveDispatchChannelAndTarget(message, envelope)
 	normalized := message
@@ -51,7 +81,7 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		return &normalized, nil
 	case "email":
 		if dispatcher.EmailSender == nil {
-			return nil, nil
+			return nil, ErrChannelNotConfigured
 		}
 		subject, body, err := formatEmailReply(message, envelope)
 		if err != nil {
@@ -63,7 +93,7 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		return &normalized, nil
 	case "telegram":
 		if dispatcher.TelegramSender == nil {
-			return nil, nil
+			return nil, ErrChannelNotConfigured
 		}
 		// Copy metadata before attaching delivery results. Explicit agent sends
 		// select their own topic; legacy final replies use the event address.
@@ -99,7 +129,7 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		return &normalized, nil
 	case "telegram_reaction":
 		if dispatcher.TelegramSender == nil {
-			return nil, nil
+			return nil, ErrChannelNotConfigured
 		}
 		if message.Body == nil {
 			return nil, MessageDispatchError{ReasonCode: "telegram_dispatch_failed"}
@@ -114,7 +144,7 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 		return &normalized, nil
 	case "github":
 		if dispatcher.GitHubSender == nil {
-			return nil, nil
+			return nil, ErrChannelNotConfigured
 		}
 		if message.Body == nil {
 			return nil, MessageDispatchError{ReasonCode: "github_dispatch_failed"}
