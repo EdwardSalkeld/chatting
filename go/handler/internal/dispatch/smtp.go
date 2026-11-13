@@ -12,9 +12,15 @@ import (
 	"net/smtp"
 	"strings"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/idleconn"
 )
 
 const defaultSubject = "Automation response"
+
+// DefaultSMTPIOTimeout is how long the server may stay silent before a send
+// fails. It applies per read or write, not to the whole send.
+const DefaultSMTPIOTimeout = 60 * time.Second
 
 type SMTPConfig struct {
 	Host        string
@@ -24,7 +30,11 @@ type SMTPConfig struct {
 	Password    string
 	UseSSL      bool
 	StartTLS    bool
-	Timeout     time.Duration
+	// Timeout bounds connecting and the implicit-TLS handshake.
+	Timeout time.Duration
+	// IOTimeout bounds each read and write after that; zero means
+	// DefaultSMTPIOTimeout.
+	IOTimeout time.Duration
 }
 
 type SMTPClient interface {
@@ -54,6 +64,9 @@ func NewSMTPEmailSender(config SMTPConfig) (*SMTPEmailSender, error) {
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Second
+	}
+	if config.IOTimeout <= 0 {
+		config.IOTimeout = DefaultSMTPIOTimeout
 	}
 	return &SMTPEmailSender{config: config, dial: dialSMTP}, nil
 }
@@ -144,19 +157,24 @@ func writeHeader(buffer *bytes.Buffer, key string, value string) {
 func dialSMTP(ctx context.Context, config SMTPConfig) (SMTPClient, error) {
 	address := net.JoinHostPort(config.Host, fmt.Sprintf("%d", config.Port))
 	dialer := &net.Dialer{Timeout: config.Timeout}
+	rawConn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	conn := idleconn.Wrap(rawConn, config.IOTimeout)
 	if config.UseSSL {
-		conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+		tlsConn := tls.Client(conn, &tls.Config{
 			ServerName: config.Host,
 			MinVersion: tls.VersionTLS12,
 		})
+		handshakeCtx, cancel := context.WithTimeout(ctx, config.Timeout)
+		err := tlsConn.HandshakeContext(handshakeCtx)
+		cancel()
 		if err != nil {
+			_ = rawConn.Close()
 			return nil, err
 		}
-		return smtp.NewClient(conn, config.Host)
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return nil, err
+		conn = tlsConn
 	}
 	return smtp.NewClient(conn, config.Host)
 }
