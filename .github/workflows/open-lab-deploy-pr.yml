@@ -3,15 +3,13 @@ name: Open Lab Deploy PR
 on:
   workflow_run:
     workflows:
-      - CI
+      - Release
     types:
       - completed
-    branches:
-      - main
   workflow_dispatch:
     inputs:
-      chatting_sha:
-        description: Optional chatting commit SHA to deploy. Defaults to the triggering SHA.
+      release_tag:
+        description: Optional release tag to deploy, such as v0.1.123. Defaults to the latest release; an older tag rolls Lab back.
         required: false
         type: string
 
@@ -20,46 +18,21 @@ permissions:
 
 concurrency:
   group: open-lab-deploy-pr
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   open-pr:
-    name: Update lab flake.lock
+    name: Pin lab to the release
+    # Nothing below reads a commit or tag from the triggering event: the release
+    # to deploy is looked up in this repository, so a pull request from a fork
+    # cannot steer what Lab is asked to deploy.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'main'
-      )
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Resolve target SHA
-        id: target
-        env:
-          MANUAL_TARGET_SHA: ${{ inputs.chatting_sha }}
-          WORKFLOW_RUN_TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          target_sha="$MANUAL_TARGET_SHA"
-          if [ -z "$target_sha" ]; then
-            target_sha="$WORKFLOW_RUN_TARGET_SHA"
-          fi
-          if [ -z "$target_sha" ]; then
-            target_sha="${GITHUB_SHA}"
-          fi
-
-          case "$target_sha" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
-              ;;
-            *)
-              echo "unexpected target sha: $target_sha" >&2
-              exit 64
-              ;;
-          esac
-
-          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${target_sha%${target_sha#????????}}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout lab
         uses: actions/checkout@v7
         with:
@@ -67,38 +40,92 @@ jobs:
           token: ${{ secrets.LAB_REPO_TOKEN }}
           path: lab
 
+      - name: Choose the release
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          manual=false
+          target="$MANUAL_RELEASE_TAG"
+          if [ -n "$target" ]; then
+            manual=true
+          else
+            target="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          fi
+          if [[ ! "$target" =~ $tag_pattern ]]; then
+            echo "unexpected release tag: $target" >&2
+            exit 64
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$target" --jq .tag_name > /dev/null
+
+          current="$(sed -nE 's|.*url = "github:'"$GITHUB_REPOSITORY"'/(v[0-9]+\.[0-9]+\.[0-9]+)";.*|\1|p' lab/flake.nix)"
+          if [[ ! "$current" =~ $tag_pattern ]]; then
+            echo "::notice::Lab does not pin chatting to a release tag yet; nothing to propose."
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A release run that published nothing still ends here, and must not
+          # move Lab backwards. Only a tag given by hand may do that.
+          newest="$(printf '%s\n%s\n' "$current" "$target" | sort -V | tail -n 1)"
+          if [ "$target" = "$current" ] || { [ "$manual" = false ] && [ "$newest" != "$target" ]; }; then
+            echo "Lab already pins $current; nothing to propose for $target."
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "bump=true"
+            echo "current=$current"
+            echo "tag=$target"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Install Nix
+        if: steps.target.outputs.bump == 'true'
         uses: DeterminateSystems/nix-installer-action@v23
 
-      - name: Update chatting lock entry
-        working-directory: lab
-        run: |
-          nix flake lock \
-            --override-input chatting github:EdwardSalkeld/chatting/${{ steps.target.outputs.sha }} \
-            --update-input chatting
-
-      - name: Compose PR body
+      - name: Move lab's chatting pin
+        if: steps.target.outputs.bump == 'true'
         working-directory: lab
         env:
-          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          CURRENT_TAG: ${{ steps.target.outputs.current }}
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          sed -i -E 's|(url = "github:'"$GITHUB_REPOSITORY"'/)'"$CURRENT_TAG"'";|\1'"$TARGET_TAG"'";|' flake.nix
+          nix flake update chatting
+          if git diff --quiet -- flake.nix flake.lock; then
+            echo "moving the pin from $CURRENT_TAG to $TARGET_TAG changed nothing" >&2
+            exit 1
+          fi
+
+      - name: Compose PR body
+        if: steps.target.outputs.bump == 'true'
+        env:
+          CURRENT_TAG: ${{ steps.target.outputs.current }}
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
         run: |
           cat > /tmp/lab-pr-body.md <<EOF
           ## Summary
-          - bump the chatting flake input to ${TARGET_SHA}
-          - deploy the merged chatting main commit via lab-controlled rollout
+          - move the chatting flake input from ${CURRENT_TAG} to ${TARGET_TAG}
+          - [release notes](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TARGET_TAG})
+          - [changes since ${CURRENT_TAG}](https://github.com/${GITHUB_REPOSITORY}/compare/${CURRENT_TAG}...${TARGET_TAG})
 
           ## Testing
-          - not run (automation-only flake.lock update)
+          - Chatting CI built and tested this release's packages before publishing it
+          - lab CI builds magpie with them on this pull request
           EOF
 
       - name: Create or update lab PR
+        if: steps.target.outputs.bump == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.LAB_REPO_TOKEN }}
           path: lab
-          commit-message: Deploy chatting ${{ steps.target.outputs.short_sha }}
+          commit-message: Deploy chatting ${{ steps.target.outputs.tag }}
           branch: billy/auto-deploy-chatting
           base: main
           delete-branch: true
-          title: Deploy chatting ${{ steps.target.outputs.short_sha }}
+          title: Deploy chatting ${{ steps.target.outputs.tag }}
           body-path: /tmp/lab-pr-body.md
