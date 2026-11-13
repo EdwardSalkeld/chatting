@@ -33,6 +33,10 @@ class ServerError(BBMBError):
     """Raised on BBMB internal server errors."""
 
 
+class BrokerTimeoutError(BBMBError):
+    """Raised when the broker does not answer within the I/O timeout."""
+
+
 class _CommandType:
     ENSURE_QUEUE = 0x01
     ADD_MESSAGE = 0x02
@@ -51,6 +55,10 @@ class _StatusCode:
 
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB
 
+# Bounds one request/response exchange. A pickup that asks the broker to wait
+# gets the wait added on top, so an idle long poll never trips it.
+DEFAULT_IO_TIMEOUT_SECONDS = 30.0
+
 
 @dataclass(frozen=True)
 class Message:
@@ -67,6 +75,7 @@ class Client:
         address: str = "localhost:9876",
         *,
         socket_factory: Callable[[], socket.socket] | None = None,
+        io_timeout_seconds: float = DEFAULT_IO_TIMEOUT_SECONDS,
     ) -> None:
         if not isinstance(address, str) or not address.strip():
             raise ValueError("address is required")
@@ -74,11 +83,18 @@ class Client:
         self.host = parts[0]
         self.port = int(parts[1]) if len(parts) > 1 else 9876
         self._socket_factory = socket_factory or socket.socket
+        self._io_timeout_seconds = io_timeout_seconds
         self.sock: socket.socket | None = None
 
     def connect(self) -> None:
-        self.sock = self._socket_factory()
-        self.sock.connect((self.host, self.port))
+        sock = self._socket_factory()
+        sock.settimeout(self._io_timeout_seconds)
+        try:
+            sock.connect((self.host, self.port))
+        except BaseException:
+            sock.close()
+            raise
+        self.sock = sock
 
     def close(self) -> None:
         if self.sock is not None:
@@ -94,8 +110,7 @@ class Client:
 
     def ensure_queue(self, queue_name: str) -> None:
         payload = _write_string(queue_name)
-        self._write_frame(_CommandType.ENSURE_QUEUE, payload)
-        _, response_payload = self._read_frame()
+        response_payload = self._round_trip(_CommandType.ENSURE_QUEUE, payload)
         status = struct.unpack("B", response_payload[:1])[0]
         if status != _StatusCode.OK:
             raise BBMBError(f"ensure_queue_failed_status:{status}")
@@ -109,8 +124,7 @@ class Client:
         payload += _write_string(content)
         payload += _write_string(checksum)
 
-        self._write_frame(_CommandType.ADD_MESSAGE, payload)
-        _, response_payload = self._read_frame()
+        response_payload = self._round_trip(_CommandType.ADD_MESSAGE, payload)
         status = struct.unpack("B", response_payload[:1])[0]
 
         if status == _StatusCode.OK:
@@ -135,8 +149,9 @@ class Client:
         if wait_seconds > 0:
             payload += struct.pack(">I", wait_seconds)
 
-        self._write_frame(_CommandType.PICKUP_MESSAGE, payload)
-        _, response_payload = self._read_frame()
+        response_payload = self._round_trip(
+            _CommandType.PICKUP_MESSAGE, payload, broker_wait_seconds=wait_seconds
+        )
         status = struct.unpack("B", response_payload[:1])[0]
 
         if status == _StatusCode.OK:
@@ -155,8 +170,7 @@ class Client:
         payload = _write_string(queue_name)
         payload += _write_string(guid)
 
-        self._write_frame(_CommandType.DELETE_MESSAGE, payload)
-        _, response_payload = self._read_frame()
+        response_payload = self._round_trip(_CommandType.DELETE_MESSAGE, payload)
         status = struct.unpack("B", response_payload[:1])[0]
 
         if status == _StatusCode.OK:
@@ -166,6 +180,24 @@ class Client:
         if status == _StatusCode.INTERNAL_ERROR:
             raise ServerError("server internal error")
         raise BBMBError(f"delete_message_failed_status:{status}")
+
+    def _round_trip(
+        self, command_type: int, payload: bytes, *, broker_wait_seconds: int = 0
+    ) -> bytes:
+        sock = _require_socket(self.sock)
+        sock.settimeout(self._io_timeout_seconds + max(broker_wait_seconds, 0))
+        try:
+            self._write_frame(command_type, payload)
+            _, response_payload = self._read_frame()
+        except TimeoutError as error:
+            self.close()
+            raise BrokerTimeoutError("timed out waiting for broker") from error
+        except BaseException:
+            # The stream position is unknown after a partial exchange, so the
+            # socket must not be reused for another request.
+            self.close()
+            raise
+        return response_payload
 
     def _write_frame(self, command_type: int, payload: bytes) -> None:
         sock = _require_socket(self.sock)
@@ -224,6 +256,7 @@ def _read_string(data: bytes, offset: int) -> tuple[str, int]:
 
 __all__ = [
     "BBMBError",
+    "BrokerTimeoutError",
     "Client",
     "InvalidChecksumError",
     "Message",
