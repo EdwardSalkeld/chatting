@@ -7,6 +7,7 @@ import socket
 import struct
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlsplit
 
 
 class BBMBError(Exception):
@@ -79,14 +80,27 @@ class Client:
     ) -> None:
         if not isinstance(address, str) or not address.strip():
             raise ValueError("address is required")
-        parts = address.split(":", maxsplit=1)
-        self.host = parts[0]
-        self.port = int(parts[1]) if len(parts) > 1 else 9876
-        self._socket_factory = socket_factory or socket.socket
+        parsed = urlsplit("//" + address)
+        if (
+            not parsed.hostname
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+        ):
+            raise ValueError("address must be a host and optional port")
+        self.host = parsed.hostname
+        self.port = parsed.port if parsed.port is not None else 9876
+        self._socket_factory = socket_factory
         self._io_timeout_seconds = io_timeout_seconds
         self.sock: socket.socket | None = None
 
     def connect(self) -> None:
+        if self._socket_factory is None:
+            self.sock = socket.create_connection(
+                (self.host, self.port), timeout=self._io_timeout_seconds
+            )
+            return
         sock = self._socket_factory()
         sock.settimeout(self._io_timeout_seconds)
         try:
