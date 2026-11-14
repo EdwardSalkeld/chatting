@@ -253,7 +253,7 @@ rejects unknown keys.
 
 ### Shared
 
-- `bbmb_address`: must match on `message-handler` and `worker`.
+- `bbmb_address`: must match on `message-handler` and `worker`. Use bracketed IPv6 addresses, for example `[::1]:9876`.
 
 ### Message-handler
 

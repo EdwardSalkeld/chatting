@@ -56,6 +56,30 @@ class _FakeSocket:
 
 
 class LocalBBMBClientTests(unittest.TestCase):
+    def test_address_parsing(self) -> None:
+        for address, expected in (
+            ("localhost", ("localhost", 9876)),
+            ("127.0.0.1:1234", ("127.0.0.1", 1234)),
+            ("[::1]:1234", ("::1", 1234)),
+            ("[::1]", ("::1", 9876)),
+        ):
+            with self.subTest(address=address):
+                client = Client(address)
+                self.assertEqual((client.host, client.port), expected)
+
+    def test_connects_to_ipv6_broker(self) -> None:
+        try:
+            listener = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            listener.bind(("::1", 0))
+        except OSError as error:
+            self.skipTest(f"IPv6 loopback unavailable: {error}")
+        self.addCleanup(listener.close)
+        listener.listen()
+        port = listener.getsockname()[1]
+        with Client(f"[::1]:{port}", io_timeout_seconds=1):
+            connection, _ = listener.accept()
+            connection.close()
+
     def test_ensure_queue_add_pickup_delete_round_trip(self) -> None:
         ensure_response = _frame(0x01, struct.pack("B", 0x00))
         add_response = _frame(0x02, struct.pack("B", 0x00) + _encode_string("guid-1"))
