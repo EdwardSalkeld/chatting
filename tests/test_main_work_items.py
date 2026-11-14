@@ -1,4 +1,5 @@
 import io
+import http.client
 import json
 import tempfile
 import unittest
@@ -173,6 +174,65 @@ def _staged_task(db_path: Path) -> TaskQueueMessage:
 
 
 class HandlerTransportFailureTests(unittest.TestCase):
+    def test_malformed_topic_response_reports_unknown_outcome(self) -> None:
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "worker.db"
+            task = _staged_task(db_path)
+            response = io.BytesIO(b"not json")
+            argv = [
+                "main_work_items.py",
+                "--db",
+                str(db_path),
+                "ensure-telegram-topic",
+                task.task_id,
+                "--name",
+                "Work",
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch("urllib.request.urlopen", return_value=response),
+                patch("sys.stderr", stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("creation outcome may be unknown", stderr.getvalue())
+
+    def test_unreadable_http_error_body_does_not_crash_cli(self) -> None:
+        class BrokenBody(io.BytesIO):
+            def read(self, *args):
+                raise http.client.IncompleteRead(b"partial")
+
+        for command in (
+            ["ensure-telegram-topic", "--name", "Work"],
+            ["register-pr", "https://github.com/o/r/pull/9"],
+        ):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                db_path = Path(tmp) / "worker.db"
+                task = _staged_task(db_path)
+                error = urllib.error.HTTPError(
+                    "http://handler", 400, "bad request", {}, BrokenBody()
+                )
+                argv = [
+                    "main_work_items.py",
+                    "--db",
+                    str(db_path),
+                    command[0],
+                    task.task_id,
+                    *command[1:],
+                ]
+                stderr = io.StringIO()
+                with (
+                    patch("sys.argv", argv),
+                    patch("urllib.request.urlopen", side_effect=error),
+                    patch("sys.stderr", stderr),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("HTTP 400 (response body unavailable)", stderr.getvalue())
+
     def _run(self, mode: str, command: list[str]) -> tuple[object, str]:
         real_urlopen = urllib.request.urlopen
 

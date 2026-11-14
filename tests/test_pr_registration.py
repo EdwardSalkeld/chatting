@@ -1,11 +1,25 @@
 import json
+import http.client
 import unittest
 from unittest.mock import patch
 
 from app.worker.pr_registration import created_pr_url, register_github_artifact
+from app.worker.main import _pr_registrar
 
 
 class ActionsRegistrationTests(unittest.TestCase):
+    def test_bad_status_does_not_interrupt_worker(self) -> None:
+        register = _pr_registrar("http://localhost:9467/egress", "task:1")
+        with (
+            patch(
+                "app.worker.main.register_pr",
+                side_effect=http.client.BadStatusLine("bad"),
+            ),
+            self.assertLogs("app.worker.main", level="WARNING") as logs,
+        ):
+            register("https://github.com/o/r/pull/9")
+        self.assertIn("pr_registration_failed", logs.output[0])
+
     def test_actions_registration_sends_handler_field(self) -> None:
         for kind in ("run", "workflow"):
             with (

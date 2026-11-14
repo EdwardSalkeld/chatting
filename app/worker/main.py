@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import http.client
 import json
 import logging
 import os
@@ -407,7 +408,7 @@ def _pr_registrar(handler_egress_url: str, task_id: str):
     def register(pr_url: str) -> None:
         try:
             register_pr(handler_url, task_id=task_id, pr_url=pr_url)
-        except OSError as exc:
+        except (OSError, http.client.HTTPException) as exc:
             # The PR still exists; only later notifications lose their route.
             LOGGER.warning(
                 "pr_registration_failed task_id=%s pr_url=%s error=%s",

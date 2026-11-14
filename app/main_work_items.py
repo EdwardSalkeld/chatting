@@ -15,6 +15,13 @@ from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR, _load_config, worker_db_
 from app.worker.pr_registration import register_github_artifact, register_pr
 
 
+def _http_error_detail(error: urllib.error.HTTPError) -> str:
+    try:
+        return error.read().decode("utf-8", errors="replace")
+    except OSError, http.client.HTTPException:
+        return f"HTTP {error.code} (response body unavailable)"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -100,9 +107,14 @@ def main() -> int:
                 print(json.dumps(json.load(response)))
         except urllib.error.HTTPError as error:
             parser.error(
-                f"handler rejected Telegram topic request: {error.read().decode()}"
+                f"handler rejected Telegram topic request: {_http_error_detail(error)}"
             )
-        except OSError, http.client.HTTPException:
+        except (
+            OSError,
+            http.client.HTTPException,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ):
             parser.error(
                 "handler unavailable; creation outcome may be unknown; rerun ensure to check existing state"
             )
@@ -131,7 +143,7 @@ def main() -> int:
                 )
         except urllib.error.HTTPError as error:
             parser.error(
-                f"handler rejected GitHub registration: {error.read().decode()}"
+                f"handler rejected GitHub registration: {_http_error_detail(error)}"
             )
         except (OSError, http.client.HTTPException) as error:
             parser.error(f"handler unavailable: {error!r}")
