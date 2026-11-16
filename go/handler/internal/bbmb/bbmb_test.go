@@ -122,33 +122,20 @@ func TestAdapterPickupJSONReturnsNilForEmptyQueue(t *testing.T) {
 	}
 }
 
-func TestAdapterPickupJSONRejectsMalformedJSON(t *testing.T) {
-	server := newPickupPayloadServer(t, "guid-bad", `{not-json`)
-	defer server.close()
-
-	adapter := newTestAdapter(t, server.address)
-	_, err := adapter.PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
-	var opErr *OperationError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("error = %#v", err)
-	}
-	if opErr.Operation != "pickup_payload_invalid_json" {
-		t.Fatalf("operation = %q", opErr.Operation)
-	}
-}
-
-func TestAdapterPickupJSONRejectsNonObjectPayload(t *testing.T) {
-	server := newPickupPayloadServer(t, "guid-array", `["not","object"]`)
-	defer server.close()
-
-	adapter := newTestAdapter(t, server.address)
-	_, err := adapter.PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
-	var opErr *OperationError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("error = %#v", err)
-	}
-	if opErr.Operation != "pickup_payload_invalid_type" {
-		t.Fatalf("operation = %q", opErr.Operation)
+func TestAdapterRejectsInvalidPickupPayload(t *testing.T) {
+	for _, tc := range []struct{ payload, operation string }{
+		{`{not-json`, "pickup_payload_invalid_json"},
+		{`["not","object"]`, "pickup_payload_invalid_type"},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			server := newPickupPayloadServer(t, "guid-bad", tc.payload)
+			defer server.close()
+			_, err := newTestAdapter(t, server.address).PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
+			var opErr *OperationError
+			if !errors.As(err, &opErr) || opErr.Operation != tc.operation {
+				t.Fatalf("error = %#v", err)
+			}
+		})
 	}
 }
 

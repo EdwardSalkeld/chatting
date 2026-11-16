@@ -546,52 +546,6 @@ class PersonalInboxTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_task(task)
 
-    def test_worker_replays_cached_result_after_ack_failure(self):
-        cache = sqlite3.connect(":memory:")
-        self.addCleanup(cache.close)
-        cache.execute(
-            "CREATE TABLE classifications (id TEXT PRIMARY KEY, fingerprint TEXT, result TEXT)"
-        )
-
-        class Broker:
-            fail_ack = True
-            outputs = []
-
-            def pickup_json(self, queue, **kwargs):
-                self_queue = queue
-                if self_queue != TASKS_QUEUE:
-                    raise AssertionError(queue)
-                return PickedMessage(guid="guid", payload=copy.deepcopy(mail_task()))
-
-            def publish_json(self, queue, result):
-                self.outputs.append((queue, result))
-
-            def ack(self, queue, guid):
-                if self.fail_ack:
-                    raise OSError("lost acknowledgement")
-
-        broker = Broker()
-        result = {
-            "kind": "personal_inbox.result.v1",
-            "message_id": "Stm4-9ebGwd3",
-            "classification": {
-                "category": "order",
-                "summary": "A receipt",
-                "action": "",
-                "deadline": "",
-                "confidence": 0.99,
-            },
-        }
-        with patch("app.worker.personal_inbox.classify", return_value=result) as model:
-            with self.assertRaises(OSError):
-                process_one(broker, cache, jev_key="j", summary_model="m")
-            broker.fail_ack = False
-            process_one(broker, cache, jev_key="j", summary_model="m")
-        self.assertEqual(model.call_count, 1)
-        self.assertEqual(
-            broker.outputs, [(RESULTS_QUEUE, result), (RESULTS_QUEUE, result)]
-        )
-
 
 class PersonalInboxBrokerTests(unittest.TestCase):
     def test_real_broker_and_restarted_worker_replay_cached_classification(self):
@@ -660,10 +614,6 @@ class PersonalInboxBrokerTests(unittest.TestCase):
             finally:
                 process.terminate()
                 process.wait(timeout=5)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CodexInvocationTests(unittest.TestCase):

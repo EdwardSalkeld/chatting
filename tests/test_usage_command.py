@@ -113,33 +113,21 @@ _EXHAUSTED_RATE_LIMITS = {
 
 
 class UsageCommandDetectionTests(unittest.TestCase):
-    def test_bare_command_matches(self) -> None:
-        self.assertTrue(is_usage_command_envelope(_envelope("/usage")))
-
-    def test_bot_suffix_and_topic_prefix_match(self) -> None:
-        self.assertTrue(
-            is_usage_command_envelope(_envelope("[thread_id=42] /Usage@MyBot"))
-        )
-        self.assertFalse(is_usage_command_envelope(_envelope("/usage@MyBot please")))
-
-    def test_surrounding_whitespace_and_case_match(self) -> None:
-        self.assertTrue(is_usage_command_envelope(_envelope("  /Usage\n")))
-
-    def test_command_with_extra_words_does_not_match(self) -> None:
-        self.assertFalse(is_usage_command_envelope(_envelope("/usage please")))
-
-    def test_command_mentioned_mid_sentence_does_not_match(self) -> None:
-        self.assertFalse(
-            is_usage_command_envelope(_envelope("what does /usage report?"))
-        )
-
-    def test_forum_topic_thread_prefix_still_matches(self) -> None:
-        self.assertTrue(is_usage_command_envelope(_envelope("[thread_id=42] /usage")))
-
-    def test_thread_prefix_with_extra_words_does_not_match(self) -> None:
-        self.assertFalse(
-            is_usage_command_envelope(_envelope("[thread_id=42] /usage please"))
-        )
+    def test_usage_command_boundaries(self):
+        for content, expected in (
+            ("/usage", True),
+            ("[thread_id=42] /Usage@MyBot", True),
+            ("  /Usage\n", True),
+            ("[thread_id=42] /usage", True),
+            ("/usage please", False),
+            ("/usage@MyBot please", False),
+            ("what does /usage report?", False),
+            ("[thread_id=42] /usage please", False),
+        ):
+            with self.subTest(content=content):
+                self.assertEqual(
+                    is_usage_command_envelope(_envelope(content)), expected
+                )
 
 
 class CodexUsageReportTests(unittest.TestCase):
@@ -331,7 +319,3 @@ class UsageCommandWorkerTests(unittest.TestCase):
         self.assertEqual(visible.message.target, "8605042448")
         self.assertIn("Primary window (7d): 42% used", visible.message.body or "")
         self.assertEqual(result.egress_messages[1].event_kind, "completion")
-
-
-if __name__ == "__main__":
-    unittest.main()

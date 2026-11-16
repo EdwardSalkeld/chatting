@@ -153,7 +153,3 @@ class ModelRouterTests(unittest.TestCase):
                     choose_model(store=self.store, envelope=self.envelope).tier,
                     expected,
                 )
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -37,10 +37,19 @@ def test_transport_cannot_override_item_session(tmp_path):
     ]
 
 
+# Backend migration is independent of ingress source; cover each value without
+# rebuilding the same legacy database for the full Cartesian product.
 @pytest.mark.parametrize(
-    "source", ["im", "webhook", "email", "cron", "reminder", "internal"]
+    "source,existing_backend",
+    [
+        ("im", None),
+        ("webhook", "exec"),
+        ("email", "app-server"),
+        ("cron", None),
+        ("reminder", "exec"),
+        ("internal", "app-server"),
+    ],
 )
-@pytest.mark.parametrize("existing_backend", [None, "exec", "app-server"])
 def test_new_items_use_app_server_without_changing_existing_items(
     tmp_path, source, existing_backend
 ):

@@ -105,7 +105,3 @@ class CreatedPRURLTests(unittest.TestCase):
         ):
             with self.subTest(line=line[:40]):
                 self.assertIsNone(created_pr_url(line))
-
-
-if __name__ == "__main__":
-    unittest.main()

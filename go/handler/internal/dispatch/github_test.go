@@ -7,51 +7,23 @@ import (
 	"testing"
 )
 
-func TestGitHubIssueCommentSenderUsesGHCLIForIssueURLTarget(t *testing.T) {
-	var seen [][]string
-	sender := NewGitHubIssueCommentSender(func(_ context.Context, command []string) error {
-		seen = append(seen, append([]string(nil), command...))
-		return nil
-	})
-
-	if err := sender.Send(context.Background(), "https://github.com/brokensbone/chatting/issues/12", "hello"); err != nil {
-		t.Fatal(err)
-	}
-	expected := [][]string{{"gh", "issue", "comment", "12", "--repo", "brokensbone/chatting", "--body", "hello"}}
-	if !reflect.DeepEqual(seen, expected) {
-		t.Fatalf("commands = %#v", seen)
-	}
-}
-
-func TestGitHubIssueCommentSenderUsesGHCLIForSlugTarget(t *testing.T) {
-	var seen [][]string
-	sender := NewGitHubIssueCommentSender(func(_ context.Context, command []string) error {
-		seen = append(seen, append([]string(nil), command...))
-		return nil
-	})
-
-	if err := sender.Send(context.Background(), "brokensbone/chatting#13", "hello"); err != nil {
-		t.Fatal(err)
-	}
-	expected := [][]string{{"gh", "issue", "comment", "13", "--repo", "brokensbone/chatting", "--body", "hello"}}
-	if !reflect.DeepEqual(seen, expected) {
-		t.Fatalf("commands = %#v", seen)
-	}
-}
-
-func TestGitHubIssueCommentSenderUsesGHCLIForPullRequestURLTarget(t *testing.T) {
-	var seen [][]string
-	sender := NewGitHubIssueCommentSender(func(_ context.Context, command []string) error {
-		seen = append(seen, append([]string(nil), command...))
-		return nil
-	})
-
-	if err := sender.Send(context.Background(), "https://github.com/brokensbone/chatting/pull/60", "hello"); err != nil {
-		t.Fatal(err)
-	}
-	expected := [][]string{{"gh", "issue", "comment", "60", "--repo", "brokensbone/chatting", "--body", "hello"}}
-	if !reflect.DeepEqual(seen, expected) {
-		t.Fatalf("commands = %#v", seen)
+func TestGitHubIssueCommentTargets(t *testing.T) {
+	for _, tc := range []struct{ target, number string }{
+		{"https://github.com/brokensbone/chatting/issues/12", "12"},
+		{"brokensbone/chatting#13", "13"},
+		{"https://github.com/brokensbone/chatting/pull/60", "60"},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			var seen [][]string
+			sender := NewGitHubIssueCommentSender(func(_ context.Context, command []string) error { seen = append(seen, command); return nil })
+			if err := sender.Send(context.Background(), tc.target, "hello"); err != nil {
+				t.Fatal(err)
+			}
+			expected := [][]string{{"gh", "issue", "comment", tc.number, "--repo", "brokensbone/chatting", "--body", "hello"}}
+			if !reflect.DeepEqual(seen, expected) {
+				t.Fatalf("commands = %#v", seen)
+			}
+		})
 	}
 }
 

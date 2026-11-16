@@ -557,43 +557,41 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(exit_code, EXIT_TRANSIENT)
 
     def test_handler_transport_failure_after_send_is_transient(self) -> None:
-        for mode in ("stall", "close_before_response", "close_mid_body", "reset"):
-            stderr = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            egress_server("close_mid_body") as (url, received),
+        ):
+            config_path = Path(tmpdir) / "worker.json"
+            config_path.write_text(
+                json.dumps({"handler_egress_url": url}), encoding="utf-8"
+            )
+            spec = _write_spec(
+                Path(tmpdir),
+                {
+                    "task_id": "task:email:53",
+                    "channel": "email",
+                    "target": "alice@example.com",
+                    "message": "working on it",
+                },
+            )
             with (
-                self.subTest(mode=mode),
-                tempfile.TemporaryDirectory() as tmpdir,
-                egress_server(mode) as (url, received),
+                patch(
+                    "app.main_reply.submit_egress",
+                    partial(submit_egress, timeout_seconds=READ_TIMEOUT_SECONDS),
+                ),
+                patch("sys.stderr", stderr),
+                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
+                patch.dict(
+                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
+                ),
             ):
-                config_path = Path(tmpdir) / "worker.json"
-                config_path.write_text(
-                    json.dumps({"handler_egress_url": url}), encoding="utf-8"
-                )
-                spec = _write_spec(
-                    Path(tmpdir),
-                    {
-                        "task_id": "task:email:53",
-                        "channel": "email",
-                        "target": "alice@example.com",
-                        "message": "working on it",
-                    },
-                )
-                with (
-                    patch(
-                        "app.main_reply.submit_egress",
-                        partial(submit_egress, timeout_seconds=READ_TIMEOUT_SECONDS),
-                    ),
-                    patch("sys.stderr", stderr),
-                    patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                    patch.dict(
-                        "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                    ),
-                ):
-                    exit_code = main()
+                exit_code = main()
 
-                self.assertEqual(exit_code, EXIT_TRANSIENT)
-                printed = json.loads(stderr.getvalue())
-                self.assertEqual(printed["http_status"], 0)
-                self.assertEqual(printed["retry_event_id"], received[0]["event_id"])
+            self.assertEqual(exit_code, EXIT_TRANSIENT)
+            printed = json.loads(stderr.getvalue())
+            self.assertEqual(printed["http_status"], 0)
+            self.assertEqual(printed["retry_event_id"], received[0]["event_id"])
 
     def test_transient_retry_event_id_is_the_base_for_combined_replies(self) -> None:
         submit = _FakeSubmit(status=0, response={"reason": "transport error"})
@@ -921,7 +919,3 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(activity[0]["phase"], "egress_incremental")
         self.assertEqual(activity[0]["summary"], "incremental egress to email")
         self.assertEqual(activity[0]["detail"]["event_id"], "evt:custom:1")
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -234,7 +234,3 @@ class LocalBBMBClientTimeoutTests(unittest.TestCase):
 
         with self.assertRaises(BrokerOperationError):
             adapter.pickup_json("chatting.tasks.v1", timeout_seconds=30)
-
-
-if __name__ == "__main__":
-    unittest.main()

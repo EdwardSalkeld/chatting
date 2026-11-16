@@ -50,9 +50,6 @@ class ExplicitFinishTests(unittest.TestCase):
     def enable(self):
         self.store.set_work_explicit_finish(work_item_id=self.item, enabled=True)
 
-    def test_default_on(self):
-        self.assertTrue(self.store.get_work_explicit_finish(work_item_id=self.item))
-
     def test_disabled_preserves_exit_completion_and_payload(self):
         self.store.set_work_explicit_finish(work_item_id=self.item, enabled=False)
         self.assertFalse(self.store.get_work_explicit_finish(work_item_id=self.item))
@@ -68,6 +65,7 @@ class ExplicitFinishTests(unittest.TestCase):
         )
 
     def test_finish_records_then_kills_executor_and_child(self):
+        self.assertTrue(self.store.get_work_explicit_finish(work_item_id=self.item))
         script = """
 import json, os, subprocess, sys
 from pathlib import Path

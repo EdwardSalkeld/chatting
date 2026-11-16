@@ -303,7 +303,3 @@ class WorkerActivityTests(unittest.TestCase):
         )
         self.assertEqual(_extract_current_message(""), "")
         self.assertEqual(_extract_current_message(None), "")
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -287,7 +287,3 @@ class HandlerTransportFailureTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 2)
                 self.assertIn("handler unavailable", stderr)
-
-
-if __name__ == "__main__":
-    unittest.main()

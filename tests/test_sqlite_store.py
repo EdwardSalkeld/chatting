@@ -188,7 +188,3 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 ["task:im:new", "task:cron:old"],
             )
             self.assertGreater(visible[1]["activity_id"], visible[0]["activity_id"])
-
-
-if __name__ == "__main__":
-    unittest.main()

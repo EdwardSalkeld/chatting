@@ -123,7 +123,3 @@ class BBMBQueueAdapterTests(unittest.TestCase):
 
         adapter.pickup_json("chatting.tasks.v1", timeout_seconds=7, wait_seconds=3)
         self.assertEqual(recorded, {"timeout_seconds": 7, "wait_seconds": 3})
-
-
-if __name__ == "__main__":
-    unittest.main()

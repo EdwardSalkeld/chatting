@@ -351,7 +351,3 @@ class CodexExecutorTests(unittest.TestCase):
             str(Path(__file__).resolve().parents[1]), executor_env["PYTHONPATH"]
         )
         self.assertEqual(run_mock.call_args.kwargs["timeout_seconds"], 123)
-
-
-if __name__ == "__main__":
-    unittest.main()

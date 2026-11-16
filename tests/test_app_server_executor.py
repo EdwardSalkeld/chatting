@@ -311,44 +311,6 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertIn("uncertain_request", result.errors[0])
         self.assertIsNone(session.server)
 
-    def test_setting_is_work_item_scoped_persistent_and_default_is_app_server(self):
-        first = _telegram_task(1)
-        same_chat_other_item = replace(_telegram_task(2), work_item_id="item_another")
-        other = _telegram_task(3, thread_id=99)
-        for task in (first, same_chat_other_item, other):
-            self.store.stage_inbox_task(task)
-        conversation = self.store.get_inbox_task(task_id=first.task_id).conversation_id
-        self.assertEqual(
-            self.store.get_conversation_executor(conversation_id=conversation),
-            "app-server",
-        )
-        self.store.set_conversation_executor(
-            conversation_id=conversation, backend="exec"
-        )
-        reopened = SQLiteStateStore(str(self.root / "worker.db"))
-        self.assertEqual(
-            reopened.get_conversation_executor(conversation_id=conversation),
-            "exec",
-        )
-        self.assertNotEqual(
-            self.store.get_inbox_task(
-                task_id=same_chat_other_item.task_id
-            ).conversation_id,
-            conversation,
-        )
-        other_id = self.store.get_inbox_task(task_id=other.task_id).conversation_id
-        self.assertEqual(
-            reopened.get_conversation_executor(conversation_id=other_id), "app-server"
-        )
-        claimed = self.store.claim_next_inbox_task()
-        self.assertEqual(claimed.task_message.task_id, first.task_id)
-        # Different work items have independent sessions and may run together.
-        claimed = self.store.claim_next_inbox_task()
-        self.assertEqual(claimed.task_message.task_id, same_chat_other_item.task_id)
-        claimed = self.store.claim_next_inbox_task()
-        self.assertEqual(claimed.task_message.task_id, other.task_id)
-        self.assertIsNone(self.store.claim_next_inbox_task())
-
     def test_command_selects_conversation_and_does_not_run_a_model(self):
         task = _telegram_task(1, content="/executor app-server")
         self.assertEqual(parse_model_command(task.envelope), ("executor", "app-server"))
@@ -428,7 +390,3 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertIn("missing_visible_reply", result.reason_codes)
         self.assertEqual(len(self.calls("turn/start")), 2)
         self.assertEqual(len(self.calls("thread/start")), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()

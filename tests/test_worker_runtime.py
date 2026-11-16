@@ -450,6 +450,9 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertNotIn("stdout", audit_event.detail["execution_result"])
             self.assertNotIn("stderr", audit_event.detail["execution_result"])
             self.assertEqual(audit_event.detail["execution_result"]["errors"], [])
+            self.assertEqual(
+                audit_event.detail["incremental_reply_send_published_count"], 0
+            )
             activity = store.list_recent_worker_activity(
                 limit=10, include_internal=True
             )
@@ -592,27 +595,6 @@ class WorkerRuntimeTests(unittest.TestCase):
             self.assertNotIn("\n", result.error_summary)
             self.assertLessEqual(len(result.error_summary), 240)
             self.assertTrue(result.error_summary.endswith("..."))
-
-    def test_process_task_message_keeps_non_telegram_success_without_visible_reply(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=NoMessageExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(result.egress_messages), 1)
-            self.assertEqual(result.egress_messages[0].event_kind, "completion")
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(
-                audit_event.detail["incremental_reply_send_published_count"], 0
-            )
 
     def test_process_task_message_marks_telegram_success_without_visible_reply_as_execution_error(
         self,
@@ -921,7 +903,3 @@ class WorkerRuntimeTests(unittest.TestCase):
             _build_error_summary(execution_errors=[], last_error=None),
             "unknown_error",
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

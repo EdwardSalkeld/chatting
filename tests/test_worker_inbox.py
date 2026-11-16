@@ -460,7 +460,3 @@ class WorkerInboxTests(unittest.TestCase):
             assert recovered is not None
             self.assertEqual(recovered.task_message.task_id, delivered.task_id)
             self.assertEqual(recovered.state, "closing")
-
-
-if __name__ == "__main__":
-    unittest.main()

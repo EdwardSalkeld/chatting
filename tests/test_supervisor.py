@@ -277,7 +277,3 @@ class SupervisorTests(unittest.TestCase):
         subprocess.run(command, check=True, capture_output=True, timeout=5)
         self.wait_for(lambda: not list((self.root / "slots").glob("*.lock")))
         self.assertEqual([event["phase"] for event in self.log()], ["start", "end"])
-
-
-if __name__ == "__main__":
-    unittest.main()

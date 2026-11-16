@@ -142,7 +142,3 @@ class MainHistoryCliTests(unittest.TestCase):
                 [turn["message_id"] for turn in json.loads(stdout.getvalue())["turns"]],
                 [13],
             )
-
-
-if __name__ == "__main__":
-    unittest.main()

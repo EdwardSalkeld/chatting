@@ -91,54 +91,26 @@ func TestUnconfiguredChannels(t *testing.T) {
 	}
 }
 
-func TestDispatcherFormatsEmailReplySubjectAndQuotedOriginal(t *testing.T) {
-	body := "Here is the answer."
-	sender := &recordingEmailSender{}
-	message := contracts.OutboundMessage{
-		Channel: "email",
-		Target:  "alice@example.com",
-		Body:    &body,
-	}
-
-	_, err := (Dispatcher{EmailSender: sender}).Dispatch(context.Background(), message, emailEnvelope("Quarterly update", "Can you summarize the key points?"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sent := sender.messages[0]
-	if sent.subject == nil || *sent.subject != "Re: Quarterly update" {
-		t.Fatalf("subject = %#v", sent.subject)
-	}
-	if !strings.Contains(sent.body, "Here is the answer.") ||
-		!strings.Contains(sent.body, "Original message:") ||
-		!strings.Contains(sent.body, "> Can you summarize the key points?") {
-		t.Fatalf("body = %q", sent.body)
-	}
-}
-
-func TestDispatcherStripsLeadingSubjectLineFromEmailBody(t *testing.T) {
-	body := "Subject: Re: Ice-cream\n\nGreat choice. Let's go classic."
-	sender := &recordingEmailSender{}
-	message := contracts.OutboundMessage{
-		Channel: "email",
-		Target:  "alice@example.com",
-		Body:    &body,
-	}
-
-	_, err := (Dispatcher{EmailSender: sender}).Dispatch(context.Background(), message, emailEnvelope("Ice-cream", "Yes please"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sent := sender.messages[0]
-	if sent.subject == nil || *sent.subject != "Re: Ice-cream" {
-		t.Fatalf("subject = %#v", sent.subject)
-	}
-	if strings.HasPrefix(strings.TrimSpace(sent.body), "Subject:") {
-		t.Fatalf("body still starts with subject line: %q", sent.body)
-	}
-	if !strings.Contains(sent.body, "Great choice. Let's go classic.") {
-		t.Fatalf("body = %q", sent.body)
+func TestDispatcherRendersEmailReplies(t *testing.T) {
+	for _, body := range []string{"Here is the answer.", "Subject: Re: Question\n\nHere is the answer."} {
+		sender := &recordingEmailSender{}
+		message := contracts.OutboundMessage{Channel: "email", Target: "alice@example.com", Body: &body}
+		_, err := (Dispatcher{EmailSender: sender}).Dispatch(context.Background(), message, emailEnvelope("Question", "Original question"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sender.messages) != 1 {
+			t.Fatalf("messages = %#v", sender.messages)
+		}
+		sent := sender.messages[0]
+		if sent.subject == nil || *sent.subject != "Re: Question" || strings.HasPrefix(strings.TrimSpace(sent.body), "Subject:") {
+			t.Fatalf("sent = %#v", sent)
+		}
+		for _, text := range []string{"Here is the answer.", "Original message:", "> Original question"} {
+			if !strings.Contains(sent.body, text) {
+				t.Fatalf("body = %q missing %q", sent.body, text)
+			}
+		}
 	}
 }
 
@@ -163,21 +135,27 @@ func TestDispatcherResolvesFinalToEnvelopeReplyChannel(t *testing.T) {
 	}
 }
 
-func TestDispatcherReturnsEmailFailureReason(t *testing.T) {
+func TestDispatcherPreservesFailureReasons(t *testing.T) {
 	body := "Done."
-	message := contracts.OutboundMessage{
-		Channel: "email",
-		Target:  "alice@example.com",
-		Body:    &body,
-	}
-
-	_, err := (Dispatcher{EmailSender: &recordingEmailSender{err: errors.New("boom")}}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	var dispatchErr MessageDispatchError
-	if !errors.As(err, &dispatchErr) || dispatchErr.ReasonCode != "email_dispatch_failed" {
-		t.Fatalf("error = %#v", err)
+	for _, tc := range []struct {
+		channel, reason string
+		dispatcher      Dispatcher
+	}{
+		{"email", "email_dispatch_failed", Dispatcher{EmailSender: &recordingEmailSender{err: errors.New("boom")}}},
+		{"telegram", "telegram_attachment_missing", Dispatcher{TelegramSender: &recordingTelegramSender{err: errors.New("telegram_attachment_missing")}}},
+		{"github", "github_dispatch_failed", Dispatcher{GitHubSender: &recordingGitHubSender{err: errors.New("boom")}}},
+	} {
+		t.Run(tc.channel, func(t *testing.T) {
+			message := contracts.OutboundMessage{Channel: tc.channel, Target: "target", Body: &body}
+			if tc.channel == "telegram" {
+				message.Attachment = &contracts.AttachmentRef{URI: "/tmp/missing.png"}
+			}
+			_, err := tc.dispatcher.Dispatch(context.Background(), message, contracts.TaskEnvelope{})
+			var dispatchErr MessageDispatchError
+			if !errors.As(err, &dispatchErr) || dispatchErr.ReasonCode != tc.reason {
+				t.Fatalf("error = %#v", err)
+			}
+		})
 	}
 }
 
@@ -227,24 +205,6 @@ func TestDispatcherSendsTelegramReactionFromEnvelopeMetadata(t *testing.T) {
 	}
 }
 
-func TestDispatcherReturnsTelegramAttachmentFailureReason(t *testing.T) {
-	body := "photo"
-	message := contracts.OutboundMessage{
-		Channel: "telegram",
-		Target:  "12345",
-		Body:    &body,
-		Attachment: &contracts.AttachmentRef{
-			URI: "/tmp/missing.png",
-		},
-	}
-
-	_, err := (Dispatcher{TelegramSender: &recordingTelegramSender{err: errors.New("telegram_attachment_missing")}}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	var dispatchErr MessageDispatchError
-	if !errors.As(err, &dispatchErr) || dispatchErr.ReasonCode != "telegram_attachment_missing" {
-		t.Fatalf("error = %#v", err)
-	}
-}
-
 func TestDispatcherSendsGitHubComment(t *testing.T) {
 	body := "Done via GitHub."
 	sender := &recordingGitHubSender{}
@@ -263,24 +223,6 @@ func TestDispatcherSendsGitHubComment(t *testing.T) {
 	}
 	if len(sender.messages) != 1 || sender.messages[0].target != "brokensbone/chatting#13" || sender.messages[0].body != "Done via GitHub." {
 		t.Fatalf("messages = %#v", sender.messages)
-	}
-}
-
-func TestDispatcherReturnsGitHubFailureReason(t *testing.T) {
-	body := "Done via GitHub."
-	message := contracts.OutboundMessage{
-		Channel: "github",
-		Target:  "brokensbone/chatting#13",
-		Body:    &body,
-	}
-
-	_, err := (Dispatcher{GitHubSender: &recordingGitHubSender{err: errors.New("boom")}}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	var dispatchErr MessageDispatchError
-	if !errors.As(err, &dispatchErr) || dispatchErr.ReasonCode != "github_dispatch_failed" {
-		t.Fatalf("error = %#v", err)
 	}
 }
 
