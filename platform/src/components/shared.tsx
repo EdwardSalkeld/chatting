@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { statusLabel, statusTone, type StatusKind, type Tone } from '@/lib/status'
 import { usePageTitle, TopbarActions, TopbarContext } from '@/components/page-head'
+import { noAutofill } from '@/lib/no-autofill'
 
 export { usePageTitle, TopbarActions, TopbarContext }
 export type { Tone }
@@ -537,6 +538,7 @@ export function SearchInput({
       <input
         type="search"
         data-page-search
+        {...noAutofill}
         aria-label={placeholder}
         placeholder={placeholder}
         value={value}
