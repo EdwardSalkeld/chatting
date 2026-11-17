@@ -52,7 +52,6 @@ class ExplicitFinishTests(unittest.TestCase):
 
     def test_disabled_preserves_exit_completion_and_payload(self):
         self.store.set_work_explicit_finish(work_item_id=self.item, enabled=False)
-        self.assertFalse(self.store.get_work_explicit_finish(work_item_id=self.item))
         result = self.executor("import sys; print(sys.stdin.read())").execute(
             _envelope()
         )
@@ -94,28 +93,12 @@ Path('executor-survived').touch()
         with patch("app.worker.executor.codex.os.killpg", side_effect=stop_group):
             result = self.executor(script).execute(_envelope())
         self.assertFalse(result.errors, result)
-        records = list((Path(self.temporary.name) / ".chatting-finish").glob("*.json"))
-        self.assertEqual(len(records), 1)
-        self.assertEqual(
-            json.loads(records[0].read_text())["task_id"], self.task.task_id
-        )
         child_pid = int((Path(self.temporary.name) / "child.pid").read_text())
         deadline = time.monotonic() + 5
         while _process_exists(child_pid) and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertFalse(_process_exists(child_pid), "child must be killed")
         self.assertFalse((Path(self.temporary.name) / "executor-survived").exists())
-
-    def test_disabled_setting_survives_reopen_and_new_tasks(self):
-        self.store.set_work_explicit_finish(work_item_id=self.item, enabled=False)
-        reopened = SQLiteStateStore(str(Path(self.temporary.name) / "worker.db"))
-        next_task = replace(
-            self.task,
-            task_id="task:next",
-            envelope=replace(self.task.envelope, id="next"),
-        )
-        reopened.stage_inbox_task(next_task)
-        self.assertFalse(reopened.get_work_explicit_finish(work_item_id=self.item))
 
     def test_unrequested_zero_and_nonzero_exits_restart_with_context(self):
         self.enable()

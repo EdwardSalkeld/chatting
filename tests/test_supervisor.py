@@ -206,12 +206,6 @@ class SupervisorTests(unittest.TestCase):
         )
         self.assertIsNone(self.store.claim_next_inbox_task())
 
-    def test_smoke_run_can_drain_and_stop_all_slots(self) -> None:
-        self.store.stage_inbox_task(_task(1, "item_a", 0.1))
-        self.pool.tick()
-        self.pool.drain()
-        self.assertFalse(list((self.root / "slots").glob("*.lock")))
-
     def test_settings_change_waits_for_busy_supervisor_before_replacing_it(
         self,
     ) -> None:

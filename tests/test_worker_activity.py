@@ -175,23 +175,23 @@ class WorkerActivityTests(unittest.TestCase):
             )
             port = server.server.server_address[1]
             try:
-                payload = _get(port, f"/activity.json")
+                payload = _get(port, "/activity.json")
                 self.assertEqual(payload["current_executor"]["active"], False)
                 self.assertIsNone(payload["current_run"])
                 self.assertEqual(
                     payload["recent_activity"][0]["phase"], "task_finished"
                 )
 
-                html_body = _get(port, f"/")
+                html_body = _get(port, "/")
                 self.assertIn("/api/items", html_body)
 
-                items = _get(port, f"/api/items")
+                items = _get(port, "/api/items")
                 self.assertEqual(items["items"][0]["run_count"], 1)
                 self.assertEqual(
                     items["items"][0]["work_item_id"], "item_legacy_general"
                 )
 
-                item_runs = _get(port, f"/api/items/item_legacy_general/runs")
+                item_runs = _get(port, "/api/items/item_legacy_general/runs")
                 self.assertEqual(item_runs["runs"][0]["run_id"], run_record.run_id)
                 self.assertEqual(item_runs["runs"][0]["preview"], full_request[:240])
                 self.assertNotIn("request_content", item_runs["runs"][0])
@@ -232,20 +232,20 @@ class WorkerActivityTests(unittest.TestCase):
             )
             port = server.server.server_address[1]
             try:
-                payload = _get(port, f"/activity.json")
+                payload = _get(port, "/activity.json")
                 self.assertEqual(
                     payload["current_run"]["task_id"], task_message.task_id
                 )
                 self.assertEqual(payload["current_run"]["event_count"], 3)
 
-                html_body = _get(port, f"/tasks/task%3Atelegram%3A1")
+                html_body = _get(port, "/tasks/task%3Atelegram%3A1")
                 self.assertIn("Live session", html_body)
-                events = _get(port, f"/api/tasks/task%3Atelegram%3A1/events?after=2")
+                events = _get(port, "/api/tasks/task%3Atelegram%3A1/events?after=2")
                 self.assertEqual(
                     [event["phase"] for event in events["events"]], ["executor_stdout"]
                 )
                 self.assertTrue(events["active"])
-                item = _get(port, f"/api/items/item_legacy_general/runs")
+                item = _get(port, "/api/items/item_legacy_general/runs")
                 self.assertEqual(
                     item["active_executors"][0]["task_id"], task_message.task_id
                 )
