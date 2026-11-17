@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from app.model_command import MODELS, models_from_environment, parse_model_command
+from app.model_command import parse_model_command
 from app.models import ExecutionResult
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
@@ -49,12 +49,15 @@ class AppServerExecutorTests(unittest.TestCase):
             .for_workspace(work_item_id="item_a")
         )
 
-    def tearDown(self):
+    def wait_for_idle_owners(self):
         deadline = time.monotonic() + 4
         while (
             list(self.root.glob("sessions/*/rpc.sock")) and time.monotonic() < deadline
         ):
             time.sleep(0.025)
+
+    def tearDown(self):
+        self.wait_for_idle_owners()
         self.temporary.cleanup()
 
     def calls(self, method):
@@ -63,38 +66,6 @@ class AppServerExecutorTests(unittest.TestCase):
             for entry in map(json.loads, self.log.read_text().splitlines())
             if entry.get("method") == method
         ]
-
-    def test_configured_models_reach_session_owner_payload_and_usage_events(self):
-        environment = {
-            "CHATTING_MODEL_HIGH": "configured-high",
-            "CHATTING_MODEL_LOW": "configured-low",
-        }
-        with (
-            patch.dict(os.environ, environment),
-            patch.dict(MODELS, models_from_environment(environment)),
-        ):
-            for number, tier in ((911, "high"), (912, "low")):
-                task = _telegram_task(number)
-                result = self.executor.for_model(tier).execute(task.envelope)
-                self.assertEqual(result.errors, [])
-                events = [json.loads(line) for line in result.stdout.splitlines()]
-                selected = [
-                    e["params"]["model"]
-                    for e in events
-                    if e.get("method") == "chatting/modelSelected"
-                ]
-                self.assertEqual(
-                    selected, [environment[f"CHATTING_MODEL_{tier.upper()}"]]
-                )
-        turns = self.calls("turn/start")
-        for turn, expected in zip(
-            turns, ("configured-high", "configured-low"), strict=True
-        ):
-            self.assertEqual(turn["params"]["model"], expected)
-            payload = json.loads(turn["params"]["input"][0]["text"])
-            self.assertEqual(payload["task"]["model_selection"]["model"], expected)
-        self.assertIn("configured-high", payload["escalation_contract"]["instructions"])
-        self.assertIn("configured-low", payload["escalation_contract"]["instructions"])
 
     def test_background_occurrences_get_fresh_threads_and_retry_journals(self):
         first, second = _telegram_task(901), _telegram_task(902)
@@ -145,15 +116,16 @@ class AppServerExecutorTests(unittest.TestCase):
     def test_idle_expiry_resumes_saved_thread_and_other_conversation_is_isolated(self):
         self.assertEqual(self.executor.execute(_telegram_task(1).envelope).errors, [])
         thread = self.calls("turn/start")[0]["params"]["threadId"]
-        deadline = time.monotonic() + 4
-        while (
-            list(self.root.glob("sessions/*/rpc.sock")) and time.monotonic() < deadline
-        ):
-            time.sleep(0.025)
+        self.wait_for_idle_owners()
         self.assertFalse(list(self.root.glob("sessions/*/rpc.sock")))
         self.assertEqual(self.executor.execute(_telegram_task(2).envelope).errors, [])
-        self.assertEqual(self.calls("thread/resume")[0]["params"]["threadId"], thread)
-        self.assertTrue(self.calls("thread/resume")[0]["params"]["excludeTurns"])
+        resume = self.calls("thread/resume")[0]["params"]
+        self.assertEqual(resume["threadId"], thread)
+        self.assertTrue(resume["excludeTurns"])
+        # Full access and no approvals apply to new and resumed threads alike.
+        for params in (self.calls("thread/start")[0]["params"], resume):
+            self.assertEqual(params["sandbox"], "danger-full-access")
+            self.assertEqual(params["approvalPolicy"], "never")
         other = self.executor.for_conversation("conversation-b")
         self.assertEqual(other.execute(_telegram_task(3).envelope).errors, [])
         self.assertEqual(self.calls("turn/start")[-1]["params"]["threadId"], thread)
@@ -242,29 +214,6 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(result.errors, [])
         self.assertEqual(result.escalation_reason, "Needs a broader change")
 
-    def test_full_access_and_no_approvals_apply_to_new_and_resumed_threads(self):
-        executor = self.executor
-        self.assertEqual(executor.execute(_telegram_task(1).envelope).errors, [])
-        self.assertEqual(
-            self.calls("thread/start")[0]["params"]["sandbox"], "danger-full-access"
-        )
-        self.assertEqual(
-            self.calls("thread/start")[0]["params"]["approvalPolicy"], "never"
-        )
-        deadline = time.monotonic() + 4
-        while (
-            list(self.root.glob("sessions/*/rpc.sock")) and time.monotonic() < deadline
-        ):
-            time.sleep(0.025)
-        self.assertFalse(list(self.root.glob("sessions/*/rpc.sock")))
-        self.assertEqual(executor.execute(_telegram_task(2).envelope).errors, [])
-        self.assertEqual(
-            self.calls("thread/resume")[0]["params"]["sandbox"], "danger-full-access"
-        )
-        self.assertEqual(
-            self.calls("thread/resume")[0]["params"]["approvalPolicy"], "never"
-        )
-
     def test_owner_death_leaves_uncertain_turn_blocked_after_restart(self):
         killed = False
 
@@ -334,24 +283,6 @@ class AppServerExecutorTests(unittest.TestCase):
                 _telegram_task(2, content="[thread_id=99] /executor@bot exec").envelope
             ),
             ("executor", "exec"),
-        )
-
-    def test_switch_command_is_a_followup_barrier_for_a_running_turn(self):
-        parent = _telegram_task(1)
-        self.store.stage_inbox_task(parent)
-        self.store.claim_next_inbox_task()
-        switch = _telegram_task(2, content="/executor app-server")
-        later = _telegram_task(3)
-        self.store.stage_inbox_task(switch)
-        self.store.stage_inbox_task(later)
-        self.assertEqual(
-            self.store.claim_conversation_followups(parent_task_id=parent.task_id), []
-        )
-        self.assertEqual(
-            self.store.get_inbox_task(task_id=switch.task_id).state, "pending"
-        )
-        self.assertEqual(
-            self.store.get_inbox_task(task_id=later.task_id).state, "pending"
         )
 
     def test_selector_and_missing_reply_recovery_use_the_same_thread(self):

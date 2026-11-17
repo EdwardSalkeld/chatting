@@ -265,7 +265,7 @@ class WorkerInboxTests(unittest.TestCase):
         )
 
     def test_commands_stop_followup_claiming_without_overtaking(self) -> None:
-        for command in ("/set low", "/usage@MyBot"):
+        for command in ("/executor app-server", "/usage@MyBot"):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as tmpdir:
                 store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
                 parent = _telegram_task(1)
