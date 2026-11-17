@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/metrics"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/personalinbox"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/reminders"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
@@ -25,6 +26,7 @@ func main() {
 	port := flag.Int("port", 19464, "Loopback fixture port")
 	empty := flag.Bool("empty", false, "Start with empty fixtures")
 	noInbox := flag.Bool("no-inbox", false, "Omit the optional personal inbox endpoint")
+	rich := flag.Bool("rich", false, "Also seed many schedules, reminders, inbox decisions and handler metrics")
 	flag.Parse()
 	if *dir == "" {
 		log.Fatal("--state-dir is required")
@@ -92,17 +94,42 @@ func main() {
 			}
 		}
 		_ = db.Close()
+		if *rich {
+			if err := seedRich(ctx, store, filepath.Join(*dir, "handler.db"), inboxPath); err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
-	mux := http.NewServeMux()
-	scheduleService := schedules.NewService(store)
-	schedules.RegisterRoutes(mux, scheduleService)
-	schedules.RegisterUIRoutes(mux, scheduleService)
-	reminderService := reminders.NewService(store)
-	reminders.RegisterRoutes(mux, reminderService)
-	reminders.RegisterUIRoutes(mux, reminderService)
-	if !*noInbox {
-		personalinbox.RegisterUIRoutes(mux, &personalinbox.Service{Store: inbox, Now: time.Now, Config: personalinbox.Config{DryRun: true, ConfidenceThreshold: .9, LinkTemplate: "https://example.com/mail/{email}", Folders: map[string]string{}}})
+	// Mirrors the real handler, whose metrics listener also serves the
+	// schedule, reminder and inbox routes.
+	startedAt := time.Now()
+	if *rich && !*empty {
+		startedAt = startedAt.Add(-76 * time.Hour)
+	}
+	recorder := metrics.New(startedAt, nil)
+	recorder.SetSQLitePath(filepath.Join(*dir, "handler.db"))
+	if *rich && !*empty {
+		seedRichMetrics(recorder, time.Now())
+	}
+	go func() {
+		for now := range time.Tick(5 * time.Second) {
+			recorder.RecordLoop(0, now)
+		}
+	}()
+	register := func(mux *http.ServeMux) {
+		scheduleService := schedules.NewService(store)
+		schedules.RegisterRoutes(mux, scheduleService)
+		schedules.RegisterUIRoutes(mux, scheduleService)
+		reminderService := reminders.NewService(store)
+		reminders.RegisterRoutes(mux, reminderService)
+		reminders.RegisterUIRoutes(mux, reminderService)
+		if !*noInbox {
+			personalinbox.RegisterUIRoutes(mux, &personalinbox.Service{Store: inbox, Now: time.Now, Config: personalinbox.Config{DryRun: true, ConfidenceThreshold: .9, LinkTemplate: "https://example.com/mail/{email}", Folders: map[string]string{}}})
+		}
+	}
+	if _, err := metrics.StartServer(recorder, "127.0.0.1", *port, register); err != nil {
+		log.Fatal(err)
 	}
 	log.Printf("Fixture handler: http://127.0.0.1:%d", *port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", *port), mux))
+	select {}
 }
