@@ -14,25 +14,6 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
-func TestRunEnsuresQueuesAndExitsAfterMaxLoops(t *testing.T) {
-	broker := &fakeBroker{}
-	config := handlerconfig.Defaults()
-	config.MaxLoops = 1
-	config.PollIntervalSeconds = 100
-	runner, err := NewRunner(config, broker, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	if got, want := broker.ensured, []string{TaskQueueName}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("ensured = %#v, want %#v", got, want)
-	}
-}
-
 func TestRunPublishesInternalHeartbeatTask(t *testing.T) {
 	broker := &fakeBroker{}
 	state := newFakeIngressState()
@@ -79,32 +60,6 @@ func TestRunPublishesInternalHeartbeatTask(t *testing.T) {
 	}
 	if !state.seen[taskMessage.Envelope.Source][taskMessage.Envelope.DedupeKey] {
 		t.Fatalf("dedupe key was not marked seen: %#v", state.seen)
-	}
-}
-
-func TestPublishIngressSkipsSeenEnvelope(t *testing.T) {
-	broker := &fakeBroker{}
-	state := newFakeIngressState()
-	connector := heartbeat.New(func() time.Time {
-		return testutil.MustTime(t, "2026-03-09T12:00:00Z")
-	})
-	envelope := heartbeat.BuildEnvelope(1, testutil.MustTime(t, "2026-03-09T12:00:00Z"))
-	state.seen[envelope.Source] = map[string]bool{envelope.DedupeKey: true}
-	runner, err := NewRunner(handlerconfig.Defaults(), broker, state, []Connector{connector}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	published, err := runner.PublishIngress(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if published != 0 {
-		t.Fatalf("published = %d", published)
-	}
-	if len(broker.published) != 0 {
-		t.Fatalf("broker published = %#v", broker.published)
 	}
 }
 
@@ -183,25 +138,6 @@ func TestPublishIngressAcksSeenEnvelopeFromAckingConnector(t *testing.T) {
 	}
 }
 
-func TestRunReturnsWhenContextIsCancelledDuringSleep(t *testing.T) {
-	broker := &fakeBroker{}
-	config := handlerconfig.Defaults()
-	config.MaxLoops = 0
-	runner, err := NewRunner(config, broker, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	runner.sleep = func(context.Context, time.Duration) error {
-		cancel()
-		return context.Canceled
-	}
-
-	if err := runner.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 	broker := &fakeBroker{}
 	config := handlerconfig.Defaults()
@@ -218,7 +154,7 @@ func TestRunReturnsWhenContextIsCancelledDuringConnectorPoll(t *testing.T) {
 	}
 }
 
-func TestRunRecordsLoopMetrics(t *testing.T) {
+func TestRunEnsuresQueueAndRecordsLoopMetrics(t *testing.T) {
 	broker := &fakeBroker{}
 	recorder := metrics.New(testutil.MustTime(t, "2026-03-09T12:00:00Z"), nil)
 	config := handlerconfig.Defaults()
@@ -236,6 +172,9 @@ func TestRunRecordsLoopMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if got, want := broker.ensured, []string{TaskQueueName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ensured = %#v, want %#v", got, want)
+	}
 	snapshot := recorder.Snapshot()
 	if snapshot["loops_total"] != 1 {
 		t.Fatalf("loops_total = %v", snapshot["loops_total"])

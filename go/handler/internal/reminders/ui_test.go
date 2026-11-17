@@ -3,8 +3,6 @@ package reminders
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +11,7 @@ import (
 )
 
 func TestReminderUIListsAndEditsScheduledReminder(t *testing.T) {
-	store, err := sqlitestate.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	server, store := newTestServer(t)
 	record, _, err := store.CreateReminder(context.Background(), sqlitestate.ReminderInput{
 		RunAt: time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC), Prompt: "Water plants",
 		ReplyChannelType: "telegram", ReplyChannelTarget: "-123", CreatedFromTaskID: "ui", IdempotencyKey: "ui-1",
@@ -25,12 +19,6 @@ func TestReminderUIListsAndEditsScheduledReminder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux := http.NewServeMux()
-	service := NewService(store)
-	RegisterRoutes(mux, service)
-	RegisterUIRoutes(mux, service)
-	server := httptest.NewServer(mux)
-	defer server.Close()
 
 	for path, markers := range map[string][]string{
 		"/reminders":                      {"Water plants", "/reminders/new", "/reminders/" + record.ReminderID},
