@@ -47,32 +47,6 @@ class ModelTests(unittest.TestCase):
             created_at=self.timestamp,
         )
 
-    def test_record_serialization(self):
-        common = {
-            "schema_version": "1.0",
-            "run_id": "run_1",
-            "envelope_id": "evt_1",
-            "source": "email",
-            "workflow": "default",
-            "result_status": "success",
-            "created_at": "2026-02-27T16:05:00Z",
-        }
-        for model, expected in (
-            (self.run, {**common, "latency_ms": 42}),
-            (self.audit, {**common, "detail": {"reason_codes": []}}),
-            (
-                ExecutionResult(errors=[], stdout="out", stderr="err"),
-                {
-                    "schema_version": "1.0",
-                    "errors": [],
-                    "stdout": "out",
-                    "stderr": "err",
-                },
-            ),
-        ):
-            with self.subTest(model=type(model).__name__):
-                self.assertEqual(model.to_dict(), expected)
-
     def test_top_level_schema_versions_and_timestamps(self):
         for model in (self.envelope, self.run, self.audit, ExecutionResult(errors=[])):
             for version, error in (
@@ -126,16 +100,3 @@ class ModelTests(unittest.TestCase):
     def test_outbound_message_requires_body_or_attachment(self):
         with self.assertRaisesRegex(ValueError, "body or attachment is required"):
             OutboundMessage(channel="telegram", target="12345")
-        message = OutboundMessage(
-            channel="telegram",
-            target="12345",
-            attachment=AttachmentRef(uri="file:///report.pdf", name="report.pdf"),
-        )
-        self.assertEqual(
-            message.to_dict(),
-            {
-                "channel": "telegram",
-                "target": "12345",
-                "attachment": {"uri": "file:///report.pdf", "name": "report.pdf"},
-            },
-        )

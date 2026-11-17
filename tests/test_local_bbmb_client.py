@@ -140,6 +140,7 @@ class LocalBBMBClientTests(unittest.TestCase):
         expected_frame = _frame(0x03, expected_payload)
         self.assertEqual(fake_socket.sent, [expected_frame])
 
+
 class _LocalServer:
     """Accepts connections, reads one request, then optionally replies late."""
 
