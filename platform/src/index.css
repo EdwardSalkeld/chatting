@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import './styles/legacy.css' layer(legacy);
 
 @custom-variant dark {
   &:where([data-theme='dark'], [data-theme='dark'] *) {
