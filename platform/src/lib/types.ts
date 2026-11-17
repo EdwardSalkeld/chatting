@@ -195,8 +195,6 @@ export interface Reminder {
   cancelled_at: string | null
 }
 export interface InboxRow {
-  /** Message id; older handlers omit it. */
-  id?: string
   received: string
   received_at: string
   sender: string
@@ -217,15 +215,4 @@ export interface InboxSnapshot {
   dead_letters: string
   last_error: string
   rows: InboxRow[]
-}
-/** A mailbox or Telegram effect whose outcome is unknown, e.g. interrupted mid-flight. */
-export interface InboxEffect {
-  id: string
-  message_id: string
-  kind: string
-  category?: string
-  target: string
-  status: string
-  receipt?: string
-  note?: string
 }

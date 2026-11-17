@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
-import { InboxEffects } from '@/components/inbox-effects'
 import {
   ErrorStrip,
   ErrorText,
@@ -12,7 +11,6 @@ import {
   Panel,
   SearchInput,
   StatusBadge,
-  TopbarContext,
   shortAge,
   useNow,
   usePageTitle,
@@ -88,10 +86,6 @@ export function InboxPage() {
     })
   }, [data])
 
-  const subjects = useMemo(
-    () => new Map((data?.rows || []).filter((r) => r.id).map((r) => [r.id!, r.subject])),
-    [data],
-  )
   const needle = q.trim().toLowerCase()
   const searched = needle
     ? rows.filter((row) =>
@@ -193,28 +187,22 @@ export function InboxPage() {
 
   return (
     <div className="inbox-page">
-      {data && (
-        <TopbarContext>
-          <StatusBadge
-            status={data.dry_run ? 'preview' : 'active'}
-            title={
-              data.dry_run
-                ? 'Dry run: decisions are recorded but no mailbox changes are made'
-                : 'Decisions are applied to the mailbox'
-            }
-          >
-            {data.dry_run ? 'Dry run' : 'Live'}
-          </StatusBadge>
-        </TopbarContext>
-      )}
       <ErrorStrip query={query} label="Inbox" />
       <FactsRow
         className="inbox-facts"
         items={[
           {
             label: 'Mode',
-            value: data ? (data.dry_run ? 'dry-run' : 'live') : null,
-            tone: data?.dry_run ? 'warn' : undefined,
+            value: data ? (
+              <StatusBadge status={data.dry_run ? 'preview' : 'active'}>
+                {data.dry_run ? 'Dry run' : 'Live'}
+              </StatusBadge>
+            ) : null,
+            title: data
+              ? data.dry_run
+                ? 'Dry run: decisions are recorded but no mailbox changes are made'
+                : 'Decisions are applied to the mailbox'
+              : undefined,
           },
           { label: 'Threshold', value: threshold?.toFixed(2) ?? null, priority: 2 },
           {
@@ -241,7 +229,6 @@ export function InboxPage() {
           },
         ]}
       />
-      <InboxEffects subjects={subjects} />
       <div className="toolbar inbox-toolbar">
         <FilterChips
           className="chip-strip"
@@ -424,9 +411,7 @@ function DecisionSheet({
                     </a>
                   </Button>
                 ) : (
-                  <Button size="sm" disabled title="No https link recorded for this message">
-                    Open message
-                  </Button>
+                  <span className="muted inbox-no-link">No message link recorded</span>
                 )}
               </>
             )

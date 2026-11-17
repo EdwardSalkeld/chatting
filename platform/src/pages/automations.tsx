@@ -113,6 +113,85 @@ interface ScheduleRow {
   fires: RunRow[]
 }
 
+const RECENT_FIRES = 20
+
+/** The latest cron runs across every schedule, newest first. */
+function RecentFires({
+  runs,
+  loading,
+  now,
+  onSchedule,
+}: {
+  runs: RunRow[] | undefined
+  loading: boolean
+  now: number
+  onSchedule: (job: string) => void
+}) {
+  const rows = useMemo(
+    () =>
+      runs && [...runs].sort((a, b) => ms(b.created_at) - ms(a.created_at)).slice(0, RECENT_FIRES),
+    [runs],
+  )
+  const columns: Column<RunRow>[] = [
+    {
+      key: 'status',
+      header: 'Status',
+      width: 112,
+      cell: (r) => <StatusBadge status={r.result_status} kind="run" />,
+    },
+    {
+      key: 'schedule',
+      header: 'Schedule',
+      cell: (r) => {
+        const job = parseCronTask(r.task_id)?.job
+        return job ? (
+          <button type="button" className="am-link truncate" onClick={() => onSchedule(job)}>
+            {job}
+          </button>
+        ) : (
+          <span className="muted mono truncate">{r.task_id}</span>
+        )
+      },
+      title: (r) => r.preview || undefined,
+    },
+    {
+      key: 'when',
+      header: 'When',
+      width: 120,
+      cell: (r) => <span className="num">{relTime(r.created_at, now)}</span>,
+      title: (r) => fullWhen(new Date(r.created_at), localZone),
+    },
+    {
+      key: 'latency',
+      header: 'Latency',
+      width: 80,
+      align: 'right',
+      priority: 2,
+      cell: (r) => <span className="num">{latency(r.latency_ms)}</span>,
+    },
+  ]
+  return (
+    <Panel
+      title="Recent fires"
+      meta={`latest ${RECENT_FIRES} cron runs`}
+      to="/runs?source=cron"
+      toLabel="All cron runs"
+    >
+      <DataTable
+        label="Recent fires"
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.run_id}
+        rowHref={(r) => `/runs/${encode(r.run_id)}`}
+        loading={loading}
+        sortParam={false}
+        skeletonRows={5}
+        empty="No cron runs in the recent run history"
+      />
+    </Panel>
+  )
+}
+
 function SchedulesPage() {
   usePageTitle('Schedules')
   const schedules = useSchedules()
@@ -322,6 +401,15 @@ function SchedulesPage() {
           }
         />
       </Panel>
+      <RecentFires
+        runs={cronRuns.data?.runs}
+        loading={cronRuns.isPending}
+        now={now}
+        onSchedule={(job) => {
+          const match = schedules.data?.schedules.find((s) => s.job_name === job)
+          if (match) sheet.open(match.schedule_id)
+        }}
+      />
       <AutomationSheet
         kind="schedules"
         sheet={sheet}
@@ -533,16 +621,7 @@ function RemindersPage() {
           onChange={(value) => sheet.update({ q: value }, { replace: true })}
           placeholder="Search reminders…"
         />
-        <div className="toolbar-end">
-          {notice}
-          <span
-            className="am-sub"
-            data-priority="2"
-            title="Times are shown in your browser’s timezone"
-          >
-            {localZone}
-          </span>
-        </div>
+        <div className="toolbar-end">{notice}</div>
       </div>
       <Panel>
         <ErrorStrip query={reminders} label="Handler" />

@@ -45,7 +45,7 @@ export interface DataTableProps<T> {
   rowHref?: (row: T) => string | undefined
   onRowClick?: (row: T) => void
   loading?: boolean
-  /** Shown as a single inline row when `rows` is empty. */
+  /** Shown as a single inline row when `rows` is empty; undefined rows read "Unavailable". */
   empty?: ReactNode
   /** URL param holding the sort (default `sort`); pass `false` to disable URL sorting. */
   sortParam?: string | false
@@ -224,7 +224,14 @@ export function DataTable<T>({
         <tbody>
           {!sorted && loading ? (
             <SkeletonRows rows={skeletonRows} colSpan={span} />
-          ) : !sorted?.length ? (
+          ) : !sorted ? (
+            // No rows and not loading means the request failed; the no-data copy would mislead.
+            <tr>
+              <td className="inline-empty-cell" colSpan={span}>
+                <InlineEmpty>Unavailable</InlineEmpty>
+              </td>
+            </tr>
+          ) : !sorted.length ? (
             <tr>
               <td className="inline-empty-cell" colSpan={span}>
                 <InlineEmpty>{empty}</InlineEmpty>
@@ -241,6 +248,7 @@ export function DataTable<T>({
                 <Fragment key={key}>
                   <tr
                     data-row={clickable || undefined}
+                    data-nav={rowHref?.(row) ? '' : undefined}
                     data-tone={rowTone?.(row)}
                     tabIndex={clickable ? 0 : undefined}
                     aria-label={clickable ? rowLabel?.(row) : undefined}

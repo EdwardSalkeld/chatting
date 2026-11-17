@@ -266,6 +266,18 @@ function SessionView({ id }: { id: string }) {
     },
     [scrollToEnd],
   )
+  // One control for live output: following means polling and staying at the end; stopping
+  // pauses both. Scrolling up stops following but keeps polling, so new lines are counted.
+  const liveFollowing = following && !paused
+  const toggleLive = useCallback(() => {
+    if (followRef.current && !paused) {
+      setFollowing(false)
+      setPaused(true)
+    } else {
+      setPaused(false)
+      follow(true)
+    }
+  }, [follow, paused])
 
   const jumpError = useCallback(
     (step: 1 | -1) => {
@@ -308,8 +320,7 @@ function SessionView({ id }: { id: string }) {
       if (isEditableTarget(event.target)) return
       if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"]')) return
       const key = event.key
-      if (key === 'f') follow(!followRef.current)
-      else if (key === 'p') setPaused((v) => !v)
+      if (key === 'f' || key === 'p') toggleLive()
       else if (key === 'e' || key === 'E') jumpError(key === 'E' ? -1 : 1)
       else if (key === 'c') void copy()
       else if (key === 'Escape' && followRef.current) setFollowing(false)
@@ -318,7 +329,7 @@ function SessionView({ id }: { id: string }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [follow, jumpError, copy])
+  }, [toggleLive, jumpError, copy])
 
   const [expanded, setExpanded] = useState<Record<string, 'open' | 'full' | 'closed'>>({})
   const setEntryState = useCallback(
@@ -408,28 +419,34 @@ function SessionView({ id }: { id: string }) {
               </button>
             </span>
           )}
-          {stream.active && (
+          {stream.active ? (
             <button
               type="button"
               className="t-btn"
-              aria-pressed={paused}
-              onClick={() => setPaused(!paused)}
-              title="Pause polling (p)"
+              aria-pressed={liveFollowing}
+              onClick={toggleLive}
+              title={
+                liveFollowing
+                  ? 'Following live output. Pause updates and scrolling (f)'
+                  : 'Resume updates and follow the end of the transcript (f)'
+              }
             >
-              {paused ? <Play size={14} /> : <Pause size={14} />}
-              <span>{paused ? 'Resume' : 'Pause'}</span>
+              {liveFollowing ? <Pause size={14} /> : <Play size={14} />}
+              <span>{liveFollowing ? 'Following' : paused ? 'Resume' : 'Follow'}</span>
             </button>
+          ) : (
+            visible.length > 0 && (
+              <button
+                type="button"
+                className="t-btn"
+                onClick={scrollToEnd}
+                title="Jump to the end of the transcript"
+              >
+                <ArrowDown size={14} />
+                <span>Latest</span>
+              </button>
+            )
           )}
-          <button
-            type="button"
-            className="t-btn"
-            aria-pressed={following}
-            onClick={() => follow(!following)}
-            title="Follow the end of the transcript (f)"
-          >
-            <ArrowDown size={14} />
-            <span>Follow</span>
-          </button>
           <button
             type="button"
             className="t-btn"
@@ -691,12 +708,27 @@ function SessionHeader({
       ? `reason: ${header.reason_codes.join(', ')}`
       : '',
   ].filter(Boolean)
+  // Phones get one wrapping line instead of the labelled facts, so the transcript keeps the screen.
+  const summary = [
+    elapsed != null && span(elapsed),
+    attempts != null &&
+      attempts > 1 &&
+      `attempt ${attempts}${header?.max_attempts ? `/${header.max_attempts}` : ''}`,
+    meta.model,
+    rr && `rerouted ${rr.from || '?'}→${rr.to || '?'}`,
+    t && `${tk(t.total)} tok`,
+    ctx != null && `${ctx}% ctx`,
+  ].filter(Boolean)
   return (
     <div className="t-head">
       <FactsRow
         className="t-facts"
         items={facts.map((f) => (SECONDARY_FACTS.has(f.label) ? { ...f, priority: 2 } : f))}
       />
+      <p className="t-summary">
+        <StatusBadge status={status} kind="run" />
+        {summary.length > 0 && <span>{summary.join(' · ')}</span>}
+      </p>
       {problems.length > 0 && (
         <div className="t-alert" data-tone="danger" role="alert">
           <AlertTriangle size={14} />
@@ -812,6 +844,7 @@ const Entry = memo(
     a.entry.key === b.entry.key &&
     a.entry.body === b.entry.body &&
     a.entry.running === b.entry.running &&
+    a.entry.interrupted === b.entry.interrupted &&
     a.entry.exit === b.entry.exit &&
     a.fold?.count === b.fold?.count &&
     a.fold?.open === b.fold?.open &&
@@ -856,6 +889,14 @@ function CommandBody({
         ) : entry.exit != null ? (
           <span className="t-exit" data-tone={failed ? 'danger' : 'neutral'}>
             exit {entry.exit}
+          </span>
+        ) : entry.interrupted ? (
+          <span
+            className="t-exit"
+            data-tone="warn"
+            title="The command started but no completion was recorded before its attempt or the run ended."
+          >
+            no exit recorded
           </span>
         ) : null}
         {entry.durationMs != null && entry.durationMs > 0 && (

@@ -110,19 +110,19 @@ export function Runs() {
           value={statuses.length ? statuses : ['']}
           onChange={toggleStatus}
           options={[
-            { value: '', label: 'All', count: bySource.length + liveScoped.length },
-            { value: 'live', label: 'Live', count: liveScoped.length, tone: 'live' },
-            { value: 'success', label: 'Success', count: count('success') },
+            { value: '', label: 'All', count: all ? bySource.length + liveScoped.length : null },
+            { value: 'live', label: 'Live', count: all ? liveScoped.length : null, tone: 'live' },
+            { value: 'success', label: 'Success', count: all ? count('success') : null },
             {
               value: 'execution_error',
               label: 'Failed',
-              count: count('execution_error'),
+              count: all ? count('execution_error') : null,
               tone: 'warn',
             },
             {
               value: 'dead_letter',
               label: 'Dead letters',
-              count: count('dead_letter'),
+              count: all ? count('dead_letter') : null,
               tone: 'danger',
             },
           ]}
@@ -192,7 +192,8 @@ export function Runs() {
       </div>
       <div className="runs-meta">
         <RunSummary
-          runs={visible}
+          runs={all ? visible : undefined}
+          live={showLive ? liveScoped.length : 0}
           after={[
             {
               label: 'Tokens 24h',

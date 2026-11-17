@@ -123,3 +123,6 @@
     flex: 1;
   }
 }
+.inbox-no-link {
+  font-size: var(--fs-sm);
+}

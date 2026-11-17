@@ -33,15 +33,13 @@ func platformServer(t *testing.T, upstream string) *httptest.Server {
 	return server
 }
 func TestConfigRejectsMistakesAndUpstreamCredentials(t *testing.T) {
-	for _, raw := range []string{`{"handler_url":"file:///tmp/private"}`, `{"worker_url":"http://user:secret@localhost"}`, `{"worker_url":"http://localhost/admin"}`, `{"handler_url":"http://localhost?x=1"}`, `{"unknown":1}`, `{"port":65536}`, `{"port":0}`, `null`, `{"host":""}`, `{} {}`, `{"handler_admin_url":"http://localhost/admin"}`, `{"handler_admin_url":"ftp://localhost"}`} {
+	for _, raw := range []string{`{"handler_url":"file:///tmp/private"}`, `{"worker_url":"http://user:secret@localhost"}`, `{"worker_url":"http://localhost/admin"}`, `{"handler_url":"http://localhost?x=1"}`, `{"unknown":1}`, `{"port":65536}`, `{"port":0}`, `null`, `{"host":""}`, `{} {}`} {
 		if _, err := DecodeConfig(strings.NewReader(raw)); err == nil {
 			t.Errorf("accepted %s", raw)
 		}
 	}
-	for _, raw := range []string{`{}`, `{"handler_admin_url":"http://127.0.0.1:9467"}`} {
-		if _, err := DecodeConfig(strings.NewReader(raw)); err != nil {
-			t.Fatal(raw, err)
-		}
+	if _, err := DecodeConfig(strings.NewReader(`{}`)); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestGatewayOnlyForwardsSupportedRoutesAndMethods(t *testing.T) {
@@ -265,64 +263,5 @@ func TestGatewayRewritesRunsDeadLettersAndMetricsRoutes(t *testing.T) {
 		if tc.upstream == "/metrics" && (!strings.HasPrefix(response.Header.Get("Content-Type"), "text/plain") || string(body) != "chatting_up 1\n") {
 			t.Errorf("%s: metrics text not passed through: %q %q", tc.path, response.Header.Get("Content-Type"), body)
 		}
-	}
-}
-
-func TestGatewayInboxEffectRoutesNeedAdminURLAndOnlyReachTheResolveAPI(t *testing.T) {
-	var seen []string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		seen = append(seen, r.Method+" "+r.URL.RequestURI()+" "+string(body))
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer upstream.Close()
-	call := func(server *httptest.Server, method, path, origin, body string) int {
-		t.Helper()
-		request, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
-		if origin != "" {
-			request.Header.Set("Origin", origin)
-		}
-		response, err := server.Client().Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = response.Body.Close()
-		return response.StatusCode
-	}
-	readOnly := platformServer(t, upstream.URL)
-	if status := call(readOnly, "GET", "/api/handler/inbox/effects", "", ""); status != 404 || len(seen) != 0 {
-		t.Fatalf("effects without an admin URL: %d %v", status, seen)
-	}
-	config := DefaultConfig()
-	config.HandlerURL, config.WorkerURL, config.HandlerAdminURL = upstream.URL, upstream.URL, upstream.URL
-	handler, err := NewHandler(config, assets())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	for _, tc := range []struct {
-		method, path, origin string
-		status               int
-	}{
-		{"POST", "/api/handler/inbox/effects", server.URL, 405},
-		{"GET", "/api/handler/inbox/effects/resolve", "", 405},
-		{"POST", "/api/handler/inbox/effects/resolve", "https://other.example", 403},
-		{"GET", "/api/handler/inbox/effects/other", "", 404},
-	} {
-		if status := call(server, tc.method, tc.path, tc.origin, `{}`); status != tc.status {
-			t.Errorf("%s %s: got %d want %d", tc.method, tc.path, status, tc.status)
-		}
-	}
-	if len(seen) != 0 {
-		t.Fatalf("rejected requests reached upstream: %v", seen)
-	}
-	resolve := `{"id":"m1:telegram","outcome":"done","note":"seen"}`
-	if call(server, "GET", "/api/handler/inbox/effects?after=x", "", "") != 200 || call(server, "POST", "/api/handler/inbox/effects/resolve", server.URL, resolve) != 200 {
-		t.Fatal("allowed effect requests failed")
-	}
-	want := []string{"GET /api/personal-inbox/effects/uncertain ", "POST /api/personal-inbox/resolve " + resolve}
-	if strings.Join(seen, "|") != strings.Join(want, "|") {
-		t.Fatalf("upstream calls %q want %q", seen, want)
 	}
 }

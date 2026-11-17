@@ -22,6 +22,8 @@ export interface TranscriptEntry {
   exit?: number | null
   durationMs?: number
   running?: boolean
+  /** Started but never completed before its attempt or the run ended. */
+  interrupted?: boolean
 }
 export interface TokenUsage {
   input: number
@@ -125,6 +127,15 @@ export function transcript(events: ActivityEvent[], finished: boolean): Transcri
   let buffer = '',
     bufferAt = '',
     bufferKey = ''
+  // A command with no completion when its attempt or the run ends will never get one.
+  function interruptOpenCommands() {
+    for (const row of commands.values()) {
+      if (!row.running) continue
+      row.running = false
+      row.interrupted = true
+      row.tone = 'warn'
+    }
+  }
   function add(entry: Omit<TranscriptEntry, 'body'> & { body?: string }) {
     const full = { body: '', ...entry }
     entries.push(full)
@@ -294,6 +305,7 @@ export function transcript(events: ActivityEvent[], finished: boolean): Transcri
         })
         break
       case 'executor_started':
+        interruptOpenCommands()
         meta.attempts++
         add({ ...base, kind: 'system', body: '' })
         break
@@ -312,6 +324,7 @@ export function transcript(events: ActivityEvent[], finished: boolean): Transcri
         add({ ...base, kind: 'error', tone: 'danger', body: text })
         break
       case 'task_finished': {
+        interruptOpenCommands()
         const status = String(detail.result_status || '')
         meta.finishedStatus = status || undefined
         const reasons = Array.isArray(detail.reason_codes) ? detail.reason_codes.join(', ') : ''
@@ -343,6 +356,7 @@ export function transcript(events: ActivityEvent[], finished: boolean): Transcri
       }
     }
   }
+  if (finished) interruptOpenCommands()
   let tokens = execTokens
   for (const total of threadTotals.values()) tokens = addUsage(tokens, total)
   meta.tokens = tokens
@@ -369,7 +383,7 @@ export function matchesFind(entry: TranscriptEntry, needle: string) {
 
 export function entryText(entry: TranscriptEntry) {
   if (entry.kind === 'command' && entry.command != null)
-    return `$ ${entry.command}${entry.exit != null ? `  (exit ${entry.exit})` : ''}${entry.output ? `\n${entry.output}` : ''}`
+    return `$ ${entry.command}${entry.exit != null ? `  (exit ${entry.exit})` : entry.interrupted ? '  (no exit recorded)' : ''}${entry.output ? `\n${entry.output}` : ''}`
   return entry.body ? `${entry.label}: ${entry.body}` : entry.label
 }
 

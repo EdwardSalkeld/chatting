@@ -23,6 +23,16 @@
 .item-failures {
   color: var(--warn);
 }
+.th-sub {
+  color: var(--fg-3);
+  font-weight: 400;
+}
+.item-wait {
+  color: var(--fg-3);
+}
+[data-tone='warn'] > .item-wait {
+  color: var(--warn);
+}
 .item-facts {
   padding: 0 2px;
 }
@@ -122,6 +132,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.item-tail-inline {
+  display: none;
+  margin-right: 6px;
+  color: var(--fg-2);
+  font-family: var(--font-sans-stack);
+  font-weight: 500;
+}
 .item-tail-text {
   color: var(--fg);
   overflow: hidden;
@@ -171,5 +188,8 @@
   }
   .item-tail-kind {
     display: none;
+  }
+  .item-tail-inline {
+    display: inline;
   }
 }

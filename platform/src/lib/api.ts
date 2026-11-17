@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query'
 import type {
   ActivitySnapshot,
   DeadLettersSnapshot,
-  InboxEffect,
   InboxSnapshot,
   ItemsSnapshot,
   Reminder,
@@ -130,13 +129,5 @@ export const useInbox = () =>
     queryKey: ['inbox'],
     queryFn: () => api<InboxSnapshot>('handler/inbox'),
     refetchInterval: 10000,
-    retry: false,
-  })
-/** Needs `handler_admin_url` on the platform; a 404 means the routes are not configured. */
-export const useInboxEffects = () =>
-  useQuery({
-    queryKey: ['inbox-effects'],
-    queryFn: () => api<{ effects: InboxEffect[] }>('handler/inbox/effects'),
-    refetchInterval: 15000,
     retry: false,
   })

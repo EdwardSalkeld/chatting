@@ -203,22 +203,31 @@ export function WorkItems() {
       priority: 2,
       sortValue: (r) => r.item.run_count,
       sortDescFirst: true,
-      cell: (r) => (
-        <span className="num">
-          {r.item.run_count}
-          {r.failures > 0 && (
-            <span className="item-failures" title={`${r.failures} failed`}>
-              {' '}
-              ·{r.failures}
-            </span>
-          )}
-        </span>
-      ),
+      cell: (r) => <span className="num">{r.item.run_count}</span>,
+    },
+    {
+      key: 'failures',
+      header: 'Failed',
+      width: 80,
+      align: 'right',
+      priority: 2,
+      sortValue: (r) => r.failures || null,
+      sortDescFirst: true,
+      cell: (r) =>
+        r.failures > 0 ? <span className="num item-failures">{r.failures}</span> : null,
+      title: (r) =>
+        r.failures > 0
+          ? `${r.failures} failed or dead-lettered runs in the run history`
+          : undefined,
     },
     {
       key: 'queued',
-      header: 'Queued',
-      width: 88,
+      header: (
+        <span title="Queued tasks · how long the oldest has waited">
+          Queued <span className="th-sub">· oldest</span>
+        </span>
+      ),
+      width: 140,
       align: 'right',
       priority: 3,
       sortValue: (r) => (r.item.queued ? time(r.item.oldest_queued_at) || 1 : null),
@@ -228,7 +237,7 @@ export function WorkItems() {
         return (
           <span className="num" data-tone={since && now - since > 600e3 ? 'warn' : undefined}>
             {r.item.queued}
-            {since ? ` · ${shortAge(now - since)}` : ''}
+            {since ? <span className="item-wait"> · {shortAge(now - since)}</span> : ''}
           </span>
         )
       },
@@ -292,10 +301,20 @@ export function WorkItems() {
           onChange={(value) => update({ status: value === filter ? null : value || null })}
           options={[
             { value: '', label: 'All', count: searched?.length ?? null },
-            { value: 'live', label: 'Running', count: counts.live, tone: 'live' },
-            { value: 'queued', label: 'Queued', count: counts.queued, tone: 'pending' },
-            { value: 'failed', label: 'Failed', count: counts.failed, tone: 'warn' },
-            { value: 'idle', label: 'Idle', count: counts.idle },
+            { value: 'live', label: 'Running', count: searched ? counts.live : null, tone: 'live' },
+            {
+              value: 'queued',
+              label: 'Queued',
+              count: searched ? counts.queued : null,
+              tone: 'pending',
+            },
+            {
+              value: 'failed',
+              label: 'Failed',
+              count: searched ? counts.failed : null,
+              tone: 'warn',
+            },
+            { value: 'idle', label: 'Idle', count: searched ? counts.idle : null },
           ]}
         />
         <SearchInput
@@ -498,7 +517,9 @@ export function WorkItemDetail() {
           placeholder="Search runs…"
         />
       </div>
-      {runs && runs.length > 0 && <RunSummary runs={visible || []} />}
+      {runs && runs.length > 0 && (
+        <RunSummary runs={visible || []} live={!status || status === 'live' ? live.length : 0} />
+      )}
       <section className="panel">
         <RunTable
           label="Run history"
@@ -589,7 +610,11 @@ function ItemInsights({ runs, live }: { runs: RunRow[]; live?: Executor }) {
               <li key={entry.key} data-kind={entry.kind} data-tone={entry.tone}>
                 <time className="num">{fmtClock(entry.at, true)}</time>
                 <span className="item-tail-kind">{entry.label}</span>
-                <span className="item-tail-text">{tailText(entry)}</span>
+                <span className="item-tail-text">
+                  {/* Phones drop the kind column, so the label leads the text instead. */}
+                  <span className="item-tail-inline">{entry.label}</span>
+                  {tailText(entry)}
+                </span>
               </li>
             ))}
           </ol>
@@ -660,8 +685,8 @@ function ItemInsights({ runs, live }: { runs: RunRow[]; live?: Executor }) {
 
 function tailText(entry: TranscriptEntry) {
   if (entry.kind === 'command' && entry.command != null)
-    return `$ ${entry.command}${entry.exit != null ? `  → exit ${entry.exit}` : entry.running ? '  (running)' : ''}`
-  return entry.body.split('\n')[0] || '—'
+    return `$ ${entry.command}${entry.exit != null ? `  → exit ${entry.exit}` : entry.running ? '  (running)' : entry.interrupted ? '  (no exit recorded)' : ''}`
+  return entry.body.split('\n')[0]
 }
 
 function percentile(values: number[], p: number) {

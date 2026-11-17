@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Tip, TooltipProvider } from '@/components/ui/tooltip'
 import { useDayRuns, useInbox, useItems, useReminders, useSchedules } from '@/lib/api'
-import { useShortcuts } from '@/lib/keys'
+import { PALETTE_KEY, useShortcuts } from '@/lib/keys'
 import { fmtClock } from '@/lib/format'
 import { Overview } from '@/pages/overview'
 import { WorkItems, WorkItemDetail } from '@/pages/work'
@@ -70,7 +70,7 @@ function Shell() {
     go: navigate,
   })
   useEffect(() => setMore(false), [location.pathname])
-  // Sections linked by hash (#tokens, #effects) render after their data loads, so look a few times.
+  // Sections linked by hash (#tokens) render after their data loads, so look a few times.
   useEffect(() => {
     const id = location.hash.slice(1)
     if (!id) return
@@ -145,6 +145,7 @@ function Shell() {
               <div className="topbar-actions" ref={head.setActionsSlot} />
               <div className="topbar-spacer" />
               <div className="topbar-tools">
+                <ZoneLabel />
                 <ServiceAges />
                 <ThemeToggle />
                 <button
@@ -155,7 +156,7 @@ function Shell() {
                 >
                   <Command />
                   <span>Jump to…</span>
-                  <kbd>⌘K</kbd>
+                  <kbd>{PALETTE_KEY}</kbd>
                 </button>
               </div>
             </header>
@@ -344,6 +345,19 @@ function ServiceBanner() {
         </span>
       ))}
     </div>
+  )
+}
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone
+const ZONE_SHORT =
+  new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+    .formatToParts(new Date())
+    .find((part) => part.type === 'timeZoneName')?.value || ZONE
+/** Every clock time in the console is in the browser's zone; say which, once. */
+function ZoneLabel() {
+  return (
+    <span className="zone-label" title={`Times are shown in your browser’s timezone, ${ZONE}`}>
+      {ZONE_SHORT}
+    </span>
   )
 }
 function ServiceAges() {

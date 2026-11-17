@@ -1,6 +1,6 @@
 import { AlertCircle, Search } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { statusLabel, statusTone, type StatusKind, type Tone } from '@/lib/status'
@@ -150,17 +150,30 @@ export function AgeChip({
 }) {
   const now = useNow(1000)
   const tone = ageTone({ updatedAt, interval, error, now })
-  const age = updatedAt ? shortAge(now - updatedAt) : 'loading'
+  const age = updatedAt ? shortAge(now - updatedAt) : ''
   const description = error
     ? `${label || 'Data'} unavailable${updatedAt ? `, last data ${age} ago` : ''}`
     : updatedAt
       ? `${label || 'Data'} updated ${age} ago`
-      : `${label || 'Data'} loading`
+      : `${label || 'Data'} connecting`
   return (
     <span className={cn('age-chip', className)} data-tone={tone} title={description}>
       <span className="status-dot" data-tone={tone} />
       {label && <span className="age-label">{label}</span>}
-      <span aria-hidden>{error && !updatedAt ? 'down' : age}</span>
+      {/* A healthy labelled pill shows no number: a bare "2s" reads as latency. */}
+      {(!label || tone !== 'ok') && (
+        <span aria-hidden>
+          {error
+            ? updatedAt
+              ? `down · ${age} ago`
+              : 'down'
+            : !updatedAt
+              ? 'connecting'
+              : tone === 'ok'
+                ? `updated ${age} ago`
+                : `stale · ${age} ago`}
+        </span>
+      )}
       <span className="sr-only">{description}</span>
     </span>
   )
@@ -201,6 +214,37 @@ export interface ChipOption {
   tone?: Tone
 }
 /** Toggle chips. `value` may be an array for multi-select; `onChange` receives the clicked value. */
+/**
+ * Marks a horizontal scroller with data-more="start|end|both" while content is hidden past an
+ * edge, so CSS can fade that edge and show there is more to scroll to.
+ */
+function useScrollEdges<T extends HTMLElement>() {
+  const ref = useRef<T>(null)
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const update = () => {
+      const max = node.scrollWidth - node.clientWidth
+      const start = node.scrollLeft > 1,
+        end = max > 1 && node.scrollLeft < max - 1
+      const more = start && end ? 'both' : start ? 'start' : end ? 'end' : ''
+      if (more) node.dataset.more = more
+      else delete node.dataset.more
+    }
+    update()
+    node.addEventListener('scroll', update, { passive: true })
+    // Chip counts arrive after mount and widen the content without resizing the strip.
+    const observer = new ResizeObserver(update)
+    observer.observe(node)
+    for (const child of Array.from(node.children)) observer.observe(child)
+    return () => {
+      node.removeEventListener('scroll', update)
+      observer.disconnect()
+    }
+  }, [])
+  return ref
+}
+
 export function FilterChips({
   options,
   value,
@@ -216,8 +260,15 @@ export function FilterChips({
   className?: string
   id?: string
 }) {
+  const ref = useScrollEdges<HTMLDivElement>()
   return (
-    <div className={cn('filter-chips', className)} id={id} role="group" aria-label={label}>
+    <div
+      ref={ref}
+      className={cn('filter-chips', className)}
+      id={id}
+      role="group"
+      aria-label={label}
+    >
       {options.map((option) => {
         const pressed = Array.isArray(value) ? value.includes(option.value) : value === option.value
         return (

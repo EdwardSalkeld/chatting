@@ -213,7 +213,7 @@ export function RunTable({
       },
       {
         key: 'attempts',
-        header: 'Att',
+        header: <span title="Attempts">Att</span>,
         width: 60,
         align: 'right',
         priority: 3,
@@ -327,6 +327,30 @@ function lastFailedCommand(entries: TranscriptEntry[]) {
   return entries.findLast((e) => e.kind === 'command' && e.exit != null && e.exit !== 0)
 }
 
+const firstLine = (text: string) => text.trim().split('\n')[0]
+
+/**
+ * The best explanation a transcript offers for a failure the run did not record: an error
+ * line, then stderr, then a command that never finished, then the executor's last message.
+ */
+function transcriptReason(entries: TranscriptEntry[]): { text: string; error: boolean } | null {
+  const error = entries.find(
+    (e) => e.kind === 'error' && e.body.trim() && !/^task finished/i.test(e.label),
+  )
+  if (error) return { text: `${error.label}: ${firstLine(error.body)}`, error: true }
+  const stderr = entries.findLast((e) => e.label === 'stderr' && e.body.trim())
+  if (stderr)
+    return {
+      text: `stderr: ${firstLine(stderr.body.split('\n').filter(Boolean).at(-1) || '')}`,
+      error: true,
+    }
+  const interrupted = entries.findLast((e) => e.interrupted)
+  if (interrupted) return { text: `A command never finished: ${interrupted.command}`, error: false }
+  const message = entries.findLast((e) => e.kind === 'assistant' && e.body.trim())
+  if (message) return { text: `Its last message: “${firstLine(message.body)}”`, error: false }
+  return null
+}
+
 function useTranscript(taskID: string | null | undefined) {
   const events = useQuery({
     queryKey: ['task-events', taskID],
@@ -364,14 +388,8 @@ function RunFailureDetail({ run }: { run: RunRow }) {
       ? `${run.last_error}${run.last_error_stage ? ` · stage ${run.last_error_stage}` : ''}`
       : '',
   ].filter(Boolean)
-  const firstError =
-    errorEntries.find((e) => e.body.trim() && !/^task finished/i.test(e.label)) || errorEntries[0]
-  const fromTranscript =
-    !recorded.length && firstError
-      ? firstError.body.trim()
-        ? `${firstError.label}: ${firstError.body.split('\n')[0]}`
-        : firstError.label
-      : ''
+  const reason = !recorded.length && entries ? transcriptReason(entries) : null
+  const fromTranscript = reason?.error ? reason.text : ''
   const errors = recorded.length ? recorded : fromTranscript ? [fromTranscript] : []
   const output = (command?.output || '').replace(/\n+$/, '').split('\n').slice(-6).join('\n')
   return (
@@ -383,18 +401,22 @@ function RunFailureDetail({ run }: { run: RunRow }) {
         </pre>
       ) : events.isPending ? (
         <span className="muted">Loading transcript…</span>
+      ) : reason ? (
+        <span className="muted">No error was recorded for this run. {reason.text}</span>
       ) : (
         <span className="muted">
-          No error was recorded for this run or found in its transcript.
+          The run ended as {statusLabel(run.result_status).toLowerCase()} without recording an
+          error, and its transcript has no error, stderr or unfinished command.
         </span>
       )}
       <FactsRow
         items={[
           {
             label: 'Reason',
-            value: run.reason_codes?.length ? run.reason_codes.join(', ') : '—',
+            value: run.reason_codes?.join(', '),
             mono: true,
-            tone: run.reason_codes?.length ? 'warn' : undefined,
+            tone: 'warn',
+            hidden: !run.reason_codes?.length,
           },
           {
             label: 'Attempts',
@@ -410,13 +432,11 @@ function RunFailureDetail({ run }: { run: RunRow }) {
                   exit {command.exit}
                 </span>
               </span>
-            ) : events.isError ? (
-              <span className="muted">transcript unavailable</span>
             ) : (
-              <span className="muted">none</span>
+              <span className="muted">transcript unavailable</span>
             ),
             title: command?.command,
-            hidden: events.isPending,
+            hidden: events.isPending || (!command && !events.isError),
           },
           {
             label: 'Finished',
@@ -486,9 +506,6 @@ function DeadLetterDetail({ dl }: { dl: DeadLetter }) {
           {
             label: 'Status',
             value: dl.replayed_run_id ? 'Replayed' : statusLabel(dl.status),
-            title: dl.replayed_run_id
-              ? undefined
-              : 'Not replayed. The worker has no replay mechanism yet; resend the request from its source.',
           },
           { label: 'Source', value: dl.source || '—' },
           {
@@ -524,17 +541,22 @@ export function useDeadLetterMap() {
 }
 
 /** Summary strip: run count, failure rate, latency percentiles and tokens. */
+/** Figures for finished runs; `runs` is undefined while loading or unavailable, shown as "—". */
 export function RunSummary({
   runs,
+  live = 0,
   extra = [],
   after = [],
 }: {
-  runs: RunRow[]
+  runs: RunRow[] | undefined
+  /** Live runs in view, which the figures leave out; shown beside the finished count. */
+  live?: number
   extra?: Fact[]
   after?: Fact[]
 }) {
   const [all, setAll] = useState(false)
   const facts = useMemo(() => {
+    if (!runs) return null
     const latencies = runs.map((r) => r.latency_ms).sort((a, b) => a - b)
     const pick = (p: number) =>
       latencies.length
@@ -551,25 +573,40 @@ export function RunSummary({
         className="run-summary"
         items={[
           ...extra,
-          { label: 'Runs', value: runs.length },
+          {
+            label: 'Finished',
+            value: runs ? (
+              <>
+                {runs.length}
+                {live > 0 && <span className="muted"> · {live} live</span>}
+              </>
+            ) : null,
+            title:
+              live > 0
+                ? `${runs?.length ?? '—'} finished and ${live} live; the figures here cover finished runs only`
+                : 'Finished runs in view',
+          },
           {
             label: 'Failed',
-            value: runs.length
-              ? `${facts.failed} · ${((facts.failed / runs.length) * 100).toFixed(1)}%`
-              : '—',
-            tone: facts.failed ? 'warn' : undefined,
+            value:
+              runs && facts
+                ? runs.length
+                  ? `${facts.failed} · ${((facts.failed / runs.length) * 100).toFixed(1)}%`
+                  : '—'
+                : null,
+            tone: facts?.failed ? 'warn' : undefined,
           },
           {
             label: 'Dead letters',
-            value: facts.dead,
-            tone: facts.dead ? 'danger' : undefined,
+            value: facts ? facts.dead : null,
+            tone: facts?.dead ? 'danger' : undefined,
             priority: 2,
           },
-          { label: 'p50', value: fmtLatency(facts.p50) },
-          { label: 'p95', value: fmtLatency(facts.p95), priority: 2 },
+          { label: 'p50', value: facts ? fmtLatency(facts.p50) : null },
+          { label: 'p95', value: facts ? fmtLatency(facts.p95) : null, priority: 2 },
           {
             label: 'Tokens',
-            value: facts.tokens ? fmtTokens(facts.tokens) : '—',
+            value: facts?.tokens ? fmtTokens(facts.tokens) : '—',
             mono: true,
             priority: 2,
           },

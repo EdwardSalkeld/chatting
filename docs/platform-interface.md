@@ -11,8 +11,7 @@ level. The listener defaults to loopback.
 built with Vite, Tailwind CSS and shadcn/ui, then embedded in the binary. Node is
 only needed at build time. The platform has no database, integration credentials,
 or executor of its own. It connects to the handler’s metrics/admin listener and
-the worker’s activity listener. It never uses the webhook listener, and uses the
-egress listener only when `handler_admin_url` is set (see below).
+the worker’s activity listener; it does not use the egress or webhook listeners.
 
 Build from the repository root with Node 24 and the Go version in
 `go/handler/go.mod`:
@@ -45,12 +44,6 @@ All fields are optional. An omitted `--config` uses these defaults:
 }
 ```
 
-`handler_admin_url` is optional and has no default. Set it to the handler's
-loopback egress listener (for example `http://127.0.0.1:9467`) to enable the one
-write the platform makes there: resolving personal inbox effects whose outcome
-is unknown. Without it the platform does not contact that listener and the
-effect routes answer 404.
-
 Upstream URLs are HTTP(S) origins with no credentials, paths or query strings.
 Unknown config keys are rejected. Each installation owns its bind address,
 network gate, service configuration and rollout procedure in its deployment
@@ -72,7 +65,7 @@ service failures. Unknown paths render the app's own not-found page.
   tokens carry an hourly 24h sparkline built from the runs list), a one-line
   system strip, a "needs
   attention" list (dead letters, failed runs with their error, overdue
-  reminders, stuck inbox mail, uncertain inbox effects, old outbox rows, a stale
+  reminders, stuck inbox mail, old outbox rows, a stale
   handler loop), running and queued work (queued rows show their position and
   time in the queue), upcoming schedule and reminder fires, recent runs and inbox
   categories.
@@ -93,15 +86,18 @@ service failures. Unknown paths render the app's own not-found page.
 - Sessions (`/tasks/:id`, `/runs/:id`): run facts (status, attempts, backend,
   model and reroutes, tokens, context use), errors, and the transcript of
   messages, paired commands with exit codes, system events and deliveries. Kind
-  filters (`?show=`), find (`?find=`), error navigation, pause/resume, follow
-  and copy. Consecutive lines that differ only in numbers (heartbeats) fold
-  into one row with a count; gaps over 30 seconds are marked; open commands
-  show how long they have run. Model, tokens and context use appear as soon
+  filters (`?show=`), find (`?find=`), error navigation, one follow/pause
+  control while live (a Latest jump once ended) and copy. Consecutive lines
+  that differ only in numbers (heartbeats) fold into one row with a count; gaps
+  over 30 seconds are marked; open commands show how long they have run, and
+  commands with no completion when their attempt or run ended show "no exit
+  recorded". Phones show the facts as one compact line. Model, tokens and context use appear as soon
   as the executor reports them, including while live. Codex exec and
   app-server output formats are both supported.
 - Schedules (`/schedules`): next and last run, cron in plain English, filters
   and a side sheet (`?edit=`, `?new=1`) to create, edit or delete with live
   cron/timezone validation, the next five fires, recent fires and revisions.
+  Below the table, the latest 20 cron runs across all schedules.
   Save stays disabled until a field differs from the loaded record.
 - Reminders (`/reminders`): Upcoming and History tabs; the sheet creates,
   reschedules or cancels. "When" is typed as 24h `YYYY-MM-DD HH:MM` in the
@@ -109,25 +105,24 @@ service failures. Unknown paths render the app's own not-found page.
   Reply metadata and context are preserved, and retries of an unchanged
   submission reuse an idempotency key.
 - Personal inbox (`/inbox`): mode, threshold, waiting/stuck/dead-letter facts,
-  category filters and a detail sheet (`?row=`). When `handler_admin_url` is
-  set, an "Uncertain effects" table lists effects interrupted before the
-  handler recorded a result, with Mark done and Retry actions (confirmed, and
-  a reconciliation note is required). A missing inbox endpoint is shown as "not
-  configured", separately from a failed service.
+  category filters and a detail sheet (`?row=`). Read-only. A missing inbox
+  endpoint is shown as "not configured", separately from a failed service.
 - System (`/system`): handler and worker `/metrics` as grouped key/values with
   per-minute rates, queue and outbox state, live executors, token use by model
   over 24 hours, 7 days or 30 days (`?window=`, linked from the Overview tokens
   tile as `#tokens`) and the raw text (`?show=raw`).
 
-Operator actions are limited to what the services already implement: schedule
-and reminder edits, and resolving uncertain inbox effects. Dead-letter replay,
-cancelling a live executor, running a schedule now and overriding an inbox
-classification have no mechanism in the worker or handler, so the platform does
-not offer them.
-
 Write results, write failures and `r` refetches are announced in one polite
 toast region. If the handler or worker has been unreachable for 30 seconds a
 banner under the top bar says since when and offers Retry, on every screen size.
+The top bar names the browser timezone every clock time is shown in, and shows
+a service's data age only when it is stale or down.
+
+Rows that open a page show a trailing arrow on hover, rows that open a side
+sheet highlight, and rows that expand in place carry a leading chevron. Work
+items and runs open pages because they hold long histories and transcripts
+worth linking to; inbox decisions, schedules and reminders are short records,
+so a sheet keeps the list in view.
 
 The sidebar counts running executors, failed runs in the last 24h, overdue
 reminders and waiting inbox mail. The tab title is prefixed with `● ` while an
@@ -145,7 +140,7 @@ Keyboard shortcuts (`?` lists them; ignored while typing):
 | `g` then `o i r s m n y` | Overview, Items, Runs, Schedules, Reminders, Inbox, System |
 | `[`                      | Collapse the sidebar                                       |
 | `r`                      | Refetch the page                                           |
-| `f` / `p` / `e` / `c`    | Session: follow, pause, next error, copy                   |
+| `f` / `p` / `e` / `c`    | Session: follow or pause live output, next error, copy     |
 | `Esc`                    | Clear search, close a sheet or stop following              |
 
 Work items and activity update every four seconds, runs every five, handler
@@ -160,24 +155,22 @@ show "—", never a healthy zero.
 
 The browser uses same-origin APIs. The platform forwards only these routes:
 
-| Platform route                                                 | Upstream route                                                  | Methods          |
-| -------------------------------------------------------------- | --------------------------------------------------------------- | ---------------- |
-| `/api/worker/items`                                            | Worker `/api/items`                                             | GET              |
-| `/api/worker/items/{id}/runs`                                  | Worker `/api/items/{id}/runs`                                   | GET              |
-| `/api/worker/runs?limit=&status=&source=&work_item_id=&since=` | Worker `/api/runs`                                              | GET              |
-| `/api/worker/runs/{id}`                                        | Worker `/api/runs/{id}`                                         | GET              |
-| `/api/worker/dead-letters?limit=`                              | Worker `/api/dead-letters`                                      | GET              |
-| `/api/worker/tasks/{id}/events?after=N`                        | Worker `/api/tasks/{id}/events?after=N`                         | GET              |
-| `/api/worker/activity`                                         | Worker `/activity.json`                                         | GET              |
-| `/api/worker/metrics`                                          | Worker `/metrics` (Prometheus text)                             | GET              |
-| `/api/handler/schedules`                                       | Handler `/api/schedules`                                        | GET, POST        |
-| `/api/handler/schedules/{id}`                                  | Handler `/api/schedules/{id}`                                   | GET, PUT, DELETE |
-| `/api/handler/reminders`                                       | Handler `/api/reminders`                                        | GET, POST        |
-| `/api/handler/reminders/{id}`                                  | Handler `/api/reminders/{id}`                                   | GET, PUT, DELETE |
-| `/api/handler/inbox`                                           | Handler `/api/personal-inbox/decisions`                         | GET              |
-| `/api/handler/metrics`                                         | Handler `/metrics` (Prometheus text)                            | GET              |
-| `/api/handler/inbox/effects`                                   | Handler egress listener `/api/personal-inbox/effects/uncertain` | GET              |
-| `/api/handler/inbox/effects/resolve`                           | Handler egress listener `/api/personal-inbox/resolve`           | POST             |
+| Platform route                                                 | Upstream route                          | Methods          |
+| -------------------------------------------------------------- | --------------------------------------- | ---------------- |
+| `/api/worker/items`                                            | Worker `/api/items`                     | GET              |
+| `/api/worker/items/{id}/runs`                                  | Worker `/api/items/{id}/runs`           | GET              |
+| `/api/worker/runs?limit=&status=&source=&work_item_id=&since=` | Worker `/api/runs`                      | GET              |
+| `/api/worker/runs/{id}`                                        | Worker `/api/runs/{id}`                 | GET              |
+| `/api/worker/dead-letters?limit=`                              | Worker `/api/dead-letters`              | GET              |
+| `/api/worker/tasks/{id}/events?after=N`                        | Worker `/api/tasks/{id}/events?after=N` | GET              |
+| `/api/worker/activity`                                         | Worker `/activity.json`                 | GET              |
+| `/api/worker/metrics`                                          | Worker `/metrics` (Prometheus text)     | GET              |
+| `/api/handler/schedules`                                       | Handler `/api/schedules`                | GET, POST        |
+| `/api/handler/schedules/{id}`                                  | Handler `/api/schedules/{id}`           | GET, PUT, DELETE |
+| `/api/handler/reminders`                                       | Handler `/api/reminders`                | GET, POST        |
+| `/api/handler/reminders/{id}`                                  | Handler `/api/reminders/{id}`           | GET, PUT, DELETE |
+| `/api/handler/inbox`                                           | Handler `/api/personal-inbox/decisions` | GET              |
+| `/api/handler/metrics`                                         | Handler `/metrics` (Prometheus text)    | GET              |
 
 Query strings, JSON bodies and upstream status codes are preserved. Browser
 cookies and authorization headers are not forwarded. Cross-origin browser
@@ -224,7 +217,7 @@ the existing API continues to return every matching revision. Detail
 The handler’s new `GET /api/personal-inbox/decisions` lives on the same private
 metrics/admin listener as the existing inbox page. It returns that page’s last
 200 messages as `rows`, with `sender`, `subject`, `received_at` (RFC3339),
-`decision`, `score`, `why`, `link`, `unclassified` and the message `id`. Summary fields are `dry_run`,
+`decision`, `score`, `why`, `link` and `unclassified`. Summary fields are `dry_run`,
 `threshold`, `counts`, `awaiting`, `stuck`, `oldest_wait`, `dead_letters` and
 `last_error`. The old HTML route is unchanged.
 
@@ -250,8 +243,3 @@ npm --prefix platform run build
 For browser QA without real integrations, see [testing](testing.md). Fixtures use
 real handler routes and the real worker activity monitor with disposable SQLite
 state. They start no connector, broker, executor or outbound delivery.
-
-The handler's `GET /api/personal-inbox/effects/uncertain` lives beside the
-existing `POST /api/personal-inbox/resolve` on the loopback egress listener. It
-returns `effects`: those with status `uncertain` or `inflight`, the ones resolve
-accepts, with their bodies blanked because they carry mail summaries.

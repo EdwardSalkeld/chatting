@@ -53,9 +53,9 @@
   --lh-lg: 24px;
   --fs-xl: 20px;
   --lh-xl: 24px;
-  --fs-mono-sm: 11.5px;
+  --fs-mono-sm: 11px;
   --lh-mono-sm: 16px;
-  --fs-mono-base: 12.5px;
+  --fs-mono-base: 12px;
   --lh-mono-base: 18px;
 
   --sp-1: 2px;
@@ -509,6 +509,19 @@ pre,
   align-items: center;
   gap: 4px;
   flex: none;
+}
+.zone-label {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
 }
 .service-ages {
   display: flex;
@@ -1091,6 +1104,28 @@ table.dt {
   scroll-margin-bottom: 8px;
 }
 /* The outline sits on the cells because table rows do not paint outlines reliably. */
+/* Rows that open a page show a trailing arrow on hover; rows that open a sheet only highlight,
+   and rows that expand in place carry the leading chevron. */
+/* The arrow sits in the cell's existing 12px right padding, so no column loses width. */
+.dt tbody tr[data-nav] td:last-child {
+  position: relative;
+}
+.dt tbody tr[data-nav] td:last-child::after {
+  content: '›';
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  transform: translateY(-55%);
+  color: var(--fg-3);
+  font-family: var(--font-sans-stack);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  opacity: 0;
+}
+.dt tbody tr[data-nav]:hover td:last-child::after,
+.dt tbody tr[data-nav]:focus-visible td:last-child::after {
+  opacity: 1;
+}
 .dt tbody tr:focus-visible {
   outline: none;
 }
@@ -1815,15 +1850,25 @@ a.cell-primary:hover {
     top: 11px;
   }
   .expand-button {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
   }
   .dt th.col-expand,
   .dt td.col-expand {
-    width: 34px;
+    width: 38px;
   }
   .dt td > a.cell-primary:not(.truncate) {
     padding-block: 8px;
+  }
+  /* Rows grow to 40px on phones so links and buttons inside a cell can be 36px targets. */
+  :root {
+    --row-h: 40px;
+  }
+  .dt td a:not(.truncate),
+  .dt td button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
   }
 }
 .h-short {
@@ -2008,23 +2053,6 @@ a.cell-primary:hover {
 .dl-open {
   align-self: flex-start;
 }
-.row-actions {
-  display: inline-flex;
-  gap: 4px;
-  justify-content: flex-end;
-}
-
-/* Resolve dialog */
-.resolve-target {
-  margin: 0;
-  color: var(--fg-2);
-  font-size: var(--fs-mono-sm);
-  overflow-wrap: anywhere;
-}
-.resolve-note {
-  display: grid;
-  gap: 4px;
-}
 
 /* Status legend in the shortcut sheet */
 .legend-title {
@@ -2071,7 +2099,7 @@ a.cell-primary:hover {
   .facts-more {
     display: inline-flex;
     align-items: center;
-    min-height: 32px;
+    min-height: 36px;
   }
   .run-summary-wrap.is-all .facts-row > [data-priority] {
     display: inline-flex;
@@ -2090,6 +2118,21 @@ a.cell-primary:hover {
   }
   .toolbar > .chip-strip::-webkit-scrollbar {
     display: none;
+  }
+  .toolbar > .chip-strip[data-more='end'] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  }
+  .toolbar > .chip-strip[data-more='start'] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+  }
+  .toolbar > .chip-strip[data-more='both'] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 32px,
+      #000 calc(100% - 32px),
+      transparent
+    );
   }
   .filters-toggle {
     display: inline-flex;

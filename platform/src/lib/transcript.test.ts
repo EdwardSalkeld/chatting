@@ -66,6 +66,35 @@ describe('durable executor transcript', () => {
       { command: 'ls', running: true },
     ])
   })
+  it('never leaves a command running once its run or attempt has ended', () => {
+    const start = (id: string) =>
+      lines({
+        method: 'item/started',
+        params: { item: { id, type: 'commandExecution', command: `run ${id}` } },
+      })
+    const finished = event(5, '', 'task_finished', {
+      result_status: 'dead_letter',
+      reason_codes: [],
+    })
+    const { entries } = transcript(
+      [
+        event(1, '', 'executor_started', {}),
+        event(2, start('a')),
+        event(3, '', 'executor_started', {}),
+        event(4, start('b')),
+        finished,
+      ],
+      false,
+    )
+    const commands = entries.filter((e) => e.command)
+    expect(commands).toMatchObject([
+      { command: 'run a', running: false, interrupted: true, tone: 'warn' },
+      { command: 'run b', running: false, interrupted: true },
+    ])
+    expect(transcript([event(1, start('c'))], true).entries).toMatchObject([
+      { command: 'run c', running: false, interrupted: true },
+    ])
+  })
   it('keeps malformed output and final unterminated lines visible', () => {
     expect(
       transcript([event(1, 'plain output\ntrailing line')], true).entries.map((e) => e.body),

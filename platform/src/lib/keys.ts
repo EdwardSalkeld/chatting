@@ -10,14 +10,20 @@ export const GO_TARGETS: Record<string, { to: string; label: string }> = {
   y: { to: '/system', label: 'System' },
 }
 
+const APPLE =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
+/** The palette chord as this platform writes it. */
+export const PALETTE_KEY = APPLE ? '⌘K' : 'Ctrl K'
+
 export const SHORTCUTS: { keys: string[]; label: string }[] = [
-  { keys: ['⌘K', 'Ctrl K'], label: 'Command palette' },
+  { keys: [PALETTE_KEY], label: 'Command palette' },
   { keys: ['/'], label: 'Focus page search' },
   { keys: ['Esc'], label: 'Clear search / close sheet' },
   { keys: ['j', 'k'], label: 'Next / previous row' },
   { keys: ['Enter', 'o'], label: 'Open focused row' },
   { keys: ['→', '←'], label: 'Expand / collapse dead letter' },
-  { keys: ['f', 'p'], label: 'Session: follow / pause' },
+  { keys: ['f', 'p'], label: 'Session: follow or pause live output' },
   { keys: ['e', 'c'], label: 'Session: next error / copy' },
   ...Object.entries(GO_TARGETS).map(([key, { label }]) => ({ keys: [`g ${key}`], label })),
   { keys: ['['], label: 'Collapse sidebar' },

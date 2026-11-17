@@ -28,7 +28,7 @@ func TestPlatformDecisionsShareExistingPrivateUIView(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != 200 || len(view.Rows) != 1 || view.Rows[0].Subject != "Your order" || !view.Rows[0].Unclassified || view.Awaiting != 1 || view.Rows[0].ReceivedAt == "" || view.Rows[0].ID == "" {
+	if response.StatusCode != 200 || len(view.Rows) != 1 || view.Rows[0].Subject != "Your order" || !view.Rows[0].Unclassified || view.Awaiting != 1 || view.Rows[0].ReceivedAt == "" {
 		t.Fatalf("unexpected decisions: %+v", view)
 	}
 	response, err = server.Client().Get(server.URL + "/personal-inbox")

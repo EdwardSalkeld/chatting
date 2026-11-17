@@ -21,7 +21,6 @@ func RegisterUIRoutes(mux *http.ServeMux, service *Service) {
 }
 
 type decisionRow struct {
-	ID           string `json:"id"`
 	Received     string `json:"received"`
 	ReceivedAt   string `json:"received_at"`
 	Sender       string `json:"sender"`
@@ -81,7 +80,6 @@ func (service *Service) handleUIDecisions(writer http.ResponseWriter, request *h
 	}
 	for _, message := range messages {
 		row := decisionRow{
-			ID:         message.ID,
 			Received:   time.Unix(message.Created, 0).UTC().Format("02 Jan 15:04"),
 			ReceivedAt: time.Unix(message.Created, 0).UTC().Format(time.RFC3339),
 			Sender:     message.Mail.From,

@@ -25,7 +25,6 @@ import {
   useDeadLetters,
   useHandlerMetrics,
   useInbox,
-  useInboxEffects,
   useItems,
   useReminders,
   useRuns,
@@ -54,7 +53,10 @@ import { parseProm, promSum, promValue } from '@/lib/prom'
 import '@/styles/overview.css'
 
 const DAY = 86400e3
-const ATTENTION_ROWS = 8
+// Caps keep all five panels starting above the fold at 1440x900.
+const ATTENTION_ROWS = 6,
+  RECENT_ROWS = 5,
+  UPCOMING_ROWS = 6
 const time = timeMs
 
 export function fmtNext(at: number, now: number) {
@@ -81,7 +83,9 @@ interface Attention {
   detailKind?: 'error' | 'code' | 'text'
   /** Row tooltip, e.g. the request prompt behind a failed run. */
   tooltip?: string
+  /** 0 for rows describing current state, shown as "now" unless `ageText` says more. */
   at: number
+  ageText?: string
   href: string
 }
 const TONE_RANK: Record<Tone, number> = {
@@ -125,12 +129,11 @@ export function Overview() {
   const items = useItems()
   const activity = useActivity()
   const day = useDayRuns()
-  const recent = useRuns({ limit: 10 })
+  const recent = useRuns({ limit: RECENT_ROWS })
   const deadLetters = useDeadLetters()
   const reminders = useReminders()
   const schedules = useSchedules()
   const inbox = useInbox()
-  const effects = useInboxEffects().data?.effects
   const handlerMetrics = useHandlerMetrics()
   const workerMetrics = useWorkerMetrics()
 
@@ -176,8 +179,10 @@ export function Overview() {
         title: nameOf(dl.work_item_id, dl.task_id || dl.run_id),
         secondary: `${dl.attempt_count} attempts`,
         source: dl.source,
-        detail: [dl.last_error, dl.reason_codes.join(', ')].filter(Boolean).join(' · '),
-        detailKind: 'error',
+        detail:
+          [dl.last_error, dl.reason_codes.join(', ')].filter(Boolean).join(' · ') ||
+          'No error recorded',
+        detailKind: dl.last_error || dl.reason_codes.length ? 'error' : 'text',
         at: time(dl.created_at),
         href: `/runs/${encode(dl.run_id)}`,
       })
@@ -197,8 +202,8 @@ export function Overview() {
         title: nameOf(run.work_item_id, run.task_id),
         secondary: recovered ? 'later run ok' : undefined,
         source: run.source,
-        detail: runError(run),
-        detailKind: 'error',
+        detail: runError(run) || 'No error recorded',
+        detailKind: runError(run) ? 'error' : 'text',
         tooltip: run.preview ? `Request: ${run.preview}` : undefined,
         at: time(run.created_at),
         href: `/runs/${encode(run.run_id)}`,
@@ -233,11 +238,13 @@ export function Overview() {
           title: mail.stuck
             ? `${mail.stuck} inbox messages stuck in triage`
             : `${mail.awaiting} inbox messages waiting`,
-          secondary: [mail.stuck ? `${mail.awaiting} waiting` : '', oldest]
-            .filter(Boolean)
-            .join(' · '),
+          detail:
+            [mail.stuck ? `${mail.awaiting} waiting` : '', oldest].filter(Boolean).join(' · ') ||
+            undefined,
+          detailKind: 'text',
           source: 'email',
           at: 0,
+          ageText: mail.oldest_wait || undefined,
           href: '/inbox?category=waiting',
         })
       if (Number(mail.dead_letters) > 0)
@@ -247,6 +254,8 @@ export function Overview() {
           tone: 'danger',
           label: 'Dead letter',
           title: `${mail.dead_letters} inbox dead letters`,
+          detail: 'Messages the handler stopped retrying',
+          detailKind: 'text',
           source: 'email',
           at: 0,
           href: '/inbox',
@@ -265,20 +274,6 @@ export function Overview() {
           href: '/inbox',
         })
     }
-    if (effects?.length)
-      rows.push({
-        key: 'inbox:effects',
-        status: 'uncertain',
-        tone: 'warn',
-        label: 'Uncertain',
-        title: `${effects.length} inbox ${effects.length === 1 ? 'effect needs' : 'effects need'} resolving`,
-        secondary: [...new Set(effects.map((e) => e.kind))].join(', '),
-        source: 'email',
-        detail: effects[0].note,
-        detailKind: 'text',
-        at: 0,
-        href: '/inbox#effects',
-      })
     if (outbox?.pending && outbox.oldest_created_at && now - time(outbox.oldest_created_at) > 300e3)
       rows.push({
         key: 'outbox',
@@ -286,7 +281,8 @@ export function Overview() {
         tone: 'warn',
         label: 'Outbox',
         title: `${outbox.pending} replies waiting to publish`,
-        secondary: `oldest ${shortAge(now - time(outbox.oldest_created_at))}`,
+        detail: `Oldest queued ${fmtWhen(outbox.oldest_created_at)}`,
+        detailKind: 'text',
         source: 'internal',
         at: time(outbox.oldest_created_at),
         href: '/system',
@@ -298,7 +294,8 @@ export function Overview() {
         tone: loopTone(loopAge),
         label: 'Stale',
         title: 'Handler loop has not completed recently',
-        secondary: `last ${shortAge(loopAge!)} ago`,
+        detail: `Last loop finished ${fmtWhen(now - loopAge!)}`,
+        detailKind: 'text',
         source: 'internal',
         at: now - loopAge!,
         href: '/system',
@@ -654,7 +651,7 @@ export function Overview() {
             <DataTable
               label="Recent runs"
               columns={recentColumns(nameOf)}
-              rows={recent.data?.runs}
+              rows={recent.data?.runs.slice(0, RECENT_ROWS)}
               rowKey={(row) => row.run_id}
               rowHref={(row) => `/runs/${encode(row.run_id)}`}
               rowVersion={(row) => row.result_status}
@@ -683,7 +680,7 @@ export function Overview() {
             <DataTable
               label="Upcoming"
               columns={upcomingColumns(now)}
-              rows={schedules.data || reminders.data ? upcoming.slice(0, 8) : undefined}
+              rows={schedules.data || reminders.data ? upcoming.slice(0, UPCOMING_ROWS) : undefined}
               rowKey={(row) => row.key}
               rowHref={(row) => row.href}
               loading={schedules.isPending || reminders.isPending}
@@ -789,8 +786,13 @@ function attentionColumns(now: number): Column<Attention>[] {
       header: 'Age',
       width: 56,
       align: 'right',
-      cell: (row) => age(now, row.at),
-      title: (row) => (row.at ? new Date(row.at).toLocaleString() : undefined),
+      cell: (row) => row.ageText || (row.at ? age(now, row.at) : 'now'),
+      title: (row) =>
+        row.at
+          ? new Date(row.at).toLocaleString()
+          : row.ageText
+            ? `Oldest has waited ${row.ageText}`
+            : 'Current state',
     },
   ]
 }

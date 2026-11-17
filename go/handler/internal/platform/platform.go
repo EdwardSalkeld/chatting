@@ -38,10 +38,6 @@ type Config struct {
 	Port       int    `json:"port"`
 	HandlerURL string `json:"handler_url"`
 	WorkerURL  string `json:"worker_url"`
-	// HandlerAdminURL is the handler's loopback egress listener, which carries
-	// the personal inbox write routes. Optional: without it the platform only
-	// reads, and the inbox effect routes answer 404.
-	HandlerAdminURL string `json:"handler_admin_url,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -70,10 +66,7 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.Host) == "" || config.Port < 1 || config.Port > 65535 {
 		return fmt.Errorf("host and a port between 1 and 65535 are required")
 	}
-	for name, raw := range map[string]string{"handler_url": config.HandlerURL, "worker_url": config.WorkerURL, "handler_admin_url": config.HandlerAdminURL} {
-		if name == "handler_admin_url" && raw == "" {
-			continue
-		}
+	for name, raw := range map[string]string{"handler_url": config.HandlerURL, "worker_url": config.WorkerURL} {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("%s must be an HTTP(S) origin without credentials, a path or query", name)
@@ -117,10 +110,6 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 		return nil, err
 	}
 	handlerProxy, workerProxy := proxy(config.HandlerURL), proxy(config.WorkerURL)
-	var adminProxy *httputil.ReverseProxy
-	if config.HandlerAdminURL != "" {
-		adminProxy = proxy(config.HandlerAdminURL)
-	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		routePath := request.URL.EscapedPath()
 		writer.Header().Set("Cache-Control", "no-store")
@@ -138,15 +127,6 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 				upstream, allowed = handlerProxy, "GET"
 			case worker.MatchString(routePath):
 				upstream, allowed = workerProxy, "GET"
-			case routePath == "/api/handler/inbox/effects", routePath == "/api/handler/inbox/effects/resolve":
-				if adminProxy == nil {
-					writeError(writer, http.StatusNotFound, "Inbox effects need handler_admin_url in the platform configuration")
-					return
-				}
-				upstream, allowed = adminProxy, "GET"
-				if routePath == "/api/handler/inbox/effects/resolve" {
-					allowed = "POST"
-				}
 			default:
 				writeError(writer, http.StatusNotFound, "API route not found")
 				return
@@ -186,11 +166,6 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 					request.URL.Path, request.URL.RawPath = "/activity.json", ""
 				case "/api/metrics":
 					request.URL.Path, request.URL.RawPath = "/metrics", ""
-				}
-			} else if upstream == adminProxy {
-				request.URL.Path, request.URL.RawPath, request.URL.RawQuery = "/api/personal-inbox/effects/uncertain", "", ""
-				if routePath == "/api/handler/inbox/effects/resolve" {
-					request.URL.Path = "/api/personal-inbox/resolve"
 				}
 			} else if request.URL.Path == "/api/handler/inbox" {
 				request.URL.Path = "/api/personal-inbox/decisions"

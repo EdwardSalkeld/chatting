@@ -20,6 +20,29 @@
   color: var(--fg-3);
   font-weight: 400;
 }
+.t-summary {
+  display: none;
+}
+@media (max-width: 759px) {
+  .t-head > .t-facts {
+    display: none;
+  }
+  .t-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    margin: 0;
+    min-width: 0;
+    color: var(--fg-2);
+    font-size: var(--fs-sm);
+    line-height: 24px;
+  }
+  .t-summary > span:last-child {
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+  }
+}
 .t-link {
   color: var(--accent);
   font-weight: 500;
@@ -539,12 +562,12 @@
   .t-more,
   .t-fold {
     min-width: 40px;
-    min-height: 32px;
+    min-height: 36px;
     justify-content: center;
   }
   .t-cmd {
     height: auto;
-    min-height: 32px;
+    min-height: 36px;
   }
   .t-facts .t-link,
   .t-line > .t-link {
