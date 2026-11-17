@@ -287,4 +287,3 @@ class EmailE2ETests(unittest.TestCase):
             diag.append(f"\n--- {name} log (last 3000 chars) ---")
             diag.append(log_content[-3000:] if log_content else "(empty)")
         print("\n".join(diag), file=sys.stderr)
-

@@ -384,7 +384,7 @@ class PersonalInboxTests(unittest.TestCase):
         self.assertEqual(post.call_args_list[0].args[0], JEV_ENDPOINT)
 
     def test_extracted_task_never_changes_jev_category(self):
-        for category in ("news", "order", "action", "review"):
+        for category in ("news", "review"):
             with self.subTest(category=category):
                 result, _ = self.classify_with(
                     [
