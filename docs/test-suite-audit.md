@@ -109,3 +109,31 @@ path/symlink boundaries, SMTP/IMAP/bbmb/HTTP timeouts and cancellation,
 restart recovery, migrations, concurrent topic creation, watermark ordering
 and cross-language contract fixtures. `go test ./...`, `go vet ./...` and
 `gofmt -l .` pass.
+
+## Python second pass — 17 November 2026
+
+A second Python-only pass: 298 → 236 collected tests (−62) and 9,906 → 7,804
+test-file lines (−2,102, 21%). Nested subtests fell from 190 to 145.
+Production code is unchanged.
+
+- **Duplicates:** reply CLI exit-code and egress-URL cases (covered by the
+  real truncated-response test), NOUL injection and failed-triage cases
+  (covered by the boundary table), cache-replay checks (covered by the ack
+  replay tests), the mocked outbox status-0 case, store round trips read back
+  by runtime and outbox tests, and the supervisor parallel test (the parallel
+  worker e2e covers it with a real broker).
+- **Trivial checks:** argparse rejecting flags, JSON keeping shell characters,
+  dataclass `to_dict`, prompt and HTML wording, env-to-attribute wiring, mock
+  kwargs forwarding, a test of the `fake_codex` helper, and log formatting.
+- **Smaller tables:** transport modes per CLI (the egress client owns that
+  matrix), backend migration sources, invalid NOUL answers × questions,
+  inbox barrier commands, malformed router answers and retention windows.
+- **Shared helpers:** one scripted executor replaces eleven runtime executor
+  classes; reply CLI, history CLI, routing, work-item CLI, model router and
+  activity tests share setup instead of repeating patches.
+
+Kept: lease and claim concurrency, restart and supervisor recovery, crash
+journals and legacy session migration, explicit-finish kill ordering,
+follow-up bundles, prompt-injection gating, secret scrubbing, outbox
+replay and delivery ordering. Full runs pass with and without a locally built
+bbmb server and Go handler; ruff and pyright pass.
