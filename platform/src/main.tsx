@@ -6,11 +6,20 @@ import '@fontsource-variable/inter'
 import '@fontsource-variable/jetbrains-mono'
 import App from './App'
 import { applyTheme } from './components/theme'
+import { ApiError } from './lib/api'
 import './index.css'
 
 applyTheme()
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 2000, refetchOnWindowFocus: true } },
+  defaultOptions: {
+    queries: {
+      // A 4xx (not found, bad request) will not change on retry; only retry network and 5xx.
+      retry: (failures, error) =>
+        failures < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500),
+      staleTime: 2000,
+      refetchOnWindowFocus: true,
+    },
+  },
 })
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

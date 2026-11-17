@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { statusTone } from './status'
+import { statusLabel, statusTone } from './status'
 
 describe('statusTone', () => {
   it.each([
@@ -45,5 +45,14 @@ describe('statusTone', () => {
   it('falls back to neutral for unknown or empty values', () => {
     expect(statusTone('something_new')).toBe('neutral')
     expect(statusTone(undefined)).toBe('neutral')
+  })
+})
+
+describe('statusLabel', () => {
+  it('uses one word per run outcome', () => {
+    expect(statusLabel('execution_error')).toBe('Failed')
+    expect(statusLabel('dead_letter')).toBe('Dead letter')
+    expect(statusLabel('recovered')).toBe('Recovered')
+    expect(statusLabel('pending_publish')).toBe('Pending publish')
   })
 })

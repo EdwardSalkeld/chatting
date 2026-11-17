@@ -1,9 +1,10 @@
 import { useCallback, useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Bell, CalendarClock, Cog, Mail, MessageSquare } from 'lucide-react'
 import { FactsRow, StatusBadge, shortAge, useNow, type Fact } from '@/components/shared'
 import { DataTable, type Column } from '@/components/table'
-import { useDeadLetters } from '@/lib/api'
+import { api, useDeadLetters } from '@/lib/api'
 import {
   encode,
   fmtLatency,
@@ -15,7 +16,15 @@ import {
   timeMs,
 } from '@/lib/format'
 import { statusLabel } from '@/lib/status'
-import type { DeadLetter, Executor, RunRow, WorkItem } from '@/lib/types'
+import { transcript, type TranscriptEntry } from '@/lib/transcript'
+import type {
+  ActivityEvent,
+  DeadLetter,
+  EventsSnapshot,
+  Executor,
+  RunRow,
+  WorkItem,
+} from '@/lib/types'
 
 const SOURCE_ICONS: Record<string, typeof MessageSquare> = {
   im: MessageSquare,
@@ -37,13 +46,16 @@ export function SourceLabel({ source }: { source: string | null | undefined }) {
   )
 }
 
-const SHORT_STATUS: Record<string, string> = { execution_error: 'Error' }
+export function RunStatus({ status, title }: { status: string; title?: string }) {
+  return <StatusBadge status={status} kind="run" title={title} />
+}
 
-export function RunStatus({ status }: { status: string }) {
+/** The one-line reason a run failed, from the executor errors, last error or reason codes. */
+export function runError(run: Pick<RunRow, 'execution_errors' | 'last_error' | 'reason_codes'>) {
   return (
-    <StatusBadge status={status} kind="run" title={statusLabel(status)}>
-      {SHORT_STATUS[status]}
-    </StatusBadge>
+    run.execution_errors?.[0] ||
+    run.last_error ||
+    (run.reason_codes?.length ? run.reason_codes.join(', ') : undefined)
   )
 }
 
@@ -84,6 +96,7 @@ export function RunTable({
   loading,
   empty,
   sortParam = 'sort',
+  showRequest = true,
 }: {
   runs: RunRow[] | undefined
   live?: Executor[]
@@ -94,6 +107,8 @@ export function RunTable({
   loading?: boolean
   empty: ReactNode
   sortParam?: string
+  /** Hide the request column, e.g. when every run repeats the item's prompt. */
+  showRequest?: boolean
 }) {
   const now = useNow(1000)
 
@@ -122,7 +137,7 @@ export function RunTable({
         sortValue: onRun((r) => r.result_status),
         cell: (e) =>
           e.kind === 'run' ? (
-            <RunStatus status={e.run.result_status} />
+            <RunStatus status={e.run.result_status} title={runError(e.run)} />
           ) : (
             <StatusBadge status="live" kind="run">
               Live {shortAge(now - timeMs(e.executor.started_at))}
@@ -133,7 +148,7 @@ export function RunTable({
         key: 'item',
         header: 'Item',
         width: 200,
-        narrowWidth: '100%',
+        narrowWidth: 'auto',
         sortValue: (e) => itemLabel(workItemOf(e)),
         cell: (e) => {
           const id = workItemOf(e)
@@ -177,7 +192,7 @@ export function RunTable({
         priority: 3,
         sortValue: onRun((r) => r.model || r.executed_model_tier),
         cell: (e) => {
-          if (e.kind === 'live') return <span className="muted">attempt {e.executor.attempt}</span>
+          if (e.kind === 'live') return <span className="muted">—</span>
           const r = e.run
           return r.model || r.executed_model_tier ? (
             <span className="model-cell">
@@ -196,6 +211,26 @@ export function RunTable({
             : undefined,
       },
       {
+        key: 'attempts',
+        header: 'Att',
+        width: 60,
+        align: 'right',
+        priority: 3,
+        sortValue: (e) => (e.kind === 'run' ? e.run.attempt_count : e.executor.attempt),
+        sortDescFirst: true,
+        cell: (e) => {
+          const n = e.kind === 'run' ? e.run.attempt_count : e.executor.attempt
+          return n == null ? (
+            <span className="muted">—</span>
+          ) : (
+            <span className="num" data-tone={n > 1 ? 'warn' : undefined}>
+              {n}
+            </span>
+          )
+        },
+        title: (e) => (e.kind === 'live' ? `attempt ${e.executor.attempt}` : undefined),
+      },
+      {
         key: 'tokens',
         header: 'Tokens',
         width: 84,
@@ -207,7 +242,7 @@ export function RunTable({
         cell: (e) => (e.kind === 'run' ? fmtTokens(e.run.tokens?.total_tokens) : '—'),
         title: (e) => (e.kind === 'run' ? tokenTitle(e.run.tokens) : undefined),
       },
-      {
+      showRequest && {
         key: 'request',
         header: 'Request',
         priority: items ? 2 : undefined,
@@ -222,7 +257,7 @@ export function RunTable({
       },
     ]
     return cols.filter((c): c is Column<Entry> => !!c)
-  }, [items, now])
+  }, [items, now, showRequest])
 
   const entries = useMemo<Entry[] | undefined>(() => {
     if (!runs) return undefined
@@ -236,8 +271,10 @@ export function RunTable({
 
   const expand = useCallback(
     (entry: Entry) => {
-      const dl = entry.kind === 'run' ? deadLetters?.get(entry.run.run_id) : undefined
-      return dl ? <DeadLetterDetail dl={dl} /> : null
+      if (entry.kind !== 'run') return null
+      const dl = deadLetters?.get(entry.run.run_id)
+      if (dl) return <DeadLetterDetail dl={dl} />
+      return isFailure(entry.run.result_status) ? <RunFailureDetail run={entry.run} /> : null
     },
     [deadLetters],
   )
@@ -257,9 +294,95 @@ export function RunTable({
       empty={empty}
       sortParam={sortParam}
       defaultSort="-when"
-      expand={deadLetters ? expand : undefined}
-      expandLabel="dead letter"
+      expand={expand}
+      expandLabel="failure details"
     />
+  )
+}
+
+const EVENT_PAGES = 20
+
+async function taskEvents(taskID: string) {
+  const events: ActivityEvent[] = []
+  for (let page = 0; page < EVENT_PAGES; page++) {
+    const after = events.length ? events[events.length - 1].activity_id : 0
+    const data = await api<EventsSnapshot>(`worker/tasks/${encode(taskID)}/events?after=${after}`)
+    events.push(...data.events)
+    if (data.events.length < 100) break
+  }
+  return events
+}
+
+function lastFailedCommand(entries: TranscriptEntry[]) {
+  return entries.findLast((e) => e.kind === 'command' && e.exit != null && e.exit !== 0)
+}
+
+/** Why an execution_error run failed: executor errors, the last failing command and its output. */
+function RunFailureDetail({ run }: { run: RunRow }) {
+  const events = useQuery({
+    queryKey: ['task-events', run.task_id],
+    queryFn: () => taskEvents(run.task_id),
+    enabled: !!run.task_id,
+    staleTime: Infinity,
+  })
+  const command = useMemo(
+    () => (events.data ? lastFailedCommand(transcript(events.data, true).entries) : undefined),
+    [events.data],
+  )
+  const errors = [
+    ...(run.execution_errors || []),
+    run.last_error
+      ? `${run.last_error}${run.last_error_stage ? ` · stage ${run.last_error_stage}` : ''}`
+      : '',
+  ].filter(Boolean)
+  const output = (command?.output || '').replace(/\n+$/, '').split('\n').slice(-6).join('\n')
+  return (
+    <div className="dl-detail is-failed">
+      {errors.length > 0 && (
+        <pre className="dl-error" data-tone="danger">
+          {errors.join('\n')}
+        </pre>
+      )}
+      <FactsRow
+        items={[
+          {
+            label: 'reason',
+            value: run.reason_codes?.length ? run.reason_codes.join(', ') : '—',
+            mono: true,
+            tone: 'warn',
+          },
+          {
+            label: 'attempts',
+            value: run.attempt_count ?? '—',
+            tone: (run.attempt_count || 0) > 1 ? 'warn' : undefined,
+          },
+          {
+            label: 'last failed command',
+            value: events.isPending ? (
+              <span className="muted">loading…</span>
+            ) : command ? (
+              <span className="fail-cmd">
+                <code className="truncate">{command.command}</code>
+                <span className="t-exit" data-tone="danger">
+                  exit {command.exit}
+                </span>
+              </span>
+            ) : events.isError ? (
+              <span className="muted">transcript unavailable</span>
+            ) : (
+              <span className="muted">none</span>
+            ),
+            title: command?.command,
+          },
+          {
+            label: 'finished',
+            value: fmtWhen(run.created_at, { seconds: true }),
+            title: fullTime(run.created_at),
+          },
+        ]}
+      />
+      {output && <pre className="dl-output">{output}</pre>}
+    </div>
   )
 }
 
@@ -314,14 +437,22 @@ export function useDeadLetterMap() {
 }
 
 /** Summary strip: run count, failure rate, latency percentiles and tokens. */
-export function RunSummary({ runs, extra = [] }: { runs: RunRow[]; extra?: Fact[] }) {
+export function RunSummary({
+  runs,
+  extra = [],
+  after = [],
+}: {
+  runs: RunRow[]
+  extra?: Fact[]
+  after?: Fact[]
+}) {
   const facts = useMemo(() => {
     const latencies = runs.map((r) => r.latency_ms).sort((a, b) => a - b)
     const pick = (p: number) =>
       latencies.length
         ? latencies[Math.min(latencies.length - 1, Math.floor(p * latencies.length))]
         : null
-    const failed = runs.filter((r) => isFailure(r.result_status)).length
+    const failed = runs.filter((r) => r.result_status === 'execution_error').length
     const dead = runs.filter((r) => r.result_status === 'dead_letter').length
     const tokens = runs.reduce((sum, r) => sum + (r.tokens?.total_tokens || 0), 0)
     return { p50: pick(0.5), p95: pick(0.95), failed, dead, tokens }
@@ -343,6 +474,7 @@ export function RunSummary({ runs, extra = [] }: { runs: RunRow[]; extra?: Fact[
         { label: 'p50', value: fmtLatency(facts.p50) },
         { label: 'p95', value: fmtLatency(facts.p95) },
         { label: 'tokens', value: facts.tokens ? fmtTokens(facts.tokens) : '—', mono: true },
+        ...after,
       ]}
     />
   )

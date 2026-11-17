@@ -34,6 +34,7 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn('sheet-content', className)}
+        aria-modal="true"
         aria-describedby={description ? undefined : props['aria-describedby']}
         {...props}
         onOpenAutoFocus={(event) => {

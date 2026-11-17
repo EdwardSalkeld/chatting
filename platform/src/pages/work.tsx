@@ -13,7 +13,7 @@ import {
   useNow,
   usePageTitle,
 } from '@/components/shared'
-import { api, useItems, useRuns } from '@/lib/api'
+import { ApiError, api, useItems, useRuns } from '@/lib/api'
 import type { Executor, ItemSnapshot, RunRow, WorkItem } from '@/lib/types'
 import {
   encode,
@@ -26,7 +26,14 @@ import {
   timeMs,
 } from '@/lib/format'
 import { useUrlParams, useUrlState } from '@/lib/url'
-import { RunStatus, RunSummary, RunTable, SourceLabel, useDeadLetterMap } from '@/components/runs'
+import {
+  RunStatus,
+  RunSummary,
+  RunTable,
+  SourceLabel,
+  runError,
+  useDeadLetterMap,
+} from '@/components/runs'
 import '@/styles/runs.css'
 import '@/styles/work.css'
 
@@ -160,11 +167,7 @@ export function WorkItems() {
           )
         if (status === 'queued') return <StatusBadge status="queued" kind="run" />
         if (status === 'error')
-          return (
-            <StatusBadge status={r.last!.result_status} kind="run" tone="warn">
-              Failed
-            </StatusBadge>
-          )
+          return <RunStatus status={r.last!.result_status} title={runError(r.last!)} />
         return <StatusBadge status="idle" kind="run" />
       },
       title: (r) =>
@@ -269,7 +272,7 @@ export function WorkItems() {
             { value: '', label: 'All', count: searched?.length ?? null },
             { value: 'live', label: 'Running', count: counts.live, tone: 'live' },
             { value: 'queued', label: 'Queued', count: counts.queued, tone: 'pending' },
-            { value: 'error', label: 'Errors', count: counts.error, tone: 'warn' },
+            { value: 'error', label: 'Failed', count: counts.error, tone: 'warn' },
             { value: 'idle', label: 'Idle', count: counts.idle },
           ]}
         />
@@ -354,11 +357,16 @@ export function WorkItemDetail() {
   ]
   const tiers = [...new Set((runs || []).map((r) => r.executed_model_tier).filter(Boolean))]
   const models = [...new Set((runs || []).map((r) => r.model).filter(Boolean))]
+  const prompts = new Set((runs || []).map((r) => r.preview))
+  const sharedPrompt = runs && runs.length > 1 && prompts.size === 1 ? runs[0].preview : undefined
+  const lastFailure = runs?.find((r) => isFailure(r.result_status))
+  const lastFailureText = lastFailure && (runError(lastFailure) || lastFailure.result_status)
+  const notFound = query.error instanceof ApiError && query.error.status === 404
 
   if (!data)
     return (
       <div className="item-page">
-        <ErrorStrip query={query} label="Worker" />
+        {!notFound && <ErrorStrip query={query} label="Worker" />}
         {query.isPending ? (
           <section className="panel">
             <RunTable label="Runs" runs={undefined} loading empty="" />
@@ -413,6 +421,29 @@ export function WorkItemDetail() {
           },
         ]}
       />
+      {(lastFailure || sharedPrompt) && (
+        <dl className="facts-row item-facts-2">
+          {lastFailure && (
+            <div className="item-last-error">
+              <dt>last error</dt>
+              <dd>
+                <Link className="text-link" to={`/runs/${encode(lastFailure.run_id)}`}>
+                  {fmtWhen(lastFailure.created_at)}
+                </Link>{' '}
+                <span className="mono" data-tone="danger" title={lastFailureText}>
+                  {lastFailureText}
+                </span>
+              </dd>
+            </div>
+          )}
+          {sharedPrompt && (
+            <div className="item-prompt">
+              <dt>prompt</dt>
+              <dd title={sharedPrompt}>{sharedPrompt}</dd>
+            </div>
+          )}
+        </dl>
+      )}
       <div className="toolbar">
         <FilterChips
           label="Run filter"
@@ -428,7 +459,7 @@ export function WorkItemDetail() {
             },
             {
               value: 'error',
-              label: 'Errors',
+              label: 'Failed',
               count: count((r) => isFailure(r.result_status)),
               tone: 'warn',
             },
@@ -450,6 +481,7 @@ export function WorkItemDetail() {
           label="Run history"
           runs={visible}
           live={!status || status === 'live' ? live : []}
+          showRequest={!sharedPrompt}
           deadLetters={deadLetters}
           empty={
             q || status ? (

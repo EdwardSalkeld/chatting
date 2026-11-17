@@ -87,6 +87,11 @@ export interface RunRow extends RunCard {
   executed_model_tier: string | null
   model: string | null
   tokens: TokenTotals | null
+  attempt_count?: number | null
+  reason_codes?: string[]
+  last_error?: string | null
+  last_error_stage?: string | null
+  execution_errors?: string[]
 }
 export interface RunsQuery {
   limit?: number

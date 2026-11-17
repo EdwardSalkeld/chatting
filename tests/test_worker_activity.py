@@ -415,6 +415,13 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertEqual(first_run["tokens"]["total_tokens"], 110)
                 self.assertIsNone(runs[0]["tokens"])
                 self.assertEqual(
+                    first_run["execution_errors"], ["executor_exit_nonzero:1"]
+                )
+                self.assertEqual(runs[0]["execution_errors"], [])
+                self.assertIn("reason_codes", first_run)
+                self.assertIn("last_error", first_run)
+                self.assertIn("attempt_count", first_run)
+                self.assertEqual(
                     [r["run_id"] for r in get("/api/runs?source=cron")["runs"]],
                     ["run:second"],
                 )

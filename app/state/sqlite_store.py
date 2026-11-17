@@ -1020,6 +1020,15 @@ class SQLiteStateStore:
                           json_extract(audit.detail_json, '$.task_id') AS task_id,
                           json_extract(audit.detail_json, '$.executed_model_tier')
                               AS executed_model_tier,
+                          json_extract(audit.detail_json, '$.attempt_count')
+                              AS attempt_count,
+                          json_extract(audit.detail_json, '$.reason_codes')
+                              AS reason_codes_json,
+                          json_extract(audit.detail_json, '$.last_error') AS last_error,
+                          json_extract(audit.detail_json, '$.last_error_stage')
+                              AS last_error_stage,
+                          json_extract(audit.detail_json, '$.execution_result.errors')
+                              AS execution_errors_json,
                           json_extract(activity.detail_json, '$.content') AS request_content
                    FROM run_records AS run
                    LEFT JOIN audit_events AS audit ON audit.event_id = (
@@ -1059,6 +1068,8 @@ class SQLiteStateStore:
                 else {}
             )
         for card in cards:
+            card["reason_codes"] = _json_strings(card.pop("reason_codes_json"))
+            card["execution_errors"] = _json_strings(card.pop("execution_errors_json"))
             row = usage.get(card["run_id"])
             card["model"] = row["model"] if row else None
             card["tokens"] = (
@@ -1630,3 +1641,17 @@ def _inbox_task_from_row(
 
 def _json_safe_dict(value: dict[str, object]) -> dict[str, object]:
     return json.loads(json.dumps(value, sort_keys=True))
+
+
+def _json_strings(raw: object) -> list[str]:
+    if not isinstance(raw, str):
+        return []
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return []
+    return (
+        [item for item in value if isinstance(item, str)]
+        if isinstance(value, list)
+        else []
+    )

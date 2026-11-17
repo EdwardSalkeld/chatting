@@ -14,11 +14,12 @@ import {
   type Tone,
 } from '@/components/shared'
 import { DataTable, type Column } from '@/components/table'
-import { useActivity, useHandlerMetrics, useWorkerMetrics } from '@/lib/api'
-import { encode, fmtBytes, fmtUptime } from '@/lib/format'
+import { useActivity, useHandlerMetrics, useRuns, useWorkerMetrics } from '@/lib/api'
+import { encode, fmtBytes, fmtTokens, fmtUptime } from '@/lib/format'
 import { parseProm, promSamples, promValue, sampleKey, type PromMetrics } from '@/lib/prom'
 import { useUrlParams, useUrlState } from '@/lib/url'
 import type { Executor } from '@/lib/types'
+import { usageByModel, type ModelUsage } from '@/lib/usage'
 import '@/styles/system.css'
 
 const H = 'chatting_message_handler_'
@@ -505,6 +506,7 @@ export function System() {
       <Panel title="Executors" count={executors?.length ?? null} meta="Live executor processes">
         <ExecutorTable executors={executors} loading={activity.isPending} now={now} />
       </Panel>
+      <TokensByModel now={now} />
       {raw && (
         <div className="sys-grid">
           <RawPanel title="Handler /metrics" text={handler.data} q={q} />
@@ -512,6 +514,106 @@ export function System() {
         </div>
       )}
     </div>
+  )
+}
+
+const WEEK = 7 * 86400e3
+
+function TokensByModel({ now }: { now: number }) {
+  const minute = Math.floor(now / 60000) * 60000
+  const query = useRuns({ limit: 1000, since: new Date(minute - WEEK).toISOString() })
+  const rows = useMemo(() => query.data && usageByModel(query.data.runs), [query.data])
+  const total = rows?.reduce((sum, r) => sum + r.total, 0) || 0
+  const n = (value: number) => <span className="num">{fmtTokens(value)}</span>
+  const columns: Column<ModelUsage>[] = [
+    { key: 'model', header: 'Model', mono: true, sortValue: (r) => r.model, cell: (r) => r.model },
+    {
+      key: 'runs',
+      header: 'Runs',
+      width: 72,
+      align: 'right',
+      sortValue: (r) => r.runs,
+      sortDescFirst: true,
+      cell: (r) => r.runs,
+    },
+    {
+      key: 'input',
+      header: 'In',
+      width: 84,
+      align: 'right',
+      priority: 2,
+      sortValue: (r) => r.input,
+      sortDescFirst: true,
+      cell: (r) => n(r.input),
+    },
+    {
+      key: 'cached',
+      header: 'Cached',
+      width: 96,
+      align: 'right',
+      priority: 3,
+      sortValue: (r) => r.cached,
+      sortDescFirst: true,
+      cell: (r) => n(r.cached),
+      title: (r) => (r.input ? `${Math.round((r.cached / r.input) * 100)}% of input` : undefined),
+    },
+    {
+      key: 'output',
+      header: 'Out',
+      width: 84,
+      align: 'right',
+      sortValue: (r) => r.output,
+      sortDescFirst: true,
+      cell: (r) => n(r.output),
+    },
+    {
+      key: 'reasoning',
+      header: 'Reasoning',
+      width: 120,
+      align: 'right',
+      priority: 3,
+      sortValue: (r) => r.reasoning,
+      sortDescFirst: true,
+      cell: (r) => n(r.reasoning),
+    },
+    {
+      key: 'total',
+      header: 'Total',
+      width: 92,
+      align: 'right',
+      sortValue: (r) => r.total,
+      sortDescFirst: true,
+      cell: (r) => n(r.total),
+    },
+    {
+      key: 'share',
+      header: 'Share',
+      width: 76,
+      align: 'right',
+      priority: 2,
+      sortValue: (r) => r.total,
+      cell: (r) => (total ? `${Math.round((r.total / total) * 100)}%` : '—'),
+    },
+  ]
+  return (
+    <Panel
+      title="Tokens by model"
+      meta={`last 7 days${query.data?.truncated ? ' · latest 1000 runs' : ''}`}
+      count={rows?.length ?? null}
+    >
+      <ErrorStrip query={query} label="Runs" />
+      <DataTable
+        label="Tokens by model, last 7 days"
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.model}
+        loading={query.isPending}
+        sortParam="tsort"
+        defaultSort="-total"
+        skeletonRows={3}
+        empty="No token usage recorded in the last 7 days"
+      />
+    </Panel>
   )
 }
 

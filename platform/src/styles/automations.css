@@ -244,3 +244,7 @@ button.am-link {
 .am-spacer {
   flex: 1;
 }
+.am-clean {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}

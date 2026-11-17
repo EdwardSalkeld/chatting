@@ -2,9 +2,9 @@ import { useMemo } from 'react'
 import { X } from 'lucide-react'
 import { ErrorStrip, FilterChips, SearchInput, useNow, usePageTitle } from '@/components/shared'
 import { RunSummary, RunTable, useDeadLetterMap } from '@/components/runs'
-import { useItems, useRuns } from '@/lib/api'
+import { useDayRuns, useItems, useRuns } from '@/lib/api'
 import type { RunRow, WorkItem } from '@/lib/types'
-import { itemName, timeMs } from '@/lib/format'
+import { fmtTokens, itemName, timeMs } from '@/lib/format'
 import { useUrlParams, useUrlState } from '@/lib/url'
 import '@/styles/runs.css'
 
@@ -42,6 +42,8 @@ export function Runs() {
   const sinceIso = since ? new Date(minute - SINCE[since].ms).toISOString() : undefined
   const runsQuery = useRuns({ limit: LIMIT, since: sinceIso })
   const itemsQuery = useItems()
+  const dayRuns = useDayRuns().data?.runs
+  const dayTokens = dayRuns?.reduce((sum, r) => sum + (r.tokens?.total_tokens || 0), 0)
   const [deadLetters, dlQuery] = useDeadLetterMap()
 
   const items = useMemo(
@@ -111,7 +113,7 @@ export function Runs() {
             { value: 'success', label: 'Success', count: count('success') },
             {
               value: 'execution_error',
-              label: 'Errors',
+              label: 'Failed',
               count: count('execution_error'),
               tone: 'warn',
             },
@@ -172,7 +174,17 @@ export function Runs() {
         />
       </div>
       <div className="runs-meta">
-        <RunSummary runs={visible} />
+        <RunSummary
+          runs={visible}
+          after={[
+            {
+              label: 'tokens 24h',
+              value: dayTokens ? fmtTokens(dayTokens) : '—',
+              mono: true,
+              title: 'All runs in the last 24 hours, regardless of filters',
+            },
+          ]}
+        />
         {runsQuery.data?.truncated && (
           <span className="runs-truncated" data-tone="warn">
             Showing the latest {LIMIT}; narrow the time range for older runs

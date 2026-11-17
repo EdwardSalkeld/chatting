@@ -15,7 +15,7 @@ import { Session } from '@/pages/session'
 import { Runs } from '@/pages/runs'
 import { System } from '@/pages/system'
 import { AgeChip, CountChip, Empty, type Tone } from '@/components/shared'
-import { PageHeadContext, usePageHeadState } from '@/components/page-head'
+import { PageHeadContext, usePageHeadState, usePageTitle } from '@/components/page-head'
 import { NAV, sectionFor } from '@/components/nav'
 import { ThemeToggle, cycleTheme, readStored, writeStored } from '@/components/theme'
 import { CommandPalette } from '@/components/command-palette'
@@ -106,7 +106,6 @@ export default function App() {
                 </Tip>
               ))}
             </nav>
-            <ServiceRows />
           </aside>
           <div className="main-shell">
             <header className="topbar">
@@ -151,19 +150,7 @@ export default function App() {
                 />
                 <Route path="/inbox" element={<InboxPage />} />
                 <Route path="/system" element={<System />} />
-                <Route
-                  path="*"
-                  element={
-                    <Empty
-                      title="Page not found"
-                      action={
-                        <Button asChild size="sm">
-                          <Link to="/">Overview</Link>
-                        </Button>
-                      }
-                    />
-                  }
-                />
+                <Route path="*" element={<NotFound />} />
               </Routes>
             </main>
           </div>
@@ -212,7 +199,6 @@ export default function App() {
                 ),
               )}
             </div>
-            <ServiceRows />
           </SheetContent>
         </Sheet>
         <CommandPalette
@@ -316,15 +302,19 @@ function ServiceAges() {
     </div>
   )
 }
-function ServiceRows() {
+
+function NotFound() {
+  const { pathname } = useLocation()
+  usePageTitle('Not found')
   return (
-    <div className="sidebar-services">
-      {useServices().map((s) => (
-        <div className="service-row" key={s.name}>
-          <span>{s.name === 'handler' ? 'Handler' : 'Worker'}</span>
-          <AgeChip updatedAt={s.updatedAt} interval={s.interval} error={s.error} />
-        </div>
-      ))}
-    </div>
+    <Empty
+      title="Page not found"
+      description={pathname}
+      action={
+        <Button asChild variant="outline" size="sm">
+          <Link to="/">Back to Overview</Link>
+        </Button>
+      }
+    />
   )
 }

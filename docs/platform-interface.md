@@ -55,19 +55,27 @@ The interface is a dense operator console with light and dark themes (the top
 bar toggles system, light and dark). Lists are 32px-row tables with sticky
 headers; the window is the only vertical scroller. Every filter, tab, search,
 sort, open sheet and transcript option is a URL query parameter, so reloads,
-back/forward and shared links restore the view.
+back/forward and shared links restore the view. Run outcomes use one word
+each: Failed (amber) for an execution error, Dead letter (red), and Recovered
+(grey) for a failure a later run of the same item fixed; red Error is kept for
+service failures. Unknown paths render the app's own not-found page.
 
 - Overview (`/`): stat tiles (running, queued, errors in 24h, dead letters,
-  waiting inbox mail, handler loop age), a one-line system strip, a "needs
-  attention" list (dead letters, failed runs, overdue reminders, stuck inbox
-  mail, old outbox rows, a stale handler loop), running and queued work, upcoming
-  schedule and reminder fires, recent runs and inbox categories.
+  waiting inbox mail, tokens in 24h), a one-line system strip, a "needs
+  attention" list (dead letters, failed runs with their error, overdue
+  reminders, stuck inbox mail, old outbox rows, a stale handler loop), running
+  and queued work, upcoming schedule and reminder fires, recent runs and inbox
+  categories.
 - Work items (`/items`, `/items/:id`): status filters, search, last result,
   failures and 7-day tokens per item. Item detail shows reply facts, a run
-  summary (failure rate, p50/p95 latency, tokens) and run history. Read-only.
+  summary (failure rate, p50/p95 latency, tokens), the last error and run
+  history; when every run repeats the same prompt it is shown once above the
+  table instead of per row. Read-only.
 - Runs (`/runs`): every non-internal run with status, source, time-range and
-  item filters. Running executors are pinned first. Dead-letter rows expand to
-  show the error, reason codes, attempts and replay.
+  item filters. Running executors are pinned first. Failed and dead-letter rows
+  expand to show the error, reason codes and attempts; failed rows also show
+  the last failing command with its exit code and output, and dead letters the
+  envelope and replay.
 - Sessions (`/tasks/:id`, `/runs/:id`): run facts (status, attempts, backend,
   model and reroutes, tokens, context use), errors, and the transcript of
   messages, paired commands with exit codes, system events and deliveries. Kind
@@ -76,16 +84,18 @@ back/forward and shared links restore the view.
 - Schedules (`/schedules`): next and last run, cron in plain English, filters
   and a side sheet (`?edit=`, `?new=1`) to create, edit or delete with live
   cron/timezone validation, the next five fires, recent fires and revisions.
+  Save stays disabled until a field differs from the loaded record.
 - Reminders (`/reminders`): Upcoming and History tabs; the sheet creates,
-  reschedules or cancels. Times use the browser's timezone and are sent as UTC.
+  reschedules or cancels. "When" is typed as 24h `YYYY-MM-DD HH:MM` in the
+  browser's timezone, previewed as "in 7h 13m", and sent as UTC.
   Reply metadata and context are preserved, and retries of an unchanged
   submission reuse an idempotency key.
 - Personal inbox (`/inbox`): mode, threshold, waiting/stuck/dead-letter facts,
   category filters and a detail sheet (`?row=`). Read-only. A missing inbox
   endpoint is shown as "not configured", separately from a failed service.
 - System (`/system`): handler and worker `/metrics` as grouped key/values with
-  per-minute rates, queue and outbox state, live executors and the raw text
-  (`?show=raw`).
+  per-minute rates, queue and outbox state, live executors, token use by model
+  over the last 7 days and the raw text (`?show=raw`).
 
 The sidebar counts running executors, failed runs in the last 24h, overdue
 reminders and waiting inbox mail. The tab title is prefixed with `● ` while an

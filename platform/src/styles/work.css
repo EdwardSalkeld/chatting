@@ -35,3 +35,31 @@
     margin-left: 0;
   }
 }
+.item-facts-2 {
+  padding: 0 2px;
+  flex-wrap: nowrap;
+}
+.item-last-error {
+  flex: 0 1 auto;
+  max-width: 55%;
+}
+.item-last-error .mono {
+  color: var(--tone);
+  font-size: var(--fs-mono-sm);
+  font-weight: 400;
+}
+.item-prompt {
+  flex: 1 1 0;
+}
+.item-prompt dd {
+  color: var(--fg-2);
+  font-weight: 400;
+}
+@media (max-width: 759px) {
+  .item-facts-2 {
+    flex-wrap: wrap;
+  }
+  .item-last-error {
+    max-width: 100%;
+  }
+}

@@ -8,7 +8,6 @@ import {
   Panel,
   Stat,
   StatusBadge,
-  StatusDot,
   TopbarActions,
   shortAge,
   useNow,
@@ -42,9 +41,9 @@ import {
   itemName,
   timeMs,
 } from '@/lib/format'
-import { statusLabel } from '@/lib/status'
+import { statusLabel, statusTone } from '@/lib/status'
 import { useUrlState } from '@/lib/url'
-import { RunStatus, SourceLabel, tokenTitle } from '@/components/runs'
+import { RunStatus, SourceLabel, runError, tokenTitle } from '@/components/runs'
 import { nextRuns } from '@/lib/cron'
 import { parseProm, promSum, promValue } from '@/lib/prom'
 import '@/styles/overview.css'
@@ -53,21 +52,8 @@ const DAY = 86400e3
 const ATTENTION_ROWS = 8
 const time = timeMs
 
-/** "14:00", "Tmrw 09:00", "Wed 09:00", "Nov 30 09:00". */
 export function fmtNext(at: number, now: number) {
-  const date = new Date(at)
-  const clock = date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-  const start = new Date(now)
-  start.setHours(0, 0, 0, 0)
-  const days = Math.floor((at - start.getTime()) / DAY)
-  if (days <= 0) return clock
-  if (days === 1) return `Tmrw ${clock}`
-  if (days < 7) return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${clock}`
-  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${clock}`
+  return fmtWhen(at, { now })
 }
 
 export function nextCronFire(cron: string, timezone: string, now: number) {
@@ -86,6 +72,10 @@ interface Attention {
   secondary?: string
   source?: string | null
   detail?: string
+  /** error: red mono; code: mono (ids, targets); text: sans prose. */
+  detailKind?: 'error' | 'code' | 'text'
+  /** Row tooltip, e.g. the request prompt behind a failed run. */
+  tooltip?: string
   at: number
   href: string
 }
@@ -176,7 +166,8 @@ export function Overview() {
         title: nameOf(dl.work_item_id, dl.task_id || dl.run_id),
         secondary: `${dl.attempt_count} attempts`,
         source: dl.source,
-        detail: [dl.reason_codes.join(', '), dl.last_error].filter(Boolean).join(' · '),
+        detail: [dl.last_error, dl.reason_codes.join(', ')].filter(Boolean).join(' · '),
+        detailKind: 'error',
         at: time(dl.created_at),
         href: `/runs/${encode(dl.run_id)}`,
       })
@@ -190,13 +181,15 @@ export function Overview() {
       )
       rows.push({
         key: `run:${run.run_id}`,
-        status: run.result_status,
-        tone: recovered ? 'neutral' : 'warn',
-        label: run.result_status === 'execution_error' ? 'Error' : statusLabel(run.result_status),
+        status: recovered ? 'recovered' : run.result_status,
+        tone: recovered ? 'neutral' : statusTone(run.result_status),
+        label: statusLabel(recovered ? 'recovered' : run.result_status),
         title: nameOf(run.work_item_id, run.task_id),
         secondary: recovered ? 'later run ok' : undefined,
         source: run.source,
-        detail: run.preview,
+        detail: runError(run),
+        detailKind: 'error',
+        tooltip: run.preview ? `Request: ${run.preview}` : undefined,
         at: time(run.created_at),
         href: `/runs/${encode(run.run_id)}`,
       })
@@ -213,6 +206,7 @@ export function Overview() {
         secondary: `due ${fmtWhen(reminder.run_at)}`,
         source: 'reminder',
         detail: `${reminder.reply_channel.type} ${reminder.reply_channel.target}`,
+        detailKind: 'code',
         at: due,
         href: `/reminders?edit=${encode(reminder.reminder_id)}`,
       })
@@ -256,6 +250,7 @@ export function Overview() {
           title: 'Inbox last error',
           source: 'email',
           detail: mail.last_error,
+          detailKind: 'error',
           at: 0,
           href: '/inbox',
         })
@@ -349,6 +344,17 @@ export function Overview() {
   const showAll = attentionView === 'all'
   const longest = live?.reduce((max, e) => Math.max(max, now - time(e.started_at)), 0)
   const latestDead = pendingDead?.reduce((max, d) => Math.max(max, time(d.created_at)), 0)
+  const dayTokens = dayRuns?.reduce((sum, r) => sum + (r.tokens?.total_tokens || 0), 0)
+  const dayModels = useMemo(() => {
+    const byModel = new Map<string, number>()
+    for (const r of dayRuns || [])
+      if (r.model && r.tokens?.total_tokens)
+        byModel.set(r.model, (byModel.get(r.model) || 0) + r.tokens.total_tokens)
+    return [...byModel]
+      .sort((a, b) => b[1] - a[1])
+      .map(([model, n]) => `${model} ${fmtTokens(n)}`)
+      .join(' · ')
+  }, [dayRuns])
   const errorTone: Tone | undefined = !dayErrors?.length
     ? undefined
     : dayErrors.some((r) => r.result_status === 'dead_letter')
@@ -384,12 +390,6 @@ export function Overview() {
     {
       label: 'Dedupe',
       value: pct(promValue(hm, 'chatting_message_handler_egress_dedupe_hit_rate_pct')),
-    },
-    {
-      label: 'Reminders late',
-      value: num(promValue(hm, 'chatting_message_handler_reminder_late_total')),
-      tone: promValue(hm, 'chatting_message_handler_reminder_late_total') ? 'warn' : undefined,
-      hidden: promValue(hm, 'chatting_message_handler_reminder_late_total') == null,
     },
     {
       label: 'Outbox',
@@ -483,26 +483,15 @@ export function Overview() {
           to="/inbox?category=waiting"
         />
         <Stat
-          label="Handler loop"
-          value={
-            loopAge != null
-              ? shortAge(loopAge)
-              : handlerMetrics.isError
-                ? null
-                : handlerMetrics.data
-                  ? null
-                  : '…'
-          }
-          tone={loopAge == null ? undefined : loopTone(loopAge)}
+          label="Tokens 24h"
+          value={day.isError && !dayRuns ? null : dayTokens == null ? '…' : fmtTokens(dayTokens)}
           sub={
-            promValue(hm, 'chatting_message_handler_uptime_seconds') != null
-              ? `up ${fmtUptime(promValue(hm, 'chatting_message_handler_uptime_seconds'))}`
-              : handlerMetrics.isError
-                ? 'metrics unavailable'
-                : undefined
+            dayRuns?.length
+              ? `${fmtTokens(Math.round((dayTokens || 0) / dayRuns.length))} per run`
+              : undefined
           }
-          title="Time since the handler last completed a loop"
-          to="/system"
+          title={dayModels || undefined}
+          to="/runs?since=24h"
         />
       </div>
 
@@ -639,14 +628,6 @@ export function Overview() {
             ) : (
               <>
                 <ErrorStrip query={inbox} label="Inbox" />
-                {inbox.data && (
-                  <InboxFacts
-                    stuck={inbox.data.stuck}
-                    deadLetters={inbox.data.dead_letters}
-                    oldest={inbox.data.oldest_wait}
-                    error={inbox.data.last_error}
-                  />
-                )}
                 <DataTable
                   label="Inbox categories"
                   columns={inboxColumns(now)}
@@ -671,40 +652,6 @@ function num(value: number | undefined) {
 }
 function pct(value: number | undefined) {
   return value == null ? undefined : `${value.toFixed(1)}%`
-}
-
-function InboxFacts({
-  stuck,
-  deadLetters,
-  oldest,
-  error,
-}: {
-  stuck: number
-  deadLetters: string
-  oldest: string
-  error: string
-}) {
-  return (
-    <div className="ov-inbox-facts">
-      <FactsRow
-        items={[
-          { label: 'Stuck', value: String(stuck), tone: stuck ? 'warn' : undefined },
-          { label: 'Oldest wait', value: oldest || '—' },
-          {
-            label: 'Dead letters',
-            value: deadLetters || '0',
-            tone: Number(deadLetters) > 0 ? 'danger' : undefined,
-          },
-        ]}
-      />
-      {error && (
-        <div className="ov-inbox-error" data-tone="danger" title={error}>
-          <StatusDot tone="danger" label="Error" />
-          <span className="truncate">Last error · {error}</span>
-        </div>
-      )}
-    </div>
-  )
 }
 
 function Primary({ title, secondary }: { title: ReactNode; secondary?: ReactNode }) {
@@ -732,7 +679,7 @@ function attentionColumns(now: number): Column<Attention>[] {
       key: 'what',
       header: 'What',
       cell: (row) => <Primary title={row.title} secondary={row.secondary} />,
-      title: (row) => row.title,
+      title: (row) => [row.title, row.tooltip].filter(Boolean).join('\n'),
     },
     {
       key: 'source',
@@ -746,9 +693,20 @@ function attentionColumns(now: number): Column<Attention>[] {
       header: 'Detail',
       width: '38%',
       priority: 3,
-      mono: true,
-      cell: (row) => row.detail || '—',
-      title: (row) => row.detail,
+      cell: (row) =>
+        row.detail ? (
+          <span
+            className={row.detailKind === 'text' ? 'truncate' : 'mono truncate ov-detail'}
+            data-tone={
+              row.detailKind !== 'error' ? undefined : row.tone === 'neutral' ? 'neutral' : 'danger'
+            }
+          >
+            {row.detail}
+          </span>
+        ) : (
+          '—'
+        ),
+      title: (row) => [row.detail, row.tooltip].filter(Boolean).join('\n') || undefined,
     },
     {
       key: 'age',

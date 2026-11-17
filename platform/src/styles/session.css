@@ -113,6 +113,9 @@
   margin-left: auto;
   min-width: 0;
 }
+.t-filter-toggle {
+  display: none;
+}
 .t-btn,
 .t-errnav > button {
   display: inline-flex;
@@ -442,14 +445,22 @@
   }
   .filter-chips.t-chips {
     flex: 1 1 100%;
-    order: 0;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
+    order: 1;
+    flex-wrap: wrap;
+  }
+  .t-toolbar[data-chips='closed'] .t-chips {
+    display: none;
+  }
+  .t-filter-toggle {
+    display: inline-flex;
   }
   .t-find {
-    flex: 1 1 140px;
+    flex: 1 1 60px;
     width: auto;
+  }
+  .t-errword,
+  .t-state {
+    display: none;
   }
   .t-actions {
     margin-left: 0;
@@ -461,17 +472,15 @@
     display: none;
   }
   .t-entry {
-    grid-template-columns: 40px 14px minmax(0, 1fr);
+    grid-template-columns: 54px 14px minmax(0, 1fr);
     column-gap: 6px;
   }
-  .t-hh {
-    display: none;
-  }
   .t-time {
-    padding-left: 4px;
+    padding-left: 0;
+    font-size: var(--fs-xs);
   }
   .t-day::before {
-    width: 40px;
+    width: 54px;
   }
   .t-pill {
     bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom));

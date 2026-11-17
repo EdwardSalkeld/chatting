@@ -36,6 +36,7 @@ const TONES: Record<string, Tone> = {
   cancelled: 'neutral',
   finished: 'neutral',
   superseded: 'neutral',
+  recovered: 'neutral',
   news: 'neutral',
   order: 'neutral',
   action: 'neutral',
@@ -55,6 +56,14 @@ export function statusTone(value: string | null | undefined, kind?: StatusKind):
   return 'neutral'
 }
 
+// One word per outcome: execution_error is "Failed" (warn) everywhere; red "Error" is kept for
+// service failures so the two never share a label.
+const LABELS: Record<string, string> = {
+  execution_error: 'Failed',
+  dead_letter: 'Dead letter',
+  recovered: 'Recovered',
+}
+
 export function statusLabel(value: string) {
-  return value.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
+  return LABELS[value] || value.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
 }

@@ -192,7 +192,22 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 			return
 		}
 		if _, err := fs.Stat(assets, filename); err != nil {
-			http.NotFound(writer, request)
+			// Unknown app routes get the app shell so the client renders its own not-found page
+			// with navigation; missing assets and files stay a plain 404.
+			if strings.HasPrefix(filename, "assets/") || strings.Contains(path.Base(filename), ".") {
+				http.NotFound(writer, request)
+				return
+			}
+			index, err := fs.ReadFile(assets, "index.html")
+			if err != nil {
+				http.NotFound(writer, request)
+				return
+			}
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			writer.WriteHeader(http.StatusNotFound)
+			if request.Method != http.MethodHead {
+				_, _ = writer.Write(index)
+			}
 			return
 		}
 		http.ServeFileFS(writer, request, assets, filename)

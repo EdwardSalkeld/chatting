@@ -17,7 +17,7 @@ import {
 } from '@/components/shared'
 import { DataTable, type Column } from '@/components/table'
 import { ApiError, useInbox } from '@/lib/api'
-import { safeMailLink } from '@/lib/format'
+import { fmtWhen, safeMailLink } from '@/lib/format'
 import { isEditableTarget } from '@/lib/keys'
 import { parseSort, sortRows, useUrlParams, useUrlState } from '@/lib/url'
 import type { InboxRow } from '@/lib/types'
@@ -33,17 +33,17 @@ interface Row extends InboxRow {
 }
 
 function received(ms: number, now: number) {
-  if (!Number.isFinite(ms)) return '—'
-  const date = new Date(ms)
-  const time = date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-  if (new Date(now).toDateString() === date.toDateString()) return time
-  if (now - ms < 6 * 86400e3)
-    return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return Number.isFinite(ms) ? fmtWhen(ms, { now }) : '—'
+}
+function Header({ long, short }: { long: string; short: string }) {
+  return (
+    <>
+      <span className="h-long">{long}</span>
+      <span className="h-short" aria-hidden>
+        {short}
+      </span>
+    </>
+  )
 }
 function fullDate(ms: number) {
   return Number.isFinite(ms)
@@ -98,9 +98,9 @@ export function InboxPage() {
   const columns: Column<Row>[] = [
     {
       key: 'received',
-      header: 'Received',
-      width: 96,
-      narrowWidth: 72,
+      header: <Header long="Received" short="Time" />,
+      width: 104,
+      narrowWidth: 84,
       sortValue: (row) => row.ms,
       sortDescFirst: true,
       className: 'num',
@@ -119,20 +119,24 @@ export function InboxPage() {
     {
       key: 'subject',
       header: 'Subject',
+      width: '30%',
+      narrowWidth: 'auto',
       cell: (row) => <span className="truncate cell-primary">{row.subject || '(No subject)'}</span>,
       title: (row) => row.subject,
     },
     {
       key: 'decision',
-      header: 'Decision',
-      width: 84,
+      header: <Header long="Decision" short="Kind" />,
+      width: 104,
+      narrowWidth: 88,
       sortValue: (row) => row.decision,
       cell: (row) => <StatusBadge status={row.decision} kind="inbox" />,
     },
     {
       key: 'confidence',
-      header: 'Conf',
-      width: 52,
+      header: <Header long="Conf." short="Conf" />,
+      width: 76,
+      narrowWidth: 68,
       align: 'right',
       sortValue: (row) => row.confidence,
       sortDescFirst: true,
@@ -141,7 +145,6 @@ export function InboxPage() {
     {
       key: 'reason',
       header: 'Reason',
-      width: '34%',
       priority: 3,
       cell: (row) => (
         <span className={row.unclassified ? 'truncate muted' : 'truncate inbox-reason'}>

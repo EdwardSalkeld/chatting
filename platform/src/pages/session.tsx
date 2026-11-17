@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowDown,
   Check,
+  ListFilter,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -29,7 +30,7 @@ import {
   type Fact,
 } from '@/components/shared'
 import { api, useItems } from '@/lib/api'
-import { encode, itemName } from '@/lib/format'
+import { encode, fmtLatency, fmtWhen, itemName } from '@/lib/format'
 import { isEditableTarget } from '@/lib/keys'
 import {
   ENTRY_KINDS,
@@ -75,23 +76,8 @@ function dayLabel(value: string) {
     month: 'short',
   })
 }
-function stamp(value?: string | null) {
-  if (!value) return '—'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return value
-  const today = d.toDateString() === new Date().toDateString()
-  return today
-    ? clock(value)
-    : `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${clock(value)}`
-}
-function span(ms?: number | null) {
-  if (ms == null || !Number.isFinite(ms)) return '—'
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const s = Math.round(ms / 1000)
-  if (s < 3600) return `${Math.floor(s / 60)}m ${pad(s % 60)}s`
-  return `${Math.floor(s / 3600)}h ${pad(Math.floor((s % 3600) / 60))}m`
-}
+const stamp = (value?: string | null) => fmtWhen(value, { seconds: true })
+const span = fmtLatency
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 const full = new Intl.NumberFormat()
 const tk = (n: number) => (n < 10_000 ? full.format(n) : compact.format(n))
@@ -180,6 +166,7 @@ function SessionView({ id }: { id: string }) {
   const show = useMemo(() => parseShow(params.get('show')), [params])
   const find = params.get('find') || ''
   const [paused, setPaused] = useState(false)
+  const [chipsOpen, setChipsOpen] = useState(false)
   const runHeader = useQuery({
     queryKey: ['run', id],
     queryFn: () => api<RunHeader>(`worker/runs/${encode(id)}`),
@@ -215,9 +202,9 @@ function SessionView({ id }: { id: string }) {
       delivery: 0,
       error: 0,
     }
-    for (const e of searched) c[e.kind]++
+    for (const e of entries) c[e.kind]++
     return c
-  }, [searched])
+  }, [entries])
   const visible = useMemo(() => searched.filter((e) => show.has(e.kind)), [searched, show])
   const errorCount = useMemo(() => entries.filter((e) => e.kind === 'error').length, [entries])
 
@@ -358,9 +345,25 @@ function SessionView({ id }: { id: string }) {
         taskID={taskID}
       />
       {request && <RequestLine text={request} />}
-      <div className="t-toolbar">
+      <div className="t-toolbar" data-chips={chipsOpen ? 'open' : 'closed'}>
+        <button
+          type="button"
+          className="t-btn t-filter-toggle"
+          aria-expanded={chipsOpen}
+          aria-controls="t-chips"
+          onClick={() => setChipsOpen(!chipsOpen)}
+          aria-label="Event type filters"
+        >
+          <ListFilter size={14} />
+          {show.size < ENTRY_KINDS.length && (
+            <small className="num">
+              {show.size}/{ENTRY_KINDS.length}
+            </small>
+          )}
+        </button>
         <FilterChips
           className="t-chips"
+          id="t-chips"
           label="Event types"
           options={kinds}
           value={[...show]}
@@ -381,7 +384,8 @@ function SessionView({ id }: { id: string }) {
                 title="Next error (e), previous (shift+e)"
               >
                 <XCircle size={14} />
-                {errorCount} {errorCount === 1 ? 'error' : 'errors'}
+                {errorCount}
+                <span className="t-errword">{errorCount === 1 ? 'error' : 'errors'}</span>
               </button>
               <button type="button" aria-label="Previous error" onClick={() => jumpError(-1)}>
                 <ChevronUp size={14} />
@@ -431,7 +435,10 @@ function SessionView({ id }: { id: string }) {
               data-tone={paused && stream.active ? 'warn' : live ? 'live' : 'neutral'}
             />
             {paused && stream.active ? 'Paused' : live ? 'Live' : 'Ended'}
-            <span className="num t-count">
+            <span
+              className="num t-count"
+              title={find ? `${searched.length} of ${entries.length} events match` : undefined}
+            >
               {everything ? entries.length : `${visible.length}/${entries.length}`}
             </span>
           </span>
@@ -708,8 +715,7 @@ const Entry = memo(
     return (
       <div className="t-entry" data-kind={entry.kind} data-tone={entry.tone} tabIndex={-1}>
         <time className="t-time num" dateTime={entry.at} title={new Date(entry.at).toString()}>
-          <span className="t-hh">{time.slice(0, 3)}</span>
-          {time.slice(3)}
+          {time}
         </time>
         <span className="t-glyph" aria-hidden>
           {GLYPHS[entry.kind]}

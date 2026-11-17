@@ -51,6 +51,14 @@ export function localDateTime(value: string) {
   if (Number.isNaN(date.getTime())) return ''
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
 }
+/** Parses a 24h local "YYYY-MM-DD HH:MM" (or with a T) to a Date; undefined when malformed. */
+export function parseLocalDateTime(value: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(value.trim())
+  if (!m) return undefined
+  const [y, mo, d, h, mi] = m.slice(1).map(Number)
+  const date = new Date(y, mo - 1, d, h, mi)
+  return date.getMonth() === mo - 1 && date.getDate() === d && h < 24 && mi < 60 ? date : undefined
+}
 export function safeMailLink(value: string) {
   try {
     return new URL(value).protocol === 'https:' ? value : undefined
@@ -66,36 +74,46 @@ export function fmtTokens(value: number | null | undefined) {
   return `${(value / 1e6).toFixed(value < 1e7 ? 1 : 0)}M`
 }
 
+/** One duration style everywhere: "850ms", "12.3s", "2m 5s", "3h 6m" (no zero padding). */
 export function fmtLatency(ms: number | null | undefined) {
   if (ms == null || !Number.isFinite(ms)) return '—'
   if (ms < 1000) return `${Math.round(ms)}ms`
-  const s = ms / 1000
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${Math.round(s % 60)}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const s = Math.round(ms / 1000)
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
 }
 
-const sameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate()
+const pad = (n: number) => String(n).padStart(2, '0')
+const DAY_MS = 86400e3
 
-/** "09:39", "Yest 18:30", "Nov 14 11:30". */
-export function fmtWhen(value: string | null | undefined) {
-  if (!value) return '—'
+/** HH:MM or HH:MM:SS, always 24h. */
+export function fmtClock(value: Date | string | number, seconds = false) {
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return seconds ? `${hm}:${pad(d.getSeconds())}` : hm
+}
+
+/**
+ * The one relative date style for past and future times: "09:39", "Yest 18:30", "Tmrw 08:00",
+ * "Tue 12:00" within a week, otherwise "Nov 14 11:30".
+ */
+export function fmtWhen(
+  value: string | number | null | undefined,
+  { seconds = false, now = Date.now() }: { seconds?: boolean; now?: number } = {},
+) {
+  if (value == null || value === '') return '—'
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  const time = date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-  const now = new Date()
-  if (sameDay(date, now)) return time
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (sameDay(date, yesterday)) return `Yest ${time}`
+  if (Number.isNaN(date.getTime())) return String(value)
+  const time = fmtClock(date, seconds)
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((midnight(date) - midnight(new Date(now))) / DAY_MS)
+  if (days === 0) return time
+  if (days === -1) return `Yest ${time}`
+  if (days === 1) return `Tmrw ${time}`
+  if (Math.abs(days) < 7)
+    return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
   return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`
 }
 

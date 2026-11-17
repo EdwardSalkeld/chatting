@@ -33,7 +33,7 @@ import {
 } from '@/components/shared'
 import { DataTable, type Column } from '@/components/table'
 import { api, useReminders, useRuns, useSchedules } from '@/lib/api'
-import { encode, lines, localDateTime } from '@/lib/format'
+import { encode, fmtLatency, fmtWhen, lines, localDateTime, parseLocalDateTime } from '@/lib/format'
 import { useUrlParams } from '@/lib/url'
 import {
   cronError,
@@ -57,21 +57,8 @@ const recordID = (row: RecordType) => (isSchedule(row) ? row.schedule_id : row.r
 const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const ms = (value?: string | null) => (value ? new Date(value).getTime() : NaN)
 
-function localWhen(value?: string | null) {
-  const date = new Date(value || '')
-  if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  })
-}
-function latency(value: number) {
-  if (value < 60000) return `${Math.round(value / 1000)}s`
-  return `${Math.floor(value / 60000)}m ${Math.round((value % 60000) / 1000)}s`
-}
+const localWhen = (value?: string | null) => fmtWhen(value)
+const latency = fmtLatency
 function matches(query: string, ...values: (string | null | undefined)[]) {
   if (!query) return true
   const haystack = values.join(' ').toLowerCase()
@@ -285,7 +272,7 @@ function SchedulesPage() {
   return (
     <div className="am-page">
       <TopbarActions>
-        <Button size="sm" onClick={sheet.create}>
+        <Button variant="outline" size="sm" onClick={sheet.create}>
           <Plus />
           New schedule
         </Button>
@@ -471,15 +458,7 @@ function RemindersPage() {
       className: 'am-col-status',
       priority: 2,
       sortValue: (r) => (r.overdue ? 0 : 1),
-      cell: (r) =>
-        r.overdue ? (
-          <StatusBadge status="overdue" kind="reminder" />
-        ) : (
-          <span className="cell-flex muted">
-            <StatusDot status="scheduled" kind="reminder" />
-            scheduled
-          </span>
-        ),
+      cell: (r) => <StatusBadge status={r.overdue ? 'overdue' : 'scheduled'} kind="reminder" />,
     },
   ]
   const historyColumns: Column<ReminderRow>[] = [
@@ -535,7 +514,7 @@ function RemindersPage() {
   return (
     <div className="am-page">
       <TopbarActions>
-        <Button size="sm" onClick={sheet.create}>
+        <Button variant="outline" size="sm" onClick={sheet.create}>
           <Plus />
           New reminder
         </Button>
@@ -766,6 +745,10 @@ function changedFields(row: RecordType, previous?: RecordType) {
   return changed.length ? changed.join(', ') : 'no field changes'
 }
 
+function formSnapshot(form: HTMLFormElement) {
+  return JSON.stringify([...new FormData(form)].map(([key, value]) => [key, String(value).trim()]))
+}
+
 function AutomationForm({
   kind,
   record,
@@ -800,10 +783,28 @@ function AutomationForm({
     zoneProblem = timezoneError(timezone)
   const upcoming = recurring ? nextRuns(cron, timezone, 5, new Date(now)) : []
   const overdue = !!reminder && reminder.status === 'scheduled' && ms(reminder.run_at) < now
+  const [when, setWhen] = useState(() =>
+    reminder ? localDateTime(reminder.run_at).replace('T', ' ') : '',
+  )
+  const whenDate = parseLocalDateTime(when)
+  const whenProblem = when.trim() && !whenDate ? 'Use YYYY-MM-DD HH:MM (24h)' : null
+
+  const formRef = useRef<HTMLFormElement>(null)
+  const initial = useRef<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    if (formRef.current) initial.current = formSnapshot(formRef.current)
+  }, [])
+  const checkDirty = () => {
+    if (formRef.current && initial.current != null)
+      setDirty(formSnapshot(formRef.current) !== initial.current)
+  }
+  const unchanged = !!record && !dirty
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
+    if (unchanged) return
     const data = new FormData(event.currentTarget),
       value = (key: string) => String(data.get(key) || '').trim()
     let payload: Record<string, unknown>
@@ -831,7 +832,11 @@ function AutomationForm({
           throw Error('Reply metadata must be a JSON object.')
         payload = {
           ...common,
-          run_at: new Date(value('run_at')).toISOString(),
+          run_at: (() => {
+            const at = parseLocalDateTime(value('run_at'))
+            if (!at) throw Error('When must be YYYY-MM-DD HH:MM (24h).')
+            return at.toISOString()
+          })(),
           prompt: value('prompt'),
           reply_channel: { type: value('channel_type'), target: value('channel_target'), metadata },
           created_from_task_id: reminder?.created_from_task_id || 'platform',
@@ -948,11 +953,12 @@ function AutomationForm({
         </Button>
       )}
       <span className="am-spacer" />
+      {!readOnly && unchanged && <span className="am-clean">No changes</span>}
       <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onClose}>
-        {readOnly ? 'Close' : 'Discard'}
+        {readOnly || unchanged ? 'Close' : 'Discard'}
       </Button>
       {!readOnly && (
-        <Button type="submit" size="sm" form={formID} disabled={busy}>
+        <Button type="submit" size="sm" form={formID} disabled={busy || unchanged}>
           {busy && <LoaderCircle className="animate-spin" />}
           {record ? 'Save changes' : recurring ? 'Create schedule' : 'Create reminder'}
         </Button>
@@ -978,7 +984,14 @@ function AutomationForm({
       <div className="am-sheet-body">
         {record && <FactsRow items={facts} />}
         <ErrorStrip error={error} message="Couldn’t save" />
-        <form id={formID} onSubmit={save} className="am-form">
+        <form
+          id={formID}
+          ref={formRef}
+          onSubmit={save}
+          onInput={checkDirty}
+          onChange={checkDirty}
+          className="am-form"
+        >
           <fieldset disabled={busy || readOnly}>
             {recurring ? (
               <>
@@ -1062,13 +1075,29 @@ function AutomationForm({
                     rows={3}
                   />
                 </Field>
-                <Field id="run-at" label="When" hint={`Local time (${localZone})`} wide>
+                <Field
+                  id="run-at"
+                  label="When"
+                  error={whenProblem}
+                  hint={
+                    whenDate
+                      ? `${relTime(whenDate, now)} · ${localZone}`
+                      : `YYYY-MM-DD HH:MM, 24h ${localZone}`
+                  }
+                  wide
+                >
                   <Input
                     id="run-at"
                     name="run_at"
-                    type="datetime-local"
+                    className="font-mono"
+                    inputMode="numeric"
+                    autoComplete="off"
                     required
-                    defaultValue={reminder ? localDateTime(reminder.run_at) : ''}
+                    value={when}
+                    onChange={(e) => setWhen(e.target.value)}
+                    aria-invalid={!!whenProblem || undefined}
+                    aria-describedby={whenProblem ? 'run-at-error' : undefined}
+                    placeholder="2026-11-20 09:00"
                   />
                 </Field>
               </>

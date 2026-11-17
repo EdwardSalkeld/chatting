@@ -66,23 +66,12 @@
   font-family: var(--font-mono-stack);
   font-size: var(--fs-mono-sm);
 }
-.ov-inbox-facts {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  min-height: 32px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border);
-  min-width: 0;
+.ov-detail {
+  display: block;
+  font-size: var(--fs-mono-sm);
 }
-.ov-inbox-error {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+.ov-detail[data-tone] {
   color: var(--tone);
-  font-size: var(--fs-sm);
 }
 .ov-note {
   display: flex;

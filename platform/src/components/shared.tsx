@@ -207,15 +207,17 @@ export function FilterChips({
   onChange,
   label,
   className,
+  id,
 }: {
   options: ChipOption[]
   value: string | readonly string[]
   onChange: (value: string) => void
   label: string
   className?: string
+  id?: string
 }) {
   return (
-    <div className={cn('filter-chips', className)} role="group" aria-label={label}>
+    <div className={cn('filter-chips', className)} id={id} role="group" aria-label={label}>
       {options.map((option) => {
         const pressed = Array.isArray(value) ? value.includes(option.value) : value === option.value
         return (

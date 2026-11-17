@@ -122,7 +122,7 @@ func TestGatewayUnavailableAndFrontendDeepLinks(t *testing.T) {
 		path   string
 		status int
 		body   string
-	}{{"/api/worker/items", 502, "Service unavailable"}, {"/items/item_a", 200, "Chatting platform"}, {"/runs/run%3Aone", 200, "Chatting platform"}, {"/runs", 200, "Chatting platform"}, {"/system", 200, "Chatting platform"}, {"/assets/app.js", 200, "console.log"}, {"/assets/missing.js", 404, "404"}, {"/secrets.json", 404, "404"}} {
+	}{{"/api/worker/items", 502, "Service unavailable"}, {"/items/item_a", 200, "Chatting platform"}, {"/runs/run%3Aone", 200, "Chatting platform"}, {"/runs", 200, "Chatting platform"}, {"/system", 200, "Chatting platform"}, {"/assets/app.js", 200, "console.log"}, {"/assets/missing.js", 404, "404"}, {"/secrets.json", 404, "404"}, {"/nope", 404, "Chatting platform"}, {"/items/a/b", 404, "Chatting platform"}} {
 		response, err := server.Client().Get(server.URL + tc.path)
 		if err != nil {
 			t.Fatal(err)
