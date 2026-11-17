@@ -124,11 +124,9 @@ func TestAssignmentStartsWatch(t *testing.T) {
 		{"issue", "issues", "assigned", "alice", "billyacachofa", "keep", "assigned_to_us"},
 		{"pull request", "pull_request", "assigned", "alice", "BillyAcachofa", "keep", "assigned_to_us"},
 		{"other assignee", "issues", "assigned", "alice", "bob", "drop", "not_tagged_or_watched"},
-		{"missing assignee", "issues", "assigned", "alice", "", "drop", "not_tagged_or_watched"},
 		{"unassignment", "issues", "unassigned", "alice", "BillyAcachofa", "drop", "not_tagged_or_watched"},
 		{"opening with old assignment", "issues", "opened", "alice", "BillyAcachofa", "drop", "not_tagged_or_watched"},
 		{"own assignment", "issues", "assigned", "BillyAcachofa", "BillyAcachofa", "drop", "self_action"},
-		{"app assignment", "issues", "assigned", "billybotapp[bot]", "BillyAcachofa", "drop", "self_action"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

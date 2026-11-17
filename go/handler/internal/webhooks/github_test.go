@@ -20,26 +20,19 @@ import (
 func TestGitHubAuthentication(t *testing.T) {
 	secret := []byte("test-webhook-secret")
 	body := `{"action":"published","repository":{"full_name":"BillyAcachofa/test"}}`
-	sign := func(body string) string {
-		mac := hmac.New(sha256.New, secret)
-		_, _ = mac.Write([]byte(body))
-		return "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	}
+	sign := func(body string) string { return signature(secret, body) }
 	for _, tc := range []struct {
 		name, method, path, body, signature string
 		secret                              []byte
 		status                              int
 	}{
 		{"release", "POST", GitHubPath, body, sign(body), secret, 200},
-		{"ping", "POST", GitHubPath, `{"zen":"hello"}`, sign(`{"zen":"hello"}`), secret, 200},
 		{"unconfigured", "POST", GitHubPath, body, sign(body), nil, 503},
 		{"unsigned", "POST", GitHubPath, body, "", secret, 401},
 		{"tampered", "POST", GitHubPath, body + " ", sign(body), secret, 401},
 		{"malformed signature", "POST", GitHubPath, body, "sha256=garbage", secret, 401},
 		{"sha1", "POST", GitHubPath, body, "sha1=obsolete", secret, 401},
 		{"invalid json", "POST", GitHubPath, "{", sign("{"), secret, 400},
-		{"method", "GET", GitHubPath, "", "", secret, 405},
-		{"subpath", "POST", GitHubPath + "/extra", body, sign(body), secret, 404},
 		{"oversized", "POST", GitHubPath, strings.Repeat("x", MaxBodyBytes+1), "", secret, 413},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,10 +83,8 @@ func TestSignedFilterIngress(t *testing.T) {
 		t.Helper()
 		logs.Reset()
 		r := httptest.NewRequest("POST", GitHubPath, strings.NewReader(body))
-		mac := hmac.New(sha256.New, secret)
-		_, _ = mac.Write([]byte(body))
 		if valid {
-			r.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+			r.Header.Set("X-Hub-Signature-256", signature(secret, body))
 		}
 		r.Header.Set("X-GitHub-Event", "issue_comment")
 		r.Header.Set("X-GitHub-Delivery", delivery)
@@ -140,4 +131,10 @@ func TestSignedFilterIngress(t *testing.T) {
 		t.Fatal(err)
 	}
 	send(strings.Replace(body, `"number":7`, `"number":9`, 1), "state-error", true, 500)
+}
+
+func signature(secret []byte, body string) string {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(body))
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }

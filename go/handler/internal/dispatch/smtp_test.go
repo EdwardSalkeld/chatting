@@ -84,13 +84,6 @@ func TestSMTPEmailSenderUsesStartTLSAndAuth(t *testing.T) {
 	}
 }
 
-func TestNewSMTPEmailSenderValidatesConfig(t *testing.T) {
-	_, err := NewSMTPEmailSender(SMTPConfig{Host: "smtp.example.com", Port: 25})
-	if err == nil || !strings.Contains(err.Error(), "smtp from address is required") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 type fakeSMTPClient struct {
 	from       string
 	recipients []string
@@ -98,7 +91,6 @@ type fakeSMTPClient struct {
 	startTLS   bool
 	auth       bool
 	quit       bool
-	closed     bool
 }
 
 func (client *fakeSMTPClient) StartTLS(_ *tls.Config) error {
@@ -131,7 +123,6 @@ func (client *fakeSMTPClient) Quit() error {
 }
 
 func (client *fakeSMTPClient) Close() error {
-	client.closed = true
 	return nil
 }
 

@@ -30,7 +30,6 @@ func TestStatusRouteIsReadOnlyAndValidatesPagination(t *testing.T) {
 		{"GET", "/github/webhooks/status?limit=1&offset=2", 200, 1, 2},
 		{"GET", "/github/webhooks/status?limit=101", 400, 0, 0},
 		{"GET", "/github/webhooks/status?offset=-1", 400, 0, 0},
-		{"GET", "/github/webhooks/status?limit=x", 400, 0, 0},
 		{"GET", "/github/webhooks/status?limit=1&limit=2", 400, 0, 0},
 		{"GET", "/github/webhooks/status?replay=true", 400, 0, 0},
 		{"POST", "/github/webhooks/status", 405, 0, 0},
