@@ -73,6 +73,24 @@ func (service *Service) RegisterRoutes(mux *http.ServeMux) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(effects)
 	})
+	// The platform lists only effects an operator can resolve, without bodies:
+	// those carry mail summaries the decision view does not otherwise expose.
+	mux.HandleFunc("/api/personal-inbox/effects/uncertain", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		effects, err := service.Store.effects(request.Context(), "json_extract(data,'$.status') IN ('uncertain','inflight')")
+		if err != nil {
+			http.Error(writer, "storage unavailable", 503)
+			return
+		}
+		for index := range effects {
+			effects[index].Body = ""
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"effects": effects})
+	})
 	mux.HandleFunc("/api/personal-inbox/resolve", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost {
 			writer.WriteHeader(http.StatusMethodNotAllowed)

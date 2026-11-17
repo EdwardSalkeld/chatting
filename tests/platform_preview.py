@@ -1529,6 +1529,15 @@ def main():
                     },
                 },
             ]
+            if status == "live":
+                # The header shows model and token use while the session runs.
+                native.insert(
+                    0,
+                    {
+                        "method": "chatting/modelSelected",
+                        "params": {"model": MODELS["high"]},
+                    },
+                )
             output = "\n".join(json.dumps(row) for row in native) + "\n"
             monitor.record_executor_output(
                 task_message=message, stream="stdout", content=output[:73]
@@ -1571,12 +1580,14 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
     print(f"Fixture worker: http://127.0.0.1:{args.port}", flush=True)
+    ticks = 0
     try:
         while not stopped.wait(5):
             if live and (args.state_dir / "finish-live").exists():
                 finish(store, monitor, live, "success", datetime.now(timezone.utc))
                 live = None
             elif live:
+                ticks += 1
                 monitor.record_executor_output(
                     task_message=live,
                     stream="stdout",
@@ -1588,6 +1599,28 @@ def main():
                                     "type": "agentMessage",
                                     "text": f"Preview activity tick · {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC",
                                 }
+                            },
+                        }
+                    )
+                    + "\n"
+                    + json.dumps(
+                        {
+                            "method": "thread/tokenUsage/updated",
+                            "params": {
+                                "threadId": "thr_fixture_live",
+                                "tokenUsage": {
+                                    "last": {
+                                        "inputTokens": 18_000 + ticks * 40,
+                                        "outputTokens": 120,
+                                    },
+                                    "total": {
+                                        "inputTokens": 18_000 * ticks,
+                                        "cachedInputTokens": 15_000 * ticks,
+                                        "outputTokens": 120 * ticks,
+                                        "totalTokens": 18_120 * ticks,
+                                    },
+                                    "modelContextWindow": 272_000,
+                                },
                             },
                         }
                     )

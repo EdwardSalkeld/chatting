@@ -115,3 +115,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.sys-sub {
+  color: var(--fg-3);
+  font-weight: 400;
+}

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, LoaderCircle, Plus, Trash2 } from 'lucide-react'
+import { LoaderCircle, Mail, MessageSquare, Plus, Trash2 } from 'lucide-react'
+import { useToast } from '@/components/toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -72,20 +73,23 @@ export function Automations({ kind }: { kind: Kind }) {
   return kind === 'schedules' ? <SchedulesPage /> : <RemindersPage />
 }
 
+/** Write confirmations go to the app-wide toast region, which announces them. */
 function useSavedNotice() {
-  const [notice, setNotice] = useState('')
-  useEffect(() => {
-    if (!notice) return
-    const id = setTimeout(() => setNotice(''), 4000)
-    return () => clearTimeout(id)
-  }, [notice])
-  const node = notice ? (
-    <span className="am-notice" role="status">
-      <Check size={14} />
-      {notice}
+  const toast = useToast()
+  return [null, (message: string) => toast(message)] as const
+}
+
+/** Channel icon and the tail of the target id; the full id is in the tooltip. */
+function TargetCell({ type, target }: { type?: string; target?: string }) {
+  if (!type && !target) return <span className="muted">—</span>
+  const Icon = type === 'email' ? Mail : type ? MessageSquare : null
+  const short = target && target.length > 8 ? `…${target.slice(-6)}` : target
+  return (
+    <span className="source-label" title={`${type || ''} ${target || ''}`.trim()}>
+      {Icon && <Icon aria-hidden />}
+      <span className="mono">{short || type}</span>
     </span>
-  ) : null
-  return [node, setNotice] as const
+  )
 }
 
 function useSheetParams() {
@@ -248,24 +252,9 @@ function SchedulesPage() {
       className: 'am-col-target',
       priority: 3,
       sortValue: (r) => r.schedule.reply_channel_target,
-      cell: (r) =>
-        r.schedule.reply_channel_type ? (
-          <span>
-            {r.schedule.reply_channel_type}
-            <span className="am-sub mono"> · {r.schedule.reply_channel_target}</span>
-          </span>
-        ) : (
-          <span className="muted">—</span>
-        ),
-    },
-    {
-      key: 'version',
-      header: 'Ver',
-      className: 'am-col-ver',
-      align: 'right',
-      priority: 2,
-      sortValue: (r) => r.schedule.version,
-      cell: (r) => <span className="num muted">{r.schedule.version}</span>,
+      cell: (r) => (
+        <TargetCell type={r.schedule.reply_channel_type} target={r.schedule.reply_channel_target} />
+      ),
     },
   ]
 
@@ -418,10 +407,7 @@ function RemindersPage() {
     priority: 3,
     sortValue: (r) => r.reminder.reply_channel.target,
     cell: (r) => (
-      <span>
-        {r.reminder.reply_channel.type}
-        <span className="am-sub mono"> · {r.reminder.reply_channel.target}</span>
-      </span>
+      <TargetCell type={r.reminder.reply_channel.type} target={r.reminder.reply_channel.target} />
     ),
   }
   const revision: Column<ReminderRow> = {
@@ -776,6 +762,7 @@ function AutomationForm({
   const [cron, setCron] = useState(schedule?.cron || ''),
     [timezone, setTimezone] = useState(schedule?.timezone || (record ? '' : localZone))
   const client = useQueryClient()
+  const toast = useToast()
   const submission = useRef({ fingerprint: '', key: '' })
   const now = useNow(30000)
   const formID = `${kind}-form`
@@ -869,6 +856,7 @@ function AutomationForm({
       onSaved(`${recurring ? 'Schedule' : 'Reminder'} ${record ? 'updated' : 'created'}`)
     } catch (e) {
       setError(e instanceof Error ? e : Error('Could not save.'))
+      toast(`Save failed${e instanceof Error ? `: ${e.message}` : ''}`, { tone: 'danger' })
     } finally {
       setBusy(false)
     }
@@ -883,6 +871,12 @@ function AutomationForm({
       onSaved(recurring ? 'Schedule deleted' : 'Reminder cancelled')
     } catch (e) {
       setError(e instanceof Error ? e : Error('Could not remove.'))
+      toast(
+        `${recurring ? 'Delete' : 'Cancel'} failed${e instanceof Error ? `: ${e.message}` : ''}`,
+        {
+          tone: 'danger',
+        },
+      )
       setConfirm(false)
     } finally {
       setBusy(false)

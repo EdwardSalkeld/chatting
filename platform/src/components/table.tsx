@@ -13,6 +13,7 @@ import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown } from 'lucide-rea
 import { cn } from '@/lib/utils'
 import { parseSort, sortRows, toggleSort, useUrlState } from '@/lib/url'
 import { InlineEmpty, SkeletonRows } from '@/components/shared'
+import { focusRow } from '@/lib/keys'
 
 export interface Column<T> {
   key: string
@@ -67,6 +68,8 @@ export interface DataTableProps<T> {
    */
   expand?: (row: T) => ReactNode
   expandLabel?: string
+  /** Accessible name for a clickable row, e.g. "Morning briefing, failed, 2h ago". */
+  rowLabel?: (row: T) => string
 }
 
 const px = (value: number | string | undefined) =>
@@ -102,6 +105,7 @@ export function DataTable<T>({
   pinned,
   expand,
   expandLabel = 'details',
+  rowLabel,
 }: DataTableProps<T>) {
   const navigate = useNavigate()
   const [urlSort, setUrlSort] = useUrlState(sortParam || '__nosort', defaultSort)
@@ -239,6 +243,8 @@ export function DataTable<T>({
                     data-row={clickable || undefined}
                     data-tone={rowTone?.(row)}
                     tabIndex={clickable ? 0 : undefined}
+                    aria-label={clickable ? rowLabel?.(row) : undefined}
+                    aria-keyshortcuts={clickable ? 'Enter' : undefined}
                     aria-selected={clickable ? selected : undefined}
                     aria-expanded={canExpand ? open : undefined}
                     className={cn(flashing.has(key) && 'is-flash')}
@@ -294,7 +300,7 @@ export function DataTable<T>({
                         sibling = (
                           step > 0 ? sibling.nextElementSibling : sibling.previousElementSibling
                         ) as HTMLElement | null
-                      sibling?.focus()
+                      if (sibling) focusRow(sibling)
                     }}
                   >
                     {expand && (

@@ -30,11 +30,12 @@ import {
   type Fact,
 } from '@/components/shared'
 import { api, useItems } from '@/lib/api'
-import { encode, fmtLatency, fmtWhen, itemName } from '@/lib/format'
+import { encode, fmtLatency, fmtTokens, fmtWhen, itemName } from '@/lib/format'
 import { isEditableTarget } from '@/lib/keys'
 import {
   ENTRY_KINDS,
   entryText,
+  foldRepeats,
   formatShow,
   matchesFind,
   parseShow,
@@ -78,9 +79,9 @@ function dayLabel(value: string) {
 }
 const stamp = (value?: string | null) => fmtWhen(value, { seconds: true })
 const span = fmtLatency
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 const full = new Intl.NumberFormat()
-const tk = (n: number) => (n < 10_000 ? full.format(n) : compact.format(n))
+const tk = fmtTokens
+const GAP_MS = 30_000
 
 function highlight(text: string, needle: string): ReactNode {
   if (!needle || !text) return text
@@ -206,6 +207,18 @@ function SessionView({ id }: { id: string }) {
     return c
   }, [entries])
   const visible = useMemo(() => searched.filter((e) => show.has(e.kind)), [searched, show])
+  const folded = useMemo(() => foldRepeats(visible), [visible])
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set())
+  const toggleFold = useCallback(
+    (key: string) =>
+      setUnfolded((current) => {
+        const next = new Set(current)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      }),
+    [],
+  )
   const errorCount = useMemo(() => entries.filter((e) => e.kind === 'error').length, [entries])
 
   const toggleKind = (kind: string) => {
@@ -476,23 +489,46 @@ function SessionView({ id }: { id: string }) {
         </InlineEmpty>
       ) : (
         <div className="t-log" role="log" aria-live="polite" aria-label="Session transcript">
-          {visible.map((entry, i) => {
+          {folded.map((group, i) => {
+            const { entry, members } = group
+            const previous = i > 0 ? folded[i - 1].members.at(-1)! : undefined
             const day = dayKey(entry.at)
-            const newDay = i > 0 && day !== dayKey(visible[i - 1].at)
+            const newDay = !!previous && day !== dayKey(previous.at)
+            const gap = previous ? Date.parse(entry.at) - Date.parse(previous.at) : 0
+            const open = members.length > 1 && unfolded.has(entry.key)
             return (
               <div key={entry.key} className="t-group">
-                {newDay && (
+                {newDay ? (
                   <div className="t-day" role="separator">
                     <span>{dayLabel(entry.at)}</span>
                   </div>
+                ) : (
+                  gap > GAP_MS && (
+                    <div className="t-gap" role="separator" aria-label={`${span(gap)} gap`}>
+                      +{span(gap)}
+                    </div>
+                  )
                 )}
-                <Entry
-                  entry={entry}
-                  find={find}
-                  state={expanded[entry.key]}
-                  setState={setEntryState}
-                  showRun={!completed}
-                />
+                {(open ? members : [entry]).map((member, j) => (
+                  <Entry
+                    key={member.key}
+                    entry={member}
+                    find={find}
+                    state={expanded[member.key]}
+                    setState={setEntryState}
+                    showRun={!completed}
+                    fold={
+                      members.length > 1 && j === 0
+                        ? {
+                            count: members.length,
+                            lastAt: members[members.length - 1].at,
+                            open,
+                            toggle: toggleFold,
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
               </div>
             )
           })}
@@ -704,14 +740,27 @@ const Entry = memo(
     state,
     setState,
     showRun,
+    fold,
   }: {
     entry: TranscriptEntry
     find: string
     state?: 'open' | 'full' | 'closed'
     setState: (key: string, state: 'open' | 'full' | 'closed') => void
     showRun: boolean
+    fold?: { count: number; lastAt: string; open: boolean; toggle: (key: string) => void }
   }) {
     const time = clock(entry.at)
+    const foldButton = fold && (
+      <button
+        type="button"
+        className="t-fold"
+        aria-expanded={fold.open}
+        onClick={() => fold.toggle(entry.key)}
+        title={fold.open ? 'Fold repeated lines' : 'Show every repeated line'}
+      >
+        ×{fold.count} · last {clock(fold.lastAt)}
+      </button>
+    )
     return (
       <div className="t-entry" data-kind={entry.kind} data-tone={entry.tone} tabIndex={-1}>
         <time className="t-time num" dateTime={entry.at} title={new Date(entry.at).toString()}>
@@ -722,9 +771,18 @@ const Entry = memo(
         </span>
         <div className="t-body">
           {entry.kind === 'command' && entry.command != null ? (
-            <CommandBody entry={entry} find={find} state={state} setState={setState} />
+            <CommandBody
+              entry={entry}
+              find={find}
+              state={state}
+              setState={setState}
+              fold={foldButton}
+            />
           ) : entry.kind === 'assistant' ? (
-            <p className="t-text">{highlight(entry.body, find)}</p>
+            <p className="t-text">
+              {highlight(entry.body, find)}
+              {foldButton}
+            </p>
           ) : (
             <p className="t-line">
               <span className="t-label">{highlight(entry.label, find)}</span>
@@ -739,6 +797,7 @@ const Entry = memo(
                   run
                 </Link>
               )}
+              {foldButton}
             </p>
           )}
         </div>
@@ -753,19 +812,29 @@ const Entry = memo(
     a.entry.key === b.entry.key &&
     a.entry.body === b.entry.body &&
     a.entry.running === b.entry.running &&
-    a.entry.exit === b.entry.exit,
+    a.entry.exit === b.entry.exit &&
+    a.fold?.count === b.fold?.count &&
+    a.fold?.open === b.fold?.open &&
+    a.fold?.lastAt === b.fold?.lastAt,
 )
+
+function RunningFor({ since }: { since: string }) {
+  const now = useNow(1000)
+  return <>running {span(Math.max(0, now - Date.parse(since)))}</>
+}
 
 function CommandBody({
   entry,
   find,
   state,
   setState,
+  fold,
 }: {
   entry: TranscriptEntry
   find: string
   state?: 'open' | 'full' | 'closed'
   setState: (key: string, state: 'open' | 'full' | 'closed') => void
+  fold?: ReactNode
 }) {
   const output = (entry.output || '').replace(/\n+$/, '')
   const outLines = output ? output.split('\n') : []
@@ -782,7 +851,7 @@ function CommandBody({
         </code>
         {entry.running ? (
           <span className="t-exit" data-tone="live">
-            running
+            <RunningFor since={entry.at} />
           </span>
         ) : entry.exit != null ? (
           <span className="t-exit" data-tone={failed ? 'danger' : 'neutral'}>
@@ -803,6 +872,7 @@ function CommandBody({
             {outLines.length} {outLines.length === 1 ? 'line' : 'lines'}
           </button>
         )}
+        {fold}
       </div>
       {shown.length > 0 && <pre className="t-out">{highlight(shown.join('\n'), find)}</pre>}
       {shown.length > 0 && hidden > 0 && (

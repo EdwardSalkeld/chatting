@@ -123,7 +123,8 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                 self.assertLess(first["start"], other["end"])
                 self.assertGreaterEqual(second["start"], first["end"])
                 self.assertEqual(
-                    store.inbox_queue_summary(), {"queued": 0, "running": 0}
+                    store.inbox_queue_summary(),
+                    {"queued": 0, "running": 0, "oldest_queued_at": None},
                 )
 
                 # Kill the manager while work is live. Detached supervisors

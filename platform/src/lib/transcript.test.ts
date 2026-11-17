@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatShow, matchesFind, parseShow, transcript } from './transcript'
+import {
+  foldRepeats,
+  formatShow,
+  matchesFind,
+  parseShow,
+  transcript,
+  type TranscriptEntry,
+} from './transcript'
 import type { ActivityEvent } from './types'
 
 const event = (
@@ -249,5 +256,23 @@ describe('filters', () => {
       ),
     )
     expect(transcript(rows, false).entries).toHaveLength(2000)
+  })
+})
+
+describe('foldRepeats', () => {
+  const entry = (key: string, body: string, kind: TranscriptEntry['kind'] = 'assistant') =>
+    ({ key, kind, label: 'Assistant', body, at: `2026-11-17T12:00:0${key}Z` }) as TranscriptEntry
+  it('folds consecutive lines that differ only in numbers and keeps errors separate', () => {
+    const folded = foldRepeats([
+      entry('1', 'tick · 12:00:01 UTC'),
+      entry('2', 'tick · 12:00:06 UTC'),
+      entry('3', 'tick · 12:00:11 UTC'),
+      entry('4', 'Done'),
+      entry('5', 'boom', 'error'),
+      entry('6', 'boom', 'error'),
+      entry('7', 'tick · 12:00:16 UTC'),
+    ])
+    expect(folded.map((f) => f.members.length)).toEqual([3, 1, 1, 1, 1])
+    expect(folded[0].entry.key).toBe('1')
   })
 })

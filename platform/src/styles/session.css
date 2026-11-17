@@ -486,3 +486,78 @@
     bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom));
   }
 }
+
+/* Gaps between entries and folded repeats */
+.t-gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 18px;
+  padding-left: 72px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.t-gap::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
+.t-fold {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.t-fold:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.t-fold[aria-expanded='true'] {
+  background: var(--surface-3);
+}
+
+/* Phone tap targets: 40px minimum for toolbar and line toggles */
+@media (max-width: 767px) {
+  .t-btn,
+  .t-errnav > button,
+  .t-filter-toggle {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
+  }
+  .t-toggle,
+  .t-more,
+  .t-fold {
+    min-width: 40px;
+    min-height: 32px;
+    justify-content: center;
+  }
+  .t-cmd {
+    height: auto;
+    min-height: 32px;
+  }
+  .t-facts .t-link,
+  .t-line > .t-link {
+    display: inline-block;
+    line-height: 24px;
+    padding: 8px 0;
+    margin-block: -8px;
+  }
+  .t-request {
+    min-height: 40px;
+    align-items: center;
+  }
+  .t-gap {
+    padding-left: 0;
+  }
+}

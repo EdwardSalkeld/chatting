@@ -1,4 +1,5 @@
-import { useCallback, useMemo, type ReactNode } from 'react'
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { cn } from '@/lib/utils'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Bell, CalendarClock, Cog, Mail, MessageSquare } from 'lucide-react'
@@ -274,7 +275,11 @@ export function RunTable({
       if (entry.kind !== 'run') return null
       const dl = deadLetters?.get(entry.run.run_id)
       if (dl) return <DeadLetterDetail dl={dl} />
-      return isFailure(entry.run.result_status) ? <RunFailureDetail run={entry.run} /> : null
+      return isFailure(entry.run.result_status) ? (
+        <RunFailureDetail run={entry.run} />
+      ) : (
+        <RunSuccessDetail run={entry.run} />
+      )
     },
     [deadLetters],
   )
@@ -295,14 +300,19 @@ export function RunTable({
       sortParam={sortParam}
       defaultSort="-when"
       expand={expand}
-      expandLabel="failure details"
+      expandLabel="run details"
+      rowLabel={(e) =>
+        e.kind === 'live'
+          ? `Live run, ${e.executor.preview || e.executor.task_id}, started ${fmtWhen(e.executor.started_at)}`
+          : `${statusLabel(e.run.result_status)} run, ${items && e.run.work_item_id ? `${items.get(e.run.work_item_id) ? itemName(items.get(e.run.work_item_id)!) : e.run.work_item_id}, ` : ''}${fmtWhen(e.run.created_at)}`
+      }
     />
   )
 }
 
 const EVENT_PAGES = 20
 
-async function taskEvents(taskID: string) {
+export async function taskEvents(taskID: string) {
   const events: ActivityEvent[] = []
   for (let page = 0; page < EVENT_PAGES; page++) {
     const after = events.length ? events[events.length - 1].activity_id : 0
@@ -317,50 +327,83 @@ function lastFailedCommand(entries: TranscriptEntry[]) {
   return entries.findLast((e) => e.kind === 'command' && e.exit != null && e.exit !== 0)
 }
 
-/** Why an execution_error run failed: executor errors, the last failing command and its output. */
-function RunFailureDetail({ run }: { run: RunRow }) {
+function useTranscript(taskID: string | null | undefined) {
   const events = useQuery({
-    queryKey: ['task-events', run.task_id],
-    queryFn: () => taskEvents(run.task_id),
-    enabled: !!run.task_id,
+    queryKey: ['task-events', taskID],
+    queryFn: () => taskEvents(taskID!),
+    enabled: !!taskID,
     staleTime: Infinity,
   })
-  const command = useMemo(
-    () => (events.data ? lastFailedCommand(transcript(events.data, true).entries) : undefined),
+  const entries = useMemo(
+    () => (events.data ? transcript(events.data, true).entries : undefined),
     [events.data],
   )
-  const errors = [
+  return { events, entries }
+}
+
+function TranscriptLink({ runID, errors }: { runID: string; errors?: number }) {
+  return (
+    <Link className="text-link dl-open" to={`/runs/${encode(runID)}`}>
+      Open transcript
+      {errors ? ` (${errors} ${errors === 1 ? 'error' : 'errors'})` : ''}
+    </Link>
+  )
+}
+
+/**
+ * Why a run failed: executor errors and the last error, or, when the run recorded none, the
+ * first error in its transcript; plus the last failing command and its output.
+ */
+function RunFailureDetail({ run }: { run: RunRow }) {
+  const { events, entries } = useTranscript(run.task_id)
+  const command = useMemo(() => (entries ? lastFailedCommand(entries) : undefined), [entries])
+  const errorEntries = useMemo(() => entries?.filter((e) => e.kind === 'error') || [], [entries])
+  const recorded = [
     ...(run.execution_errors || []),
     run.last_error
       ? `${run.last_error}${run.last_error_stage ? ` · stage ${run.last_error_stage}` : ''}`
       : '',
   ].filter(Boolean)
+  const firstError =
+    errorEntries.find((e) => e.body.trim() && !/^task finished/i.test(e.label)) || errorEntries[0]
+  const fromTranscript =
+    !recorded.length && firstError
+      ? firstError.body.trim()
+        ? `${firstError.label}: ${firstError.body.split('\n')[0]}`
+        : firstError.label
+      : ''
+  const errors = recorded.length ? recorded : fromTranscript ? [fromTranscript] : []
   const output = (command?.output || '').replace(/\n+$/, '').split('\n').slice(-6).join('\n')
   return (
     <div className="dl-detail is-failed">
-      {errors.length > 0 && (
+      {errors.length > 0 ? (
         <pre className="dl-error" data-tone="danger">
           {errors.join('\n')}
+          {fromTranscript && <span className="dl-source"> · from transcript</span>}
         </pre>
+      ) : events.isPending ? (
+        <span className="muted">Loading transcript…</span>
+      ) : (
+        <span className="muted">
+          No error was recorded for this run or found in its transcript.
+        </span>
       )}
       <FactsRow
         items={[
           {
-            label: 'reason',
+            label: 'Reason',
             value: run.reason_codes?.length ? run.reason_codes.join(', ') : '—',
             mono: true,
-            tone: 'warn',
+            tone: run.reason_codes?.length ? 'warn' : undefined,
           },
           {
-            label: 'attempts',
+            label: 'Attempts',
             value: run.attempt_count ?? '—',
             tone: (run.attempt_count || 0) > 1 ? 'warn' : undefined,
           },
           {
-            label: 'last failed command',
-            value: events.isPending ? (
-              <span className="muted">loading…</span>
-            ) : command ? (
+            label: 'Last failed command',
+            value: command ? (
               <span className="fail-cmd">
                 <code className="truncate">{command.command}</code>
                 <span className="t-exit" data-tone="danger">
@@ -373,20 +416,57 @@ function RunFailureDetail({ run }: { run: RunRow }) {
               <span className="muted">none</span>
             ),
             title: command?.command,
+            hidden: events.isPending,
           },
           {
-            label: 'finished',
+            label: 'Finished',
             value: fmtWhen(run.created_at, { seconds: true }),
             title: fullTime(run.created_at),
           },
         ]}
       />
       {output && <pre className="dl-output">{output}</pre>}
+      <TranscriptLink runID={run.run_id} errors={errorEntries.length} />
+    </div>
+  )
+}
+
+/** Successful runs expand to the same facts the table hides on narrow screens. */
+function RunSuccessDetail({ run }: { run: RunRow }) {
+  const t = run.tokens
+  return (
+    <div className="dl-detail is-ok">
+      {run.preview && <p className="dl-request">{run.preview}</p>}
+      <FactsRow
+        items={[
+          { label: 'Source', value: run.source },
+          { label: 'Latency', value: fmtLatency(run.latency_ms) },
+          { label: 'Model', value: run.model, mono: true, hidden: !run.model },
+          { label: 'Tier', value: run.executed_model_tier, hidden: !run.executed_model_tier },
+          {
+            label: 'Tokens',
+            value: t
+              ? `${fmtTokens(t.total_tokens)} · in ${fmtTokens(t.input_tokens)} · cached ${fmtTokens(t.cached_input_tokens)} · out ${fmtTokens(t.output_tokens)}`
+              : null,
+            mono: true,
+            hidden: !t,
+          },
+          { label: 'Attempts', value: run.attempt_count, hidden: run.attempt_count == null },
+          {
+            label: 'Finished',
+            value: fmtWhen(run.created_at, { seconds: true }),
+            title: fullTime(run.created_at),
+          },
+        ]}
+      />
+      <TranscriptLink runID={run.run_id} />
     </div>
   )
 }
 
 function DeadLetterDetail({ dl }: { dl: DeadLetter }) {
+  const { entries } = useTranscript(dl.task_id)
+  const errors = entries?.filter((e) => e.kind === 'error').length
   return (
     <div className="dl-detail">
       {dl.last_error && (
@@ -397,23 +477,29 @@ function DeadLetterDetail({ dl }: { dl: DeadLetter }) {
       <FactsRow
         items={[
           {
-            label: 'reason',
+            label: 'Reason',
             value: dl.reason_codes.length ? dl.reason_codes.join(', ') : '—',
             mono: true,
             tone: 'danger',
           },
-          { label: 'attempts', value: dl.attempt_count },
-          { label: 'status', value: statusLabel(dl.status) },
-          { label: 'source', value: dl.source || '—' },
+          { label: 'Attempts', value: dl.attempt_count },
           {
-            label: 'reply',
+            label: 'Status',
+            value: dl.replayed_run_id ? 'Replayed' : statusLabel(dl.status),
+            title: dl.replayed_run_id
+              ? undefined
+              : 'Not replayed. The worker has no replay mechanism yet; resend the request from its source.',
+          },
+          { label: 'Source', value: dl.source || '—' },
+          {
+            label: 'Reply',
             value: [dl.reply_channel_type, dl.reply_channel_target].filter(Boolean).join(' · '),
             mono: true,
           },
-          { label: 'received', value: fmtWhen(dl.received_at), title: fullTime(dl.received_at) },
-          { label: 'envelope', value: dl.envelope_id, mono: true, title: dl.envelope_id || '' },
+          { label: 'Received', value: fmtWhen(dl.received_at), title: fullTime(dl.received_at) },
+          { label: 'Envelope', value: dl.envelope_id, mono: true, title: dl.envelope_id || '' },
           {
-            label: 'replayed as',
+            label: 'Replayed as',
             value: dl.replayed_run_id && (
               <Link className="text-link" to={`/runs/${encode(dl.replayed_run_id)}`}>
                 {dl.replayed_run_id}
@@ -423,6 +509,7 @@ function DeadLetterDetail({ dl }: { dl: DeadLetter }) {
           },
         ]}
       />
+      <TranscriptLink runID={dl.run_id} errors={errors} />
     </div>
   )
 }
@@ -446,6 +533,7 @@ export function RunSummary({
   extra?: Fact[]
   after?: Fact[]
 }) {
+  const [all, setAll] = useState(false)
   const facts = useMemo(() => {
     const latencies = runs.map((r) => r.latency_ms).sort((a, b) => a - b)
     const pick = (p: number) =>
@@ -458,24 +546,39 @@ export function RunSummary({
     return { p50: pick(0.5), p95: pick(0.95), failed, dead, tokens }
   }, [runs])
   return (
-    <FactsRow
-      className="run-summary"
-      items={[
-        ...extra,
-        { label: 'runs', value: runs.length },
-        {
-          label: 'failed',
-          value: runs.length
-            ? `${facts.failed} · ${((facts.failed / runs.length) * 100).toFixed(1)}%`
-            : '—',
-          tone: facts.failed ? 'warn' : undefined,
-        },
-        { label: 'dead letters', value: facts.dead, tone: facts.dead ? 'danger' : undefined },
-        { label: 'p50', value: fmtLatency(facts.p50) },
-        { label: 'p95', value: fmtLatency(facts.p95) },
-        { label: 'tokens', value: facts.tokens ? fmtTokens(facts.tokens) : '—', mono: true },
-        ...after,
-      ]}
-    />
+    <div className={cn('run-summary-wrap', all && 'is-all')}>
+      <FactsRow
+        className="run-summary"
+        items={[
+          ...extra,
+          { label: 'Runs', value: runs.length },
+          {
+            label: 'Failed',
+            value: runs.length
+              ? `${facts.failed} · ${((facts.failed / runs.length) * 100).toFixed(1)}%`
+              : '—',
+            tone: facts.failed ? 'warn' : undefined,
+          },
+          {
+            label: 'Dead letters',
+            value: facts.dead,
+            tone: facts.dead ? 'danger' : undefined,
+            priority: 2,
+          },
+          { label: 'p50', value: fmtLatency(facts.p50) },
+          { label: 'p95', value: fmtLatency(facts.p95), priority: 2 },
+          {
+            label: 'Tokens',
+            value: facts.tokens ? fmtTokens(facts.tokens) : '—',
+            mono: true,
+            priority: 2,
+          },
+          ...after.map((fact) => ({ priority: 2 as const, ...fact })),
+        ]}
+      />
+      <button type="button" className="facts-more" aria-expanded={all} onClick={() => setAll(!all)}>
+        {all ? 'Less' : 'More'}
+      </button>
+    </div>
   )
 }

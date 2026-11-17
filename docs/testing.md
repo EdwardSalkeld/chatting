@@ -82,7 +82,9 @@ volume: about 40 work items and 200 runs over 14 days with failures, dead
 letters, token usage, three live executors and one task with over 300 events on
 the worker; 15 versioned schedules, 30 reminders (two overdue), 120 inbox
 decisions and synthetic handler metrics on the handler. The handler fixture
-always serves `/metrics` like the real handler. Start the platform with a
+always serves `/metrics` like the real handler, and on the same port the inbox
+effect routes the real handler keeps on its egress listener, with a few
+uncertain effects to resolve (`handler_admin_url` above points at it). Start the platform with a
 temporary config:
 
 ```json
@@ -90,7 +92,8 @@ temporary config:
   "host": "127.0.0.1",
   "port": 19466,
   "handler_url": "http://127.0.0.1:19464",
-  "worker_url": "http://127.0.0.1:19465"
+  "worker_url": "http://127.0.0.1:19465",
+  "handler_admin_url": "http://127.0.0.1:19464"
 }
 ```
 

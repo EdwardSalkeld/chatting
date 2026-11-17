@@ -2,8 +2,10 @@ import { useMemo } from 'react'
 import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { InboxEffects } from '@/components/inbox-effects'
 import {
   ErrorStrip,
+  ErrorText,
   FactsRow,
   FilterChips,
   InlineEmpty,
@@ -86,6 +88,10 @@ export function InboxPage() {
     })
   }, [data])
 
+  const subjects = useMemo(
+    () => new Map((data?.rows || []).filter((r) => r.id).map((r) => [r.id!, r.subject])),
+    [data],
+  )
   const needle = q.trim().toLowerCase()
   const searched = needle
     ? rows.filter((row) =>
@@ -210,7 +216,7 @@ export function InboxPage() {
             value: data ? (data.dry_run ? 'dry-run' : 'live') : null,
             tone: data?.dry_run ? 'warn' : undefined,
           },
-          { label: 'Threshold', value: threshold?.toFixed(2) ?? null },
+          { label: 'Threshold', value: threshold?.toFixed(2) ?? null, priority: 2 },
           {
             label: 'Waiting',
             value:
@@ -226,18 +232,19 @@ export function InboxPage() {
             label: 'Dead letters',
             value: deadLetters,
             tone: deadLetters ? 'danger' : undefined,
+            priority: deadLetters ? undefined : 2,
           },
           {
             label: 'Last error',
-            value: data ? data.last_error || '—' : null,
-            tone: data?.last_error ? 'danger' : undefined,
-            title: data?.last_error || undefined,
-            mono: !!data?.last_error,
+            value: data ? data.last_error ? <ErrorText text={data.last_error} /> : '—' : null,
+            priority: 2,
           },
         ]}
       />
+      <InboxEffects subjects={subjects} />
       <div className="toolbar inbox-toolbar">
         <FilterChips
+          className="chip-strip"
           label="Decision"
           value={category}
           onChange={(value) => update({ category: value === category ? null : value || null })}
@@ -282,6 +289,9 @@ export function InboxPage() {
           defaultSort={DEFAULT_SORT}
           selectedKey={selectedKey}
           onRowClick={select}
+          rowLabel={(row) =>
+            `${row.subject || 'No subject'}, from ${row.sender || 'unknown sender'}, ${row.decision}`
+          }
           rowVersion={(row) => `${row.decision}|${row.score}|${row.why}`}
           skeletonRows={12}
           empty={

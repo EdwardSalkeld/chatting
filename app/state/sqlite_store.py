@@ -637,17 +637,23 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT state, lease_owner, COUNT(*) AS count FROM worker_inbox
+                SELECT state, lease_owner, COUNT(*) AS count,
+                       MIN(staged_at) AS oldest FROM worker_inbox
                 WHERE state IN ('pending', 'active', 'closing')
                   AND parent_task_id IS NULL
                 GROUP BY state, lease_owner IS NOT NULL
                 """
             ).fetchall()
-        queued = sum(int(row["count"]) for row in rows if row["lease_owner"] is None)
+        waiting = [row for row in rows if row["lease_owner"] is None]
+        queued = sum(int(row["count"]) for row in waiting)
         running = sum(
             int(row["count"]) for row in rows if row["lease_owner"] is not None
         )
-        return {"queued": queued, "running": running}
+        return {
+            "queued": queued,
+            "running": running,
+            "oldest_queued_at": min((row["oldest"] for row in waiting), default=None),
+        }
 
     def recover_inbox_tasks(self, *, supervised_task_ids: tuple[str, ...] = ()) -> None:
         """Recover abandoned leases, leaving live supervisors and their bundles alone."""
@@ -954,7 +960,8 @@ class SQLiteStateStore:
                           item.created_at, COALESCE(runs.run_count, 0) AS run_count,
                           runs.last_run_at,
                           COALESCE(queue.queued, 0) AS queued,
-                          COALESCE(queue.running, 0) AS running
+                          COALESCE(queue.running, 0) AS running,
+                          queue.oldest_queued_at
                    FROM work_items AS item
                    LEFT JOIN (
                        SELECT work_item_id, COUNT(*) AS run_count,
@@ -965,7 +972,8 @@ class SQLiteStateStore:
                    LEFT JOIN (
                        SELECT work_item_id,
                               SUM(CASE WHEN state IN ('pending', 'attached') THEN 1 ELSE 0 END) AS queued,
-                              SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running
+                              SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running,
+                              MIN(CASE WHEN state IN ('pending', 'attached') THEN staged_at END) AS oldest_queued_at
                        FROM worker_inbox GROUP BY work_item_id
                    ) AS queue ON queue.work_item_id = item.work_item_id
                    ORDER BY COALESCE(runs.last_run_at, item.created_at) DESC"""
@@ -982,6 +990,7 @@ class SQLiteStateStore:
                 "last_run_at": row["last_run_at"],
                 "queued": row["queued"],
                 "running": row["running"],
+                "oldest_queued_at": row["oldest_queued_at"],
             }
             for row in rows
         ]

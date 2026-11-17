@@ -4,8 +4,10 @@ import { Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   ErrorStrip,
+  ErrorText,
   FactsRow,
   Panel,
+  Sparkline,
   Stat,
   StatusBadge,
   TopbarActions,
@@ -23,6 +25,7 @@ import {
   useDeadLetters,
   useHandlerMetrics,
   useInbox,
+  useInboxEffects,
   useItems,
   useReminders,
   useRuns,
@@ -38,6 +41,8 @@ import {
   fmtUptime,
   fmtWhen,
   fullTime,
+  hourlyBuckets,
+  hourlyConcurrency,
   itemName,
   timeMs,
 } from '@/lib/format'
@@ -100,7 +105,7 @@ interface Upcoming {
 
 type Activity =
   | { kind: 'live'; key: string; executor: Executor }
-  | { kind: 'queued'; key: string; item: WorkItem }
+  | { kind: 'queued'; key: string; item: WorkItem; position: number }
 
 interface InboxCategory {
   category: string
@@ -125,6 +130,7 @@ export function Overview() {
   const reminders = useReminders()
   const schedules = useSchedules()
   const inbox = useInbox()
+  const effects = useInboxEffects().data?.effects
   const handlerMetrics = useHandlerMetrics()
   const workerMetrics = useWorkerMetrics()
 
@@ -138,7 +144,11 @@ export function Overview() {
   }
 
   const live = items.data?.active_executors ?? activity.data?.active_executors
-  const queuedItems = (items.data?.items || []).filter((item) => item.queued > 0)
+  // Oldest first, which is the order the worker claims them in.
+  const queuedItems = (items.data?.items || [])
+    .filter((item) => item.queued > 0)
+    .sort((a, b) => time(a.oldest_queued_at) - time(b.oldest_queued_at))
+  const oldestQueued = activity.data?.queue.oldest_queued_at
   const dayRuns = day.data?.runs
   const dayErrors = useMemo(
     () => dayRuns?.filter((run) => run.result_status !== 'success'),
@@ -255,6 +265,20 @@ export function Overview() {
           href: '/inbox',
         })
     }
+    if (effects?.length)
+      rows.push({
+        key: 'inbox:effects',
+        status: 'uncertain',
+        tone: 'warn',
+        label: 'Uncertain',
+        title: `${effects.length} inbox ${effects.length === 1 ? 'effect needs' : 'effects need'} resolving`,
+        secondary: [...new Set(effects.map((e) => e.kind))].join(', '),
+        source: 'email',
+        detail: effects[0].note,
+        detailKind: 'text',
+        at: 0,
+        href: '/inbox#effects',
+      })
     if (outbox?.pending && outbox.oldest_created_at && now - time(outbox.oldest_created_at) > 300e3)
       rows.push({
         key: 'outbox',
@@ -319,7 +343,12 @@ export function Overview() {
 
   const activityRows: Activity[] | undefined = live && [
     ...live.map((executor) => ({ kind: 'live' as const, key: executor.task_id, executor })),
-    ...queuedItems.map((item) => ({ kind: 'queued' as const, key: item.work_item_id, item })),
+    ...queuedItems.map((item, i) => ({
+      kind: 'queued' as const,
+      key: item.work_item_id,
+      item,
+      position: i + 1,
+    })),
   ]
 
   const inboxRows = useMemo(() => {
@@ -355,6 +384,17 @@ export function Overview() {
       .map(([model, n]) => `${model} ${fmtTokens(n)}`)
       .join(' · ')
   }, [dayRuns])
+  const trends = useMemo(() => {
+    if (!dayRuns) return undefined
+    const at = (r: RunRow) => time(r.created_at)
+    return {
+      concurrency: hourlyConcurrency(dayRuns, { now: minute }),
+      failed: hourlyBuckets(dayRuns, at, (r) => (r.result_status === 'success' ? 0 : 1), {
+        now: minute,
+      }),
+      tokens: hourlyBuckets(dayRuns, at, (r) => r.tokens?.total_tokens || 0, { now: minute }),
+    }
+  }, [dayRuns, minute])
   const errorTone: Tone | undefined = !dayErrors?.length
     ? undefined
     : dayErrors.some((r) => r.result_status === 'dead_letter')
@@ -435,21 +475,56 @@ export function Overview() {
           value={items.isError && !live ? null : (live?.length ?? '…')}
           tone={live?.length ? 'live' : undefined}
           sub={longest ? `longest ${shortAge(longest)}` : undefined}
-          to="/items?filter=live"
+          to="/items?status=live"
+          spark={
+            trends && (
+              <Sparkline
+                values={trends.concurrency}
+                tone="live"
+                label="Average runs in flight per hour, last 24h"
+              />
+            )
+          }
         />
         <Stat
           label="Queued"
           value={activity.isError && !activity.data ? null : (activity.data?.queue.queued ?? '…')}
-          tone={activity.data?.queue.queued ? 'pending' : undefined}
-          sub={outbox?.pending ? `${outbox.pending} to publish` : undefined}
-          to="/items?filter=queued"
+          tone={
+            oldestQueued && now - time(oldestQueued) > 600e3
+              ? 'warn'
+              : activity.data?.queue.queued
+                ? 'pending'
+                : undefined
+          }
+          sub={
+            [
+              activity.data?.queue.queued && oldestQueued
+                ? `oldest ${shortAge(now - time(oldestQueued))}`
+                : '',
+              outbox?.pending ? `${outbox.pending} to publish` : '',
+            ]
+              .filter(Boolean)
+              .join(' · ') || undefined
+          }
+          title={oldestQueued ? `Oldest queued since ${fullTime(oldestQueued)}` : undefined}
+          to="/items?status=queued"
         />
         <Stat
-          label="Errors 24h"
+          label="Failed 24h"
           value={day.isError && !dayRuns ? null : (dayErrors?.length ?? '…')}
           tone={errorTone}
           sub={dayRuns && `of ${dayRuns.length}${day.data?.truncated ? '+' : ''} runs`}
-          to="/runs?status=error&since=24h"
+          to="/runs?status=failed&since=24h"
+          title="Failed (amber) and dead-letter (red) runs in the last 24 hours"
+          spark={
+            trends && (
+              <Sparkline
+                values={trends.failed}
+                tone={errorTone || 'neutral'}
+                label="Failed runs per hour, last 24h"
+              />
+            )
+          }
         />
         <Stat
           label="Dead letters"
@@ -490,8 +565,9 @@ export function Overview() {
               ? `${fmtTokens(Math.round((dayTokens || 0) / dayRuns.length))} per run`
               : undefined
           }
-          title={dayModels || undefined}
-          to="/runs?since=24h"
+          title={dayModels ? `${dayModels} · open tokens by model` : undefined}
+          to="/system?window=24h#tokens"
+          spark={trends && <Sparkline values={trends.tokens} label="Tokens per hour, last 24h" />}
         />
       </div>
 
@@ -524,7 +600,7 @@ export function Overview() {
             </button>
           )
         }
-        to="/runs?status=error"
+        to="/runs?status=failed"
         toLabel="Failed runs"
       >
         <ErrorStrip query={deadLetters} label="Dead letters" />
@@ -554,12 +630,12 @@ export function Overview() {
             title="Running now"
             count={live?.length || null}
             meta={queuedItems.length ? `${queuedItems.length} items queued` : undefined}
-            to="/items?filter=live"
+            to="/items?status=live"
           >
             <ErrorStrip query={items} label="Worker" />
             <DataTable
               label="Running now"
-              columns={activityColumns(now, nameOf)}
+              columns={activityColumns(now, nameOf, queuedItems.length)}
               rows={activityRows}
               rowKey={(row) => `${row.kind}:${row.key}`}
               rowHref={(row) =>
@@ -694,17 +770,17 @@ function attentionColumns(now: number): Column<Attention>[] {
       width: '38%',
       priority: 3,
       cell: (row) =>
-        row.detail ? (
-          <span
-            className={row.detailKind === 'text' ? 'truncate' : 'mono truncate ov-detail'}
-            data-tone={
-              row.detailKind !== 'error' ? undefined : row.tone === 'neutral' ? 'neutral' : 'danger'
-            }
-          >
+        !row.detail ? (
+          '—'
+        ) : row.detailKind === 'error' ? (
+          <ErrorText
+            text={row.detail}
+            className={row.tone === 'neutral' ? 'is-muted' : undefined}
+          />
+        ) : (
+          <span className={row.detailKind === 'text' ? 'truncate' : 'mono truncate ov-detail'}>
             {row.detail}
           </span>
-        ) : (
-          '—'
         ),
       title: (row) => [row.detail, row.tooltip].filter(Boolean).join('\n') || undefined,
     },
@@ -722,6 +798,7 @@ function attentionColumns(now: number): Column<Attention>[] {
 function activityColumns(
   now: number,
   nameOf: (id: string | null | undefined, fallback?: string) => string,
+  queueLength: number,
 ): Column<Activity>[] {
   return [
     {
@@ -747,7 +824,10 @@ function activityColumns(
             secondary={row.executor.preview}
           />
         ) : (
-          <Primary title={itemName(row.item)} secondary={`${row.item.queued} queued`} />
+          <Primary
+            title={itemName(row.item)}
+            secondary={`${row.item.queued} queued · #${row.position} of ${queueLength}`}
+          />
         ),
       title: (row) => (row.kind === 'live' ? row.executor.preview : undefined),
     },
@@ -766,15 +846,33 @@ function activityColumns(
       width: 44,
       align: 'right',
       priority: 3,
-      cell: (row) => (row.kind === 'live' ? row.executor.attempt : '—'),
+      cell: (row) => (row.kind === 'live' ? row.executor.attempt : `#${row.position}`),
+      title: (row) => (row.kind === 'queued' ? `Position ${row.position} in the queue` : undefined),
     },
     {
       key: 'elapsed',
       header: 'For',
       width: 56,
       align: 'right',
-      cell: (row) => (row.kind === 'live' ? age(now, time(row.executor.started_at)) : '—'),
-      title: (row) => (row.kind === 'live' ? fullTime(row.executor.started_at) : undefined),
+      cell: (row) => {
+        const since = row.kind === 'live' ? row.executor.started_at : row.item.oldest_queued_at
+        if (!since) return '—'
+        const waited = now - time(since)
+        return (
+          <span
+            className="num"
+            data-tone={row.kind === 'queued' && waited > 600e3 ? 'warn' : undefined}
+          >
+            {age(now, time(since))}
+          </span>
+        )
+      },
+      title: (row) =>
+        row.kind === 'live'
+          ? fullTime(row.executor.started_at)
+          : row.item.oldest_queued_at
+            ? `Queued since ${fullTime(row.item.oldest_queued_at)}`
+            : undefined,
     },
   ]
 }

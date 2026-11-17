@@ -436,6 +436,7 @@ export function Stat({
   tone,
   to,
   title,
+  spark,
 }: {
   label: string
   value: ReactNode
@@ -443,6 +444,8 @@ export function Stat({
   tone?: Tone
   to?: string
   title?: string
+  /** A trend drawn at the tile's right edge, e.g. a 24h `Sparkline`. */
+  spark?: ReactNode
 }) {
   const body = (
     <>
@@ -451,6 +454,7 @@ export function Stat({
         <strong data-tone={tone}>{value ?? '—'}</strong>
         {sub && <small>{sub}</small>}
       </div>
+      {spark && <span className="stat-spark">{spark}</span>}
     </>
   )
   return to ? (
@@ -495,5 +499,78 @@ export function SearchInput({
       />
       <kbd>/</kbd>
     </div>
+  )
+}
+
+const ERROR_CLASS = /^([A-Za-z_][\w.]*(?::\d+)?)(?::\s*([\s\S]*))?$/
+/** Splits "BrokenPipeError: [Errno 32] Broken pipe" into a class and its message. */
+export function splitError(text: string): { kind?: string; rest: string } {
+  const match = ERROR_CLASS.exec(text.trim())
+  if (!match) return { rest: text }
+  return { kind: match[1], rest: match[2] || '' }
+}
+
+/** Error class in red mono, the rest in muted text; the full string is the tooltip. */
+export function ErrorText({ text, className }: { text: string; className?: string }) {
+  const parts = text.split(' · ').map(splitError)
+  return (
+    <span className={cn('error-text truncate', className)} title={text}>
+      {parts.map((part, i) => (
+        <span key={i}>
+          {i > 0 && <span className="error-rest"> · </span>}
+          {part.kind && <span className="error-kind">{part.kind}</span>}
+          {part.kind && part.rest && <span className="error-rest">: </span>}
+          {part.rest && <span className="error-rest">{part.rest}</span>}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/**
+ * Inline bar sparkline for a series of non-negative values (oldest first). Bars rather than a
+ * line so empty buckets read as zero, not as interpolation.
+ */
+export function Sparkline({
+  values,
+  tone,
+  label,
+  width = 72,
+  height = 18,
+}: {
+  values: number[]
+  tone?: Tone
+  label: string
+  width?: number
+  height?: number
+}) {
+  if (!values.length) return null
+  const max = Math.max(...values)
+  const step = width / values.length
+  return (
+    <svg
+      className="sparkline"
+      data-tone={tone}
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={label}
+    >
+      <title>{label}</title>
+      <line x1={0} x2={width} y1={height - 0.5} y2={height - 0.5} className="sparkline-base" />
+      {values.map((v, i) => {
+        const h = max ? Math.max(v ? 1.5 : 0, (v / max) * (height - 1)) : 0
+        return (
+          <rect
+            key={i}
+            x={i * step + 0.5}
+            y={height - 1 - h}
+            width={Math.max(1, step - 1)}
+            height={h}
+          />
+        )
+      })}
+    </svg>
   )
 }

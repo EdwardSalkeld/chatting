@@ -49,19 +49,6 @@
   gap: 12px;
   min-width: 0;
 }
-.ov-primary {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-}
-.ov-primary > .cell-primary {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-.ov-primary > .cell-secondary {
-  flex: 1 1 0;
-  min-width: 0;
-}
 .ov-primary > .cell-secondary.mono {
   font-family: var(--font-mono-stack);
   font-size: var(--fs-mono-sm);

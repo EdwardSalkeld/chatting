@@ -3,6 +3,7 @@ import { FileCode } from 'lucide-react'
 import {
   AgeChip,
   ErrorStrip,
+  FilterChips,
   FactsRow,
   InlineEmpty,
   Panel,
@@ -185,7 +186,22 @@ function handlerGroups(metrics: PromMetrics | undefined, rates: Map<string, numb
           metric: `${H}last_loop_completed_timestamp_seconds`,
           title: lastLoop != null ? stamp(lastLoop * 1000) : undefined,
         },
-        r.row('loops', `${H}loops_total`),
+        (() => {
+          // Until two polls give a live rate, show the average since start.
+          const loops = r.value(`${H}loops_total`)
+          const live = rates.get(`${H}loops_total`)
+          const average = loops != null && up ? loops / (up / 60) : undefined
+          return r.row('loops', `${H}loops_total`, {
+            value: (
+              <>
+                {int(loops)}
+                {live == null && average != null && (
+                  <span className="sys-sub"> · ~{average.toFixed(1)}/m avg</span>
+                )}
+              </>
+            ),
+          })
+        })(),
       ],
     },
     { title: 'Ingress', rows: [r.row('published', `${H}ingress_published_total`)] },
@@ -214,7 +230,14 @@ function handlerGroups(metrics: PromMetrics | undefined, rates: Map<string, numb
           const pct = r.value(`${H}egress_dedupe_hit_rate_pct`)
           return {
             label: 'dedupe hit rate',
-            value: pct == null ? '—' : `${pct.toFixed(1)}%`,
+            value:
+              pct == null ? (
+                '—'
+              ) : (
+                <>
+                  {pct.toFixed(1)}%<span className="sys-sub"> of received were repeats</span>
+                </>
+              ),
             metric: `${H}egress_dedupe_hit_rate_pct`,
             title: metrics?.help[`${H}egress_dedupe_hit_rate_pct`],
           }
@@ -296,10 +319,12 @@ function workerGroups(
           title: lastEvent,
         },
         {
-          label: 'history',
+          label: 'activity buffer',
           value: activity
-            ? `${activity.recent_activity.length}${activity.history_truncated ? '+' : ''} / ${activity.history_limit}`
+            ? `${activity.recent_activity.length}/${activity.history_limit}${activity.history_truncated || activity.recent_activity.length >= activity.history_limit ? ' (full)' : ''}`
             : '—',
+          title:
+            'Recent events the worker keeps in memory for this page; older events stay in the database',
         },
       ],
     },
@@ -517,11 +542,18 @@ export function System() {
   )
 }
 
-const WEEK = 7 * 86400e3
+const WINDOWS: Record<string, { ms: number; label: string }> = {
+  '24h': { ms: 86400e3, label: 'last 24 hours' },
+  '7d': { ms: 7 * 86400e3, label: 'last 7 days' },
+  '30d': { ms: 30 * 86400e3, label: 'last 30 days' },
+}
 
 function TokensByModel({ now }: { now: number }) {
   const minute = Math.floor(now / 60000) * 60000
-  const query = useRuns({ limit: 1000, since: new Date(minute - WEEK).toISOString() })
+  const [rawWindow, setWindow] = useUrlState('window', '7d')
+  const window = WINDOWS[rawWindow] ? rawWindow : '7d'
+  const { ms, label: windowLabel } = WINDOWS[window]
+  const query = useRuns({ limit: 1000, since: new Date(minute - ms).toISOString() })
   const rows = useMemo(() => query.data && usageByModel(query.data.runs), [query.data])
   const total = rows?.reduce((sum, r) => sum + r.total, 0) || 0
   const n = (value: number) => <span className="num">{fmtTokens(value)}</span>
@@ -597,13 +629,22 @@ function TokensByModel({ now }: { now: number }) {
   ]
   return (
     <Panel
+      id="tokens"
       title="Tokens by model"
-      meta={`last 7 days${query.data?.truncated ? ' · latest 1000 runs' : ''}`}
+      meta={`${windowLabel}${query.data?.truncated ? ' · latest 1000 runs' : ''}`}
       count={rows?.length ?? null}
+      actions={
+        <FilterChips
+          label="Token window"
+          value={window}
+          onChange={(value) => setWindow(value, { replace: true })}
+          options={Object.keys(WINDOWS).map((value) => ({ value, label: value }))}
+        />
+      }
     >
       <ErrorStrip query={query} label="Runs" />
       <DataTable
-        label="Tokens by model, last 7 days"
+        label={`Tokens by model, ${windowLabel}`}
         columns={columns}
         rows={rows}
         rowKey={(r) => r.model}
@@ -611,7 +652,7 @@ function TokensByModel({ now }: { now: number }) {
         sortParam="tsort"
         defaultSort="-total"
         skeletonRows={3}
-        empty="No token usage recorded in the last 7 days"
+        empty={`No token usage recorded in the ${windowLabel}`}
       />
     </Panel>
   )

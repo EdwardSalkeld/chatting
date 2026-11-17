@@ -146,6 +146,43 @@ export function fmtUptime(seconds: number | null | undefined) {
   return `${m}m`
 }
 
+/** Per-hour buckets over the last `hours`, oldest first. `value` returns a run's contribution. */
+export function hourlyBuckets<T>(
+  rows: readonly T[],
+  at: (row: T) => number,
+  value: (row: T) => number,
+  { hours = 24, now = Date.now() }: { hours?: number; now?: number } = {},
+) {
+  const end = Math.floor(now / 3600e3) * 3600e3 + 3600e3
+  const buckets = new Array<number>(hours).fill(0)
+  for (const row of rows) {
+    const index = hours - 1 - Math.floor((end - 1 - at(row)) / 3600e3)
+    if (index >= 0 && index < hours) buckets[index] += value(row)
+  }
+  return buckets
+}
+
+/** Average number of runs in flight per hour, from each run's start and finish. */
+export function hourlyConcurrency(
+  runs: readonly { created_at: string; latency_ms: number }[],
+  { hours = 24, now = Date.now() }: { hours?: number; now?: number } = {},
+) {
+  const end = Math.floor(now / 3600e3) * 3600e3 + 3600e3
+  const start = end - hours * 3600e3
+  const buckets = new Array<number>(hours).fill(0)
+  for (const run of runs) {
+    const finish = timeMs(run.created_at)
+    const begin = finish - (run.latency_ms || 0)
+    for (let i = Math.max(0, Math.floor((begin - start) / 3600e3)); i < hours; i++) {
+      const lo = start + i * 3600e3
+      if (lo >= finish) break
+      const overlap = Math.min(finish, lo + 3600e3) - Math.max(begin, lo)
+      if (overlap > 0) buckets[i] += overlap / 3600e3
+    }
+  }
+  return buckets
+}
+
 export const isFailure = (status: string | null | undefined) => !!status && status !== 'success'
 export const timeMs = (value: string | null | undefined) =>
   value ? new Date(value).getTime() || 0 : 0

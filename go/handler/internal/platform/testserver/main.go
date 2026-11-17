@@ -93,6 +93,18 @@ func main() {
 				log.Fatal(err)
 			}
 		}
+		// Effects whose outcome was lost mid-flight, so the platform's resolve
+		// action has something to act on. Resolving only rewrites this fixture.
+		for _, effect := range []personalinbox.Effect{
+			{ID: "fixture-mail-0:telegram", MessageID: "fixture-mail-0", Kind: "telegram", Category: "action", Target: "fixture-actions", Status: "uncertain", Note: "interrupted before durable receipt"},
+			{ID: "fixture-mail-3:telegram", MessageID: "fixture-mail-3", Kind: "telegram", Category: "review", Target: "fixture-actions", Status: "uncertain", Note: "interrupted before durable receipt"},
+			{ID: "fixture-mail-2:file", MessageID: "fixture-mail-2", Kind: "file", Category: "order", Target: "Triage/Orders", Status: "done"},
+		} {
+			raw, _ := json.Marshal(effect)
+			if _, err := db.Exec("INSERT OR IGNORE INTO inbox_effects(id,data) VALUES (?,?)", effect.ID, string(raw)); err != nil {
+				log.Fatal(err)
+			}
+		}
 		_ = db.Close()
 		if *rich {
 			if err := seedRich(ctx, store, filepath.Join(*dir, "handler.db"), inboxPath); err != nil {
@@ -124,7 +136,11 @@ func main() {
 		reminders.RegisterRoutes(mux, reminderService)
 		reminders.RegisterUIRoutes(mux, reminderService)
 		if !*noInbox {
-			personalinbox.RegisterUIRoutes(mux, &personalinbox.Service{Store: inbox, Now: time.Now, Config: personalinbox.Config{DryRun: true, ConfidenceThreshold: .9, LinkTemplate: "https://example.com/mail/{email}", Folders: map[string]string{}}})
+			service := &personalinbox.Service{Store: inbox, Now: time.Now, Config: personalinbox.Config{DryRun: true, ConfidenceThreshold: .9, LinkTemplate: "https://example.com/mail/{email}", Folders: map[string]string{}}}
+			personalinbox.RegisterUIRoutes(mux, service)
+			// The real handler serves these on its loopback egress listener; the
+			// fixture has one port, so point handler_admin_url at it.
+			service.RegisterRoutes(mux)
 		}
 	}
 	if _, err := metrics.StartServer(recorder, "127.0.0.1", *port, register); err != nil {

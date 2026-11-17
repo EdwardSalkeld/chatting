@@ -40,6 +40,11 @@ export function isPaletteKey(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctr
 }
 
 const ROW = 'tr[data-row]'
+/** Rows carry scroll-margin for the sticky headers, so "nearest" keeps them clear of both bars. */
+export function focusRow(row: HTMLElement) {
+  row.focus({ preventScroll: true })
+  row.scrollIntoView({ block: 'nearest' })
+}
 export function moveRowFocus(step: 1 | -1) {
   const active = document.activeElement as HTMLElement | null
   const current = active?.closest<HTMLElement>(ROW)
@@ -48,7 +53,7 @@ export function moveRowFocus(step: 1 | -1) {
   if (!rows.length) return false
   const index = current ? rows.indexOf(current) : -1
   const next = rows[Math.max(0, Math.min(rows.length - 1, index < 0 ? 0 : index + step))]
-  next.focus()
+  focusRow(next)
   return true
 }
 

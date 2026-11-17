@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { X } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { SlidersHorizontal, X } from 'lucide-react'
 import { ErrorStrip, FilterChips, SearchInput, useNow, usePageTitle } from '@/components/shared'
 import { RunSummary, RunTable, useDeadLetterMap } from '@/components/runs'
 import { useDayRuns, useItems, useRuns } from '@/lib/api'
@@ -25,6 +25,7 @@ export function Runs() {
   usePageTitle('Runs')
   const [params, update] = useUrlParams()
   const [q, setQ] = useUrlState('q')
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const source = params.get('source') || ''
   const since = SINCE[params.get('since') || ''] ? params.get('since')! : ''
   const itemFilter = params.get('item') || ''
@@ -104,6 +105,7 @@ export function Runs() {
       {!runsQuery.error && <ErrorStrip query={dlQuery} label="Dead letters" tone="warn" />}
       <div className="toolbar runs-toolbar">
         <FilterChips
+          className="chip-strip"
           label="Run status"
           value={statuses.length ? statuses : ['']}
           onChange={toggleStatus}
@@ -125,35 +127,50 @@ export function Runs() {
             },
           ]}
         />
-        <select
-          className="toolbar-select"
-          aria-label="Source"
-          value={source}
-          onChange={(e) => update({ source: e.target.value || null })}
+        <button
+          type="button"
+          className="filter-chip filters-toggle"
+          aria-expanded={filtersOpen}
+          aria-controls="runs-selects"
+          onClick={() => setFiltersOpen(!filtersOpen)}
         >
-          <option value="">All sources</option>
-          {sourceCounts.map(([value, n]) => (
-            <option key={value} value={value}>
-              {value} ({n})
-            </option>
-          ))}
-          {source && !sourceCounts.some(([value]) => value === source) && (
-            <option value={source}>{source} (0)</option>
+          <SlidersHorizontal size={14} aria-hidden />
+          Filters
+          {(source ? 1 : 0) + (since ? 1 : 0) > 0 && (
+            <span className="chip-count">{(source ? 1 : 0) + (since ? 1 : 0)}</span>
           )}
-        </select>
-        <select
-          className="toolbar-select"
-          aria-label="Time range"
-          value={since}
-          onChange={(e) => update({ since: e.target.value || null })}
-        >
-          <option value="">All time</option>
-          {Object.entries(SINCE).map(([value, { label }]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+        </button>
+        <div className="toolbar-selects" id="runs-selects" data-open={filtersOpen || undefined}>
+          <select
+            className="toolbar-select"
+            aria-label="Source"
+            value={source}
+            onChange={(e) => update({ source: e.target.value || null })}
+          >
+            <option value="">All sources</option>
+            {sourceCounts.map(([value, n]) => (
+              <option key={value} value={value}>
+                {value} ({n})
+              </option>
+            ))}
+            {source && !sourceCounts.some(([value]) => value === source) && (
+              <option value={source}>{source} (0)</option>
+            )}
+          </select>
+          <select
+            className="toolbar-select"
+            aria-label="Time range"
+            value={since}
+            onChange={(e) => update({ since: e.target.value || null })}
+          >
+            <option value="">All time</option>
+            {Object.entries(SINCE).map(([value, { label }]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
         {itemFilter && (
           <button
             type="button"
@@ -178,7 +195,7 @@ export function Runs() {
           runs={visible}
           after={[
             {
-              label: 'tokens 24h',
+              label: 'Tokens 24h',
               value: dayTokens ? fmtTokens(dayTokens) : '—',
               mono: true,
               title: 'All runs in the last 24 hours, regardless of filters',

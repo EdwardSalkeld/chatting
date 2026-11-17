@@ -372,3 +372,31 @@ export function entryText(entry: TranscriptEntry) {
     return `$ ${entry.command}${entry.exit != null ? `  (exit ${entry.exit})` : ''}${entry.output ? `\n${entry.output}` : ''}`
   return entry.body ? `${entry.label}: ${entry.body}` : entry.label
 }
+
+export interface FoldedEntry {
+  entry: TranscriptEntry
+  /** All consecutive entries folded into this row, oldest first; length 1 when not folded. */
+  members: TranscriptEntry[]
+}
+
+const foldKey = (e: TranscriptEntry) =>
+  [e.kind, e.label, e.command ?? '', e.exit ?? '', e.body].join('\u0000').replace(/\d+/g, '#')
+
+/**
+ * Folds runs of consecutive entries that differ only in their numbers (timestamps, counters),
+ * e.g. a heartbeat line every few seconds. Errors and running commands are never folded, so
+ * error navigation and live command state stay per entry.
+ */
+export function foldRepeats(entries: readonly TranscriptEntry[]): FoldedEntry[] {
+  const out: FoldedEntry[] = []
+  let key = ''
+  for (const entry of entries) {
+    const foldable = entry.kind !== 'error' && !entry.running
+    const k = foldable ? foldKey(entry) : ''
+    const last = out[out.length - 1]
+    if (foldable && last && k === key) last.members.push(entry)
+    else out.push({ entry, members: [entry] })
+    key = k
+  }
+  return out
+}

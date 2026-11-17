@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Command, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
@@ -7,6 +7,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Tip, TooltipProvider } from '@/components/ui/tooltip'
 import { useDayRuns, useInbox, useItems, useReminders, useSchedules } from '@/lib/api'
 import { useShortcuts } from '@/lib/keys'
+import { fmtClock } from '@/lib/format'
 import { Overview } from '@/pages/overview'
 import { WorkItems, WorkItemDetail } from '@/pages/work'
 import { Automations } from '@/pages/automations'
@@ -14,7 +15,8 @@ import { InboxPage } from '@/pages/inbox'
 import { Session } from '@/pages/session'
 import { Runs } from '@/pages/runs'
 import { System } from '@/pages/system'
-import { AgeChip, CountChip, Empty, type Tone } from '@/components/shared'
+import { AgeChip, CountChip, Empty, shortAge, useNow, type Tone } from '@/components/shared'
+import { ToastProvider, useToast } from '@/components/toast'
 import { PageHeadContext, usePageHeadState, usePageTitle } from '@/components/page-head'
 import { NAV, sectionFor } from '@/components/nav'
 import { ThemeToggle, cycleTheme, readStored, writeStored } from '@/components/theme'
@@ -26,6 +28,15 @@ const WORKER_INTERVAL = 4000,
   HANDLER_INTERVAL = 10000
 
 export default function App() {
+  return (
+    <ToastProvider>
+      <Shell />
+    </ToastProvider>
+  )
+}
+
+function Shell() {
+  const toast = useToast()
   const location = useLocation()
   const navigate = useNavigate()
   const client = useQueryClient()
@@ -45,7 +56,12 @@ export default function App() {
       return !value
     })
   }, [])
-  const refetch = useCallback(() => void client.refetchQueries({ type: 'active' }), [client])
+  const refetch = useCallback(() => {
+    void client.refetchQueries({ type: 'active' }).then(
+      () => toast('Refreshed', { tone: 'neutral', duration: 1500 }),
+      () => toast('Refresh failed', { tone: 'danger' }),
+    )
+  }, [client, toast])
   useShortcuts({
     palette: () => setPalette((open) => !open),
     help: () => setHelp(true),
@@ -54,6 +70,18 @@ export default function App() {
     go: navigate,
   })
   useEffect(() => setMore(false), [location.pathname])
+  // Sections linked by hash (#tokens, #effects) render after their data loads, so look a few times.
+  useEffect(() => {
+    const id = location.hash.slice(1)
+    if (!id) return
+    let tries = 0
+    const timer = setInterval(() => {
+      const target = document.getElementById(decodeURIComponent(id))
+      if (target || ++tries > 20) clearInterval(timer)
+      target?.scrollIntoView({ block: 'start' })
+    }, 150)
+    return () => clearInterval(timer)
+  }, [location.pathname, location.hash])
 
   const headApi = useMemo(
     () => ({
@@ -131,6 +159,7 @@ export default function App() {
                 </button>
               </div>
             </header>
+            <ServiceBanner />
             <main id="main" className="main-content">
               <Routes>
                 <Route path="/" element={<Overview />} />
@@ -183,7 +212,7 @@ export default function App() {
           </nav>
         </div>
         <Sheet open={more} onOpenChange={setMore}>
-          <SheetContent title="More" aria-describedby={undefined}>
+          <SheetContent title="More" aria-describedby={undefined} className="is-bottom">
             <div className="more-list">
               {NAV.filter((n) => ['/schedules', '/reminders', '/system'].includes(n.to)).map(
                 (entry) => (
@@ -278,14 +307,44 @@ function useServices() {
       interval: HANDLER_INTERVAL,
       updatedAt: handler.dataUpdatedAt,
       error: handler.isError,
+      refetch: handler.refetch,
     },
     {
       name: 'worker',
       interval: WORKER_INTERVAL,
       updatedAt: worker.dataUpdatedAt,
       error: worker.isError,
+      refetch: worker.refetch,
     },
   ]
+}
+
+const DOWN_AFTER = 30_000
+/** Persistent strip under the top bar once a service has failed for 30s; visible on phones too. */
+function ServiceBanner() {
+  const services = useServices()
+  const now = useNow(1000)
+  const since = useRef<Record<string, number>>({})
+  for (const s of services) {
+    if (s.error) since.current[s.name] ??= now
+    else delete since.current[s.name]
+  }
+  const down = services.filter((s) => s.error && now - since.current[s.name] >= DOWN_AFTER)
+  if (!down.length) return null
+  return (
+    <div className="service-banner" role="alert">
+      {down.map((s) => (
+        <span key={s.name}>
+          <strong>{s.name[0].toUpperCase() + s.name.slice(1)} unreachable</strong> since{' '}
+          {fmtClock(since.current[s.name])}
+          {s.updatedAt ? ` · last data ${shortAge(now - s.updatedAt)} ago` : ' · no data yet'}
+          <button type="button" onClick={() => void s.refetch()}>
+            Retry
+          </button>
+        </span>
+      ))}
+    </div>
+  )
 }
 function ServiceAges() {
   return (
