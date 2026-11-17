@@ -1,0 +1,125 @@
+.inbox-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.inbox-page > .toolbar {
+  margin-bottom: 0;
+}
+.inbox-facts {
+  padding: 0 2px;
+}
+.inbox-facts > div:last-child {
+  flex: 1 1 200px;
+}
+.inbox-toolbar .toolbar-end {
+  min-width: 0;
+}
+.inbox-count {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.inbox-search {
+  width: 260px;
+}
+.inbox-sender {
+  display: block;
+  color: var(--fg-2);
+}
+.inbox-reason {
+  display: block;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+.dt td .muted.truncate {
+  display: block;
+  font-size: var(--fs-sm);
+}
+.dt td .cell-primary.truncate {
+  display: block;
+}
+.inbox-conf[data-tone] {
+  color: var(--tone);
+  font-weight: 500;
+}
+
+.inbox-missing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+.inbox-missing > span {
+  min-width: 0;
+}
+
+.inbox-sheet-nav {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.inbox-sheet-nav .icon-button:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.inbox-sheet-pos {
+  margin-right: auto;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.inbox-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.inbox-sheet h3 {
+  margin-bottom: 4px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-xs);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.inbox-sheet p {
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inbox-kv {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  column-gap: 12px;
+  font-size: var(--fs-base);
+  line-height: 24px;
+}
+.inbox-kv dt {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.inbox-kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.inbox-kv dd.mono {
+  font-size: var(--fs-mono-sm);
+}
+@media (max-width: 759px) {
+  .inbox-search {
+    flex: 1;
+    width: auto;
+  }
+  .inbox-toolbar .toolbar-end {
+    flex: 1;
+  }
+}
