@@ -16,7 +16,7 @@ let
         && baseNameOf path != "node_modules"
         && !(lib.hasSuffix ".tsbuildinfo" path);
     };
-    npmDepsHash = "sha256-De3gvv1l2nwQERJPrxWy4gTW3kalAc1BmTCuY++4j4k=";
+    npmDepsHash = "sha256-/MNhGoFDU4CIt3GJCMw60rqXdsAt1QF7lM4Tge8tMcQ=";
     npmBuildFlags = [
       "--"
       "--outDir"
