@@ -160,7 +160,6 @@ class CodexUsageReportTests(unittest.TestCase):
         self.assertEqual(report.model, "gpt-5.6-terra")
         self.assertEqual(report.plan_type, "plus")
         self.assertEqual(report.limit_id, "codex")
-        self.assertIsNotNone(report.primary)
         assert report.primary is not None
         self.assertEqual(report.primary.used_percent, 42.0)
         self.assertEqual(report.primary.window_minutes, 10080)
@@ -171,29 +170,15 @@ class CodexUsageReportTests(unittest.TestCase):
             datetime(2026, 8, 19, 10, 11, 13, 540000, tzinfo=timezone.utc),
         )
 
-    def test_resolves_codex_home_from_home_when_unset(self) -> None:
+    def test_exhausted_plan_reports_no_window_and_home_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            day = Path(tmp) / ".codex" / "sessions" / "2026" / "08" / "19"
             _write_rollout(
-                day,
-                name="rollout-2026-08-19T10-11-00-bbb.jsonl",
-                rate_limits=_LIVE_RATE_LIMITS,
-            )
-            report = CodexExecutor(env={"HOME": tmp}).usage_report()
-
-        self.assertEqual(report.errors, [])
-        self.assertEqual(report.limit_id, "codex")
-
-    def test_exhausted_plan_reports_no_window(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            codex_home = Path(tmp) / ".codex"
-            day = codex_home / "sessions" / "2026" / "08" / "19"
-            _write_rollout(
-                day,
+                Path(tmp) / ".codex" / "sessions" / "2026" / "08" / "19",
                 name="rollout-2026-08-19T10-11-00-bbb.jsonl",
                 rate_limits=_EXHAUSTED_RATE_LIMITS,
             )
-            report = CodexExecutor(env={"CODEX_HOME": str(codex_home)}).usage_report()
+            # Without CODEX_HOME the executor falls back to $HOME/.codex.
+            report = CodexExecutor(env={"HOME": tmp}).usage_report()
 
         self.assertEqual(report.errors, [])
         self.assertEqual(report.limit_id, "premium")
@@ -201,12 +186,10 @@ class CodexUsageReportTests(unittest.TestCase):
         self.assertIs(report.has_credits, False)
         self.assertEqual(report.credit_balance, "0")
 
-    def test_missing_sessions_directory_reports_error(self) -> None:
+    def test_missing_or_unresolvable_codex_home_reports_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = CodexExecutor(env={"CODEX_HOME": tmp}).usage_report()
         self.assertEqual(report.errors, ["codex_sessions_missing"])
-
-    def test_unresolvable_codex_home_reports_error(self) -> None:
         report = CodexExecutor(env={}).usage_report()
         self.assertEqual(report.errors, ["codex_home_unresolved"])
 

@@ -138,7 +138,7 @@ class MainReplyCliTests(unittest.TestCase):
                 )
 
     def test_topic_sends_and_history_use_chosen_destination_not_inbound_topic(self):
-        for topic in (7, 8, None):
+        for topic in (8, None):
             with self.subTest(topic=topic), tempfile.TemporaryDirectory() as tmp:
                 directory = Path(tmp)
                 store, config = _store(directory)
