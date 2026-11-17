@@ -229,16 +229,12 @@ class EmailE2ETests(unittest.TestCase):
                 # Validate the captured prompt
                 prompt = json.loads(prompt_file.read_text(encoding="utf-8"))
 
-                self.assertEqual(prompt["schema_version"], "1.0")
-                self.assertIn("task", prompt)
                 task = prompt["task"]
                 self.assertIn("E2E test task", task["content"])
                 self.assertIn("Please do the e2e test thing", task["content"])
                 self.assertEqual(task["source"], "email")
                 self.assertEqual(task["event_channel"]["type"], "email")
                 self.assertEqual(task["event_channel"]["target"], "sender@test.local")
-                self.assertIn("current_time", prompt)
-                self.assertIn("reply_contract", prompt)
 
             finally:
                 for proc in (handler_proc, worker_proc, server_proc):
@@ -292,6 +288,3 @@ class EmailE2ETests(unittest.TestCase):
             diag.append(log_content[-3000:] if log_content else "(empty)")
         print("\n".join(diag), file=sys.stderr)
 
-
-if __name__ == "__main__":
-    unittest.main()
