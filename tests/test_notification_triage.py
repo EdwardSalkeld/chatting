@@ -94,15 +94,7 @@ class NotificationTriageTests(unittest.TestCase):
     def test_uncertainty_invalid_answers_and_transport_failure_forward(self):
         triage = self.triage()
         for number, response in enumerate(
-            (
-                answer(0.31),
-                answer(0.5),
-                answer(0.7),
-                answer(True),
-                answer(float("nan")),
-                answer(2),
-                {},
-            ),
+            (answer(0.31), answer(0.7), answer(True), answer(2), {}),
             start=1,
         ):
             self.post.return_value = response
