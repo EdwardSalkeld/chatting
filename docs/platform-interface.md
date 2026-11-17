@@ -115,8 +115,9 @@ service failures. Unknown paths render the app's own not-found page.
 Write results, write failures and `r` refetches are announced in one polite
 toast region. If the handler or worker has been unreachable for 30 seconds a
 banner under the top bar says since when and offers Retry, on every screen size.
-The top bar names the browser timezone every clock time is shown in, and shows
-a service's data age only when it is stale or down.
+The top bar names the browser timezone every clock time is shown in (below
+1100px it gives way on pages with top-bar actions, such as the Overview), and
+shows a service's data age only when it is stale or down.
 
 Rows that open a page show a trailing arrow on hover, rows that open a side
 sheet highlight, and rows that expand in place carry a leading chevron. Work

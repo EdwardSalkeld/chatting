@@ -1183,6 +1183,19 @@ a.cell-primary:hover {
   [data-priority='3'] {
     display: none;
   }
+  /* Beside the sidebar the top bar is too narrow for page actions and the full tool row. */
+  .palette-button > span,
+  .palette-button > kbd {
+    display: none;
+  }
+  .palette-button {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+  .topbar:has(.topbar-actions:not(:empty)) .zone-label {
+    display: none;
+  }
 }
 @media (max-width: 759px) {
   [data-priority='2'] {
@@ -1869,6 +1882,11 @@ a.cell-primary:hover {
     display: inline-flex;
     align-items: center;
     min-height: 36px;
+  }
+  /* inline-flex would stop the ellipsis, so truncated links become 36px blocks instead. */
+  .dt td a.truncate {
+    display: block;
+    line-height: 36px;
   }
 }
 .h-short {

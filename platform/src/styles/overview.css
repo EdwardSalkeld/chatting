@@ -84,6 +84,11 @@
     align-items: flex-start;
     padding: 4px 12px;
   }
+  .ov-system-label {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+  }
   .overview .panel-meta {
     display: none;
   }

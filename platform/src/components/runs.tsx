@@ -329,14 +329,16 @@ function lastFailedCommand(entries: TranscriptEntry[]) {
 
 const firstLine = (text: string) => text.trim().split('\n')[0]
 
+// The executor's closing "task finished with execution_error" line restates the outcome, not a cause.
+const isCauseError = (e: TranscriptEntry) =>
+  e.kind === 'error' && !!e.body.trim() && !/^task finished/i.test(e.label)
+
 /**
  * The best explanation a transcript offers for a failure the run did not record: an error
  * line, then stderr, then a command that never finished, then the executor's last message.
  */
 function transcriptReason(entries: TranscriptEntry[]): { text: string; error: boolean } | null {
-  const error = entries.find(
-    (e) => e.kind === 'error' && e.body.trim() && !/^task finished/i.test(e.label),
-  )
+  const error = entries.find(isCauseError)
   if (error) return { text: `${error.label}: ${firstLine(error.body)}`, error: true }
   const stderr = entries.findLast((e) => e.label === 'stderr' && e.body.trim())
   if (stderr)
@@ -381,7 +383,7 @@ function TranscriptLink({ runID, errors }: { runID: string; errors?: number }) {
 function RunFailureDetail({ run }: { run: RunRow }) {
   const { events, entries } = useTranscript(run.task_id)
   const command = useMemo(() => (entries ? lastFailedCommand(entries) : undefined), [entries])
-  const errorEntries = useMemo(() => entries?.filter((e) => e.kind === 'error') || [], [entries])
+  const errorEntries = useMemo(() => entries?.filter(isCauseError) || [], [entries])
   const recorded = [
     ...(run.execution_errors || []),
     run.last_error

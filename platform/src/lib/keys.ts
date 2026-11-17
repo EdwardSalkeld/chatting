@@ -22,7 +22,7 @@ export const SHORTCUTS: { keys: string[]; label: string }[] = [
   { keys: ['Esc'], label: 'Clear search / close sheet' },
   { keys: ['j', 'k'], label: 'Next / previous row' },
   { keys: ['Enter', 'o'], label: 'Open focused row' },
-  { keys: ['→', '←'], label: 'Expand / collapse dead letter' },
+  { keys: ['→', '←'], label: 'Expand / collapse run row' },
   { keys: ['f', 'p'], label: 'Session: follow or pause live output' },
   { keys: ['e', 'c'], label: 'Session: next error / copy' },
   ...Object.entries(GO_TARGETS).map(([key, { label }]) => ({ keys: [`g ${key}`], label })),

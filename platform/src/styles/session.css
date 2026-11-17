@@ -507,6 +507,8 @@
   }
   .t-pill {
     bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom));
+    height: 36px;
+    border-radius: 18px;
   }
 }
 
