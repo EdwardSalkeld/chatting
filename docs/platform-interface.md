@@ -51,31 +51,68 @@ repository. The app does not assume that either upstream is on the same host.
 
 ## Views and actions
 
-- Overview: active executors, queued tasks, recurring schedule count, waiting
-  inbox classifications, recent work items and upcoming reminders.
-- Work items: search, running/queued filters, run history, model tier and explicit
-  finish settings displayed from the worker. These views are read-only.
-- Sessions: original request, executor transcript, commands and output, optional
-  sent messages, pause/resume, follow and copy. Both Codex exec and app-server
-  output formats are supported, including lines split across activity events.
-- Schedules: create, edit, delete and inspect revision history. Five-field cron
-  and IANA timezones are validated by the existing handler API.
-- Reminders: create, reschedule, cancel and inspect history. The platform lists
-  the latest revision of each reminder. Older revisions remain in detail history.
-  Reminder times use the browser’s timezone and are sent as UTC timestamps.
-  Reply metadata and context are preserved when editing. Retries of an unchanged
-  reminder submission reuse an idempotency key.
-- Personal inbox: recent decisions, category/search filters, confidence, reasons,
-  waiting/stuck/rejected counts and message links when the handler supplies them.
-  This is read-only. A missing inbox endpoint is shown separately from a failed
-  service; enable personal inbox and use a compatible handler to make it available.
+The interface is a dense operator console with light and dark themes (the top
+bar toggles system, light and dark). Lists are 32px-row tables with sticky
+headers; the window is the only vertical scroller. Every filter, tab, search,
+sort, open sheet and transcript option is a URL query parameter, so reloads,
+back/forward and shared links restore the view.
 
-Work item lists update every four seconds. Handler views update every ten
-seconds. Session activity polls every second while active, draining full pages
-without delaying. Pause stops transcript polling; it does not stop execution.
-Copy uses the browser clipboard API; browsers that restrict it display a message
-so text can be copied manually. Service failures show errors and retain any
-already loaded data. They are never presented as healthy zero counts.
+- Overview (`/`): stat tiles (running, queued, errors in 24h, dead letters,
+  waiting inbox mail, handler loop age), a one-line system strip, a "needs
+  attention" list (dead letters, failed runs, overdue reminders, stuck inbox
+  mail, old outbox rows, a stale handler loop), running and queued work, upcoming
+  schedule and reminder fires, recent runs and inbox categories.
+- Work items (`/items`, `/items/:id`): status filters, search, last result,
+  failures and 7-day tokens per item. Item detail shows reply facts, a run
+  summary (failure rate, p50/p95 latency, tokens) and run history. Read-only.
+- Runs (`/runs`): every non-internal run with status, source, time-range and
+  item filters. Running executors are pinned first. Dead-letter rows expand to
+  show the error, reason codes, attempts and replay.
+- Sessions (`/tasks/:id`, `/runs/:id`): run facts (status, attempts, backend,
+  model and reroutes, tokens, context use), errors, and the transcript of
+  messages, paired commands with exit codes, system events and deliveries. Kind
+  filters (`?show=`), find (`?find=`), error navigation, pause/resume, follow
+  and copy. Codex exec and app-server output formats are both supported.
+- Schedules (`/schedules`): next and last run, cron in plain English, filters
+  and a side sheet (`?edit=`, `?new=1`) to create, edit or delete with live
+  cron/timezone validation, the next five fires, recent fires and revisions.
+- Reminders (`/reminders`): Upcoming and History tabs; the sheet creates,
+  reschedules or cancels. Times use the browser's timezone and are sent as UTC.
+  Reply metadata and context are preserved, and retries of an unchanged
+  submission reuse an idempotency key.
+- Personal inbox (`/inbox`): mode, threshold, waiting/stuck/dead-letter facts,
+  category filters and a detail sheet (`?row=`). Read-only. A missing inbox
+  endpoint is shown as "not configured", separately from a failed service.
+- System (`/system`): handler and worker `/metrics` as grouped key/values with
+  per-minute rates, queue and outbox state, live executors and the raw text
+  (`?show=raw`).
+
+The sidebar counts running executors, failed runs in the last 24h, overdue
+reminders and waiting inbox mail. The tab title is prefixed with `● ` while an
+executor is live and `(N) ` for failed runs, overdue reminders and stuck mail.
+
+Keyboard shortcuts (`?` lists them; ignored while typing):
+
+| Key | Action |
+| --- | --- |
+| `⌘K` / `Ctrl+K` | Command palette |
+| `/` | Focus the page search |
+| `j` / `k`, `↓` / `↑` | Move between table rows |
+| `Enter` / `o` | Open the row (`⌘`/`Ctrl` for a new tab) |
+| `→` / `←` / `Space` | Expand or collapse a dead-letter row |
+| `g` then `o i r s m n y` | Overview, Items, Runs, Schedules, Reminders, Inbox, System |
+| `[` | Collapse the sidebar |
+| `r` | Refetch the page |
+| `f` / `p` / `e` / `c` | Session: follow, pause, next error, copy |
+| `Esc` | Clear search, close a sheet or stop following |
+
+Work items and activity update every four seconds, runs every five, handler
+lists and metrics every ten. Session activity polls every second while active,
+draining full pages without delaying. Pause stops transcript polling; it does
+not stop execution. Copy uses the browser clipboard API; browsers that restrict
+it display a message so text can be copied manually. Service failures show a
+strip with the time of the last good data and keep that data visible; counts
+show "—", never a healthy zero.
 
 ## HTTP interfaces
 
