@@ -1,19 +1,13 @@
-import { useRef, useState } from 'react'
-import type { FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { FormEvent, ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Clock3, History, LoaderCircle, Plus, Send, Trash2, X } from 'lucide-react'
+import { Check, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -24,49 +18,625 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import {
-  Empty,
-  ErrorNotice,
-  Loading,
-  PageHeading,
+  ErrorStrip,
+  FactsRow,
+  FilterChips,
   Panel,
   SearchInput,
+  SkeletonRows,
   StatusBadge,
+  StatusDot,
+  TopbarActions,
+  useNow,
+  usePageTitle,
+  type Fact,
 } from '@/components/shared'
-import { api, useReminders, useSchedules } from '@/lib/api'
-import { dateTime, encode, lines, localDateTime, relative } from '@/lib/format'
-import type { Reminder, Schedule } from '@/lib/types'
+import { DataTable, type Column } from '@/components/table'
+import { api, useReminders, useRuns, useSchedules } from '@/lib/api'
+import { encode, lines, localDateTime } from '@/lib/format'
+import { useUrlParams } from '@/lib/url'
+import {
+  cronError,
+  describeCron,
+  fullWhen,
+  nextRuns,
+  parseCronTask,
+  parseReminderTask,
+  relTime,
+  shortCron,
+  timezoneError,
+  zonedWhen,
+} from '@/lib/cron'
+import type { Reminder, RunRow, Schedule } from '@/lib/types'
+import '@/styles/automations.css'
 
 type Kind = 'schedules' | 'reminders'
 type RecordType = Schedule | Reminder
 const isSchedule = (row: RecordType): row is Schedule => 'schedule_id' in row
 const recordID = (row: RecordType) => (isSchedule(row) ? row.schedule_id : row.reminder_id)
+const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+const ms = (value?: string | null) => (value ? new Date(value).getTime() : NaN)
+
+function localWhen(value?: string | null) {
+  const date = new Date(value || '')
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
+}
+function latency(value: number) {
+  if (value < 60000) return `${Math.round(value / 1000)}s`
+  return `${Math.floor(value / 60000)}m ${Math.round((value % 60000) / 1000)}s`
+}
+function matches(query: string, ...values: (string | null | undefined)[]) {
+  if (!query) return true
+  const haystack = values.join(' ').toLowerCase()
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .every((term) => haystack.includes(term))
+}
 
 export function Automations({ kind }: { kind: Kind }) {
-  const schedules = useSchedules(),
-    reminders = useReminders()
-  const query = kind === 'schedules' ? schedules : reminders
-  const [params, setParams] = useSearchParams()
-  const [search, setSearch] = useState(''),
-    [filter, setFilter] = useState('scheduled'),
-    [notice, setNotice] = useState('')
-  const recurring = kind === 'schedules'
-  const rows: RecordType[] = recurring
-    ? schedules.data?.schedules || []
-    : reminders.data?.reminders || []
-  const visible = rows.filter(
-    (row) =>
-      (recurring ||
-        (filter === 'scheduled' ? row.status === 'scheduled' : row.status !== 'scheduled')) &&
-      (isSchedule(row)
-        ? `${row.job_name} ${row.content} ${row.cron}`
-        : `${row.prompt} ${row.reply_channel.target}`
-      )
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+  return kind === 'schedules' ? <SchedulesPage /> : <RemindersPage />
+}
+
+function useSavedNotice() {
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (!notice) return
+    const id = setTimeout(() => setNotice(''), 4000)
+    return () => clearTimeout(id)
+  }, [notice])
+  const node = notice ? (
+    <span className="am-notice" role="status">
+      <Check size={14} />
+      {notice}
+    </span>
+  ) : null
+  return [node, setNotice] as const
+}
+
+function useSheetParams() {
+  const [params, update] = useUrlParams()
+  const edit = params.get('edit'),
+    isNew = params.has('new')
+  return {
+    params,
+    update,
+    edit,
+    isNew,
+    open: (id: string) => update({ edit: id, new: null }),
+    create: () => update({ new: '1', edit: null }),
+    close: () => update({ edit: null, new: null }, { replace: true }),
+  }
+}
+
+interface ScheduleRow {
+  schedule: Schedule
+  next?: Date
+  fires: RunRow[]
+}
+
+function SchedulesPage() {
+  usePageTitle('Schedules')
+  const schedules = useSchedules()
+  const cronRuns = useRuns({ source: 'cron', limit: 500 })
+  const sheet = useSheetParams()
+  const q = sheet.params.get('q') || '',
+    filter = sheet.params.get('filter') || 'all'
+  const now = useNow(15000)
+  const [notice, setNotice] = useSavedNotice()
+
+  const firesByJob = useMemo(() => {
+    const map = new Map<string, RunRow[]>()
+    for (const run of cronRuns.data?.runs || []) {
+      const job = parseCronTask(run.task_id)?.job
+      if (!job) continue
+      map.set(job, [...(map.get(job) || []), run])
+    }
+    return map
+  }, [cronRuns.data])
+
+  const all: ScheduleRow[] | undefined = useMemo(
+    () =>
+      schedules.data?.schedules.map((schedule) => ({
+        schedule,
+        next: nextRuns(schedule.cron, schedule.timezone, 1, new Date(now))[0],
+        fires: firesByJob.get(schedule.job_name) || [],
+      })),
+    [schedules.data, firesByJob, now],
   )
-  const selectedID = params.get('edit'),
-    isNew = params.has('new'),
-    open = isNew || !!selectedID
+  const failing = (row: ScheduleRow) => !!row.fires[0] && row.fires[0].result_status !== 'success'
+  const dueSoon = (row: ScheduleRow) => !!row.next && row.next.getTime() - now < 3600000
+  const filters: Record<string, (row: ScheduleRow) => boolean> = {
+    all: () => true,
+    failing,
+    due: dueSoon,
+    never: (row) => !row.fires.length,
+  }
+  const rows = all?.filter(
+    (row) =>
+      (filters[filter] || filters.all)(row) &&
+      matches(
+        q,
+        row.schedule.job_name,
+        row.schedule.content,
+        row.schedule.cron,
+        row.schedule.timezone,
+        row.schedule.reply_channel_target,
+      ),
+  )
+  const count = (key: string) => all?.filter(filters[key]).length ?? null
+
+  const columns: Column<ScheduleRow>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      className: 'am-col-name',
+      sortValue: (r) => r.schedule.job_name,
+      title: (r) => `${r.schedule.job_name} — ${r.schedule.content}`,
+      cell: (r) => (
+        <>
+          <span className="cell-primary">{r.schedule.job_name}</span>
+          <span className="cell-secondary">{r.schedule.content}</span>
+        </>
+      ),
+    },
+    {
+      key: 'cron',
+      header: 'Schedule',
+      className: 'am-col-cron',
+      priority: 2,
+      sortValue: (r) => r.schedule.cron,
+      title: (r) =>
+        `${describeCron(r.schedule.cron) || 'Invalid cron'} (${r.schedule.timezone || 'UTC'})`,
+      cell: (r) => (
+        <>
+          <span className="am-human">{shortCron(r.schedule.cron)}</span>
+          <span className="am-raw mono">{r.schedule.cron}</span>
+        </>
+      ),
+    },
+    {
+      key: 'tz',
+      header: 'Zone',
+      className: 'am-col-tz',
+      priority: 3,
+      sortValue: (r) => r.schedule.timezone || 'UTC',
+      cell: (r) => <span className="muted">{r.schedule.timezone || 'UTC'}</span>,
+    },
+    {
+      key: 'next',
+      header: 'Next run',
+      className: 'am-col-next',
+      sortValue: (r) => r.next?.getTime(),
+      title: (r) =>
+        r.next
+          ? `${fullWhen(r.next, r.schedule.timezone)}\n${fullWhen(r.next, localZone)}`
+          : undefined,
+      cell: (r) =>
+        r.next ? (
+          <span className="num">
+            <span className={dueSoon(r) ? 'am-soon' : 'am-fg'}>{relTime(r.next, now)}</span>
+            <span className="am-sub"> · {zonedWhen(r.next, r.schedule.timezone, now)}</span>
+          </span>
+        ) : (
+          <span className="am-warn">invalid</span>
+        ),
+    },
+    {
+      key: 'last',
+      header: 'Last run',
+      className: 'am-col-last',
+      sortDescFirst: true,
+      sortValue: (r) => (r.fires[0] ? ms(r.fires[0].created_at) : undefined),
+      title: (r) =>
+        r.fires[0]
+          ? `${r.fires[0].result_status} · ${fullWhen(new Date(r.fires[0].created_at), localZone)}`
+          : 'No runs in the recent run history',
+      cell: (r) => {
+        const run = r.fires[0]
+        if (!run) return <span className="muted">{cronRuns.isPending ? '…' : '—'}</span>
+        return (
+          <span className="cell-flex num">
+            <StatusDot status={run.result_status} kind="run" />
+            <Link className="am-link" to={`/runs/${encode(run.run_id)}`}>
+              {relTime(run.created_at, now)}
+            </Link>
+            <span className="am-sub" data-priority="3">
+              {latency(run.latency_ms)}
+            </span>
+          </span>
+        )
+      },
+    },
+    {
+      key: 'target',
+      header: 'Target',
+      className: 'am-col-target',
+      priority: 3,
+      sortValue: (r) => r.schedule.reply_channel_target,
+      cell: (r) =>
+        r.schedule.reply_channel_type ? (
+          <span>
+            {r.schedule.reply_channel_type}
+            <span className="am-sub mono"> · {r.schedule.reply_channel_target}</span>
+          </span>
+        ) : (
+          <span className="muted">—</span>
+        ),
+    },
+    {
+      key: 'version',
+      header: 'Ver',
+      className: 'am-col-ver',
+      align: 'right',
+      priority: 2,
+      sortValue: (r) => r.schedule.version,
+      cell: (r) => <span className="num muted">{r.schedule.version}</span>,
+    },
+  ]
+
+  return (
+    <div className="am-page">
+      <TopbarActions>
+        <Button size="sm" onClick={sheet.create}>
+          <Plus />
+          New schedule
+        </Button>
+      </TopbarActions>
+      <div className="toolbar am-toolbar">
+        <FilterChips
+          label="Filter schedules"
+          value={filter}
+          onChange={(value) => sheet.update({ filter: value === 'all' ? null : value })}
+          options={[
+            { value: 'all', label: 'Active', count: count('all') },
+            { value: 'failing', label: 'Last run failed', count: count('failing'), tone: 'danger' },
+            { value: 'due', label: 'Due < 1h', count: count('due'), tone: 'pending' },
+            { value: 'never', label: 'No recent runs', count: count('never') },
+          ]}
+        />
+        <SearchInput
+          value={q}
+          onChange={(value) => sheet.update({ q: value }, { replace: true })}
+          placeholder="Search schedules…"
+        />
+        <div className="toolbar-end">{notice}</div>
+      </div>
+      <Panel>
+        <ErrorStrip query={schedules} label="Handler" />
+        <ErrorStrip query={cronRuns} label="Run history" tone="warn" />
+        <DataTable
+          label="Schedules"
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.schedule.schedule_id}
+          loading={schedules.isPending}
+          onRowClick={(r) => sheet.open(r.schedule.schedule_id)}
+          selectedKey={sheet.edit}
+          defaultSort="next"
+          rowVersion={(r) => `${r.schedule.version}:${r.fires[0]?.run_id || ''}`}
+          className="am-table"
+          empty={
+            q || filter !== 'all' ? (
+              <>
+                No schedules match ·{' '}
+                <button
+                  type="button"
+                  className="am-link"
+                  onClick={() => sheet.update({ q: null, filter: null })}
+                >
+                  Clear filters
+                </button>
+              </>
+            ) : (
+              <>
+                No schedules ·{' '}
+                <button type="button" className="am-link" onClick={sheet.create}>
+                  New schedule
+                </button>
+              </>
+            )
+          }
+        />
+      </Panel>
+      <AutomationSheet
+        kind="schedules"
+        sheet={sheet}
+        fires={(record) => (isSchedule(record) ? firesByJob.get(record.job_name) || [] : [])}
+        onSaved={setNotice}
+      />
+    </div>
+  )
+}
+
+interface ReminderRow {
+  reminder: Reminder
+  overdue: boolean
+  run?: RunRow
+}
+
+function RemindersPage() {
+  usePageTitle('Reminders')
+  const reminders = useReminders()
+  const reminderRuns = useRuns({ source: 'reminder', limit: 500 })
+  const sheet = useSheetParams()
+  const q = sheet.params.get('q') || '',
+    tab = sheet.params.get('tab') === 'history' ? 'history' : 'upcoming'
+  const now = useNow(15000)
+  const [notice, setNotice] = useSavedNotice()
+
+  const runsByReminder = useMemo(() => {
+    const map = new Map<string, RunRow[]>()
+    for (const run of reminderRuns.data?.runs || []) {
+      const parsed = parseReminderTask(run.task_id)
+      if (!parsed) continue
+      map.set(parsed.reminderId, [...(map.get(parsed.reminderId) || []), run])
+    }
+    return map
+  }, [reminderRuns.data])
+  const all: ReminderRow[] | undefined = useMemo(() => {
+    const runFor = (reminder: Reminder) => {
+      const runs = runsByReminder.get(reminder.reminder_id) || []
+      return (
+        runs.find((run) => parseReminderTask(run.task_id)?.revision === reminder.revision) ||
+        runs[0]
+      )
+    }
+    return reminders.data?.reminders.map((reminder) => ({
+      reminder,
+      overdue: reminder.status === 'scheduled' && ms(reminder.run_at) < now,
+      run: reminder.status === 'fired' ? runFor(reminder) : undefined,
+    }))
+  }, [reminders.data, runsByReminder, now])
+  const upcoming = all?.filter((row) => row.reminder.status === 'scheduled')
+  const history = all?.filter((row) => row.reminder.status !== 'scheduled')
+  const overdueCount = upcoming?.filter((row) => row.overdue).length ?? 0
+  const rows = (tab === 'history' ? history : upcoming)?.filter((row) =>
+    matches(
+      q,
+      row.reminder.prompt,
+      row.reminder.reminder_id,
+      row.reminder.reply_channel.target,
+      row.reminder.status,
+    ),
+  )
+
+  const prompt: Column<ReminderRow> = {
+    key: 'prompt',
+    header: 'Prompt',
+    className: 'am-col-prompt',
+    sortValue: (r) => r.reminder.prompt,
+    title: (r) => r.reminder.prompt,
+    cell: (r) => <span className="cell-primary">{r.reminder.prompt}</span>,
+  }
+  const when: Column<ReminderRow> = {
+    key: 'when',
+    header: 'When',
+    className: 'am-col-when',
+    sortValue: (r) => ms(r.reminder.run_at),
+    title: (r) => fullWhen(new Date(r.reminder.run_at), localZone),
+    cell: (r) => <span className="num am-fg">{localWhen(r.reminder.run_at)}</span>,
+  }
+  const target: Column<ReminderRow> = {
+    key: 'target',
+    header: 'Target',
+    className: 'am-col-target',
+    priority: 3,
+    sortValue: (r) => r.reminder.reply_channel.target,
+    cell: (r) => (
+      <span>
+        {r.reminder.reply_channel.type}
+        <span className="am-sub mono"> · {r.reminder.reply_channel.target}</span>
+      </span>
+    ),
+  }
+  const revision: Column<ReminderRow> = {
+    key: 'rev',
+    header: 'Rev',
+    className: 'am-col-ver',
+    align: 'right',
+    priority: 3,
+    sortValue: (r) => r.reminder.revision,
+    cell: (r) => <span className="num muted">{r.reminder.revision}</span>,
+  }
+  const upcomingColumns: Column<ReminderRow>[] = [
+    when,
+    {
+      key: 'in',
+      header: 'In',
+      className: 'am-col-in',
+      sortValue: (r) => ms(r.reminder.run_at),
+      cell: (r) =>
+        r.overdue ? (
+          <span className="num am-warn">
+            overdue {relTime(r.reminder.run_at, now).replace(' ago', '')}
+          </span>
+        ) : (
+          <span className="num">{relTime(r.reminder.run_at, now)}</span>
+        ),
+    },
+    prompt,
+    target,
+    revision,
+    {
+      key: 'status',
+      header: 'Status',
+      className: 'am-col-status',
+      priority: 2,
+      sortValue: (r) => (r.overdue ? 0 : 1),
+      cell: (r) =>
+        r.overdue ? (
+          <StatusBadge status="overdue" kind="reminder" />
+        ) : (
+          <span className="cell-flex muted">
+            <StatusDot status="scheduled" kind="reminder" />
+            scheduled
+          </span>
+        ),
+    },
+  ]
+  const historyColumns: Column<ReminderRow>[] = [
+    when,
+    {
+      key: 'outcome',
+      header: 'Outcome',
+      className: 'am-col-status',
+      sortValue: (r) => r.reminder.status,
+      cell: (r) => <StatusBadge status={r.reminder.status} kind="reminder" />,
+    },
+    {
+      key: 'at',
+      header: 'At',
+      className: 'am-col-in',
+      priority: 2,
+      sortDescFirst: true,
+      sortValue: (r) => ms(r.reminder.fired_at || r.reminder.cancelled_at || r.reminder.updated_at),
+      title: (r) =>
+        localWhen(r.reminder.fired_at || r.reminder.cancelled_at || r.reminder.updated_at),
+      cell: (r) => (
+        <span className="num">
+          {relTime(r.reminder.fired_at || r.reminder.cancelled_at || r.reminder.updated_at, now)}
+        </span>
+      ),
+    },
+    prompt,
+    {
+      key: 'run',
+      header: 'Run',
+      className: 'am-col-last',
+      priority: 2,
+      sortValue: (r) => r.run?.result_status,
+      cell: (r) =>
+        r.run ? (
+          <span className="cell-flex">
+            <StatusDot status={r.run.result_status} kind="run" />
+            <Link className="am-link num" to={`/runs/${encode(r.run.run_id)}`}>
+              {latency(r.run.latency_ms)}
+            </Link>
+            <span className="am-sub">
+              {r.run.result_status === 'success' ? 'ok' : r.run.result_status.replaceAll('_', ' ')}
+            </span>
+          </span>
+        ) : (
+          <span className="muted">—</span>
+        ),
+    },
+    target,
+    revision,
+  ]
+
+  return (
+    <div className="am-page">
+      <TopbarActions>
+        <Button size="sm" onClick={sheet.create}>
+          <Plus />
+          New reminder
+        </Button>
+      </TopbarActions>
+      <div className="toolbar am-toolbar">
+        <FilterChips
+          label="Reminder tab"
+          value={tab}
+          onChange={(value) =>
+            sheet.update({ tab: value === 'upcoming' ? null : value, sort: null })
+          }
+          options={[
+            {
+              value: 'upcoming',
+              label: overdueCount ? (
+                <>
+                  Upcoming <span className="am-warn">· {overdueCount} overdue</span>
+                </>
+              ) : (
+                'Upcoming'
+              ),
+              count: upcoming?.length ?? null,
+              tone: overdueCount ? 'warn' : undefined,
+            },
+            { value: 'history', label: 'History', count: history?.length ?? null },
+          ]}
+        />
+        <SearchInput
+          value={q}
+          onChange={(value) => sheet.update({ q: value }, { replace: true })}
+          placeholder="Search reminders…"
+        />
+        <div className="toolbar-end">
+          {notice}
+          <span
+            className="am-sub"
+            data-priority="2"
+            title="Times are shown in your browser’s timezone"
+          >
+            {localZone}
+          </span>
+        </div>
+      </div>
+      <Panel>
+        <ErrorStrip query={reminders} label="Handler" />
+        <DataTable
+          key={tab}
+          label={tab === 'history' ? 'Reminder history' : 'Upcoming reminders'}
+          columns={tab === 'history' ? historyColumns : upcomingColumns}
+          rows={rows}
+          rowKey={(r) => r.reminder.reminder_id}
+          loading={reminders.isPending}
+          onRowClick={(r) => sheet.open(r.reminder.reminder_id)}
+          selectedKey={sheet.edit}
+          defaultSort={tab === 'history' ? '-when' : 'when'}
+          rowVersion={(r) => `${r.reminder.revision}:${r.reminder.status}`}
+          className="am-table"
+          empty={
+            q ? (
+              <>
+                No reminders match ·{' '}
+                <button type="button" className="am-link" onClick={() => sheet.update({ q: null })}>
+                  Clear search
+                </button>
+              </>
+            ) : tab === 'history' ? (
+              'No past reminders'
+            ) : (
+              <>
+                No upcoming reminders ·{' '}
+                <button type="button" className="am-link" onClick={sheet.create}>
+                  New reminder
+                </button>
+              </>
+            )
+          }
+        />
+      </Panel>
+      <AutomationSheet
+        kind="reminders"
+        sheet={sheet}
+        fires={(record) => (isSchedule(record) ? [] : runsByReminder.get(record.reminder_id) || [])}
+        onSaved={setNotice}
+      />
+    </div>
+  )
+}
+
+function AutomationSheet({
+  kind,
+  sheet,
+  fires,
+  onSaved,
+}: {
+  kind: Kind
+  sheet: ReturnType<typeof useSheetParams>
+  fires: (record: RecordType) => RunRow[]
+  onSaved: (message: string) => void
+}) {
+  const { edit: selectedID, isNew } = sheet
+  const recurring = kind === 'schedules'
   const detail = useQuery({
     queryKey: [kind, selectedID],
     queryFn: () =>
@@ -76,245 +646,140 @@ export function Automations({ kind }: { kind: Kind }) {
     enabled: !!selectedID,
   })
   const selected = detail.data?.schedule || detail.data?.reminder
-  function close() {
-    setParams({}, { replace: true })
-  }
+  const open = isNew || !!selectedID
+  const noun = recurring ? 'schedule' : 'reminder'
   return (
-    <>
-      <PageHeading
-        title={recurring ? 'Schedules' : 'Reminders'}
-        action={
-          <Button onClick={() => setParams({ new: '1' })}>
-            <Plus />
-            {recurring ? 'New schedule' : 'New reminder'}
-          </Button>
-        }
-      />
-      {notice && (
-        <div className="success-notice" role="status">
-          {notice}
-          <button aria-label="Dismiss notification" onClick={() => setNotice('')}>
-            <X size={16} />
-          </button>
-        </div>
-      )}
-      <ErrorNotice
-        error={query.error}
-        retry={() => {
-          void query.refetch()
-        }}
-      />
-      <div className="list-toolbar">
-        {recurring ? (
-          <div className="list-count">
-            <span className="status-dot" />
-            {rows.length} active {rows.length === 1 ? 'schedule' : 'schedules'}
-          </div>
+    <Sheet
+      open={open}
+      onOpenChange={(value) => {
+        if (!value) sheet.close()
+      }}
+    >
+      {open &&
+        (!isNew && !selected ? (
+          <SheetContent
+            title={recurring ? 'Schedule' : 'Reminder'}
+            description={<span className="mono">{selectedID}</span>}
+          >
+            {detail.error ? (
+              <ErrorStrip query={detail} label="Handler" />
+            ) : (
+              <SkeletonRows rows={8} />
+            )}
+          </SheetContent>
         ) : (
-          <div className="filter-tabs">
-            {[
-              ['scheduled', 'Upcoming'],
-              ['history', 'History'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                aria-pressed={filter === value}
-                className={filter === value ? 'selected' : ''}
-                onClick={() => setFilter(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        <SearchInput value={search} onChange={setSearch} placeholder={`Search ${kind}…`} />
-      </div>
-      {query.isPending ? (
-        <Panel>
-          <Loading />
-        </Panel>
-      ) : visible.length && recurring ? (
-        <Panel>
-          <div className="table-scroll">
-            <table className="schedule-table">
-              <thead>
-                <tr>
-                  <th>SCHEDULE</th>
-                  <th>CRON</th>
-                  <th>TIMEZONE</th>
-                  <th>REPLY TARGET</th>
-                  <th>
-                    <span className="sr-only">Edit schedule</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.filter(isSchedule).map((row) => (
-                  <tr key={row.schedule_id}>
-                    <td>
-                      <button
-                        className="schedule-name"
-                        onClick={() => setParams({ edit: row.schedule_id })}
-                      >
-                        <strong>{row.job_name}</strong>
-                        <span>{row.content}</span>
-                      </button>
-                    </td>
-                    <td>
-                      <code>{row.cron}</code>
-                    </td>
-                    <td>{row.timezone || 'UTC'}</td>
-                    <td>
-                      {row.reply_channel_type
-                        ? `${row.reply_channel_type} · ${row.reply_channel_target}`
-                        : '—'}
-                    </td>
-                    <td>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Edit ${row.job_name}`}
-                        onClick={() => setParams({ edit: row.schedule_id })}
-                      >
-                        <ArrowRight />
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      ) : visible.length ? (
-        <div className="reminder-list">
-          {visible.map((row) =>
-            isSchedule(row) ? null : (
-              <button
-                className="reminder-card"
-                key={row.reminder_id}
-                onClick={() => setParams({ edit: row.reminder_id })}
-              >
-                <div className="reminder-date">
-                  <span>{new Date(row.run_at).toLocaleString(undefined, { month: 'short' })}</span>
-                  <strong>{new Date(row.run_at).getDate()}</strong>
-                </div>
-                <div className="reminder-copy">
-                  <h2>{row.prompt}</h2>
-                  <p>
-                    <Clock3 size={13} />
-                    {dateTime(row.run_at)}
-                    <span>·</span>
-                    {row.reply_channel.type} · {row.reply_channel.target}
-                  </p>
-                </div>
-                <div className="reminder-right">
-                  <StatusBadge status={row.status} />
-                  <span>
-                    {relative(
-                      row.status === 'scheduled'
-                        ? row.run_at
-                        : row.cancelled_at || row.fired_at || row.updated_at,
-                    )}
-                  </span>
-                </div>
-                <ArrowRight size={18} />
-              </button>
-            ),
-          )}
-        </div>
-      ) : (
-        <Panel>
-          <Empty
+          <AutomationForm
+            key={selectedID || 'new'}
+            kind={kind}
+            record={isNew ? undefined : selected}
+            history={detail.data?.history || []}
+            fires={selected ? fires(selected) : []}
             title={
-              search
-                ? 'No matching results'
-                : recurring
-                  ? 'No schedules'
-                  : filter === 'history'
-                    ? 'No past reminders'
-                    : 'No upcoming reminders'
+              isNew
+                ? `New ${noun}`
+                : selected && isSchedule(selected)
+                  ? selected.job_name
+                  : selected?.prompt || 'Reminder'
             }
-            action={
-              search ? (
-                <Button variant="outline" onClick={() => setSearch('')}>
-                  Clear search
-                </Button>
-              ) : (
-                (recurring || filter === 'scheduled') && (
-                  <Button onClick={() => setParams({ new: '1' })}>
-                    <Plus />
-                    {recurring ? 'New schedule' : 'New reminder'}
-                  </Button>
-                )
-              )
-            }
+            onClose={sheet.close}
+            onSaved={(message) => {
+              sheet.close()
+              onSaved(message)
+            }}
           />
-        </Panel>
-      )}
-      {!recurring && (
-        <p className="list-caption">{Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
-      )}
-      <Dialog
-        open={open}
-        onOpenChange={(value) => {
-          if (!value) close()
-        }}
-      >
-        <DialogContent className="automation-dialog">
-          <DialogHeader>
-            <DialogTitle>
-              {isNew
-                ? recurring
-                  ? 'New schedule'
-                  : 'New reminder'
-                : recurring
-                  ? 'Schedule details'
-                  : 'Reminder details'}
-            </DialogTitle>
-            <DialogDescription className={recurring ? 'sr-only' : undefined}>
-              {recurring
-                ? 'Recurring task'
-                : `Times in ${Intl.DateTimeFormat().resolvedOptions().timeZone}`}
-            </DialogDescription>
-          </DialogHeader>
-          {!isNew && detail.isPending ? (
-            <Loading />
-          ) : !isNew && !selected ? (
-            <ErrorNotice
-              error={detail.error}
-              retry={() => {
-                void detail.refetch()
-              }}
-            />
-          ) : (
-            <AutomationForm
-              key={selectedID || 'new'}
-              kind={kind}
-              record={isNew ? undefined : selected}
-              history={detail.data?.history || []}
-              onClose={close}
-              onSaved={(message) => {
-                close()
-                setNotice(message)
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
+        ))}
+    </Sheet>
   )
+}
+
+function Section({
+  title,
+  meta,
+  children,
+}: {
+  title: string
+  meta?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section className="am-section">
+      <h3>
+        {title}
+        {meta != null && <span className="am-sub">{meta}</span>}
+      </h3>
+      {children}
+    </section>
+  )
+}
+
+function Field({
+  id,
+  label,
+  hint,
+  error,
+  wide,
+  children,
+}: {
+  id: string
+  label: ReactNode
+  hint?: ReactNode
+  error?: string | null
+  wide?: boolean
+  children: ReactNode
+}) {
+  return (
+    <div className="am-field" data-wide={wide || undefined}>
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+      {error ? (
+        <p className="am-hint am-warn" id={`${id}-error`}>
+          {error}
+        </p>
+      ) : (
+        hint && <p className="am-hint">{hint}</p>
+      )}
+    </div>
+  )
+}
+
+function changedFields(row: RecordType, previous?: RecordType) {
+  if (!previous) return 'created'
+  const keys: [string, (r: RecordType) => unknown][] = isSchedule(row)
+    ? [
+        ['name', (r) => (r as Schedule).job_name],
+        ['prompt', (r) => (r as Schedule).content],
+        ['cron', (r) => (r as Schedule).cron],
+        ['zone', (r) => (r as Schedule).timezone],
+        [
+          'target',
+          (r) => `${(r as Schedule).reply_channel_type}:${(r as Schedule).reply_channel_target}`,
+        ],
+        ['context', (r) => JSON.stringify([r.context_refs, r.prompt_context])],
+      ]
+    : [
+        ['time', (r) => (r as Reminder).run_at],
+        ['prompt', (r) => (r as Reminder).prompt],
+        ['target', (r) => JSON.stringify((r as Reminder).reply_channel)],
+        ['context', (r) => JSON.stringify([r.context_refs, r.prompt_context])],
+      ]
+  const changed = keys.filter(([, get]) => get(row) !== get(previous)).map(([name]) => name)
+  return changed.length ? changed.join(', ') : 'no field changes'
 }
 
 function AutomationForm({
   kind,
   record,
   history,
+  fires,
+  title,
   onClose,
   onSaved,
 }: {
   kind: Kind
   record?: RecordType
   history: RecordType[]
+  fires: RunRow[]
+  title: string
   onClose: () => void
   onSaved: (message: string) => void
 }) {
@@ -325,8 +790,17 @@ function AutomationForm({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<Error | null>(null),
     [confirm, setConfirm] = useState(false)
+  const [cron, setCron] = useState(schedule?.cron || ''),
+    [timezone, setTimezone] = useState(schedule?.timezone || (record ? '' : localZone))
   const client = useQueryClient()
   const submission = useRef({ fingerprint: '', key: '' })
+  const now = useNow(30000)
+  const formID = `${kind}-form`
+  const cronProblem = cron.trim() ? cronError(cron) : null,
+    zoneProblem = timezoneError(timezone)
+  const upcoming = recurring ? nextRuns(cron, timezone, 5, new Date(now)) : []
+  const overdue = !!reminder && reminder.status === 'scheduled' && ms(reminder.run_at) < now
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
@@ -339,7 +813,9 @@ function AutomationForm({
         prompt_context: lines(data.get('prompt_context')),
         created_by: record?.created_by || 'platform',
       }
-      if (recurring)
+      if (recurring) {
+        const problem = cronError(value('cron')) || timezoneError(value('timezone'))
+        if (problem) throw Error(problem)
         payload = {
           ...common,
           job_name: value('job_name'),
@@ -349,7 +825,7 @@ function AutomationForm({
           reply_channel_type: value('channel_type'),
           reply_channel_target: value('channel_target'),
         }
-      else {
+      } else {
         const metadata: unknown = JSON.parse(value('metadata') || '{}')
         if (!metadata || Array.isArray(metadata) || typeof metadata !== 'object')
           throw Error('Reply metadata must be a JSON object.')
@@ -385,7 +861,7 @@ function AutomationForm({
         body: JSON.stringify(payload),
       })
       await client.invalidateQueries({ queryKey: [kind] })
-      onSaved(`${recurring ? 'Schedule' : 'Reminder'} ${record ? 'updated' : 'created'}.`)
+      onSaved(`${recurring ? 'Schedule' : 'Reminder'} ${record ? 'updated' : 'created'}`)
     } catch (e) {
       setError(e instanceof Error ? e : Error('Could not save.'))
     } finally {
@@ -399,7 +875,7 @@ function AutomationForm({
     try {
       await api(`handler/${kind}/${encode(recordID(record))}`, { method: 'DELETE' })
       await client.invalidateQueries({ queryKey: [kind] })
-      onSaved(recurring ? 'Schedule deleted.' : 'Reminder cancelled.')
+      onSaved(recurring ? 'Schedule deleted' : 'Reminder cancelled')
     } catch (e) {
       setError(e instanceof Error ? e : Error('Could not remove.'))
       setConfirm(false)
@@ -407,196 +883,339 @@ function AutomationForm({
       setBusy(false)
     }
   }
+
+  const facts: Fact[] = schedule
+    ? [
+        { label: 'Status', value: <StatusBadge status={schedule.status} kind="schedule" /> },
+        { label: 'Version', value: schedule.version },
+        {
+          label: 'Next',
+          value: upcoming[0] ? relTime(upcoming[0], now) : '—',
+          title: upcoming[0] ? fullWhen(upcoming[0], schedule.timezone) : undefined,
+        },
+        {
+          label: 'Last',
+          value: fires[0] ? relTime(fires[0].created_at, now) : '—',
+          tone: fires[0] && fires[0].result_status !== 'success' ? 'danger' : undefined,
+        },
+        { label: 'Updated', value: localWhen(schedule.created_at) },
+        { label: 'By', value: schedule.created_by },
+      ]
+    : reminder
+      ? [
+          {
+            label: 'Status',
+            value: overdue ? (
+              <StatusBadge status="overdue" kind="reminder" />
+            ) : (
+              <StatusBadge status={reminder.status} kind="reminder" />
+            ),
+          },
+          { label: 'Revision', value: reminder.revision },
+          {
+            label: reminder.status === 'scheduled' ? 'Due' : 'Was due',
+            value: relTime(reminder.run_at, now),
+            tone: overdue ? 'warn' : undefined,
+          },
+          ...(reminder.fired_at
+            ? [{ label: 'Fired', value: localWhen(reminder.fired_at) }]
+            : reminder.cancelled_at
+              ? [{ label: 'Cancelled', value: localWhen(reminder.cancelled_at) }]
+              : []),
+          { label: 'By', value: reminder.created_by },
+          {
+            label: 'From',
+            value: reminder.created_from_task_id,
+            mono: true,
+            title: reminder.created_from_task_id,
+          },
+        ]
+      : []
+
+  const footer = (
+    <>
+      {record && !readOnly && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="am-danger"
+          disabled={busy}
+          onClick={() => setConfirm(true)}
+        >
+          <Trash2 />
+          {recurring ? 'Delete' : 'Cancel reminder'}
+        </Button>
+      )}
+      <span className="am-spacer" />
+      <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onClose}>
+        {readOnly ? 'Close' : 'Discard'}
+      </Button>
+      {!readOnly && (
+        <Button type="submit" size="sm" form={formID} disabled={busy}>
+          {busy && <LoaderCircle className="animate-spin" />}
+          {record ? 'Save changes' : recurring ? 'Create schedule' : 'Create reminder'}
+        </Button>
+      )}
+    </>
+  )
+
   return (
-    <form onSubmit={save} className="automation-form">
-      <fieldset disabled={busy || readOnly}>
-        {recurring ? (
-          <>
-            <div className="form-field">
-              <Label htmlFor="job-name">Schedule name</Label>
-              <Input
-                id="job-name"
-                name="job_name"
-                required
-                defaultValue={schedule?.job_name}
-                placeholder="Morning briefing"
-              />
-            </div>
-            <div className="form-field">
-              <Label htmlFor="content">Prompt</Label>
-              <Textarea
-                id="content"
-                name="content"
-                required
-                defaultValue={schedule?.content}
-
-                rows={3}
-              />
-            </div>
-            <div className="form-columns">
-              <div className="form-field">
-                <Label htmlFor="cron">Cron expression</Label>
-                <Input
-                  className="font-mono"
-                  id="cron"
-                  name="cron"
-                  required
-                  defaultValue={schedule?.cron}
-                  placeholder="0 9 * * 1-5"
-                />
-                <p className="field-hint">Five fields: minute, hour, day, month, weekday.</p>
-              </div>
-              <div className="form-field">
-                <Label htmlFor="timezone">Timezone</Label>
-                <Input
-                  id="timezone"
-                  name="timezone"
-                  defaultValue={
-                    schedule?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
-                  }
-                  placeholder="Europe/London"
-                />
-                <p className="field-hint">An IANA timezone, such as Europe/London.</p>
-              </div>
-            </div>
-          </>
+    <SheetContent
+      title={title}
+      description={
+        record ? (
+          <span className="mono">{recordID(record)}</span>
+        ) : recurring ? (
+          'Recurring task'
         ) : (
-          <>
-            <div className="form-field">
-              <Label htmlFor="prompt">Prompt</Label>
-              <Textarea
-                id="prompt"
-                name="prompt"
-                required
-                defaultValue={reminder?.prompt}
-
-                rows={3}
-              />
-            </div>
-            <div className="form-field">
-              <Label htmlFor="run-at">When</Label>
+          `Times in ${localZone}`
+        )
+      }
+      footer={footer}
+      className="am-sheet"
+    >
+      <div className="am-sheet-body">
+        {record && <FactsRow items={facts} />}
+        <ErrorStrip error={error} message="Couldn’t save" />
+        <form id={formID} onSubmit={save} className="am-form">
+          <fieldset disabled={busy || readOnly}>
+            {recurring ? (
+              <>
+                <Field id="job-name" label="Name" wide>
+                  <Input
+                    id="job-name"
+                    name="job_name"
+                    required
+                    defaultValue={schedule?.job_name}
+                    placeholder="Morning briefing"
+                  />
+                </Field>
+                <Field id="content" label="Prompt" wide>
+                  <Textarea
+                    id="content"
+                    name="content"
+                    required
+                    defaultValue={schedule?.content}
+                    rows={3}
+                  />
+                </Field>
+                <Field
+                  id="cron"
+                  label="Cron"
+                  error={cronProblem}
+                  hint={describeCron(cron) || 'minute hour day month weekday'}
+                >
+                  <Input
+                    className="font-mono"
+                    id="cron"
+                    name="cron"
+                    required
+                    value={cron}
+                    onChange={(e) => setCron(e.target.value)}
+                    aria-invalid={!!cronProblem || undefined}
+                    aria-describedby={cronProblem ? 'cron-error' : undefined}
+                    placeholder="0 9 * * 1-5"
+                  />
+                </Field>
+                <Field
+                  id="timezone"
+                  label="Timezone"
+                  error={zoneProblem}
+                  hint="IANA name, e.g. Europe/London"
+                >
+                  <Input
+                    id="timezone"
+                    name="timezone"
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    aria-invalid={!!zoneProblem || undefined}
+                    aria-describedby={zoneProblem ? 'timezone-error' : undefined}
+                    placeholder="UTC"
+                    list="am-timezones"
+                  />
+                  <datalist id="am-timezones">
+                    {[
+                      localZone,
+                      'UTC',
+                      'Europe/London',
+                      'Europe/Berlin',
+                      'America/New_York',
+                      'America/Los_Angeles',
+                      'Asia/Tokyo',
+                    ]
+                      .filter((zone, i, list) => list.indexOf(zone) === i)
+                      .map((zone) => (
+                        <option key={zone} value={zone} />
+                      ))}
+                  </datalist>
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field id="prompt" label="Prompt" wide>
+                  <Textarea
+                    id="prompt"
+                    name="prompt"
+                    required
+                    defaultValue={reminder?.prompt}
+                    rows={3}
+                  />
+                </Field>
+                <Field id="run-at" label="When" hint={`Local time (${localZone})`} wide>
+                  <Input
+                    id="run-at"
+                    name="run_at"
+                    type="datetime-local"
+                    required
+                    defaultValue={reminder ? localDateTime(reminder.run_at) : ''}
+                  />
+                </Field>
+              </>
+            )}
+            <Field id="channel-type" label={`Reply channel${recurring ? '' : ' *'}`}>
               <Input
-                id="run-at"
-                name="run_at"
-                type="datetime-local"
-                required
-                defaultValue={reminder ? localDateTime(reminder.run_at) : ''}
+                id="channel-type"
+                name="channel_type"
+                required={!recurring}
+                defaultValue={schedule?.reply_channel_type || reminder?.reply_channel.type || ''}
+                placeholder="telegram"
               />
-              <p className="field-hint">Local time</p>
-            </div>
-          </>
-        )}
-        <div className="form-section-title">
-          <Send size={14} />
-          Delivery
-        </div>
-        <div className="form-columns">
-          <div className="form-field">
-            <Label htmlFor="channel-type">Reply channel{!recurring && ' *'}</Label>
-            <Input
-              id="channel-type"
-              name="channel_type"
-              required={!recurring}
-              defaultValue={schedule?.reply_channel_type || reminder?.reply_channel.type || ''}
-              placeholder="telegram"
-            />
-          </div>
-          <div className="form-field">
-            <Label htmlFor="channel-target">Reply target{!recurring && ' *'}</Label>
-            <Input
-              id="channel-target"
-              name="channel_target"
-              required={!recurring}
-              defaultValue={schedule?.reply_channel_target || reminder?.reply_channel.target || ''}
-              placeholder="Chat or channel ID"
-            />
-          </div>
-        </div>
-        <details className="advanced-fields">
-          <summary>Context</summary>
-          <div className="form-field">
-            <Label htmlFor="context-refs">Context references</Label>
-            <Textarea
-              id="context-refs"
-              name="context_refs"
-              defaultValue={record?.context_refs.join('\n')}
-              placeholder="repo:/absolute/path"
-              rows={2}
-            />
-            <p className="field-hint">One per line, using repo:/absolute/path.</p>
-          </div>
-          <div className="form-field">
-            <Label htmlFor="prompt-context">Prompt context</Label>
-            <Textarea
-              id="prompt-context"
-              name="prompt_context"
-              defaultValue={record?.prompt_context.join('\n')}
-              placeholder="One context entry per line"
-              rows={2}
-            />
-          </div>
-          {!recurring && (
-            <div className="form-field">
-              <Label htmlFor="metadata">Reply metadata (JSON)</Label>
-              <Textarea
+            </Field>
+            <Field id="channel-target" label={`Reply target${recurring ? '' : ' *'}`}>
+              <Input
+                id="channel-target"
+                name="channel_target"
                 className="font-mono"
-                id="metadata"
-                name="metadata"
-                defaultValue={JSON.stringify(reminder?.reply_channel.metadata || {}, null, 2)}
-                rows={3}
+                required={!recurring}
+                defaultValue={
+                  schedule?.reply_channel_target || reminder?.reply_channel.target || ''
+                }
+                placeholder="Chat or channel ID"
               />
-            </div>
-          )}
-        </details>
-      </fieldset>
-      {readOnly && (
-        <div className="subtle-notice">
-          {reminder?.status === 'cancelled' ? 'Cancelled' : 'Fired'}
-        </div>
-      )}
-      {record && (
-        <details className="revision-history">
-          <summary>
-            <History size={14} />
-            Revision history ({history.length})
-          </summary>
-          {history.map((row) => (
-            <div key={isSchedule(row) ? row.version : row.revision}>
-              <strong>Revision {isSchedule(row) ? row.version : row.revision}</strong>
-              <StatusBadge status={row.status} />
-              <p>
-                {dateTime(isSchedule(row) ? row.created_at : row.updated_at)} ·{' '}
-                {isSchedule(row) ? row.content : row.prompt}
+            </Field>
+            <Field
+              id="context-refs"
+              label="Context references"
+              hint="One per line, repo:/absolute/path"
+              wide
+            >
+              <Textarea
+                id="context-refs"
+                name="context_refs"
+                className="font-mono"
+                defaultValue={record?.context_refs.join('\n')}
+                placeholder="repo:/absolute/path"
+                rows={2}
+              />
+            </Field>
+            <Field id="prompt-context" label="Prompt context" hint="One entry per line" wide>
+              <Textarea
+                id="prompt-context"
+                name="prompt_context"
+                defaultValue={record?.prompt_context.join('\n')}
+                rows={2}
+              />
+            </Field>
+            {!recurring && (
+              <Field id="metadata" label="Reply metadata (JSON)" wide>
+                <Textarea
+                  className="font-mono"
+                  id="metadata"
+                  name="metadata"
+                  defaultValue={JSON.stringify(reminder?.reply_channel.metadata || {}, null, 2)}
+                  rows={3}
+                />
+              </Field>
+            )}
+          </fieldset>
+        </form>
+
+        {recurring && (
+          <Section title="Next 5 runs" meta={timezone || 'UTC'}>
+            {upcoming.length ? (
+              <ol className="am-list">
+                {upcoming.map((date) => (
+                  <li key={date.getTime()} title={fullWhen(date, localZone)}>
+                    <span className="num am-fg">{fullWhen(date, timezone || 'UTC')}</span>
+                    <span className="am-end num muted">{relTime(date, now)}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="am-empty">
+                {cron.trim()
+                  ? 'Fix the cron expression to preview runs'
+                  : 'Enter a cron expression'}
               </p>
-            </div>
-          ))}
-        </details>
-      )}
-      <ErrorNotice error={error} title="Couldn’t save changes" />
-      <div className="form-footer">
-        {record && !readOnly && (
-          <Button
-            type="button"
-            variant="ghost"
-            className="danger-button"
-            disabled={busy}
-            onClick={() => setConfirm(true)}
-          >
-            <Trash2 />
-            {recurring ? 'Delete schedule' : 'Cancel reminder'}
-          </Button>
+            )}
+          </Section>
         )}
-        <div className="form-footer-right">
-          <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
-            {readOnly ? 'Close' : 'Discard'}
-          </Button>
-          {!readOnly && (
-            <Button type="submit" disabled={busy}>
-              {busy && <LoaderCircle className="animate-spin" />}
-              {record ? 'Save changes' : recurring ? 'Create schedule' : 'Create reminder'}
-            </Button>
-          )}
-        </div>
+
+        {record && (
+          <Section title={recurring ? 'Recent fires' : 'Runs'} meta={fires.length || null}>
+            {fires.length ? (
+              <ol className="am-list">
+                {fires.slice(0, 10).map((run) => {
+                  const scheduled = parseCronTask(run.task_id)?.scheduledFor
+                  return (
+                    <li key={run.run_id}>
+                      <StatusDot status={run.result_status} kind="run" />
+                      <Link className="am-link num" to={`/runs/${encode(run.run_id)}`}>
+                        {localWhen(scheduled?.toISOString() || run.created_at)}
+                      </Link>
+                      <span className="am-sub">
+                        {run.result_status === 'success'
+                          ? 'success'
+                          : run.result_status.replaceAll('_', ' ')}
+                      </span>
+                      <span className="am-end num muted">{latency(run.latency_ms)}</span>
+                    </li>
+                  )
+                })}
+              </ol>
+            ) : (
+              <p className="am-empty">No runs in recent history</p>
+            )}
+          </Section>
+        )}
+
+        {record && (
+          <Section title="Revisions" meta={history.length || null}>
+            <ol className="am-list">
+              {history.map((row, i) => {
+                const version = isSchedule(row) ? row.version : row.revision
+                return (
+                  <li
+                    key={version}
+                    data-current={
+                      version === (schedule?.version ?? reminder?.revision) || undefined
+                    }
+                  >
+                    <span className="num am-ver">
+                      {isSchedule(row) ? `v${version}` : `r${version}`}
+                    </span>
+                    <StatusDot
+                      status={row.status}
+                      kind={isSchedule(row) ? 'schedule' : 'reminder'}
+                      tone={i > 0 ? 'neutral' : undefined}
+                    />
+                    <span className="am-rev-status">{row.status}</span>
+                    <span
+                      className="am-rev-what truncate"
+                      title={isSchedule(row) ? `${row.cron} · ${row.content}` : row.prompt}
+                    >
+                      {changedFields(row, history[i + 1])}
+                    </span>
+                    <span className="am-end num muted">
+                      {localWhen(isSchedule(row) ? row.created_at : row.updated_at)}
+                    </span>
+                  </li>
+                )
+              })}
+            </ol>
+          </Section>
+        )}
       </div>
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
@@ -625,6 +1244,6 @@ function AutomationForm({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </form>
+    </SheetContent>
   )
 }
