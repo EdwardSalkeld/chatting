@@ -96,8 +96,8 @@ export function fmtClock(value: Date | string | number, seconds = false) {
 }
 
 /**
- * The one relative date style for past and future times: "09:39", "Yest 18:30", "Tmrw 08:00",
- * "Tue 12:00" within a week, otherwise "Nov 14 11:30".
+ * The one relative date style for past and future times: "09:39" today,
+ * "Tue 12:00" within a week either side, otherwise "Nov 14 11:30".
  */
 export function fmtWhen(
   value: string | number | null | undefined,
@@ -110,8 +110,6 @@ export function fmtWhen(
   const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
   const days = Math.round((midnight(date) - midnight(new Date(now))) / DAY_MS)
   if (days === 0) return time
-  if (days === -1) return `Yest ${time}`
-  if (days === 1) return `Tmrw ${time}`
   if (Math.abs(days) < 7)
     return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
   return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`
