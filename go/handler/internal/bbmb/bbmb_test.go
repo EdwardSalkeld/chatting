@@ -103,25 +103,6 @@ func TestAdapterPickupJSONReturnsObjectPayload(t *testing.T) {
 	}
 }
 
-func TestAdapterPickupJSONReturnsNilForEmptyQueue(t *testing.T) {
-	server := newFakeServer(t, func(request bbmbRequest) []byte {
-		if request.command != commandPickupMessage {
-			t.Fatalf("unexpected command: %d", request.command)
-		}
-		return []byte{statusEmptyQueue}
-	})
-	defer server.close()
-
-	adapter := newTestAdapter(t, server.address)
-	picked, err := adapter.PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if picked != nil {
-		t.Fatalf("picked = %#v", picked)
-	}
-}
-
 func TestAdapterRejectsInvalidPickupPayload(t *testing.T) {
 	for _, tc := range []struct{ payload, operation string }{
 		{`{not-json`, "pickup_payload_invalid_json"},

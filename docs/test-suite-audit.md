@@ -82,3 +82,58 @@ This audit used test inventory, targeted source review and before/after suite
 runs. It did not measure mutation scores or prove unchanged branch coverage.
 External-service/live tests were not exercised locally; Nix packaging was not
 rerun because application and package inputs did not change.
+
+## Go second pass — 17 November 2026
+
+A second Go-only pass: 282 → 229 top-level tests (−53) and 11,255 → 9,322
+test-file lines (−1,933). Production code is unchanged.
+
+- **Duplicates of stronger tests:** per-channel dispatcher and Telegram sender
+  tests (covered by the topics matrix and failure-reason tables), egress drop
+  tests (covered by the surfaced-drop and SQLite-backed engine tests), runtime
+  seen-envelope and max-loops tests, and personal inbox order, news and
+  dead-letter tests.
+- **Trivial checks:** version printing, config default constants and field
+  round-trips (now one `DeepEqual` mapping test), getters, status-code lookups,
+  router 404/405s, constant `Source`/`DedupeKey` fields, `json.Marshal`
+  validity and the `task_ledger` column-order pin.
+- **Same-branch table rows:** webhook event types, IMAP backoff stages,
+  Telegram topic IDs, context-ref validator rows and triage outcome rows.
+- **Folded into lifecycles:** missing-schedule sentinels, 404-after-delete,
+  idempotency conflicts and task-completion round trips.
+- **Shared helpers:** webhook signing, Telegram polling, IMAP polling, JMAP
+  session fixtures and API/UI test servers.
+
+Kept: webhook signature rejections, public-mux route exposure, attachment
+path/symlink boundaries, SMTP/IMAP/bbmb/HTTP timeouts and cancellation,
+restart recovery, migrations, concurrent topic creation, watermark ordering
+and cross-language contract fixtures. `go test ./...`, `go vet ./...` and
+`gofmt -l .` pass.
+
+## Python second pass — 17 November 2026
+
+A second Python-only pass: 298 → 236 collected tests (−62) and 9,906 → 7,804
+test-file lines (−2,102, 21%). Nested subtests fell from 190 to 145.
+Production code is unchanged.
+
+- **Duplicates:** reply CLI exit-code and egress-URL cases (covered by the
+  real truncated-response test), NOUL injection and failed-triage cases
+  (covered by the boundary table), cache-replay checks (covered by the ack
+  replay tests), the mocked outbox status-0 case, store round trips read back
+  by runtime and outbox tests, and the supervisor parallel test (the parallel
+  worker e2e covers it with a real broker).
+- **Trivial checks:** argparse rejecting flags, JSON keeping shell characters,
+  dataclass `to_dict`, prompt and HTML wording, env-to-attribute wiring, mock
+  kwargs forwarding, a test of the `fake_codex` helper, and log formatting.
+- **Smaller tables:** transport modes per CLI (the egress client owns that
+  matrix), backend migration sources, invalid NOUL answers × questions,
+  inbox barrier commands, malformed router answers and retention windows.
+- **Shared helpers:** one scripted executor replaces eleven runtime executor
+  classes; reply CLI, history CLI, routing, work-item CLI, model router and
+  activity tests share setup instead of repeating patches.
+
+Kept: lease and claim concurrency, restart and supervisor recovery, crash
+journals and legacy session migration, explicit-finish kill ordering,
+follow-up bundles, prompt-injection gating, secret scrubbing, outbox
+replay and delivery ordering. Full runs pass with and without a locally built
+bbmb server and Go handler; ruff and pyright pass.

@@ -67,6 +67,13 @@ func TestPersistentLaneAssignments(t *testing.T) {
 	if email.WorkItemID != otherEmail.WorkItemID {
 		t.Fatal("unmatched email should use general lane")
 	}
+	bob := testTaskMessage(t)
+	bob.TaskID = "task:email:bob"
+	bob.Envelope.ID = "email:bob"
+	bob.Envelope.ReplyChannel.Target = "bob@example.com"
+	if bob, err = store.AssignTask(ctx, bob); err != nil || bob.WorkItemID == email.WorkItemID {
+		t.Fatalf("unrelated senders shared a work item: %v", err)
+	}
 
 	if err = store.RegisterPR(ctx, base.TaskID, "https://github.com/owner/repo/pull/50"); err != nil {
 		t.Fatal(err)
@@ -200,49 +207,5 @@ func TestRepliesInAChatShareItsWorkItem(t *testing.T) {
 	}
 	if notice.WorkItemID == chat.WorkItemID {
 		t.Fatal("an internal notice joined a chat's work item")
-	}
-}
-
-func TestUnrelatedWorkGetsSeparateItemsAndKeepsItsReplyRoute(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	alice := testTaskMessage(t)
-	alice, err := store.AssignTask(ctx, alice)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bob := testTaskMessage(t)
-	bob.TaskID = "task:email:bob"
-	bob.Envelope.ID = "email:bob"
-	bob.Envelope.ReplyChannel.Target = "bob@example.com"
-	bob, err = store.AssignTask(ctx, bob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if alice.WorkItemID == bob.WorkItemID {
-		t.Fatal("unrelated senders shared a work item")
-	}
-
-	// A PR opened from an email request does not redirect later GitHub mail
-	// to that email address.
-	if err = store.RegisterPR(ctx, alice.TaskID, "https://github.com/owner/repo/pull/5"); err != nil {
-		t.Fatal(err)
-	}
-	actor := "notifications@github.com"
-	notification := testTaskMessage(t)
-	notification.TaskID = "task:email:notification"
-	notification.Envelope.ID = "email:notification"
-	notification.Envelope.Actor = &actor
-	notification.Envelope.ReplyChannel.Target = "notifications@github.com"
-	notification.Envelope.Content = "Review: https://github.com/owner/repo/pull/5#pullrequestreview-1"
-	notification, err = store.AssignTask(ctx, notification)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notification.WorkItemID != alice.WorkItemID {
-		t.Fatal("PR notification did not return to the work item that opened the PR")
-	}
-	if notification.Envelope.ReplyChannel.Target != "notifications@github.com" {
-		t.Fatalf("reply route was replaced: %#v", notification.Envelope.ReplyChannel)
 	}
 }

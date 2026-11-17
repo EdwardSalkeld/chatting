@@ -109,13 +109,6 @@ def test_publish_failure_identifies_stage(inbox, caplog):
     assert "private" not in caplog.text
 
 
-def test_idle_queue_does_not_emit_completion(inbox, caplog):
-    inbox[0].pickup_json.return_value = None
-    caplog.set_level(logging.INFO)
-    assert not run(inbox)
-    assert "personal_inbox_completed" not in caplog.text
-
-
 def test_malformed_task_still_goes_to_invalid_queue(inbox, caplog):
     inbox[0].pickup_json.return_value.payload["kind"] = ["private"]
     assert run(inbox)

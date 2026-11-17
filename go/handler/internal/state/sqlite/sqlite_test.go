@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
@@ -17,33 +16,19 @@ import (
 func TestDedupeKeysAreScopedBySource(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-
-	seen, err := store.Seen(ctx, "email", "message-1")
-	if err != nil {
-		t.Fatal(err)
+	if seen, err := store.Seen(ctx, "email", "message-1"); err != nil || seen {
+		t.Fatalf("new key seen=%v err=%v", seen, err)
 	}
-	if seen {
-		t.Fatal("new key was already seen")
+	for i := 0; i < 2; i++ {
+		if err := store.MarkSeen(ctx, "email", "message-1"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := store.MarkSeen(ctx, "email", "message-1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkSeen(ctx, "email", "message-1"); err != nil {
-		t.Fatal(err)
-	}
-
 	emailSeen, err := store.Seen(ctx, "email", "message-1")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || !emailSeen {
+		t.Fatalf("email key seen=%v err=%v", emailSeen, err)
 	}
-	telegramSeen, err := store.Seen(ctx, "telegram", "message-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !emailSeen {
-		t.Fatal("email key was not seen")
-	}
-	if telegramSeen {
+	if telegramSeen, err := store.Seen(ctx, "telegram", "message-1"); err != nil || telegramSeen {
 		t.Fatal("dedupe key leaked across source")
 	}
 }
@@ -54,61 +39,31 @@ func TestTelegramChatRegistryUpsertsObservedMetadata(t *testing.T) {
 	firstSeenAt := testutil.MustTime(t, "2026-05-21T06:40:00Z")
 	firstMessageAt := testutil.MustTime(t, "2026-05-21T06:39:30Z")
 	updatedAt := testutil.MustTime(t, "2026-05-21T06:45:00Z")
-	chatType := "supergroup"
 	title := "Build Tests"
-	username := "build_tests"
-
 	if err := store.RecordTelegramChat(ctx, TelegramChatObservation{
-		ChatID:      "-100123",
-		ChatType:    &chatType,
-		Title:       &title,
-		Username:    &username,
-		UpdateID:    1001,
-		UpdateKind:  "message",
-		MessageDate: &firstMessageAt,
-		RetrievedAt: firstSeenAt,
+		ChatID: "-100123", Title: &title, UpdateID: 1001, UpdateKind: "message",
+		MessageDate: &firstMessageAt, RetrievedAt: firstSeenAt,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A later update without metadata must not erase what was observed earlier.
 	if err := store.RecordTelegramChat(ctx, TelegramChatObservation{
-		ChatID:      "-100123",
-		UpdateID:    1002,
-		UpdateKind:  "my_chat_member",
-		RetrievedAt: updatedAt,
+		ChatID: "-100123", UpdateID: 1002, UpdateKind: "my_chat_member", RetrievedAt: updatedAt,
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	var count int
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_chat_registry`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatalf("chat rows = %d", count)
-	}
-	var chatTypeValue, titleValue, usernameValue, lastMessageAt sql.NullString
+	var titleValue, lastMessageAt sql.NullString
 	var firstSeen, lastRetrieved, lastUpdateKind string
 	var lastUpdateID int64
 	if err := store.db.QueryRowContext(ctx,
-		`SELECT chat_type, title, username, first_seen_at, last_retrieved_at, last_message_at, last_update_id, last_update_kind
+		`SELECT title, first_seen_at, last_retrieved_at, last_message_at, last_update_id, last_update_kind
 		FROM telegram_chat_registry WHERE chat_id = ?`, "-100123",
-	).Scan(&chatTypeValue, &titleValue, &usernameValue, &firstSeen, &lastRetrieved, &lastMessageAt, &lastUpdateID, &lastUpdateKind); err != nil {
+	).Scan(&titleValue, &firstSeen, &lastRetrieved, &lastMessageAt, &lastUpdateID, &lastUpdateKind); err != nil {
 		t.Fatal(err)
 	}
-	if chatTypeValue.String != "supergroup" || titleValue.String != "Build Tests" || usernameValue.String != "build_tests" {
-		t.Fatalf("metadata = %v %v %v", chatTypeValue, titleValue, usernameValue)
-	}
-	if firstSeen != formatTimestamp(firstSeenAt) {
-		t.Fatalf("first_seen_at = %s", firstSeen)
-	}
-	if lastRetrieved != formatTimestamp(updatedAt) {
-		t.Fatalf("last_retrieved_at = %s", lastRetrieved)
-	}
-	if lastMessageAt.String != formatTimestamp(firstMessageAt) {
-		t.Fatalf("last_message_at = %v", lastMessageAt)
-	}
-	if lastUpdateID != 1002 || lastUpdateKind != "my_chat_member" {
-		t.Fatalf("last update = %d %s", lastUpdateID, lastUpdateKind)
+	if titleValue.String != title || firstSeen != formatTimestamp(firstSeenAt) || lastRetrieved != formatTimestamp(updatedAt) ||
+		lastMessageAt.String != formatTimestamp(firstMessageAt) || lastUpdateID != 1002 || lastUpdateKind != "my_chat_member" {
+		t.Fatalf("registry row = %v %s %s %v %d %s", titleValue, firstSeen, lastRetrieved, lastMessageAt, lastUpdateID, lastUpdateKind)
 	}
 }
 
@@ -118,152 +73,63 @@ func TestOpenDropsRetiredGitHubCheckpointTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE github_assignment_checkpoints (
-		scope_key TEXT PRIMARY KEY,
-		event_created_at TEXT NOT NULL,
-		event_id TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO github_assignment_checkpoints VALUES ('scope', '2026-05-30T12:34:56Z', 'AE_1', '2026-05-30T12:34:56Z')`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE github_assignment_checkpoints (scope_key TEXT PRIMARY KEY, event_id TEXT NOT NULL);
+		INSERT INTO github_assignment_checkpoints VALUES ('scope', 'AE_1')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	openStoreAt(t, dbPath)
-
-	db, err = sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'github_assignment_checkpoints'`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatal("github_assignment_checkpoints still exists")
-	}
-}
-
-func TestRecordTaskRoundTrips(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
 	store := openStoreAt(t, dbPath)
-	taskMessage := testTaskMessage(t)
-
-	if err := store.RecordTask(ctx, taskMessage); err != nil {
-		t.Fatal(err)
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'github_assignment_checkpoints'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("github_assignment_checkpoints still exists: %d %v", count, err)
 	}
-
-	record, err := store.GetTask(ctx, taskMessage.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record == nil {
-		t.Fatal("task record was not persisted")
-	}
-	if record.EnvelopeID != taskMessage.Envelope.ID {
-		t.Fatalf("EnvelopeID = %q", record.EnvelopeID)
-	}
-	if record.TraceID != taskMessage.TraceID {
-		t.Fatalf("TraceID = %q", record.TraceID)
-	}
-	if record.TaskMessage.Envelope.ReplyChannel.Target != "alice@example.com" {
-		t.Fatalf("reply target = %q", record.TaskMessage.Envelope.ReplyChannel.Target)
-	}
-
-	assertTaskLedgerSchemaAndPayload(t, dbPath, taskMessage)
 }
 
-func TestCompletionBlocksSameEnvelopeAndRemovesOpenTask(t *testing.T) {
+func TestTaskCompletionIsScopedToEnvelopeAndClearedByReopening(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 	taskMessage := testTaskMessage(t)
-
 	if err := store.RecordTask(ctx, taskMessage); err != nil {
 		t.Fatal(err)
+	}
+	record, err := store.GetTask(ctx, taskMessage.TaskID)
+	if err != nil || record == nil || record.TaskMessage.Envelope.ReplyChannel.Target != "alice@example.com" {
+		t.Fatalf("task record = %#v err=%v", record, err)
 	}
 	if err := store.MarkTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID, taskMessage.TraceID); err != nil {
 		t.Fatal(err)
 	}
-
-	openTask, err := store.GetTask(ctx, taskMessage.TaskID)
-	if err != nil {
-		t.Fatal(err)
+	if openTask, err := store.GetTask(ctx, taskMessage.TaskID); err != nil || openTask != nil {
+		t.Fatalf("completed task remained open: %#v %v", openTask, err)
 	}
-	if openTask != nil {
-		t.Fatalf("completed task remained open: %#v", openTask)
-	}
-	completed, err := store.IsTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !completed {
+	if completed, err := store.IsTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID); err != nil || !completed {
 		t.Fatal("same task/envelope pair was not completed")
 	}
-	otherEnvelopeCompleted, err := store.IsTaskCompleted(ctx, taskMessage.TaskID, "email:other")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if otherEnvelopeCompleted {
+	if completed, err := store.IsTaskCompleted(ctx, taskMessage.TaskID, "email:other"); err != nil || completed {
 		t.Fatal("completion leaked to a different envelope id")
-	}
-}
-
-func TestRecordTaskClearsPreviousCompletion(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t)
-	taskMessage := testTaskMessage(t)
-
-	if err := store.MarkTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID, taskMessage.TraceID); err != nil {
-		t.Fatal(err)
 	}
 	if err := store.RecordTask(ctx, taskMessage); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := store.IsTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if completed {
+	if completed, err := store.IsTaskCompleted(ctx, taskMessage.TaskID, taskMessage.Envelope.ID); err != nil || completed {
 		t.Fatal("recording a new task did not clear prior completion")
 	}
 }
 
-func TestDispatchedEventIDCheckpointRoundTrip(t *testing.T) {
+func TestDispatchedEventIDCheckpointIsIdempotentAndScopedByTask(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-
-	dispatched, err := store.HasDispatchedEventID(ctx, "task:email:1", "evt:1")
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i++ {
+		if err := store.MarkDispatchedEventID(ctx, "task:email:1", "evt:1"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if dispatched {
-		t.Fatal("new event id was already dispatched")
-	}
-	if err := store.MarkDispatchedEventID(ctx, "task:email:1", "evt:1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkDispatchedEventID(ctx, "task:email:1", "evt:1"); err != nil {
-		t.Fatal(err)
-	}
-
-	dispatched, err = store.HasDispatchedEventID(ctx, "task:email:1", "evt:1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !dispatched {
+	if dispatched, err := store.HasDispatchedEventID(ctx, "task:email:1", "evt:1"); err != nil || !dispatched {
 		t.Fatal("event id was not marked dispatched")
 	}
-	otherTaskDispatched, err := store.HasDispatchedEventID(ctx, "task:email:other", "evt:1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if otherTaskDispatched {
+	if dispatched, err := store.HasDispatchedEventID(ctx, "task:email:other", "evt:1"); err != nil || dispatched {
 		t.Fatal("event id checkpoint leaked across tasks")
 	}
 }
@@ -360,6 +226,35 @@ func TestCompletionEventsCanBeStagedAndCompletionClearsEgressState(t *testing.T)
 	}
 }
 
+func telegramAttachmentTask(t *testing.T, id string, uris ...string) contracts.TaskQueueMessage {
+	t.Helper()
+	name := "photo.jpg"
+	attachments := make([]contracts.AttachmentRef, 0, len(uris))
+	for _, uri := range uris {
+		attachments = append(attachments, contracts.AttachmentRef{URI: uri, Name: &name})
+	}
+	return contracts.NewTaskQueueMessage(contracts.TaskEnvelope{
+		SchemaVersion: contracts.SchemaVersion,
+		ID:            "telegram:" + id,
+		Source:        "im",
+		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
+		Content:       "[photo attached]",
+		Attachments:   attachments,
+		ContextRefs:   []string{},
+		ReplyChannel:  contracts.ReplyChannel{Type: "telegram", Target: "12345"},
+		DedupeKey:     "telegram:" + id,
+	}, "trace:telegram:"+id, testutil.MustTime(t, "2026-05-30T12:00:01Z"))
+}
+
+func cleanupAttachments(t *testing.T, store *Store, root string, notAfter string) TelegramAttachmentCleanupResult {
+	t.Helper()
+	result, err := store.CleanupTelegramAttachments(context.Background(), root, testutil.MustTime(t, notAfter), testutil.MustTime(t, "2026-01-01T00:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -368,66 +263,26 @@ func TestTelegramAttachmentLedgerTracksLocalTaskAttachmentsAndCleanup(t *testing
 	if err := os.WriteFile(attachmentPath, []byte("jpeg-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	name := "photo.jpg"
-	taskMessage := contracts.NewTaskQueueMessage(contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:1",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
-		Content:       "[photo attached]",
-		Attachments: []contracts.AttachmentRef{
-			{URI: fileURIForTest(attachmentPath), Name: &name},
-			{URI: "file:///tmp/outside.jpg", Name: &name},
-			{URI: "s3://bucket/photo.jpg", Name: &name},
-		},
-		ContextRefs: []string{},
-		ReplyChannel: contracts.ReplyChannel{
-			Type:   "telegram",
-			Target: "12345",
-		},
-		DedupeKey: "telegram:1",
-	}, "trace:telegram:1", testutil.MustTime(t, "2026-05-30T12:00:01Z"))
-
-	tracked, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tracked != 1 {
-		t.Fatalf("tracked = %d", tracked)
+	taskMessage := telegramAttachmentTask(t, "1", fileURIForTest(attachmentPath), "file:///tmp/outside.jpg", "s3://bucket/photo.jpg")
+	if tracked, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot); err != nil || tracked != 1 {
+		t.Fatalf("tracked = %d err=%v", tracked, err)
 	}
 	eligibleAfter := testutil.MustTime(t, "2026-05-30T12:10:00Z")
-	eligible, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, eligibleAfter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if eligible != 1 {
-		t.Fatalf("eligible = %d", eligible)
+	if eligible, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, eligibleAfter); err != nil || eligible != 1 {
+		t.Fatalf("eligible = %d err=%v", eligible, err)
 	}
 	records := listTelegramAttachments(t, store)
-	if len(records) != 1 {
+	if len(records) != 1 || records[0].AttachmentPath != attachmentPath || records[0].EligibleAfter == nil || !records[0].EligibleAfter.Equal(eligibleAfter) {
 		t.Fatalf("records = %#v", records)
 	}
-	if records[0].AttachmentPath != attachmentPath || records[0].EligibleAfter == nil || !records[0].EligibleAfter.Equal(eligibleAfter) {
-		t.Fatalf("record = %#v", records[0])
-	}
-
-	result, err := store.CleanupTelegramAttachments(
-		ctx,
-		attachmentRoot,
-		testutil.MustTime(t, "2026-05-30T12:11:00Z"),
-		testutil.MustTime(t, "2026-01-01T00:00:00Z"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := cleanupAttachments(t, store, attachmentRoot, "2026-05-30T12:11:00Z")
 	if result.DeletedCount != 1 || result.MissingCount != 0 || result.FailedCount != 0 || result.ReclaimedBytes != int64(len("jpeg-bytes")) {
 		t.Fatalf("cleanup result = %#v", result)
 	}
 	if _, err := os.Stat(attachmentPath); !os.IsNotExist(err) {
 		t.Fatalf("attachment still exists or unexpected stat error: %v", err)
 	}
-	records = listTelegramAttachments(t, store)
-	if records[0].DeletedAt == nil {
+	if records = listTelegramAttachments(t, store); records[0].DeletedAt == nil {
 		t.Fatalf("deleted_at not marked: %#v", records[0])
 	}
 }
@@ -436,41 +291,14 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 	ctx := context.Background()
 	store := openTestStore(t)
 	attachmentRoot := t.TempDir()
-	missingPath := filepath.Join(attachmentRoot, "missing.jpg")
-	name := "photo.jpg"
-	taskMessage := contracts.NewTaskQueueMessage(contracts.TaskEnvelope{
-		SchemaVersion: contracts.SchemaVersion,
-		ID:            "telegram:missing",
-		Source:        "im",
-		ReceivedAt:    contracts.NewTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
-		Content:       "[photo attached]",
-		Attachments: []contracts.AttachmentRef{{
-			URI:  fileURIForTest(missingPath),
-			Name: &name,
-		}},
-		ContextRefs: []string{},
-		ReplyChannel: contracts.ReplyChannel{
-			Type:   "telegram",
-			Target: "12345",
-		},
-		DedupeKey: "telegram:missing",
-	}, "trace:telegram:missing", testutil.MustTime(t, "2026-05-30T12:00:01Z"))
+	taskMessage := telegramAttachmentTask(t, "missing", fileURIForTest(filepath.Join(attachmentRoot, "missing.jpg")))
 	if _, err := store.RecordTelegramTaskAttachments(ctx, taskMessage, attachmentRoot); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.MarkTelegramTaskAttachmentsEligible(ctx, taskMessage.TaskID, testutil.MustTime(t, "2026-05-30T12:01:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.CleanupTelegramAttachments(
-		ctx,
-		attachmentRoot,
-		testutil.MustTime(t, "2026-05-30T12:02:00Z"),
-		testutil.MustTime(t, "2026-01-01T00:00:00Z"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.MissingCount != 1 || result.DeletedCount != 0 || result.FailedCount != 0 {
+	if result := cleanupAttachments(t, store, attachmentRoot, "2026-05-30T12:02:00Z"); result.MissingCount != 1 || result.DeletedCount != 0 || result.FailedCount != 0 {
 		t.Fatalf("cleanup result = %#v", result)
 	}
 
@@ -478,54 +306,23 @@ func TestTelegramAttachmentCleanupMarksMissingAndRejectsOutsideRoot(t *testing.T
 	if err := os.WriteFile(outsidePath, []byte("outside"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.db.ExecContext(
-		ctx,
-		`INSERT INTO telegram_attachment_ledger (
-			attachment_path,
-			attachment_uri,
-			task_id,
-			envelope_id,
-			created_at,
-			eligible_after,
-			deleted_at,
-			cleanup_attempts,
-			last_cleanup_error
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		outsidePath,
-		fileURIForTest(outsidePath),
-		"task:telegram:outside",
-		"telegram:outside",
-		formatTimestamp(testutil.MustTime(t, "2026-05-30T12:00:00Z")),
-		formatTimestamp(testutil.MustTime(t, "2026-05-30T12:01:00Z")),
-		nil,
-		0,
-		nil,
-	)
-	if err != nil {
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO telegram_attachment_ledger (attachment_path, attachment_uri, task_id, envelope_id, created_at, eligible_after, cleanup_attempts)
+		VALUES (?, ?, 'task:telegram:outside', 'telegram:outside', '2026-05-30T12:00:00Z', '2026-05-30T12:01:00Z', 0)`,
+		outsidePath, fileURIForTest(outsidePath),
+	); err != nil {
 		t.Fatal(err)
 	}
-	result, err = store.CleanupTelegramAttachments(
-		ctx,
-		attachmentRoot,
-		testutil.MustTime(t, "2026-05-30T12:02:00Z"),
-		testutil.MustTime(t, "2026-01-01T00:00:00Z"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.FailedCount != 1 {
+	if result := cleanupAttachments(t, store, attachmentRoot, "2026-05-30T12:02:00Z"); result.FailedCount != 1 {
 		t.Fatalf("cleanup result = %#v", result)
 	}
-	records := listTelegramAttachments(t, store)
-	var outsideRecord *TelegramAttachmentRecord
-	for index := range records {
-		if records[index].AttachmentPath == outsidePath {
-			outsideRecord = &records[index]
-		}
+	if _, err := os.Stat(outsidePath); err != nil {
+		t.Fatalf("file outside root was touched: %v", err)
 	}
-	if outsideRecord == nil || outsideRecord.CleanupAttempts != 1 || derefString(outsideRecord.LastCleanupError) != "attachment_path_outside_root" {
-		t.Fatalf("outside record = %#v", outsideRecord)
+	for _, record := range listTelegramAttachments(t, store) {
+		if record.AttachmentPath == outsidePath && (record.CleanupAttempts != 1 || derefString(record.LastCleanupError) != "attachment_path_outside_root") {
+			t.Fatalf("outside record = %#v", record)
+		}
 	}
 }
 
@@ -629,59 +426,4 @@ func derefString(value *string) string {
 
 func fileURIForTest(path string) string {
 	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
-}
-
-func assertTaskLedgerSchemaAndPayload(t *testing.T, dbPath string, taskMessage contracts.TaskQueueMessage) {
-	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	rows, err := db.Query(`PRAGMA table_info(task_ledger)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-
-	columns := make([]string, 0)
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			t.Fatal(err)
-		}
-		columns = append(columns, name+":"+typ)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	wantColumns := strings.Join([]string{
-		"task_id:TEXT",
-		"envelope_id:TEXT",
-		"trace_id:TEXT",
-		"task_payload_json:TEXT",
-		"created_at:TEXT",
-		"work_item_id:TEXT",
-	}, "|")
-	if gotColumns := strings.Join(columns, "|"); gotColumns != wantColumns {
-		t.Fatalf("task_ledger columns = %s", gotColumns)
-	}
-
-	var taskID, envelopeID, traceID string
-	err = db.QueryRow(
-		`SELECT task_id, envelope_id, trace_id FROM task_ledger WHERE task_id = ?`,
-		taskMessage.TaskID,
-	).Scan(&taskID, &envelopeID, &traceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if taskID != taskMessage.TaskID || envelopeID != taskMessage.Envelope.ID || traceID != taskMessage.TraceID {
-		t.Fatalf("raw ledger row = task_id %q envelope_id %q trace_id %q", taskID, envelopeID, traceID)
-	}
 }

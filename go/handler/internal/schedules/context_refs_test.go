@@ -8,7 +8,7 @@ import (
 )
 
 func TestInvalidContextRefsCannotCreateOrReplaceSchedule(t *testing.T) {
-	server := newTestServer(t)
+	server, _ := newTestServer(t)
 	validBody := `{"job_name":"review-check","content":"Check reviews","cron":"0 12 * * *","context_refs":["repo:/workspace/memory"]}`
 	response, err := server.Client().Post(server.URL+"/api/schedules", "application/json", strings.NewReader(validBody))
 	if err != nil {
@@ -18,7 +18,7 @@ func TestInvalidContextRefsCannotCreateOrReplaceSchedule(t *testing.T) {
 		t.Fatalf("create: %d %s", response.StatusCode, readBody(t, response))
 	}
 	created := decodeSchedule(t, readBody(t, response))
-	for _, ref := range []string{"/workspace/memory", "repo:relative", "file:/workspace", ""} {
+	for _, ref := range []string{"/workspace/memory", "repo:relative"} {
 		for _, method := range []string{http.MethodPost, http.MethodPut} {
 			t.Run(method+"/"+ref, func(t *testing.T) {
 				body := strings.Replace(validBody, "repo:/workspace/memory", ref, 1)

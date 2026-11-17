@@ -34,7 +34,11 @@ func TestSQLiteMetricsFollowFilesAndMissingDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Fatalf("content type = %q", contentType)
+	}
 	for _, sample := range []string{
+		"chatting_message_handler_loops_total 0",
 		`chatting_sqlite_file_size_bytes{component="handler",file="database"} 8`,
 		`chatting_sqlite_file_size_bytes{component="handler",file="wal"} 3`,
 		`chatting_sqlite_file_size_bytes{component="handler",file="shm"} 0`,

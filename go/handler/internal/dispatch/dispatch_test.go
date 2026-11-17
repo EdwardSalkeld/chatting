@@ -18,30 +18,6 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
-func TestDispatcherSendsEmailMessage(t *testing.T) {
-	body := "Done."
-	sender := &recordingEmailSender{}
-	message := contracts.OutboundMessage{
-		Channel: "email",
-		Target:  "alice@example.com",
-		Body:    &body,
-	}
-
-	dispatched, err := (Dispatcher{EmailSender: sender}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dispatched == nil || dispatched.Channel != "email" {
-		t.Fatalf("dispatched = %#v", dispatched)
-	}
-	if len(sender.messages) != 1 {
-		t.Fatalf("sent count = %d", len(sender.messages))
-	}
-	if sender.messages[0].target != "alice@example.com" || sender.messages[0].body != "Done." || sender.messages[0].subject != nil {
-		t.Fatalf("sent = %#v", sender.messages[0])
-	}
-}
-
 func TestDispatcherRejectsChannelWithoutConfiguredSender(t *testing.T) {
 	body := "Done."
 	for _, test := range []struct {
@@ -159,27 +135,6 @@ func TestDispatcherPreservesFailureReasons(t *testing.T) {
 	}
 }
 
-func TestDispatcherSendsTelegramMessage(t *testing.T) {
-	body := "Done via telegram."
-	sender := &recordingTelegramSender{}
-	message := contracts.OutboundMessage{
-		Channel: "telegram",
-		Target:  "12345",
-		Body:    &body,
-	}
-
-	dispatched, err := (Dispatcher{TelegramSender: sender}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dispatched == nil || dispatched.Channel != "telegram" || dispatched.Target != "12345" {
-		t.Fatalf("dispatched = %#v", dispatched)
-	}
-	if len(sender.messages) != 1 || sender.messages[0].target != "12345" {
-		t.Fatalf("messages = %#v", sender.messages)
-	}
-}
-
 func TestDispatcherSendsTelegramReactionFromEnvelopeMetadata(t *testing.T) {
 	body := "👍"
 	sender := &recordingTelegramSender{}
@@ -202,63 +157,6 @@ func TestDispatcherSendsTelegramReactionFromEnvelopeMetadata(t *testing.T) {
 	}
 	if len(sender.reactions) != 1 || sender.reactions[0].messageID != 42 || sender.reactions[0].emoji != "👍" {
 		t.Fatalf("reactions = %#v", sender.reactions)
-	}
-}
-
-func TestDispatcherSendsGitHubComment(t *testing.T) {
-	body := "Done via GitHub."
-	sender := &recordingGitHubSender{}
-	message := contracts.OutboundMessage{
-		Channel: "github",
-		Target:  "brokensbone/chatting#13",
-		Body:    &body,
-	}
-
-	dispatched, err := (Dispatcher{GitHubSender: sender}).Dispatch(context.Background(), message, contracts.TaskEnvelope{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dispatched == nil || dispatched.Channel != "github" || dispatched.Target != "brokensbone/chatting#13" {
-		t.Fatalf("dispatched = %#v", dispatched)
-	}
-	if len(sender.messages) != 1 || sender.messages[0].target != "brokensbone/chatting#13" || sender.messages[0].body != "Done via GitHub." {
-		t.Fatalf("messages = %#v", sender.messages)
-	}
-}
-
-func TestTelegramMessageSenderSendsTextAndFallsBackWithoutParseMode(t *testing.T) {
-	var calls []telegramHTTPCall
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		call := recordTelegramJSONCall(t, request)
-		calls = append(calls, call)
-		if len(calls) == 1 {
-			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities"})
-			return
-		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 501}})
-	}))
-	defer server.Close()
-	sender := newTestTelegramSender(t, server.URL)
-	body := "Line 1.\nNeeds **formatting**."
-
-	err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{Channel: "telegram", Target: "12345", Body: &body})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(calls) != 2 {
-		t.Fatalf("calls = %#v", calls)
-	}
-	if calls[0].path != "/bottoken/sendMessage" || calls[0].payload["parse_mode"] != "HTML" {
-		t.Fatalf("first call = %#v", calls[0])
-	}
-	if calls[0].payload["text"] != "Line 1.\nNeeds <b>formatting</b>." {
-		t.Fatalf("first text = %#v", calls[0].payload["text"])
-	}
-	if _, ok := calls[1].payload["parse_mode"]; ok {
-		t.Fatalf("fallback still has parse_mode: %#v", calls[1].payload)
-	}
-	if calls[1].payload["text"] != body {
-		t.Fatalf("fallback text = %#v", calls[1].payload["text"])
 	}
 }
 
@@ -301,67 +199,6 @@ func TestTelegramMessageSenderReactionFailurePreservesDescription(t *testing.T) 
 	}
 	if got, want := err.Error(), "telegram_reaction_failed description=Bad Request: REACTION_INVALID"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
-	}
-}
-
-func TestTelegramMessageSenderSendsPhotoAttachment(t *testing.T) {
-	tempDir := t.TempDir()
-	photoPath := filepath.Join(tempDir, "plant.png")
-	if err := os.WriteFile(photoPath, []byte("png bytes"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var multipartCall telegramMultipartCall
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		multipartCall = recordTelegramMultipartCall(t, request)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 503}})
-	}))
-	defer server.Close()
-	sender := newTestTelegramSender(t, server.URL, tempDir)
-	body := "**Photo** & [details](https://example.com)"
-
-	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
-		Channel: "telegram",
-		Target:  "12345",
-		Body:    &body,
-		Attachment: &contracts.AttachmentRef{
-			URI: photoPath,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if multipartCall.path != "/bottoken/sendPhoto" || multipartCall.fields["chat_id"] != "12345" || multipartCall.fileField != "photo" {
-		t.Fatalf("multipart call = %#v", multipartCall)
-	}
-	if multipartCall.fields["parse_mode"] != "HTML" || multipartCall.fields["caption"] != `<b>Photo</b> &amp; <a href="https://example.com">details</a>` {
-		t.Fatalf("caption = %#v", multipartCall.fields)
-	}
-}
-
-func TestTelegramMessageSenderSendsDocumentAttachmentFromFileURI(t *testing.T) {
-	tempDir := t.TempDir()
-	documentPath := filepath.Join(tempDir, "report.txt")
-	if err := os.WriteFile(documentPath, []byte("report"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var multipartCall telegramMultipartCall
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		multipartCall = recordTelegramMultipartCall(t, request)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 504}})
-	}))
-	defer server.Close()
-	sender := newTestTelegramSender(t, server.URL, tempDir)
-
-	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
-		Channel: "telegram",
-		Target:  "12345",
-		Attachment: &contracts.AttachmentRef{
-			URI: "file://" + documentPath,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if multipartCall.path != "/bottoken/sendDocument" || multipartCall.fileField != "document" {
-		t.Fatalf("multipart call = %#v", multipartCall)
 	}
 }
 
@@ -479,38 +316,6 @@ func TestTelegramMessageSenderFollowsSymlinksThatStayInsideAllowedDirs(t *testin
 	}
 }
 
-func TestTelegramMessageSenderResendsWholeAttachmentWhenCaptionFailsToParse(t *testing.T) {
-	tempDir := t.TempDir()
-	documentPath := filepath.Join(tempDir, "report.txt")
-	if err := os.WriteFile(documentPath, []byte("report"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var calls []telegramMultipartCall
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		calls = append(calls, recordTelegramMultipartCall(t, request))
-		if len(calls) == 1 {
-			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": false, "description": "Bad Request: can't parse entities"})
-			return
-		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 506}})
-	}))
-	defer server.Close()
-	sender := newTestTelegramSender(t, server.URL, tempDir)
-	caption := "Report"
-
-	if err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
-		Channel:    "telegram",
-		Target:     "12345",
-		Body:       &caption,
-		Attachment: &contracts.AttachmentRef{URI: "file://" + documentPath},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(calls) != 2 || calls[0].fileBody != "report" || calls[1].fileBody != "report" {
-		t.Fatalf("calls = %#v", calls)
-	}
-}
-
 func TestTelegramMessageSenderRejectsUnsupportedAttachmentURI(t *testing.T) {
 	sender := newTestTelegramSender(t, "http://127.0.0.1")
 	err := sender.Send(context.Background(), "12345", contracts.OutboundMessage{
@@ -544,11 +349,6 @@ func (sender *recordingEmailSender) Send(_ context.Context, target string, body 
 	return nil
 }
 
-type sentTelegram struct {
-	target  string
-	message contracts.OutboundMessage
-}
-
 type sentReaction struct {
 	target    string
 	messageID int64
@@ -556,17 +356,12 @@ type sentReaction struct {
 }
 
 type recordingTelegramSender struct {
-	messages  []sentTelegram
 	reactions []sentReaction
 	err       error
 }
 
-func (sender *recordingTelegramSender) Send(_ context.Context, target string, message contracts.OutboundMessage) error {
-	if sender.err != nil {
-		return sender.err
-	}
-	sender.messages = append(sender.messages, sentTelegram{target: target, message: message})
-	return nil
+func (sender *recordingTelegramSender) Send(context.Context, string, contracts.OutboundMessage) error {
+	return sender.err
 }
 
 func (sender *recordingTelegramSender) React(_ context.Context, target string, messageID int64, emoji string) error {
@@ -577,22 +372,10 @@ func (sender *recordingTelegramSender) React(_ context.Context, target string, m
 	return nil
 }
 
-type sentGitHub struct {
-	target string
-	body   string
-}
+type recordingGitHubSender struct{ err error }
 
-type recordingGitHubSender struct {
-	messages []sentGitHub
-	err      error
-}
-
-func (sender *recordingGitHubSender) Send(_ context.Context, target string, body string) error {
-	if sender.err != nil {
-		return sender.err
-	}
-	sender.messages = append(sender.messages, sentGitHub{target: target, body: body})
-	return nil
+func (sender *recordingGitHubSender) Send(context.Context, string, string) error {
+	return sender.err
 }
 
 type telegramHTTPCall struct {
@@ -673,7 +456,7 @@ func emailEnvelope(subject string, body string) contracts.TaskEnvelope {
 		SchemaVersion: contracts.SchemaVersion,
 		ID:            "email:1",
 		Source:        "email",
-		ReceivedAt:    contracts.NewTimestamp(mustTime("2026-03-06T11:00:00Z")),
+		ReceivedAt:    contracts.NewTimestamp(time.Date(2026, 3, 6, 11, 0, 0, 0, time.UTC)),
 		Actor:         &actor,
 		Content:       "Subject: " + subject + "\n\n" + body,
 		ReplyChannel: contracts.ReplyChannel{
@@ -682,12 +465,4 @@ func emailEnvelope(subject string, body string) contracts.TaskEnvelope {
 		},
 		DedupeKey: "email:1",
 	}
-}
-
-func mustTime(raw string) time.Time {
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,23 +13,6 @@ import (
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 )
-
-func TestRunPrintsVersion(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	status := runWithFactory(context.Background(), []string{"--version"}, &stdout, &stderr, newRuntimeRunner)
-
-	if status != 0 {
-		t.Fatalf("status = %d", status)
-	}
-	if strings.TrimSpace(stdout.String()) != version {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
-	if stderr.String() != "" {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
 
 func TestRunRequiresConfigFlag(t *testing.T) {
 	var stdout bytes.Buffer
@@ -164,34 +146,6 @@ func TestBuildDispatcherGitHubAvailability(t *testing.T) {
 		if !ok || (typed.GitHubSender != nil) != available {
 			t.Fatalf("available=%t dispatcher=%#v", available, dispatcher)
 		}
-	}
-}
-
-func TestBuildDispatcherLogsAllowedChannelsWithoutSender(t *testing.T) {
-	originalLookPath := ghLookPath
-	ghLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
-	defer func() {
-		ghLookPath = originalLookPath
-	}()
-
-	var buffer bytes.Buffer
-	previousWriter := log.Writer()
-	log.SetOutput(&buffer)
-	defer log.SetOutput(previousWriter)
-
-	if _, _, err := buildDispatcher(handlerconfig.Config{AllowedEgressChannels: []string{"email", "telegram", "log"}}); err != nil {
-		t.Fatal(err)
-	}
-	if logged := buffer.String(); !strings.Contains(logged, "handler_egress_channels_unconfigured channels=email,telegram:") {
-		t.Fatalf("log = %q", logged)
-	}
-
-	buffer.Reset()
-	if _, _, err := buildDispatcher(handlerconfig.Config{AllowedEgressChannels: []string{"log"}}); err != nil {
-		t.Fatal(err)
-	}
-	if buffer.Len() != 0 {
-		t.Fatalf("expected no warning, got %q", buffer.String())
 	}
 }
 

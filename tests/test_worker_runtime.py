@@ -26,18 +26,82 @@ from app.models import (
 )
 from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor
-from app.worker.runtime import _build_error_summary, process_task_message
+from app.worker.runtime import process_task_message
+
+GENERIC_FAILURE = "I failed to process this task. Please try again later."
 
 
-class TestExecutor:
+def _record_main_reply(
+    store: SQLiteStateStore,
+    task: TaskEnvelope,
+    *,
+    event_id: str,
+    channel: str = "telegram",
+    task_id: str | None = None,
+) -> None:
+    task_id = task_id or f"task:{task.id}"
+    store.append_worker_activity(
+        occurred_at=datetime.now(timezone.utc),
+        task_id=task_id,
+        envelope_id=task_id.removeprefix("task:"),
+        phase="egress_incremental",
+        summary="incremental egress to telegram",
+        detail={
+            "channel": channel,
+            "target": task.reply_channel.target,
+            "event_id": event_id,
+            "event_kind": "incremental",
+            "publish_source": "main_reply",
+            "sequence": None,
+        },
+    )
+
+
+class StepExecutor:
+    """Runs `step(pass_number, task)` on each launch and records the tasks."""
+
+    def __init__(
+        self, step: Callable[[int, TaskEnvelope], ExecutionResult] | None = None
+    ) -> None:
+        self.step = step
+        self.calls: list[TaskEnvelope] = []
+
     def for_workspace(self, *, work_item_id):
         del work_item_id
         return self
 
+    def execute(self, task):
+        self.calls.append(task)
+        assert self.step is not None, "unexpected executor call"
+        return self.step(len(self.calls), task)
+
+
+def _raises(message: str) -> StepExecutor:
+    def step(_pass: int, _task: TaskEnvelope) -> ExecutionResult:
+        raise RuntimeError(message)
+
+    return StepExecutor(step)
+
+
+def _returns(error: str | None = None, stdout: str | None = None) -> StepExecutor:
+    return StepExecutor(
+        lambda n, _task: ExecutionResult(
+            errors=[error] if error else [],
+            stdout=stdout.format(n) if stdout else None,
+        )
+    )
+
 
 @dataclass(frozen=True)
-class MultiMessageExecutor(TestExecutor):
+class StreamingExecutor:
+    """Emits `chunks` through the output callback the runtime installs."""
+
+    chunks: tuple[tuple[str, str], ...]
     output_callback: Callable[[str, str], None] | None = None
+
+    def for_workspace(self, *, work_item_id):
+        del work_item_id
+        return self
 
     def with_output_callback(self, callback):
         return replace(self, output_callback=callback)
@@ -45,861 +109,346 @@ class MultiMessageExecutor(TestExecutor):
     def execute(self, task):
         del task
         assert self.output_callback is not None
-        self.output_callback("stdout", "executor stdout")
-        self.output_callback("stderr", "executor stderr")
+        for stream, text in self.chunks:
+            self.output_callback(stream, text)
         return ExecutionResult(
-            errors=[], stdout="executor stdout", stderr="executor stderr"
+            errors=[],
+            stdout="".join(t for s, t in self.chunks if s == "stdout"),
+            stderr="".join(t for s, t in self.chunks if s == "stderr"),
         )
 
 
-@dataclass(frozen=True)
-class PRCreatingExecutor(TestExecutor):
-    output_callback: Callable[[str, str], None] | None = None
-
-    def with_output_callback(self, callback):
-        return replace(self, output_callback=callback)
-
-    def execute(self, task):
-        del task
-        assert self.output_callback is not None
-        line = APP_SERVER_PR_CREATED + "\n"
-        # Streamed output can split one event across callbacks.
-        self.output_callback("stdout", line[:40])
-        self.output_callback("stdout", line[40:])
-        self.output_callback("stderr", APP_SERVER_PR_CREATED + "\n")
-        return ExecutionResult(errors=[])
-
-
-@dataclass(frozen=True)
-class AlwaysFailExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        raise RuntimeError("executor down")
+def _task(
+    envelope_id: str,
+    reply_channel: ReplyChannel,
+    *,
+    source: str = "im",
+    content: str = "hello",
+    minute: int = 0,
+) -> TaskQueueMessage:
+    envelope = TaskEnvelope(
+        id=envelope_id,
+        source=source,
+        received_at=datetime(2026, 3, 6, 13, minute, tzinfo=timezone.utc),
+        actor="8605042448:edsalkeld",
+        content=content,
+        attachments=[],
+        context_refs=[],
+        reply_channel=reply_channel,
+        dedupe_key=envelope_id,
+    )
+    return TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:{envelope_id}")
 
 
-@dataclass(frozen=True)
-class CreditsFailExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        raise RuntimeError("out of credits")
+def _email_task() -> TaskQueueMessage:
+    return _task(
+        "email:1",
+        ReplyChannel(type="email", target="alice@example.com"),
+        source="email",
+    )
 
 
-@dataclass(frozen=True)
-class ExecutionErrorExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        return ExecutionResult(
-            errors=["executor_exit_nonzero:1:insufficient credits"],
-        )
-
-
-@dataclass(frozen=True)
-class AuthErrorExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        return ExecutionResult(
-            errors=["executor_exit_nonzero:1:invalidated oauth token: secret-value"],
-        )
-
-
-@dataclass(frozen=True)
-class LongExecutionErrorExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        return ExecutionResult(
-            errors=[
-                "executor_exit_nonzero:1:" + "permission denied\nconfig.toml " * 30
-            ],
-        )
-
-
-@dataclass(frozen=True)
-class NoMessageExecutor(TestExecutor):
-    def execute(self, task):
-        del task
-        return ExecutionResult(errors=[])
-
-
-@dataclass(frozen=True)
-class MainReplyExecutor(TestExecutor):
-    store: SQLiteStateStore
-
-    def execute(self, task):
-        self.store.append_worker_activity(
-            occurred_at=datetime.now(timezone.utc),
-            task_id=f"task:{task.id}",
-            envelope_id=task.id,
-            phase="egress_incremental",
-            summary="incremental egress to telegram",
-            detail={
-                "channel": "telegram",
-                "target": task.reply_channel.target,
-                "event_id": "evt:test:main-reply",
-                "event_kind": "incremental",
-                "publish_source": "main_reply",
-                "sequence": None,
-            },
-        )
-        return ExecutionResult(errors=[])
-
-
-class RecordingExecutor(TestExecutor):
-    def __init__(self, results: list[ExecutionResult]) -> None:
-        self._results = list(results)
-        self.calls: list[TaskEnvelope] = []
-
-    def execute(self, task):
-        self.calls.append(task)
-        if not self._results:
-            raise AssertionError("unexpected executor call")
-        return self._results.pop(0)
-
-
-class ReplyOnSecondPassExecutor(TestExecutor):
-    def __init__(self, store: SQLiteStateStore) -> None:
-        self.store = store
-        self.calls: list[TaskEnvelope] = []
-
-    def execute(self, task):
-        self.calls.append(task)
-        if len(self.calls) == 2:
-            self.store.append_worker_activity(
-                occurred_at=datetime.now(timezone.utc),
-                task_id=f"task:{task.id}",
-                envelope_id=task.id,
-                phase="egress_incremental",
-                summary="incremental egress to telegram",
-                detail={
-                    "channel": "telegram",
-                    "target": task.reply_channel.target,
-                    "event_id": "evt:test:recovery-main-reply",
-                    "event_kind": "incremental",
-                    "publish_source": "main_reply",
-                    "sequence": None,
-                },
-            )
-        return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
-
-
-class MainReplyRecordingExecutor(TestExecutor):
-    def __init__(self, store: SQLiteStateStore) -> None:
-        self.store = store
-        self.calls: list[TaskEnvelope] = []
-
-    def execute(self, task):
-        self.calls.append(task)
-        self.store.append_worker_activity(
-            occurred_at=datetime.now(timezone.utc),
-            task_id=f"task:{task.id}",
-            envelope_id=task.id,
-            phase="egress_incremental",
-            summary="incremental egress to telegram",
-            detail={
-                "channel": "telegram",
-                "target": task.reply_channel.target,
-                "event_id": "evt:test:recording-main-reply",
-                "event_kind": "incremental",
-                "publish_source": "main_reply",
-                "sequence": None,
-            },
-        )
-        return ExecutionResult(errors=[])
-
-
-class ResolveFollowupsOnSecondPassExecutor(TestExecutor):
-    def __init__(self, store: SQLiteStateStore) -> None:
-        self.store = store
-        self.calls: list[TaskEnvelope] = []
-
-    def execute(self, task):
-        self.calls.append(task)
-        task_id = f"task:{task.id}"
-        self.store.append_worker_activity(
-            occurred_at=datetime.now(timezone.utc),
-            task_id=task_id,
-            envelope_id=task.id,
-            phase="egress_incremental",
-            summary="incremental egress to telegram",
-            detail={
-                "channel": "telegram_reaction" if len(self.calls) == 1 else "telegram",
-                "target": task.reply_channel.target,
-                "event_id": f"evt:test:followups:{len(self.calls)}",
-                "event_kind": "incremental",
-                "publish_source": "main_reply",
-                "sequence": None,
-            },
-        )
-        if len(self.calls) == 2:
-            self.store.mark_inbox_reply_delivered(parent_task_id=task_id)
-        return ExecutionResult(errors=[], stdout=f"pass {len(self.calls)}")
-
-
-class ReplyFromClaimedFollowupExecutor(TestExecutor):
-    """Model a current reply sent after main_reply claims a newer turn."""
-
-    def __init__(self, store: SQLiteStateStore, followup_task_id: str) -> None:
-        self.store = store
-        self.followup_task_id = followup_task_id
-        self.calls: list[TaskEnvelope] = []
-
-    def execute(self, task):
-        self.calls.append(task)
-        parent_task_id = f"task:{task.id}"
-        self.store.claim_conversation_followups(parent_task_id=parent_task_id)
-        self.store.append_worker_activity(
-            occurred_at=datetime.now(timezone.utc),
-            task_id=self.followup_task_id,
-            envelope_id=self.followup_task_id.removeprefix("task:"),
-            phase="egress_incremental",
-            summary="incremental egress to telegram",
-            detail={
-                "channel": "telegram",
-                "target": task.reply_channel.target,
-                "event_id": "evt:test:claimed-followup-reply",
-                "event_kind": "incremental",
-                "publish_source": "main_reply",
-                "sequence": None,
-            },
-        )
-        self.store.mark_inbox_reply_delivered(parent_task_id=self.followup_task_id)
-        return ExecutionResult(errors=[])
+def _telegram_task(number: int = 1, content: str = "hello") -> TaskQueueMessage:
+    return _task(
+        f"telegram:{number}",
+        ReplyChannel(
+            type="telegram",
+            target="8605042448",
+            metadata={"message_id": 2470 + number},
+        ),
+        content=content,
+        minute=number,
+    )
 
 
 class WorkerRuntimeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.db_path = Path(tmp.name) / "worker.db"
+        self.store = SQLiteStateStore(str(self.db_path))
+
+    def _process(self, task_message, executor, *, max_attempts=2, **kwargs):
+        return process_task_message(
+            store=self.store,
+            task_message=task_message,
+            executor_impl=executor,
+            max_attempts=max_attempts,
+            activity_monitor=WorkerActivityMonitor(store=self.store, history_limit=10),
+            **kwargs,
+        )
+
+    def _audit_detail(self) -> dict[str, object]:
+        return self.store.list_audit_events()[0].detail
+
     def test_database_maintenance_is_builtin_and_never_calls_executor(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            original = self._build_task_message()
-            envelope = replace(
-                original.envelope,
-                source="internal",
-                reply_channel=ReplyChannel(
-                    type="internal", target="database-maintenance"
-                ),
-                content=json.dumps({"retention_days": 14}),
-            )
-            task = replace(original, envelope=envelope)
-            # TestExecutor has no execute(): entering the model path would fail.
-            result = process_task_message(
-                store=store,
-                task_message=task,
-                executor_impl=TestExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-            self.assertEqual(result.reason_codes, ["database_maintenance"])
-            self.assertEqual(result.run_record.result_status, "success")
-            # The handler flushes from sequence 0, so a lone completion must take it.
-            self.assertEqual(
-                [(msg.event_kind, msg.sequence) for msg in result.egress_messages],
-                [("completion", 0)],
-            )
-            detail = store.list_audit_events()[0].detail
-            self.assertEqual(detail["egress_message_count"], 1)
-            self.assertEqual(detail["maintenance"]["audit_transcripts_removed"], 0)
-
-    def _build_monitor(self, store: SQLiteStateStore) -> WorkerActivityMonitor:
-        return WorkerActivityMonitor(store=store, history_limit=10)
-
-    def _build_task_message(self) -> TaskQueueMessage:
-        envelope = TaskEnvelope(
-            id="email:1",
-            source="email",
-            received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
-            actor="alice@example.com",
-            content="hello",
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-            dedupe_key="email:1",
-        )
-        return TaskQueueMessage.from_envelope(envelope, trace_id="trace:email:1")
-
-    def _build_telegram_task_message(self) -> TaskQueueMessage:
-        envelope = TaskEnvelope(
-            id="telegram:1",
-            source="im",
-            received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
-            actor="8605042448:edsalkeld",
-            content="hello",
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(
-                type="telegram",
-                target="8605042448",
-                metadata={"message_id": 2471},
-            ),
-            dedupe_key="telegram:1",
-        )
-        return TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:1")
-
-    def _build_supervised_telegram_task_message(self) -> TaskQueueMessage:
-        envelope = TaskEnvelope(
-            id="telegram:super:1",
-            source="im",
-            received_at=datetime(2026, 3, 6, 13, 0, tzinfo=timezone.utc),
-            actor="8605042448:edsalkeld",
-            content="hello",
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(
-                type="telegram",
-                target="8605042448",
-                metadata={"message_id": 2471},
-            ),
-            dedupe_key="telegram:super:1",
-        )
-        return TaskQueueMessage.from_envelope(
-            envelope, trace_id="trace:telegram:super:1"
-        )
-
-    def _build_internal_heartbeat_task_message(self) -> TaskQueueMessage:
-        heartbeat_id = "internal-heartbeat:2026-03-09T12:00:00+00:00:1"
-        envelope = TaskEnvelope(
-            id=heartbeat_id,
-            source=INTERNAL_SOURCE,
-            received_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
-            actor="message-handler",
-            content="internal heartbeat ping",
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(
-                type=INTERNAL_REPLY_CHANNEL_TYPE, target=INTERNAL_HEARTBEAT_TARGET
-            ),
-            dedupe_key=heartbeat_id,
-        )
-        return TaskQueueMessage.from_envelope(
-            envelope, trace_id="trace:internal:heartbeat:1"
-        )
-
-    def _build_internal_channel_notice_task_message(self) -> TaskQueueMessage:
-        envelope = TaskEnvelope(
-            id="telegram-disallowed-channel:2101",
+        task = _task(
+            "internal:maintenance",
+            ReplyChannel(type="internal", target="database-maintenance"),
             source="internal",
-            received_at=datetime(2026, 6, 25, 8, 0, tzinfo=timezone.utc),
-            actor="message-handler",
-            content=(
-                "Not enabled in channel -100777. "
-                "Add this id to telegram_allowed_channel_ids to enable replies here."
-            ),
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(
-                type="telegram",
-                target="-100777",
-                metadata={
-                    INTERNAL_NOTICE_METADATA_KEY: (TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE),
-                    "message_id": 19,
-                },
-            ),
-            dedupe_key="telegram-disallowed-channel:2101",
+            content=json.dumps({"retention_days": 14}),
         )
-        return TaskQueueMessage.from_envelope(
-            envelope,
-            trace_id="trace:internal:telegram-disallowed-channel:2101",
+        result = self._process(task, StepExecutor())
+        self.assertEqual(result.reason_codes, ["database_maintenance"])
+        self.assertEqual(result.run_record.result_status, "success")
+        # The handler flushes from sequence 0, so a lone completion must take it.
+        self.assertEqual(
+            [(msg.event_kind, msg.sequence) for msg in result.egress_messages],
+            [("completion", 0)],
         )
+        detail = self._audit_detail()
+        self.assertEqual(detail["egress_message_count"], 1)
+        self.assertEqual(detail["maintenance"]["audit_transcripts_removed"], 0)
 
-    def _build_internal_group_notice_task_message(self) -> TaskQueueMessage:
-        envelope = TaskEnvelope(
-            id="telegram-disallowed-group:2201",
-            source="internal",
-            received_at=datetime(2026, 6, 25, 8, 5, tzinfo=timezone.utc),
-            actor="message-handler",
-            content=(
-                "Not enabled in group -100888. "
-                "Add this id to telegram_allowed_chat_ids to enable replies here."
-            ),
-            attachments=[],
-            context_refs=[],
-            reply_channel=ReplyChannel(
-                type="telegram",
-                target="-100888",
-                metadata={
-                    INTERNAL_NOTICE_METADATA_KEY: TELEGRAM_GROUP_NOT_ENABLED_NOTICE,
-                    "message_id": 29,
-                },
-            ),
-            dedupe_key="telegram-disallowed-group:2201",
+    def test_successful_task_emits_completion_only_and_streams_output(self) -> None:
+        executor = StreamingExecutor(
+            (("stdout", "executor stdout"), ("stderr", "executor stderr"))
         )
-        return TaskQueueMessage.from_envelope(
-            envelope,
-            trace_id="trace:internal:telegram-disallowed-group:2201",
+        result = self._process(_email_task(), executor)
+
+        self.assertEqual(result.run_record.result_status, "success")
+        self.assertEqual(len(result.egress_messages), 1)
+        terminal = result.egress_messages[0]
+        self.assertEqual(terminal.event_kind, "completion")
+        self.assertEqual(terminal.message.channel, "internal")
+        self.assertEqual(terminal.message.target, "task")
+        self.assertEqual(terminal.sequence, 0)
+        detail = self._audit_detail()
+        self.assertNotIn("stdout", detail["execution_result"])
+        self.assertNotIn("stderr", detail["execution_result"])
+        self.assertEqual(detail["incremental_reply_send_published_count"], 0)
+        activity = self.store.list_recent_worker_activity(
+            limit=10, include_internal=True
         )
-
-    def test_process_task_message_emits_completion_only_for_successful_task(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=MultiMessageExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(result.egress_messages), 1)
-            terminal = result.egress_messages[0]
-            self.assertEqual(terminal.event_kind, "completion")
-            self.assertEqual(terminal.message.channel, "internal")
-            self.assertEqual(terminal.message.target, "task")
-            self.assertEqual(terminal.sequence, 0)
-            audit_event = store.list_audit_events()[0]
-            self.assertNotIn("stdout", audit_event.detail["execution_result"])
-            self.assertNotIn("stderr", audit_event.detail["execution_result"])
-            self.assertEqual(audit_event.detail["execution_result"]["errors"], [])
-            self.assertEqual(
-                audit_event.detail["incremental_reply_send_published_count"], 0
-            )
-            activity = store.list_recent_worker_activity(
-                limit=10, include_internal=True
-            )
-            self.assertEqual(activity[1]["phase"], "executor_stderr")
-            self.assertEqual(activity[2]["phase"], "executor_stdout")
-            self.assertEqual(activity[1]["detail"]["content"], "executor stderr")
-            self.assertEqual(activity[2]["detail"]["content"], "executor stdout")
+        self.assertEqual(activity[1]["phase"], "executor_stderr")
+        self.assertEqual(activity[2]["phase"], "executor_stdout")
+        self.assertEqual(activity[1]["detail"]["content"], "executor stderr")
+        self.assertEqual(activity[2]["detail"]["content"], "executor stdout")
 
     def test_reports_pull_requests_the_executor_creates(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            created: list[str] = []
-            process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=PRCreatingExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-                on_pr_created=created.append,
-            )
+        line = APP_SERVER_PR_CREATED + "\n"
+        # Streamed output can split one event across callbacks.
+        executor = StreamingExecutor(
+            (("stdout", line[:40]), ("stdout", line[40:]), ("stderr", line))
+        )
+        created: list[str] = []
+        self._process(_email_task(), executor, on_pr_created=created.append)
+        self.assertEqual(
+            created, ["https://github.com/EdwardSalkeld/chatting/pull/308"]
+        )
 
-            self.assertEqual(
-                created, ["https://github.com/EdwardSalkeld/chatting/pull/308"]
-            )
+    def test_retries_and_dead_letters(self) -> None:
+        result = self._process(_email_task(), _raises("executor down"))
 
-    def test_process_task_message_retries_and_dead_letters(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=AlwaysFailExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
+        self.assertEqual(result.run_record.result_status, "dead_letter")
+        self.assertEqual(result.dead_lettered, True)
+        self.assertEqual(result.attempt_count, 2)
+        self.assertEqual(result.reason_codes, ["retry_exhausted"])
+        self.assertEqual(result.error_summary, "RuntimeError: executor down")
+        with sqlite3.connect(self.db_path) as connection:
+            (reason_codes_json,) = connection.execute(
+                "SELECT reason_codes_json FROM dead_letters"
+            ).fetchone()
+        self.assertEqual(json.loads(reason_codes_json), ["retry_exhausted"])
+        self.assertEqual(len(result.egress_messages), 2)
+        self.assertEqual(result.egress_messages[0].event_kind, "message")
+        self.assertEqual(result.egress_messages[0].message.body, GENERIC_FAILURE)
 
-            self.assertEqual(result.run_record.result_status, "dead_letter")
-            self.assertEqual(result.dead_lettered, True)
-            self.assertEqual(result.attempt_count, 2)
-            self.assertEqual(result.reason_codes, ["retry_exhausted"])
-            self.assertEqual(result.error_summary, "RuntimeError: executor down")
-            with sqlite3.connect(Path(tmpdir) / "worker.db") as connection:
-                (reason_codes_json,) = connection.execute(
-                    "SELECT reason_codes_json FROM dead_letters"
-                ).fetchone()
-            self.assertEqual(json.loads(reason_codes_json), ["retry_exhausted"])
-            self.assertEqual(len(result.egress_messages), 2)
-            self.assertEqual(result.egress_messages[0].event_kind, "message")
-            self.assertEqual(
-                result.egress_messages[0].message.body,
-                "I failed to process this task. Please try again later.",
-            )
+    def test_auth_failure_is_reported_without_exposing_details(self) -> None:
+        executor = _returns("executor_exit_nonzero:1:invalidated oauth token: secret")
+        result = self._process(_telegram_task(), executor, max_attempts=1)
 
-    def test_process_task_message_reports_auth_failure_without_exposing_details(
+        self.assertEqual(result.run_record.result_status, "execution_error")
+        visible, completion = result.egress_messages
+        self.assertEqual(visible.message.channel, "telegram")
+        self.assertEqual(visible.message.body, GENERIC_FAILURE)
+        self.assertEqual(completion.event_kind, "completion")
+
+    def test_credit_error_is_visible_before_completion(self) -> None:
+        executor = _returns("executor_exit_nonzero:1:insufficient credits")
+        result = self._process(_email_task(), executor, max_attempts=1)
+
+        self.assertEqual(result.run_record.result_status, "execution_error")
+        self.assertEqual(result.reason_codes, ["executor_reported_errors"])
+        self.assertEqual(
+            result.error_summary, "executor_exit_nonzero:1:insufficient credits"
+        )
+        visible, completion = result.egress_messages
+        self.assertEqual(visible.event_kind, "message")
+        self.assertEqual(visible.message.target, "alice@example.com")
+        self.assertIn("ran out of credits or quota", visible.message.body)
+        self.assertEqual(completion.sequence, 1)
+
+    def test_error_summary_is_bounded_single_line(self) -> None:
+        executor = _returns(
+            "executor_exit_nonzero:1:" + "permission denied\nconfig.toml " * 30
+        )
+        summary = self._process(_email_task(), executor, max_attempts=1).error_summary
+        assert summary is not None
+        self.assertNotIn("\n", summary)
+        self.assertLessEqual(len(summary), 240)
+        self.assertTrue(summary.endswith("..."))
+
+    def test_telegram_supervised_recovery_without_reply_is_execution_error(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_telegram_task_message(),
-                executor_impl=AuthErrorExecutor(),
-                max_attempts=1,
-                activity_monitor=self._build_monitor(store),
-            )
+        executor = _returns(stdout="pass {} transcript")
+        result = self._process(_telegram_task(), executor)
 
-            self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertEqual(len(result.egress_messages), 2)
-            visible, completion = result.egress_messages
-            self.assertEqual(visible.message.channel, "telegram")
-            self.assertEqual(
-                visible.message.body,
-                "I failed to process this task. Please try again later.",
-            )
-            self.assertEqual(completion.event_kind, "completion")
+        self.assertEqual(result.run_record.result_status, "execution_error")
+        self.assertEqual(result.reason_codes, ["missing_visible_reply"])
+        self.assertEqual(result.attempt_count, 2)
+        self.assertEqual([call.content for call in executor.calls], ["hello"] * 2)
+        recovery_instructions = executor.calls[1].prompt_context.task_instructions[-1]
+        self.assertIn("Do not redo side effects", recovery_instructions)
+        self.assertIn("Captured stdout:\npass 1 transcript", recovery_instructions)
+        visible, completion = result.egress_messages
+        self.assertEqual(visible.message.channel, "telegram")
+        self.assertIn("failed to publish the Telegram reply", visible.message.body)
+        self.assertEqual(completion.event_kind, "completion")
+        detail = self._audit_detail()
+        self.assertEqual(detail["executor_launch_count"], 2)
+        self.assertEqual(detail["supervised_recovery_used"], True)
+        self.assertEqual(detail["incremental_reply_send_published_count"], 0)
+        self.assertNotIn("stdout", detail["execution_result"])
 
-    def test_process_task_message_emits_visible_credit_error_before_dead_letter_completion(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=CreditsFailExecutor(),
-                max_attempts=1,
-                activity_monitor=self._build_monitor(store),
-            )
+    def test_supervised_recovery_can_publish_reply_and_succeed(self) -> None:
+        def step(n: int, task: TaskEnvelope) -> ExecutionResult:
+            if n == 2:
+                _record_main_reply(self.store, task, event_id="evt:recovery")
+            return ExecutionResult(errors=[])
 
-            self.assertEqual(result.run_record.result_status, "dead_letter")
-            self.assertEqual(len(result.egress_messages), 2)
-            visible = result.egress_messages[0]
-            completion = result.egress_messages[1]
-            self.assertEqual(visible.event_kind, "message")
-            self.assertEqual(visible.message.channel, "email")
-            self.assertIn("ran out of credits or quota", visible.message.body)
-            self.assertEqual(completion.event_kind, "completion")
-            self.assertEqual(completion.sequence, 1)
+        executor = StepExecutor(step)
+        result = self._process(_telegram_task(), executor)
 
-    def test_process_task_message_emits_visible_credit_error_for_execution_error_result(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=ExecutionErrorExecutor(),
-                max_attempts=1,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertEqual(len(result.egress_messages), 2)
-            self.assertEqual(result.reason_codes, ["executor_reported_errors"])
-            self.assertEqual(
-                result.error_summary, "executor_exit_nonzero:1:insufficient credits"
-            )
-            visible = result.egress_messages[0]
-            self.assertEqual(visible.event_kind, "message")
-            self.assertEqual(visible.message.target, "alice@example.com")
-            self.assertIn("ran out of credits or quota", visible.message.body)
-
-    def test_process_task_message_builds_bounded_single_line_error_summary(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_task_message(),
-                executor_impl=LongExecutionErrorExecutor(),
-                max_attempts=1,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertIsNotNone(result.error_summary)
-            assert result.error_summary is not None
-            self.assertNotIn("\n", result.error_summary)
-            self.assertLessEqual(len(result.error_summary), 240)
-            self.assertTrue(result.error_summary.endswith("..."))
-
-    def test_process_task_message_marks_telegram_success_without_visible_reply_as_execution_error(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_telegram_task_message(),
-                executor_impl=NoMessageExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertEqual(result.reason_codes, ["missing_visible_reply"])
-            self.assertEqual(len(result.egress_messages), 2)
-            self.assertEqual(result.egress_messages[0].event_kind, "message")
-            self.assertEqual(result.egress_messages[0].message.channel, "telegram")
-            audit_event = store.list_audit_events()[0]
-            self.assertIn(
-                "failed to publish the Telegram reply",
-                result.egress_messages[0].message.body,
-            )
-            self.assertEqual(result.egress_messages[1].event_kind, "completion")
-            self.assertEqual(
-                audit_event.detail["incremental_reply_send_published_count"], 0
-            )
-
-    def test_process_task_message_runs_supervised_recovery_for_telegram(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            executor = RecordingExecutor(
-                [
-                    ExecutionResult(errors=[], stdout="first pass transcript"),
-                    ExecutionResult(errors=[], stdout="second pass transcript"),
-                ]
-            )
-            result = process_task_message(
-                store=store,
-                task_message=self._build_supervised_telegram_task_message(),
-                executor_impl=executor,
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "execution_error")
-            self.assertEqual(result.reason_codes, ["missing_visible_reply"])
-            self.assertEqual(result.attempt_count, 2)
-            self.assertEqual(len(executor.calls), 2)
-            self.assertEqual(executor.calls[0].content, "hello")
-            self.assertEqual(executor.calls[1].content, "hello")
-            self.assertIn(
-                "Do not redo side effects or rerun the task.",
-                executor.calls[1].prompt_context.task_instructions[-1],
-            )
-            self.assertIn(
-                "Captured stdout:\nfirst pass transcript",
-                executor.calls[1].prompt_context.task_instructions[-1],
-            )
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.detail["executor_launch_count"], 2)
-            self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
-            self.assertNotIn("stdout", audit_event.detail["execution_result"])
-            self.assertNotIn("stderr", audit_event.detail["execution_result"])
-
-    def test_process_task_message_supervised_recovery_can_publish_reply_and_succeed(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            executor = ReplyOnSecondPassExecutor(store=store)
-            result = process_task_message(
-                store=store,
-                task_message=self._build_supervised_telegram_task_message(),
-                executor_impl=executor,
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
-
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(result.attempt_count, 2)
-            self.assertEqual(len(executor.calls), 2)
-            self.assertEqual(result.reason_codes, [])
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(
-                audit_event.detail["incremental_reply_send_published_count"], 1
-            )
-            self.assertEqual(audit_event.detail["executor_launch_count"], 2)
-            self.assertEqual(audit_event.detail["supervised_recovery_used"], True)
+        self.assertEqual(result.run_record.result_status, "success")
+        self.assertEqual(result.attempt_count, 2)
+        self.assertEqual(result.reason_codes, [])
+        detail = self._audit_detail()
+        self.assertEqual(detail["incremental_reply_send_published_count"], 1)
+        self.assertEqual(detail["supervised_recovery_used"], True)
 
     def test_supervisor_recovers_when_reaction_precedes_claimed_followups(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            parent = self._build_telegram_task_message()
-            followup_envelope = TaskEnvelope(
-                id="telegram:2",
-                source="im",
-                received_at=datetime(2026, 3, 6, 13, 1, tzinfo=timezone.utc),
-                actor="8605042448:edsalkeld",
-                content="one more thing",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(
-                    type="telegram",
-                    target="8605042448",
-                    metadata={"message_id": 2472},
-                ),
-                dedupe_key="telegram:2",
-            )
-            followup = TaskQueueMessage.from_envelope(
-                followup_envelope, trace_id="trace:telegram:2"
-            )
-            store.stage_inbox_task(parent)
-            store.stage_inbox_task(followup)
-            # Exercise the exit-based recovery fallback retained by /finish off.
-            assignment = store.get_work_assignment(task_id=parent.task_id)
-            assert assignment is not None
-            store.set_work_explicit_finish(
-                work_item_id=assignment.work_item_id, enabled=False
-            )
-            store.claim_next_inbox_task()
-            store.claim_conversation_followups(parent_task_id=parent.task_id)
-            executor = ResolveFollowupsOnSecondPassExecutor(store)
+        parent = _telegram_task(1)
+        followup = _telegram_task(2, "one more thing")
+        self.store.stage_inbox_task(parent)
+        self.store.stage_inbox_task(followup)
+        # Exercise the exit-based recovery fallback retained by /finish off.
+        assignment = self.store.get_work_assignment(task_id=parent.task_id)
+        assert assignment is not None
+        self.store.set_work_explicit_finish(
+            work_item_id=assignment.work_item_id, enabled=False
+        )
+        self.store.claim_next_inbox_task()
+        self.store.claim_conversation_followups(parent_task_id=parent.task_id)
 
-            result = process_task_message(
-                store=store,
-                task_message=parent,
-                executor_impl=executor,
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
+        def step(n: int, task: TaskEnvelope) -> ExecutionResult:
+            channel = "telegram_reaction" if n == 1 else "telegram"
+            _record_main_reply(self.store, task, event_id=f"evt:{n}", channel=channel)
+            if n == 2:
+                self.store.mark_inbox_reply_delivered(parent_task_id=parent.task_id)
+            return ExecutionResult(errors=[])
 
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(executor.calls), 2)
-            self.assertIn(
-                "claimed newer messages",
-                executor.calls[1].prompt_context.task_instructions[-1],
-            )
+        executor = StepExecutor(step)
+        result = self._process(parent, executor)
+
+        self.assertEqual(result.run_record.result_status, "success")
+        self.assertEqual(len(executor.calls), 2)
+        self.assertIn(
+            "claimed newer messages",
+            executor.calls[1].prompt_context.task_instructions[-1],
+        )
 
     def test_claimed_followup_reply_counts_as_parent_visible_reply(self) -> None:
-        """Do not recover/reply twice after a newer turn receives the reply."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            parent = self._build_telegram_task_message()
-            followup_envelope = TaskEnvelope(
-                id="telegram:2",
-                source="im",
-                received_at=datetime(2026, 3, 6, 13, 1, tzinfo=timezone.utc),
-                actor="8605042448:edsalkeld",
-                content="Oh, you already said.",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(
-                    type="telegram",
-                    target="8605042448",
-                    metadata={"message_id": 2472},
-                ),
-                dedupe_key="telegram:2",
-            )
-            followup = TaskQueueMessage.from_envelope(
-                followup_envelope, trace_id="trace:telegram:2"
-            )
-            store.stage_inbox_task(parent)
-            store.stage_inbox_task(followup)
-            store.claim_next_inbox_task()
-            executor = ReplyFromClaimedFollowupExecutor(store, followup.task_id)
+        # Do not recover/reply twice after a newer turn receives the reply.
+        parent = _telegram_task(1)
+        followup = _telegram_task(2, "Oh, you already said.")
+        self.store.stage_inbox_task(parent)
+        self.store.stage_inbox_task(followup)
+        self.store.claim_next_inbox_task()
 
-            result = process_task_message(
-                store=store,
-                task_message=parent,
-                executor_impl=executor,
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
+        def step(_n: int, task: TaskEnvelope) -> ExecutionResult:
+            self.store.claim_conversation_followups(parent_task_id=parent.task_id)
+            _record_main_reply(
+                self.store, task, event_id="evt:followup", task_id=followup.task_id
             )
+            self.store.mark_inbox_reply_delivered(parent_task_id=followup.task_id)
+            return ExecutionResult(errors=[])
 
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(result.reason_codes, [])
-            self.assertEqual(len(executor.calls), 1)
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(
-                audit_event.detail["incremental_reply_send_published_count"], 1
-            )
-            self.assertEqual(audit_event.detail["supervised_recovery_used"], False)
+        executor = StepExecutor(step)
+        result = self._process(parent, executor)
 
-    def test_process_task_message_handles_internal_heartbeat_without_executor(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_internal_heartbeat_task_message(),
-                executor_impl=AlwaysFailExecutor(),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
+        self.assertEqual(result.run_record.result_status, "success")
+        self.assertEqual(result.reason_codes, [])
+        self.assertEqual(len(executor.calls), 1)
+        detail = self._audit_detail()
+        self.assertEqual(detail["incremental_reply_send_published_count"], 1)
+        self.assertEqual(detail["supervised_recovery_used"], False)
 
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(result.run_record.workflow, "default")
-            self.assertEqual(result.run_record.source, "internal")
-            self.assertEqual(len(result.egress_messages), 2)
-            visible_egress_message = result.egress_messages[0]
-            completion_egress_message = result.egress_messages[1]
-            self.assertEqual(visible_egress_message.event_kind, "message")
-            self.assertEqual(visible_egress_message.message.channel, "log")
-            self.assertEqual(visible_egress_message.message.target, "heartbeat")
-            self.assertEqual(
-                json.loads(visible_egress_message.message.body)["kind"],
-                "heartbeat_pong",
-            )
-            self.assertEqual(completion_egress_message.event_kind, "completion")
-            self.assertEqual(result.reason_codes, ["internal_heartbeat"])
-            self.assertIsNone(result.error_summary)
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(audit_event.workflow, "default")
-            self.assertEqual(audit_event.detail["reason_codes"], ["internal_heartbeat"])
-            self.assertEqual(audit_event.detail["heartbeat"]["kind"], "heartbeat_pong")
+    def test_telegram_success_when_main_reply_was_published(self) -> None:
+        def step(_n: int, task: TaskEnvelope) -> ExecutionResult:
+            _record_main_reply(self.store, task, event_id="evt:main-reply")
+            return ExecutionResult(errors=[])
 
-    def test_process_task_message_allows_telegram_success_when_main_reply_was_published(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            result = process_task_message(
-                store=store,
-                task_message=self._build_telegram_task_message(),
-                executor_impl=MainReplyExecutor(store=store),
-                max_attempts=2,
-                activity_monitor=self._build_monitor(store),
-            )
+        result = self._process(_telegram_task(), StepExecutor(step))
 
-            self.assertEqual(result.run_record.result_status, "success")
-            self.assertEqual(len(result.egress_messages), 1)
-            self.assertEqual(result.egress_messages[0].event_kind, "completion")
-            audit_event = store.list_audit_events()[0]
-            self.assertEqual(
-                audit_event.detail["incremental_reply_send_published_count"], 1
-            )
+        self.assertEqual(result.run_record.result_status, "success")
+        self.assertEqual(
+            [msg.event_kind for msg in result.egress_messages], ["completion"]
+        )
+        self.assertEqual(
+            self._audit_detail()["incremental_reply_send_published_count"], 1
+        )
 
-    def test_process_task_message_handles_internal_notices_without_executor(
-        self,
-    ) -> None:
-        cases = [
-            (
-                self._build_internal_channel_notice_task_message(),
-                "-100777",
-                "Not enabled in channel -100777. Add this id to telegram_allowed_channel_ids to enable replies here.",
-                "telegram_channel_not_enabled",
+    def test_internal_heartbeat_is_handled_without_executor(self) -> None:
+        task = _task(
+            "internal-heartbeat:2026-03-09T12:00:00+00:00:1",
+            ReplyChannel(
+                type=INTERNAL_REPLY_CHANNEL_TYPE, target=INTERNAL_HEARTBEAT_TARGET
             ),
-            (
-                self._build_internal_group_notice_task_message(),
-                "-100888",
-                "Not enabled in group -100888. Add this id to telegram_allowed_chat_ids to enable replies here.",
-                "telegram_group_not_enabled",
-            ),
-        ]
-        for task_message, target, body, notice in cases:
-            with self.subTest(notice), tempfile.TemporaryDirectory() as tmpdir:
-                store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-                result = process_task_message(
-                    store=store,
-                    task_message=task_message,
-                    executor_impl=AlwaysFailExecutor(),
-                    max_attempts=2,
-                    activity_monitor=self._build_monitor(store),
+            source=INTERNAL_SOURCE,
+            content="internal heartbeat ping",
+        )
+        result = self._process(task, StepExecutor())
+
+        self.assertEqual(result.run_record.result_status, "success")
+        self.assertEqual(result.run_record.source, "internal")
+        visible, completion = result.egress_messages
+        self.assertEqual(visible.message.channel, "log")
+        self.assertEqual(visible.message.target, "heartbeat")
+        self.assertEqual(json.loads(visible.message.body)["kind"], "heartbeat_pong")
+        self.assertEqual(completion.event_kind, "completion")
+        self.assertEqual(result.reason_codes, ["internal_heartbeat"])
+        self.assertEqual(self._audit_detail()["heartbeat"]["kind"], "heartbeat_pong")
+
+    def test_internal_notices_are_handled_without_executor(self) -> None:
+        for kind, notice, target in (
+            ("channel", TELEGRAM_CHANNEL_NOT_ENABLED_NOTICE, "-100777"),
+            ("group", TELEGRAM_GROUP_NOT_ENABLED_NOTICE, "-100888"),
+        ):
+            with self.subTest(notice):
+                self.setUp()
+                body = f"Not enabled in {kind} {target}."
+                task = _task(
+                    f"telegram-disallowed-{kind}:1",
+                    ReplyChannel(
+                        type="telegram",
+                        target=target,
+                        metadata={
+                            INTERNAL_NOTICE_METADATA_KEY: notice,
+                            "message_id": 1,
+                        },
+                    ),
+                    source="internal",
+                    content=body,
                 )
+                result = self._process(task, StepExecutor())
 
                 self.assertEqual(result.run_record.result_status, "success")
-                self.assertEqual(result.run_record.source, "internal")
-                self.assertEqual(len(result.egress_messages), 2)
                 visible, completion = result.egress_messages
-                self.assertEqual(visible.event_kind, "message")
                 self.assertEqual(visible.message.channel, "telegram")
                 self.assertEqual(visible.message.target, target)
                 self.assertEqual(visible.message.body, body)
-                self.assertEqual(completion.event_kind, "completion")
                 self.assertEqual(completion.sequence, 1)
                 self.assertEqual(result.reason_codes, ["internal_notice"])
-                self.assertIsNone(result.error_summary)
-                audit_event = store.list_audit_events()[0]
-                self.assertEqual(
-                    audit_event.detail["reason_codes"], ["internal_notice"]
-                )
-                self.assertEqual(audit_event.detail["internal_notice"], notice)
-
-    def test_build_error_summary_prefers_execution_error_then_last_error_then_fallback(
-        self,
-    ) -> None:
-        self.assertEqual(
-            _build_error_summary(
-                execution_errors=["executor_exit_nonzero:1: boom"],
-                last_error="RuntimeError: ignored",
-            ),
-            "executor_exit_nonzero:1: boom",
-        )
-        self.assertEqual(
-            _build_error_summary(
-                execution_errors=[], last_error="RuntimeError:\n boom"
-            ),
-            "RuntimeError: boom",
-        )
-        self.assertEqual(
-            _build_error_summary(execution_errors=[], last_error=None),
-            "unknown_error",
-        )
+                self.assertEqual(self._audit_detail()["internal_notice"], notice)

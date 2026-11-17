@@ -20,35 +20,21 @@ from app.main_reply import (
 )
 from app.models import AttachmentRef, ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
+from app.telegram_text import normalize_telegram_outbound_text
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
 from tests.test_egress_client import READ_TIMEOUT_SECONDS, egress_server
 
-
-class ChannelNormalizationTests(unittest.TestCase):
-    def test_non_telegram_replies_preserve_literal_backslashes(self):
-        text = r"C:\new\table and regex \d+\.\d+"
-        for channel in ("email", "github", "log"):
-            with self.subTest(channel=channel):
-                args = Namespace(
-                    channel=channel,
-                    target="target",
-                    message=text,
-                    telegram_reaction=None,
-                    attachment_path=None,
-                    telegram_topic_id=None,
-                )
-                self.assertEqual(_resolve_reply_messages(args, {})[0].body, text)
-
-    def test_telegram_normalization_remains_enabled(self):
-        args = Namespace(
-            channel="telegram",
-            target="target",
-            message=r"first\nsecond",
-            telegram_reaction=None,
-            attachment_path=None,
-            telegram_topic_id=None,
-        )
-        self.assertEqual(_resolve_reply_messages(args, {})[0].body, "first\nsecond")
+EMAIL_SPEC = {
+    "task_id": "task:email:53",
+    "channel": "email",
+    "target": "alice@example.com",
+    "message": "working on it",
+}
+TELEGRAM_SPEC = {
+    "task_id": "task:telegram:53",
+    "channel": "telegram",
+    "target": "8605042448",
+}
 
 
 class _FakeSubmit:
@@ -71,10 +57,35 @@ class _FakeSubmit:
         return self.status, dict(self.response)
 
 
-def _write_spec(directory: Path, spec: dict[str, object]) -> str:
-    path = directory / "reply-spec.json"
-    path.write_text(json.dumps(spec), encoding="utf-8")
-    return str(path)
+def _run(
+    directory: Path,
+    spec: dict[str, object],
+    submit: object = None,
+    *,
+    config: dict[str, object] | None = None,
+) -> tuple[int, str, str]:
+    spec_path = directory / "reply-spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    env = {}
+    if config is not None:
+        config_path = directory / "worker.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        env[WORKER_CONFIG_PATH_ENV_VAR] = str(config_path)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with (
+        patch("app.main_reply.submit_egress", submit or _FakeSubmit()),
+        patch("sys.stdout", stdout),
+        patch("sys.stderr", stderr),
+        patch("sys.argv", ["main_reply.py", "--spec-file", str(spec_path)]),
+        patch.dict("os.environ", env),
+    ):
+        exit_code = main()
+    return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+def _store(directory: Path) -> tuple[SQLiteStateStore, dict[str, object]]:
+    db_path = str(directory / "worker.db")
+    return SQLiteStateStore(db_path), {"db_path": db_path}
 
 
 def _telegram_task_message(
@@ -102,44 +113,53 @@ def _telegram_task_message(
 
 
 class MainReplyCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_only_telegram_replies_normalize_escape_sequences(self):
+        text = r"C:\new\table and regex \d+\.\d+"
+        for channel in ("email", "github", "log", "telegram"):
+            with self.subTest(channel=channel):
+                args = Namespace(
+                    channel=channel,
+                    target="target",
+                    message=text,
+                    telegram_reaction=None,
+                    attachment_path=None,
+                    telegram_topic_id=None,
+                )
+                self.assertEqual(
+                    _resolve_reply_messages(args, {})[0].body,
+                    normalize_telegram_outbound_text(text)
+                    if channel == "telegram"
+                    else text,
+                )
+
     def test_topic_sends_and_history_use_chosen_destination_not_inbound_topic(self):
-        for topic in (7, 8, None):
+        for topic in (8, None):
             with self.subTest(topic=topic), tempfile.TemporaryDirectory() as tmp:
                 directory = Path(tmp)
-                db_path = directory / "worker.db"
-                config_path = directory / "worker.json"
-                config_path.write_text(json.dumps({"db_path": str(db_path)}))
-                store = SQLiteStateStore(str(db_path))
+                store, config = _store(directory)
                 task = _telegram_task_message(53, content="In topic seven")
                 task.envelope.reply_channel.metadata["message_thread_id"] = 7
                 store.stage_inbox_task(task)
                 for part in (1, 2):
-                    spec = _write_spec(
-                        directory,
-                        {
-                            "task_id": task.task_id,
-                            "channel": "telegram",
-                            "target": "8605042448",
-                            "telegram_topic_id": topic,
-                            "message": f"part {part}",
-                            "event_id": f"evt:part:{part}",
-                        },
-                    )
                     metadata = {"message_id": 9000 + part}
                     if topic is not None:
                         metadata["message_thread_id"] = topic
                     submit = _FakeSubmit(
                         response={"status": "dispatched", "metadata": metadata}
                     )
-                    with (
-                        patch("app.main_reply.submit_egress", submit),
-                        patch("sys.stdout", io.StringIO()),
-                        patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                        patch.dict(
-                            "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                        ),
-                    ):
-                        self.assertEqual(main(), 0)
+                    spec = {
+                        **TELEGRAM_SPEC,
+                        "task_id": task.task_id,
+                        "telegram_topic_id": topic,
+                        "message": f"part {part}",
+                        "event_id": f"evt:part:{part}",
+                    }
+                    self.assertEqual(_run(directory, spec, submit, config=config)[0], 0)
                     self.assertEqual(
                         submit.calls[0][1]["message"].get("metadata", {}),
                         {"message_thread_id": topic} if topic is not None else {},
@@ -157,157 +177,90 @@ class MainReplyCliTests(unittest.TestCase):
                 )
                 self.assertEqual(other, [])
 
-    def test_topic_validation_prevents_accidental_general_send(self):
-        for topic in (True, 0, -1, 2.5, "oops"):
-            with self.subTest(topic=topic), tempfile.TemporaryDirectory() as tmp:
-                spec = _write_spec(
-                    Path(tmp),
-                    {
-                        "task_id": "task:telegram:1",
-                        "channel": "telegram",
-                        "target": "-100",
-                        "telegram_topic_id": topic,
-                        "message": "hello",
-                    },
-                )
-                with patch("sys.argv", ["main_reply.py", "--spec-file", spec]):
-                    with self.assertRaisesRegex(ValueError, "positive integer"):
-                        main()
+    def test_invalid_specs_are_rejected_before_submission(self):
+        cases = [
+            (
+                {**TELEGRAM_SPEC, "message": "hi", "telegram_topic_id": topic},
+                "positive integer",
+            )
+            for topic in (True, 0, "oops")
+        ] + [
+            ({**EMAIL_SPEC, "task_id": "email:53"}, "envelope_id is required"),
+            ({**EMAIL_SPEC, "bogus": "nope"}, "unknown fields"),
+            (
+                {**TELEGRAM_SPEC, "telegram_reaction": "🔎", "telegram_message_id": 1},
+                "telegram_reaction '🔎' is not supported by Telegram",
+            ),
+        ]
+        for spec, error in cases:
+            with self.subTest(spec=spec):
+                submit = _FakeSubmit()
+                with self.assertRaisesRegex(ValueError, error):
+                    _run(self.dir, spec, submit)
+                self.assertEqual(submit.calls, [])
 
     def test_reaction_only_does_not_hide_task_after_restart(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            directory = Path(tmpdir)
-            db_path = directory / "worker.db"
-            config_path = directory / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            store = SQLiteStateStore(str(db_path))
-            task = _telegram_task_message(53, content="Question")
-            store.stage_inbox_task(task)
-            store.claim_next_inbox_task()
-            spec = _write_spec(
-                directory,
-                {
-                    "task_id": task.task_id,
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "telegram_reaction": "👍",
-                    "telegram_message_id": 53,
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", _FakeSubmit()),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                self.assertEqual(main(), 0)
+        store, config = _store(self.dir)
+        task = _telegram_task_message(53, content="Question")
+        store.stage_inbox_task(task)
+        store.claim_next_inbox_task()
+        spec = {
+            **TELEGRAM_SPEC,
+            "telegram_reaction": "👍",
+            "telegram_message_id": 53,
+        }
+        self.assertEqual(_run(self.dir, spec, config=config)[0], 0)
 
-            store.recover_inbox_tasks()
-            claimed = store.claim_next_inbox_task()
-            assert claimed is not None
-            self.assertEqual(claimed.task_message.task_id, task.task_id)
-            self.assertEqual(claimed.state, "active")
+        store.recover_inbox_tasks()
+        claimed = store.claim_next_inbox_task()
+        assert claimed is not None
+        self.assertEqual(claimed.task_message.task_id, task.task_id)
+        self.assertEqual(claimed.state, "active")
 
     def test_telegram_reply_claims_followups_and_withholds_stale_content(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            directory = Path(tmpdir)
-            db_path = directory / "state.db"
-            config_path = directory / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            store = SQLiteStateStore(str(db_path))
-            parent = _telegram_task_message(53, content="Initial question")
-            followup = _telegram_task_message(
-                54,
-                content="[document attached: details.pdf]",
-                attachments=[
-                    AttachmentRef(uri="file:///tmp/details.pdf", name="details.pdf")
-                ],
-            )
-            store.stage_inbox_task(parent)
-            store.stage_inbox_task(followup)
-            store.claim_next_inbox_task()
-            spec = _write_spec(
-                directory,
-                {
-                    "task_id": parent.task_id,
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "A now-stale answer",
-                },
-            )
-            submit = _FakeSubmit()
-            stdout = io.StringIO()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", stdout),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(exit_code, EXIT_FOLLOWUPS)
-            self.assertEqual(submit.calls, [])
-            self.assertEqual(payload["status"], "follow_ups_claimed")
-            self.assertEqual(payload["follow_ups"][0]["task_id"], followup.task_id)
-            self.assertEqual(
-                payload["follow_ups"][0]["attachments"],
-                [{"uri": "file:///tmp/details.pdf", "name": "details.pdf"}],
-            )
-            self.assertTrue(
-                store.has_unresolved_attached_followups(parent_task_id=parent.task_id)
-            )
-
-            # A later call has already seen the attached turns, so it may send
-            # the current response and atomically close the whole bundle.
-            stdout = io.StringIO()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", stdout),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                second_exit_code = main()
-
-            self.assertEqual(second_exit_code, 0)
-            self.assertEqual(len(submit.calls), 1)
-            self.assertEqual(
-                store.get_inbox_task(task_id=parent.task_id).state, "closing"
-            )
-            self.assertEqual(
-                store.get_inbox_task(task_id=followup.task_id).state, "closing"
-            )
-
-    def test_spec_file_posts_unsequenced_incremental_v2_payload(self) -> None:
+        store, config = _store(self.dir)
+        parent = _telegram_task_message(53, content="Initial question")
+        followup = _telegram_task_message(
+            54,
+            content="[document attached: details.pdf]",
+            attachments=[
+                AttachmentRef(uri="file:///tmp/details.pdf", name="details.pdf")
+            ],
+        )
+        store.stage_inbox_task(parent)
+        store.stage_inbox_task(followup)
+        store.claim_next_inbox_task()
+        spec = {**TELEGRAM_SPEC, "message": "A now-stale answer"}
         submit = _FakeSubmit()
-        stdout = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                    "event_id": "evt:custom:1",
-                },
+        exit_code, stdout, _ = _run(self.dir, spec, submit, config=config)
+
+        payload = json.loads(stdout)
+        self.assertEqual(exit_code, EXIT_FOLLOWUPS)
+        self.assertEqual(submit.calls, [])
+        self.assertEqual(payload["status"], "follow_ups_claimed")
+        self.assertEqual(payload["follow_ups"][0]["task_id"], followup.task_id)
+        self.assertEqual(
+            payload["follow_ups"][0]["attachments"],
+            [{"uri": "file:///tmp/details.pdf", "name": "details.pdf"}],
+        )
+        self.assertTrue(
+            store.has_unresolved_attached_followups(parent_task_id=parent.task_id)
+        )
+
+        # A later call has already seen the attached turns, so it may send
+        # the current response and atomically close the whole bundle.
+        self.assertEqual(_run(self.dir, spec, submit, config=config)[0], 0)
+        self.assertEqual(len(submit.calls), 1)
+        for task in (parent, followup):
+            self.assertEqual(
+                store.get_inbox_task(task_id=task.task_id).state, "closing"
             )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", stdout),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
+
+    def test_posts_unsequenced_incremental_v2_payload_and_records_activity(self):
+        submit = _FakeSubmit()
+        db_path = str(self.dir / "state.db")
+        spec = {**EMAIL_SPEC, "event_id": "evt:custom:1"}
+        exit_code, stdout, _ = _run(self.dir, spec, submit, config={"db_path": db_path})
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(submit.calls), 1)
@@ -322,432 +275,106 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(payload["message"]["body"], "working on it")
         self.assertNotIn("sequence", payload)
 
-        printed = json.loads(stdout.getvalue())
+        printed = json.loads(stdout)
         self.assertEqual(printed["status"], "dispatched")
         self.assertEqual(printed["http_status"], 200)
 
-    def test_delivered_telegram_reply_is_recorded_with_returned_message_id(
+        activity = SQLiteStateStore(db_path).list_recent_worker_activity(
+            limit=10, include_internal=True
+        )
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(activity[0]["task_id"], "task:email:53")
+        self.assertEqual(activity[0]["phase"], "egress_incremental")
+        self.assertEqual(activity[0]["summary"], "incremental egress to email")
+        self.assertEqual(activity[0]["detail"]["event_id"], "evt:custom:1")
+
+    def test_delivered_telegram_reply_closes_unclaimed_task_and_records_history(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            directory = Path(tmpdir)
-            db_path = directory / "worker.db"
-            config_path = directory / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            store = SQLiteStateStore(str(db_path))
-            task = _telegram_task_message(53, content="Question")
-            store.stage_inbox_task(task)
-            store.claim_next_inbox_task()
-            spec = _write_spec(
-                directory,
-                {
-                    "task_id": task.task_id,
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "Recorded answer",
-                    "event_id": "evt:answer:1",
-                },
-            )
-            submit = _FakeSubmit(
-                response={
-                    "status": "dispatched",
-                    "metadata": {"message_id": 9001},
-                }
-            )
-            stdout = io.StringIO()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", stdout),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-            self.assertEqual(exit_code, 0)
-            turns = store.list_telegram_history_around(
-                target="8605042448", message_id=9001, before=1, after=0
-            )
-            self.assertEqual(turns[-1].role, "assistant")
-            self.assertEqual(turns[-1].content, "Recorded answer")
-            self.assertEqual(turns[-1].event_id, "evt:answer:1")
-            self.assertEqual(json.loads(stdout.getvalue())["telegram_message_id"], 9001)
-
-    def test_delivered_reply_closes_a_task_that_has_not_been_claimed(self) -> None:
-        """A direct final reply must prevent a later worker replay."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            directory = Path(tmpdir)
-            db_path = directory / "worker.db"
-            config_path = directory / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            store = SQLiteStateStore(str(db_path))
-            task = _telegram_task_message(54, content="Question")
-            store.stage_inbox_task(task)
-            spec = _write_spec(
-                directory,
-                {
-                    "task_id": task.task_id,
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "Direct final answer",
-                },
-            )
-
-            with (
-                patch("app.main_reply.submit_egress", _FakeSubmit()),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-            self.assertEqual(exit_code, 0)
-            inbox_task = store.get_inbox_task(task_id=task.task_id)
-            assert inbox_task is not None
-            self.assertEqual(inbox_task.state, "closing")
-
-    def test_spec_file_preserves_shell_dangerous_text_verbatim(self) -> None:
-        # The whole point of the spec file: prose that would be mangled as a
-        # shell argument (backticks, $, quotes, newlines) arrives intact.
-        dangerous = 'Use `nix shell` for $HOME, say "hi".\nSecond line.'
-        submit = _FakeSubmit()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": dangerous,
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
+        # A direct final reply must prevent a later worker replay.
+        store, config = _store(self.dir)
+        task = _telegram_task_message(53, content="Question")
+        store.stage_inbox_task(task)
+        spec = {
+            **TELEGRAM_SPEC,
+            "message": "Recorded answer",
+            "event_id": "evt:answer:1",
+        }
+        submit = _FakeSubmit(
+            response={"status": "dispatched", "metadata": {"message_id": 9001}}
+        )
+        exit_code, stdout, _ = _run(self.dir, spec, submit, config=config)
 
         self.assertEqual(exit_code, 0)
-        _, payload = submit.calls[0]
-        self.assertEqual(payload["message"]["body"], dangerous)
+        self.assertEqual(store.get_inbox_task(task_id=task.task_id).state, "closing")
+        turns = store.list_telegram_history_around(
+            target="8605042448", message_id=9001, before=1, after=0
+        )
+        self.assertEqual(turns[-1].role, "assistant")
+        self.assertEqual(turns[-1].content, "Recorded answer")
+        self.assertEqual(turns[-1].event_id, "evt:answer:1")
+        self.assertEqual(json.loads(stdout)["telegram_message_id"], 9001)
 
-    def test_inline_reply_flags_are_rejected(self) -> None:
-        # Replies only come from --spec-file, so passing the body or routing on
-        # the command line fails hard rather than risking a shell-mangled send.
-        with patch(
-            "sys.argv",
-            [
-                "main_reply.py",
-                "task:email:53",
-                "--channel",
-                "email",
-                "--target",
-                "alice@example.com",
-                "--message",
-                "inline text",
-            ],
-        ):
-            with self.assertRaises(SystemExit) as raised:
-                main()
-        self.assertNotEqual(raised.exception.code, 0)
-
-    def test_spec_file_uses_handler_egress_url_from_worker_config(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"handler_egress_url": "http://10.0.0.5:9999/egress"}),
-                encoding="utf-8",
-            )
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                },
-            )
-            submit = _FakeSubmit()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(submit.calls[0][0], "http://10.0.0.5:9999/egress")
-
-    def test_dropped_exit_and_stays_quiet_in_db(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "state.db"
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "here is the screenshot",
-                },
-            )
-            submit = _FakeSubmit(
-                status=422,
-                response={"status": "dropped", "reason": "telegram_attachment_missing"},
-            )
-            stderr = io.StringIO()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stderr", stderr),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-            activity = SQLiteStateStore(str(db_path)).list_recent_worker_activity(
-                limit=10,
-                include_internal=True,
-            )
+    def test_dropped_exit_has_no_retry_id_and_stays_quiet_in_db(self) -> None:
+        db_path = str(self.dir / "state.db")
+        submit = _FakeSubmit(
+            status=422,
+            response={"status": "dropped", "reason": "telegram_attachment_missing"},
+        )
+        spec = {**TELEGRAM_SPEC, "message": "here is the screenshot"}
+        exit_code, _, stderr = _run(self.dir, spec, submit, config={"db_path": db_path})
 
         self.assertEqual(exit_code, EXIT_DROPPED)
-        printed = json.loads(stderr.getvalue())
+        printed = json.loads(stderr)
         self.assertEqual(printed["status"], "dropped")
         self.assertEqual(printed["reason"], "telegram_attachment_missing")
+        self.assertNotIn("retry_event_id", printed)
         # A drop is not a delivery, so it must not be recorded as one.
+        activity = SQLiteStateStore(db_path).list_recent_worker_activity(
+            limit=10, include_internal=True
+        )
         self.assertEqual(activity, [])
 
-    def test_transient_exit_when_handler_unreachable(self) -> None:
-        submit = _FakeSubmit(
-            status=0, response={"reason": "egress endpoint unreachable"}
-        )
-        stderr = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                },
+    def test_handler_transport_failure_after_send_is_transient(self) -> None:
+        with egress_server("close_mid_body") as (url, received):
+            exit_code, _, stderr = _run(
+                self.dir,
+                EMAIL_SPEC,
+                partial(submit_egress, timeout_seconds=READ_TIMEOUT_SECONDS),
+                config={"handler_egress_url": url},
             )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stderr", stderr),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
 
         self.assertEqual(exit_code, EXIT_TRANSIENT)
-
-    def test_handler_transport_failure_after_send_is_transient(self) -> None:
-        stderr = io.StringIO()
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            egress_server("close_mid_body") as (url, received),
-        ):
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"handler_egress_url": url}), encoding="utf-8"
-            )
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                },
-            )
-            with (
-                patch(
-                    "app.main_reply.submit_egress",
-                    partial(submit_egress, timeout_seconds=READ_TIMEOUT_SECONDS),
-                ),
-                patch("sys.stderr", stderr),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-            self.assertEqual(exit_code, EXIT_TRANSIENT)
-            printed = json.loads(stderr.getvalue())
-            self.assertEqual(printed["http_status"], 0)
-            self.assertEqual(printed["retry_event_id"], received[0]["event_id"])
+        printed = json.loads(stderr)
+        self.assertEqual(printed["http_status"], 0)
+        self.assertEqual(printed["retry_event_id"], received[0]["event_id"])
 
     def test_transient_retry_event_id_is_the_base_for_combined_replies(self) -> None:
         submit = _FakeSubmit(status=0, response={"reason": "transport error"})
-        stderr = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "I found the problem.",
-                    "telegram_reaction": "👀",
-                    "telegram_message_id": 123,
-                    "event_id": "evt:custom:both",
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stderr", stderr),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
+        spec = {
+            **TELEGRAM_SPEC,
+            "message": "I found the problem.",
+            "telegram_reaction": "👀",
+            "telegram_message_id": 123,
+            "event_id": "evt:custom:both",
+        }
+        exit_code, _, stderr = _run(self.dir, spec, submit)
 
         self.assertEqual(exit_code, EXIT_TRANSIENT)
-        printed = json.loads(stderr.getvalue())
+        printed = json.loads(stderr)
         self.assertEqual(printed["retry_event_id"], "evt:custom:both")
         self.assertEqual(len(printed["results"]), 2)
 
-    def test_dropped_reply_has_no_retry_event_id(self) -> None:
-        submit = _FakeSubmit(status=422, response={"status": "dropped"})
-        stderr = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stderr", stderr),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
-
-        self.assertEqual(exit_code, EXIT_DROPPED)
-        self.assertNotIn("retry_event_id", json.loads(stderr.getvalue()))
-
-    def test_requires_envelope_id_for_non_prefixed_task_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                },
-            )
-            with patch("sys.argv", ["main_reply.py", "--spec-file", spec]):
-                with self.assertRaisesRegex(ValueError, "envelope_id is required"):
-                    main()
-
-    def test_spec_file_rejects_unknown_fields(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "hi",
-                    "bogus": "nope",
-                },
-            )
-            with patch("sys.argv", ["main_reply.py", "--spec-file", spec]):
-                with self.assertRaisesRegex(ValueError, "unknown fields"):
-                    main()
-
-    def test_reaction_using_explicit_message_id(self) -> None:
-        submit = _FakeSubmit()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "telegram_reaction": "👍",
-                    "telegram_message_id": 123,
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
-
-        self.assertEqual(exit_code, 0)
-        _, payload = submit.calls[0]
-        self.assertEqual(payload["message"]["channel"], "telegram_reaction")
-        self.assertEqual(payload["message"]["body"], "👍")
-        self.assertEqual(payload["message"]["metadata"], {"message_id": 123})
-
-    def test_unsupported_reaction_is_rejected_before_handler_submission(self) -> None:
-        submit = _FakeSubmit()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "telegram_reaction": "🔎",
-                    "telegram_message_id": 123,
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    "telegram_reaction '🔎' is not supported by Telegram",
-                ):
-                    main()
-
-        self.assertEqual(submit.calls, [])
-
     def test_spec_file_sends_reaction_and_message(self) -> None:
         submit = _FakeSubmit()
-        stdout = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "I found the problem.",
-                    "telegram_reaction": "👀",
-                    "telegram_message_id": 123,
-                    "event_id": "evt:custom:both",
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", stdout),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
+        spec = {
+            **TELEGRAM_SPEC,
+            "message": "I found the problem.",
+            "telegram_reaction": "👀",
+            "telegram_message_id": 123,
+            "event_id": "evt:custom:both",
+        }
+        exit_code, stdout, _ = _run(self.dir, spec, submit)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(submit.calls), 2)
@@ -756,11 +383,11 @@ class MainReplyCliTests(unittest.TestCase):
         self.assertEqual(reaction["event_id"], "evt:custom:both:reaction")
         self.assertEqual(reaction["message"]["channel"], "telegram_reaction")
         self.assertEqual(reaction["message"]["body"], "👀")
+        self.assertEqual(reaction["message"]["metadata"], {"message_id": 123})
         self.assertEqual(message["event_id"], "evt:custom:both:message")
         self.assertEqual(message["message"]["channel"], "telegram")
         self.assertEqual(message["message"]["body"], "I found the problem.")
-        printed = json.loads(stdout.getvalue())
-        self.assertEqual(len(printed["results"]), 2)
+        self.assertEqual(len(json.loads(stdout)["results"]), 2)
 
     def test_combined_reply_attempts_message_when_reaction_is_dropped(self) -> None:
         class _ReactionDropSubmit(_FakeSubmit):
@@ -774,148 +401,38 @@ class MainReplyCliTests(unittest.TestCase):
                 return 200, {"status": "dispatched", "reason": ""}
 
         submit = _ReactionDropSubmit()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "The answer still gets sent.",
-                    "telegram_reaction": "👀",
-                    "telegram_message_id": 123,
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stderr", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
-
-        self.assertEqual(exit_code, EXIT_DROPPED)
+        spec = {
+            **TELEGRAM_SPEC,
+            "message": "The answer still gets sent.",
+            "telegram_reaction": "👀",
+            "telegram_message_id": 123,
+        }
+        self.assertEqual(_run(self.dir, spec, submit)[0], EXIT_DROPPED)
         self.assertEqual(len(submit.calls), 2)
         self.assertEqual(submit.calls[1][1]["message"]["channel"], "telegram")
 
-    def test_reaction_via_spec_file_uses_inbound_message_id_from_worker_inbox(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "state.db"
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            store = SQLiteStateStore(str(db_path))
-            envelope = TaskEnvelope(
-                id="telegram:53",
-                source="im",
-                received_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc),
-                actor="8605042448:edsalkeld",
-                content="hello",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(
-                    type="telegram",
-                    target="8605042448",
-                    metadata={"message_id": 456},
-                ),
-                dedupe_key="telegram:53",
-            )
-            store.stage_inbox_task(
-                TaskQueueMessage.from_envelope(envelope, trace_id="trace:telegram:53")
-            )
-
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "telegram_reaction": "👍",
-                },
-            )
-            submit = _FakeSubmit()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-        self.assertEqual(exit_code, 0)
-        _, payload = submit.calls[0]
-        self.assertEqual(payload["message"]["metadata"], {"message_id": 456})
+    def test_reaction_uses_inbound_message_id_from_worker_inbox(self) -> None:
+        store, config = _store(self.dir)
+        task = _telegram_task_message(53, content="hello")
+        task.envelope.reply_channel.metadata["message_id"] = 456
+        store.stage_inbox_task(task)
+        submit = _FakeSubmit()
+        spec = {**TELEGRAM_SPEC, "telegram_reaction": "👍"}
+        self.assertEqual(_run(self.dir, spec, submit, config=config)[0], 0)
+        self.assertEqual(submit.calls[0][1]["message"]["metadata"], {"message_id": 456})
 
     def test_spec_file_attachment_message(self) -> None:
         submit = _FakeSubmit()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            attachment_path = Path(tmpdir) / "menu.pdf"
-            attachment_path.write_bytes(b"%PDF-1.4\n")
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:telegram:53",
-                    "channel": "telegram",
-                    "target": "8605042448",
-                    "message": "This week's menu",
-                    "attachment_path": str(attachment_path),
-                    "attachment_name": "menu.pdf",
-                },
-            )
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-            ):
-                exit_code = main()
-
-        self.assertEqual(exit_code, 0)
-        _, payload = submit.calls[0]
-        self.assertEqual(payload["message"]["body"], "This week's menu")
-        self.assertEqual(payload["message"]["attachment"]["name"], "menu.pdf")
-        self.assertEqual(
-            payload["message"]["attachment"]["uri"], attachment_path.as_uri()
-        )
-
-    def test_records_worker_activity_on_delivery(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "state.db"
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            spec = _write_spec(
-                Path(tmpdir),
-                {
-                    "task_id": "task:email:53",
-                    "channel": "email",
-                    "target": "alice@example.com",
-                    "message": "working on it",
-                    "event_id": "evt:custom:1",
-                },
-            )
-            submit = _FakeSubmit()
-            with (
-                patch("app.main_reply.submit_egress", submit),
-                patch("sys.stdout", io.StringIO()),
-                patch("sys.argv", ["main_reply.py", "--spec-file", spec]),
-                patch.dict(
-                    "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)}
-                ),
-            ):
-                exit_code = main()
-
-            activity = SQLiteStateStore(str(db_path)).list_recent_worker_activity(
-                limit=10,
-                include_internal=True,
-            )
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(len(activity), 1)
-        self.assertEqual(activity[0]["task_id"], "task:email:53")
-        self.assertEqual(activity[0]["phase"], "egress_incremental")
-        self.assertEqual(activity[0]["summary"], "incremental egress to email")
-        self.assertEqual(activity[0]["detail"]["event_id"], "evt:custom:1")
+        attachment_path = self.dir / "menu.pdf"
+        attachment_path.write_bytes(b"%PDF-1.4\n")
+        spec = {
+            **TELEGRAM_SPEC,
+            "message": "This week's menu",
+            "attachment_path": str(attachment_path),
+            "attachment_name": "menu.pdf",
+        }
+        self.assertEqual(_run(self.dir, spec, submit)[0], 0)
+        message = submit.calls[0][1]["message"]
+        self.assertEqual(message["body"], "This week's menu")
+        self.assertEqual(message["attachment"]["name"], "menu.pdf")
+        self.assertEqual(message["attachment"]["uri"], attachment_path.as_uri())

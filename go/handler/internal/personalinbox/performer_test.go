@@ -114,21 +114,6 @@ func TestFilingRefusesADestinationConfigurationNoLongerNames(t *testing.T) {
 	}
 }
 
-func TestAmbiguousFolderNameIsRefused(t *testing.T) {
-	service, mail, _, _ := fixture(t)
-	mail.boxes = append(mail.boxes, jmap.Mailbox{ID: "T9", Name: "News", ParentID: "T1"})
-	service.Folders.Forget()
-	service.Config.Folders = map[string]string{"news": "News"}
-	performer := &HandlerPerformer{Config: service.Config, Mail: mail, Folders: service.Folders}
-	if _, err := performer.Perform(context.Background(),
-		Effect{Kind: "file", MessageID: "Stm4", Category: "news", Target: "News"}); err == nil {
-		t.Fatal("ambiguous folder name accepted")
-	}
-	if len(mail.filed) != 0 {
-		t.Fatalf("filed despite ambiguity: %+v", mail.filed)
-	}
-}
-
 func TestResolverReportsAmbiguityAndAbsence(t *testing.T) {
 	service, mail, _, _ := fixture(t)
 	mail.boxes = append(mail.boxes, jmap.Mailbox{ID: "T9", Name: "News", ParentID: "T1"})

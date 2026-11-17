@@ -18,6 +18,14 @@ from app.state import SQLiteStateStore
 from app.worker.activity import WorkerActivityMonitor, start_worker_activity_server
 
 
+def _get(port: int, path: str):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as response:
+        body = response.read().decode("utf-8")
+    return (
+        body if response.headers.get_content_type() == "text/html" else json.loads(body)
+    )
+
+
 class WorkerActivityTests(unittest.TestCase):
     def _build_task_message(self, content: str = "hello") -> TaskQueueMessage:
         envelope = TaskEnvelope(
@@ -167,58 +175,38 @@ class WorkerActivityTests(unittest.TestCase):
             )
             port = server.server.server_address[1]
             try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/activity.json"
-                ) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                payload = _get(port, "/activity.json")
                 self.assertEqual(payload["current_executor"]["active"], False)
                 self.assertIsNone(payload["current_run"])
                 self.assertEqual(
                     payload["recent_activity"][0]["phase"], "task_finished"
                 )
 
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as response:
-                    html_body = response.read().decode("utf-8")
-                self.assertIn("Work items", html_body)
+                html_body = _get(port, "/")
                 self.assertIn("/api/items", html_body)
-                self.assertIn("viewport", html_body)
 
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/api/items"
-                ) as response:
-                    items = json.loads(response.read().decode("utf-8"))
+                items = _get(port, "/api/items")
                 self.assertEqual(items["items"][0]["run_count"], 1)
                 self.assertEqual(
                     items["items"][0]["work_item_id"], "item_legacy_general"
                 )
 
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/api/items/item_legacy_general/runs"
-                ) as response:
-                    item_runs = json.loads(response.read().decode("utf-8"))
+                item_runs = _get(port, "/api/items/item_legacy_general/runs")
                 self.assertEqual(item_runs["runs"][0]["run_id"], run_record.run_id)
                 self.assertEqual(item_runs["runs"][0]["preview"], full_request[:240])
                 self.assertNotIn("request_content", item_runs["runs"][0])
 
                 encoded_run_id = quote(run_record.run_id, safe="")
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/runs/{encoded_run_id}"
-                ) as response:
-                    detail_html = response.read().decode("utf-8")
+                detail_html = _get(port, f"/runs/{encoded_run_id}")
                 self.assertIn("/api/runs/", detail_html)
-                self.assertIn("Follow output", detail_html)
-                self.assertIn("Command started", detail_html)
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/api/runs/{encoded_run_id}"
-                ) as response:
-                    header = json.loads(response.read().decode("utf-8"))
+                header = _get(port, f"/api/runs/{encoded_run_id}")
                 self.assertEqual(header["task_id"], task_message.task_id)
                 self.assertEqual(header["preview"], full_request[:240])
                 self.assertEqual(header["request"], full_request)
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/api/tasks/{quote(task_message.task_id, safe='')}/events?after=0"
-                ) as response:
-                    live_events = json.loads(response.read().decode("utf-8"))
+                live_events = _get(
+                    port,
+                    f"/api/tasks/{quote(task_message.task_id, safe='')}/events?after=0",
+                )
                 self.assertEqual(
                     live_events["events"][0]["detail"]["request"], full_request
                 )
@@ -244,33 +232,20 @@ class WorkerActivityTests(unittest.TestCase):
             )
             port = server.server.server_address[1]
             try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/activity.json"
-                ) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                payload = _get(port, "/activity.json")
                 self.assertEqual(
                     payload["current_run"]["task_id"], task_message.task_id
                 )
                 self.assertEqual(payload["current_run"]["event_count"], 3)
 
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/tasks/task%3Atelegram%3A1"
-                ) as response:
-                    html_body = response.read().decode("utf-8")
+                html_body = _get(port, "/tasks/task%3Atelegram%3A1")
                 self.assertIn("Live session", html_body)
-                self.assertIn("Follow output", html_body)
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/api/tasks/task%3Atelegram%3A1/events?after=2"
-                ) as response:
-                    events = json.loads(response.read().decode("utf-8"))
+                events = _get(port, "/api/tasks/task%3Atelegram%3A1/events?after=2")
                 self.assertEqual(
                     [event["phase"] for event in events["events"]], ["executor_stdout"]
                 )
                 self.assertTrue(events["active"])
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/api/items/item_legacy_general/runs"
-                ) as response:
-                    item = json.loads(response.read().decode("utf-8"))
+                item = _get(port, "/api/items/item_legacy_general/runs")
                 self.assertEqual(
                     item["active_executors"][0]["task_id"], task_message.task_id
                 )
@@ -301,5 +276,3 @@ class WorkerActivityTests(unittest.TestCase):
             _extract_current_message("Subject: bounce\n\nbody"),
             "Subject: bounce\n\nbody",
         )
-        self.assertEqual(_extract_current_message(""), "")
-        self.assertEqual(_extract_current_message(None), "")

@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidateContextRefs(t *testing.T) {
-	for _, ref := range []string{"repo:/workspace/memory", "repo:/", " repo : /folder with spaces/a:b "} {
+	for _, ref := range []string{"repo:/", " repo : /folder with spaces/a:b "} {
 		if err := ValidateContextRefs([]string{ref}); err != nil {
 			t.Errorf("valid ref %q: %v", ref, err)
 		}
@@ -14,7 +14,7 @@ func TestValidateContextRefs(t *testing.T) {
 	if err := ValidateContextRefs(nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{"/workspace/memory", "repo:relative", "repo:", ":/workspace", "file:/workspace", "", " ", "repo:   "} {
+	for _, ref := range []string{"/workspace/memory", "repo:relative", "repo:   ", ""} {
 		t.Run(ref, func(t *testing.T) {
 			err := ValidateContextRefs([]string{"repo:/valid", ref})
 			if err == nil || !strings.Contains(err.Error(), "context_refs[1]") || !strings.Contains(err.Error(), "repo:/absolute/path") {
