@@ -51,7 +51,7 @@ func TestGatewayOnlyForwardsSupportedRoutesAndMethods(t *testing.T) {
 		method, path string
 		status       int
 	}{
-		{"POST", "/api/worker/items", 405}, {"GET", "/api/handler/egress", 404}, {"POST", "/api/handler/inbox", 405}, {"GET", "/api/worker/metrics", 404}, {"GET", "/api/handler/schedules/extra/nested", 404}, {"DELETE", "/api/handler/reminders", 405},
+		{"POST", "/api/worker/items", 405}, {"GET", "/api/handler/egress", 404}, {"POST", "/api/handler/inbox", 405}, {"GET", "/api/handler/egress-metrics", 404}, {"POST", "/api/worker/runs", 405}, {"DELETE", "/api/worker/dead-letters", 405}, {"POST", "/api/handler/metrics", 405}, {"PUT", "/api/worker/metrics", 405}, {"GET", "/api/worker/runs/a/b", 404}, {"GET", "/api/worker/dead-letters/1", 404}, {"GET", "/api/handler/schedules/extra/nested", 404}, {"DELETE", "/api/handler/reminders", 405},
 	} {
 		request, _ := http.NewRequest(tc.method, server.URL+tc.path, nil)
 		response, err := server.Client().Do(request)
@@ -122,7 +122,7 @@ func TestGatewayUnavailableAndFrontendDeepLinks(t *testing.T) {
 		path   string
 		status int
 		body   string
-	}{{"/api/worker/items", 502, "Service unavailable"}, {"/items/item_a", 200, "Chatting platform"}, {"/runs/run%3Aone", 200, "Chatting platform"}, {"/assets/app.js", 200, "console.log"}, {"/assets/missing.js", 404, "404"}, {"/secrets.json", 404, "404"}} {
+	}{{"/api/worker/items", 502, "Service unavailable"}, {"/items/item_a", 200, "Chatting platform"}, {"/runs/run%3Aone", 200, "Chatting platform"}, {"/runs", 200, "Chatting platform"}, {"/system", 200, "Chatting platform"}, {"/assets/app.js", 200, "console.log"}, {"/assets/missing.js", 404, "404"}, {"/secrets.json", 404, "404"}} {
 		response, err := server.Client().Get(server.URL + tc.path)
 		if err != nil {
 			t.Fatal(err)
@@ -228,5 +228,40 @@ func TestGatewayPreservesEncodedSlashesInsideWorkerIDs(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != 200 {
 		t.Fatalf("encoded deep link: %d", response.StatusCode)
+	}
+}
+
+func TestGatewayRewritesRunsDeadLettersAndMetricsRoutes(t *testing.T) {
+	var seen []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.RequestURI())
+		if r.URL.Path == "/metrics" {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			_, _ = w.Write([]byte("chatting_up 1\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	server := platformServer(t, upstream.URL)
+	for _, tc := range []struct{ path, upstream string }{
+		{"/api/worker/runs?limit=50&status=dead_letter&source=cron&since=2026-11-17T00%3A00%3A00Z", "/api/runs?limit=50&status=dead_letter&source=cron&since=2026-11-17T00%3A00%3A00Z"},
+		{"/api/worker/dead-letters?limit=20", "/api/dead-letters?limit=20"},
+		{"/api/worker/metrics", "/metrics"},
+		{"/api/handler/metrics", "/metrics"},
+	} {
+		seen = nil
+		response, err := server.Client().Get(server.URL + tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode != 200 || len(seen) != 1 || seen[0] != tc.upstream {
+			t.Errorf("%s: status %d, upstream %v want %s", tc.path, response.StatusCode, seen, tc.upstream)
+		}
+		if tc.upstream == "/metrics" && (!strings.HasPrefix(response.Header.Get("Content-Type"), "text/plain") || string(body) != "chatting_up 1\n") {
+			t.Errorf("%s: metrics text not passed through: %q %q", tc.path, response.Header.Get("Content-Type"), body)
+		}
 	}
 }

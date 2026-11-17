@@ -77,7 +77,13 @@ The fixture handler listens on loopback port 19464, and the worker on 19465. Bot
 support `--port` and `--empty`. The handler also accepts `--no-inbox` to
 check the optional-integration state. They use real APIs and stores, but seed example
 work items, schedules, reminders and inbox decisions. No integrations or
-executors are started. Start the platform with a temporary config:
+executors are started. Pass `--rich` to both to judge density against realistic
+volume: about 40 work items and 200 runs over 14 days with failures, dead
+letters, token usage, three live executors and one task with over 300 events on
+the worker; 15 versioned schedules, 30 reminders (two overdue), 120 inbox
+decisions and synthetic handler metrics on the handler. The handler fixture
+always serves `/metrics` like the real handler. Start the platform with a
+temporary config:
 
 ```json
 {

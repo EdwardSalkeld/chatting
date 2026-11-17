@@ -77,8 +77,8 @@ func (config Config) Validate() error {
 
 var collection = regexp.MustCompile(`^/api/handler/(schedules|reminders)$`)
 var member = regexp.MustCompile(`^/api/handler/(schedules|reminders)/[^/]+$`)
-var worker = regexp.MustCompile(`^/api/worker/(items|items/[^/]+/runs|runs/[^/]+|tasks/[^/]+/events|activity)$`)
-var page = regexp.MustCompile(`^/(|overview|items|items/[^/]+|runs/[^/]+|tasks/[^/]+|schedules|reminders|inbox)$`)
+var worker = regexp.MustCompile(`^/api/worker/(items|items/[^/]+/runs|runs|runs/[^/]+|dead-letters|tasks/[^/]+/events|activity|metrics)$`)
+var page = regexp.MustCompile(`^/(|overview|items|items/[^/]+|runs|runs/[^/]+|tasks/[^/]+|schedules|reminders|inbox|system)$`)
 
 func writeError(writer http.ResponseWriter, status int, message string) {
 	writer.Header().Set("Content-Type", "application/json")
@@ -123,7 +123,7 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 				upstream, allowed = handlerProxy, "GET, POST"
 			case member.MatchString(routePath):
 				upstream, allowed = handlerProxy, "GET, PUT, DELETE"
-			case request.URL.Path == "/api/handler/inbox":
+			case request.URL.Path == "/api/handler/inbox", request.URL.Path == "/api/handler/metrics":
 				upstream, allowed = handlerProxy, "GET"
 			case worker.MatchString(routePath):
 				upstream, allowed = workerProxy, "GET"
@@ -161,13 +161,17 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 			if upstream == workerProxy {
 				request.URL.Path = "/api" + strings.TrimPrefix(request.URL.Path, "/api/worker")
 				request.URL.RawPath = "/api" + strings.TrimPrefix(routePath, "/api/worker")
-				if request.URL.Path == "/api/activity" {
-					request.URL.Path = "/activity.json"
-					request.URL.RawPath = ""
+				switch request.URL.Path {
+				case "/api/activity":
+					request.URL.Path, request.URL.RawPath = "/activity.json", ""
+				case "/api/metrics":
+					request.URL.Path, request.URL.RawPath = "/metrics", ""
 				}
 			} else if request.URL.Path == "/api/handler/inbox" {
 				request.URL.Path = "/api/personal-inbox/decisions"
 				request.URL.RawPath = ""
+			} else if request.URL.Path == "/api/handler/metrics" {
+				request.URL.Path, request.URL.RawPath = "/metrics", ""
 			} else {
 				request.URL.Path = "/api" + strings.TrimPrefix(request.URL.Path, "/api/handler")
 				request.URL.RawPath = "/api" + strings.TrimPrefix(routePath, "/api/handler")

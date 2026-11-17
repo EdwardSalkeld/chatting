@@ -85,14 +85,18 @@ The browser uses same-origin APIs. The platform forwards only these routes:
 | --- | --- | --- |
 | `/api/worker/items` | Worker `/api/items` | GET |
 | `/api/worker/items/{id}/runs` | Worker `/api/items/{id}/runs` | GET |
+| `/api/worker/runs?limit=&status=&source=&work_item_id=&since=` | Worker `/api/runs` | GET |
 | `/api/worker/runs/{id}` | Worker `/api/runs/{id}` | GET |
+| `/api/worker/dead-letters?limit=` | Worker `/api/dead-letters` | GET |
 | `/api/worker/tasks/{id}/events?after=N` | Worker `/api/tasks/{id}/events?after=N` | GET |
 | `/api/worker/activity` | Worker `/activity.json` | GET |
+| `/api/worker/metrics` | Worker `/metrics` (Prometheus text) | GET |
 | `/api/handler/schedules` | Handler `/api/schedules` | GET, POST |
 | `/api/handler/schedules/{id}` | Handler `/api/schedules/{id}` | GET, PUT, DELETE |
 | `/api/handler/reminders` | Handler `/api/reminders` | GET, POST |
 | `/api/handler/reminders/{id}` | Handler `/api/reminders/{id}` | GET, PUT, DELETE |
 | `/api/handler/inbox` | Handler `/api/personal-inbox/decisions` | GET |
+| `/api/handler/metrics` | Handler `/metrics` (Prometheus text) | GET |
 
 Query strings, JSON bodies and upstream status codes are preserved. Browser
 cookies and authorization headers are not forwarded. Cross-origin browser
@@ -100,6 +104,34 @@ writes are rejected; this is a request safeguard, not application authentication
 Writes are limited to 1 MiB. Upstream header waits are limited to five seconds
 and requests to ten seconds. Connection failures return JSON with status 502.
 No-store headers cover the private interface and its APIs.
+
+Both metrics routes come from listeners the platform already uses: the handler
+serves `/metrics` on its metrics/admin listener and the worker on its activity
+listener. The frontend parses the Prometheus text itself.
+
+Worker `GET /api/runs` lists runs newest first as `runs`, with `limit` (default
+200, at most 1000) and a `truncated` flag. Filters are exact matches on
+`status` (`result_status`), `source` and `work_item_id`; `since` is an RFC 3339
+timestamp compared with the run's finish time. Internal runs are left out unless
+`source=internal`. Each row has `run_id`, `created_at` (finish time),
+`result_status`, `latency_ms`, `source`, `task_id`, `work_item_id`, `preview`,
+`executed_model_tier`, and `model` and `tokens` (input, cached input, output,
+reasoning and total) when the executor reported usage, otherwise `null`.
+
+Worker `GET /api/dead-letters` returns `dead_letters`, newest first, without the
+envelope body: `dead_letter_id`, `run_id`, `task_id`, `work_item_id`,
+`envelope_id`, `source`, `received_at`, `reply_channel_type`,
+`reply_channel_target`, `reason_codes`, `last_error`, `attempt_count`, `status`,
+`replayed_run_id` and `created_at`. It takes the same `limit` as runs.
+
+`GET /api/runs/{id}` reports `started_at` (finish time minus duration) and
+`finished_at`, plus the executor detail recorded in the run's audit event:
+`executor_backend`, `model_tier` (configured), `executed_model_tier`,
+`auto_model_decision`, `escalation_reason`, `last_error`, `last_error_stage`,
+`execution_errors`, `egress_message_count`, `executor_launch_count`,
+`max_attempts` and `supervised_recovery_used`. Older runs return `null` for
+fields their audit event lacks. `/activity.json` adds `outbox`: the number of
+egress events still `pending_publish` and the oldest one's `created_at`.
 
 The handler now supports `GET /api/reminders?status=all&latest=1`. `latest=1`
 selects the highest revision **before** applying the status filter. Without it,

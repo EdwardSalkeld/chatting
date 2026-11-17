@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, ThreadingHTTPServer
 from threading import Lock, Thread
 from typing import Callable
@@ -17,6 +17,21 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_ACTIVITY_HOST = "0.0.0.0"
 DEFAULT_ACTIVITY_PORT = 9465
 DEFAULT_ACTIVITY_HISTORY_LIMIT = 100
+DEFAULT_RUNS_LIMIT = 200
+MAX_RUNS_LIMIT = 1000
+_RUN_DETAIL_KEYS = (
+    "executor_backend",
+    "model_tier",
+    "executed_model_tier",
+    "auto_model_decision",
+    "escalation_reason",
+    "last_error",
+    "last_error_stage",
+    "egress_message_count",
+    "executor_launch_count",
+    "max_attempts",
+    "supervised_recovery_used",
+)
 
 
 @dataclass(frozen=True)
@@ -223,6 +238,7 @@ class WorkerActivityMonitor:
             "current_executor": current_executor,
             "active_executors": self._current_executors(),
             "queue": self._store.inbox_queue_summary(),
+            "outbox": self._store.egress_outbox_summary(),
             "current_run": self._build_current_run_summary(
                 current_executor=current_executor,
                 include_internal=include_internal,
@@ -250,14 +266,11 @@ class WorkerActivityMonitor:
         )
         if item is None:
             return None
-        runs = self._store.list_work_item_run_cards(
-            work_item_id=work_item_id, limit=self._history_limit
+        runs = _with_previews(
+            self._store.list_work_item_run_cards(
+                work_item_id=work_item_id, limit=self._history_limit
+            )
         )
-        for run in runs:
-            request_content = run.pop("request_content", None)
-            run["preview"] = _extract_current_message(
-                request_content if isinstance(request_content, str) else None
-            )[:240]
         return {
             "item": item,
             "runs": runs,
@@ -266,6 +279,36 @@ class WorkerActivityMonitor:
                 for executor in self._current_executors()
                 if executor.get("work_item_id") == work_item_id
             ],
+        }
+
+    def list_runs(
+        self,
+        *,
+        limit: int = DEFAULT_RUNS_LIMIT,
+        status: str | None = None,
+        source: str | None = None,
+        work_item_id: str | None = None,
+        since: str | None = None,
+    ) -> dict[str, object]:
+        runs = _with_previews(
+            self._store.list_run_cards(
+                limit=limit,
+                status=status,
+                source=source,
+                work_item_id=work_item_id,
+                since=since,
+            )
+        )
+        return {"runs": runs, "limit": limit, "truncated": len(runs) >= limit}
+
+    def list_dead_letters(
+        self, *, limit: int = DEFAULT_RUNS_LIMIT
+    ) -> dict[str, object]:
+        letters = self._store.list_dead_letters(limit=limit)
+        return {
+            "dead_letters": letters,
+            "limit": limit,
+            "truncated": len(letters) >= limit,
         }
 
     def live_events(self, *, task_id: str, after_id: int) -> dict[str, object]:
@@ -295,6 +338,13 @@ class WorkerActivityMonitor:
         request_content = (
             first_detail.get("content") if isinstance(first_detail, dict) else None
         )
+        execution_result = detail.get("execution_result")
+        errors = (
+            execution_result.get("errors")
+            if isinstance(execution_result, dict)
+            else None
+        )
+        # run_records.created_at is written when the run finishes.
         return {
             "run_id": run.run_id,
             "task_id": task_id,
@@ -303,10 +353,17 @@ class WorkerActivityMonitor:
             "work_item_id": run.work_item_id,
             "status": run.result_status,
             "source": run.source,
-            "started_at": format_utc(run.created_at),
+            "started_at": format_utc(
+                run.created_at - timedelta(milliseconds=run.latency_ms)
+            ),
+            "finished_at": format_utc(run.created_at),
             "duration_ms": run.latency_ms,
             "attempt_count": detail.get("attempt_count"),
             "reason_codes": detail.get("reason_codes", []),
+            **{key: detail.get(key) for key in _RUN_DETAIL_KEYS},
+            "execution_errors": [e for e in errors if isinstance(e, str)]
+            if isinstance(errors, list)
+            else [],
         }
 
     def _current_executor(self) -> dict[str, object]:
@@ -389,6 +446,15 @@ class WorkerActivityMonitor:
             detail=detail,
             is_internal=is_internal,
         )
+
+
+def _with_previews(runs: list[dict[str, object]]) -> list[dict[str, object]]:
+    for run in runs:
+        request_content = run.pop("request_content", None)
+        run["preview"] = _extract_current_message(
+            request_content if isinstance(request_content, str) else None
+        )[:240]
+    return runs
 
 
 def start_worker_activity_server(

@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, unquote, urlparse
 
+from app.timefmt import format_utc, parse_utc
+from app.worker.activity import DEFAULT_RUNS_LIMIT, MAX_RUNS_LIMIT
+
 if TYPE_CHECKING:
     from app.worker.activity import WorkerActivityMonitor
 
@@ -35,6 +38,34 @@ def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler
                 item_id = unquote(path[len("/api/items/") : -len("/runs")])
                 snapshot = monitor.get_item_snapshot(item_id)
                 self._json(snapshot, status=200 if snapshot is not None else 404)
+                return
+            if path == "/api/runs":
+                query = parse_qs(parsed.query)
+                try:
+                    limit = _limit(query)
+                    since = _param(query, "since")
+                    if since is not None:
+                        since = format_utc(parse_utc(since))
+                except ValueError:
+                    self._json({"error": "invalid runs query"}, status=400)
+                    return
+                self._json(
+                    monitor.list_runs(
+                        limit=limit,
+                        status=_param(query, "status"),
+                        source=_param(query, "source"),
+                        work_item_id=_param(query, "work_item_id"),
+                        since=since,
+                    )
+                )
+                return
+            if path == "/api/dead-letters":
+                try:
+                    limit = _limit(parse_qs(parsed.query))
+                except ValueError:
+                    self._json({"error": "invalid limit"}, status=400)
+                    return
+                self._json(monitor.list_dead_letters(limit=limit))
                 return
             if path.startswith("/api/runs/"):
                 run_id = unquote(path[len("/api/runs/") :])
@@ -86,3 +117,16 @@ def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler
             LOGGER.info("worker_activity_http " + format, *args)
 
     return Handler
+
+
+def _param(query: dict[str, list[str]], name: str) -> str | None:
+    value = query.get(name, [""])[-1].strip()
+    return value or None
+
+
+def _limit(query: dict[str, list[str]]) -> int:
+    raw = _param(query, "limit")
+    limit = DEFAULT_RUNS_LIMIT if raw is None else int(raw)
+    if not 0 < limit <= MAX_RUNS_LIMIT:
+        raise ValueError("limit out of range")
+    return limit
