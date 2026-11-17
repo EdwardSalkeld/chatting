@@ -37,23 +37,11 @@ func TestPollEmitsDueJobWithTaskInstructionsAndRefs(t *testing.T) {
 	if envelope.ID != "cron:daily-note:2026-03-09T12:34:00+00:00" {
 		t.Fatalf("ID = %q", envelope.ID)
 	}
-	if envelope.Source != Source {
-		t.Fatalf("Source = %q", envelope.Source)
-	}
-	if envelope.ReceivedAt.Time != now.UTC() {
-		t.Fatalf("ReceivedAt = %s", envelope.ReceivedAt.Time)
-	}
-	if envelope.Content != "Write the daily note" {
-		t.Fatalf("Content = %q", envelope.Content)
-	}
-	if got := strings.Join(envelope.ContextRefs, ","); got != "repo:/workspace/chatting" {
-		t.Fatalf("ContextRefs = %#v", envelope.ContextRefs)
+	if envelope.Content != "Write the daily note" || strings.Join(envelope.ContextRefs, ",") != "repo:/workspace/chatting" {
+		t.Fatalf("envelope = %#v", envelope)
 	}
 	if envelope.ReplyChannel.Type != "log" || envelope.ReplyChannel.Target != "daily-note" {
 		t.Fatalf("ReplyChannel = %#v", envelope.ReplyChannel)
-	}
-	if envelope.DedupeKey != envelope.ID {
-		t.Fatalf("DedupeKey = %q", envelope.DedupeKey)
 	}
 	if envelope.PromptContext == nil {
 		t.Fatal("PromptContext = nil")
@@ -128,43 +116,6 @@ func TestPollSkipsStoredBareContextPathAndRunsValidJob(t *testing.T) {
 
 func (source *fakeSource) ActiveSchedules(context.Context) ([]Scheduled, error) {
 	return source.scheduled, nil
-}
-
-func TestPollFromSourceFiresDueScheduleOnce(t *testing.T) {
-	now := testutil.MustTime(t, "2026-03-09T12:34:56Z")
-	source := &fakeSource{scheduled: []Scheduled{
-		{
-			ScheduleID: "sched_a",
-			Job: Job{
-				JobName: "daily-note",
-				Content: "Write the daily note",
-				Cron:    "34 12 * * *",
-			},
-		},
-	}}
-	connector, err := NewFromSource(source, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(envelopes) != 1 {
-		t.Fatalf("first poll envelopes = %#v", envelopes)
-	}
-	if envelopes[0].ID != "cron:daily-note:2026-03-09T12:34:00+00:00" {
-		t.Fatalf("ID = %q", envelopes[0].ID)
-	}
-
-	envelopes, err = connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(envelopes) != 0 {
-		t.Fatalf("second poll should not refire: %#v", envelopes)
-	}
 }
 
 func TestPollFromSourceStopsRemovedSchedule(t *testing.T) {

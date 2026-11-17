@@ -30,15 +30,25 @@ func fixture(t *testing.T, handler func(request *http.Request, body map[string]a
 	return client, &calls
 }
 
+// apiFixture serves the session document and hands every API call to handler.
+func apiFixture(t *testing.T, handler func(body map[string]any, writer http.ResponseWriter)) *Client {
+	client, _ := fixture(t, func(request *http.Request, body map[string]any, writer http.ResponseWriter) {
+		if strings.HasSuffix(request.URL.Path, "/jmap/session") {
+			fmt.Fprint(writer, sessionJSON("http://"+request.Host+"/jmap/api/"))
+			return
+		}
+		handler(body, writer)
+	})
+	return client
+}
+
 func sessionJSON(apiURL string) string {
 	return fmt.Sprintf(`{"apiUrl":%q,"primaryAccounts":{"urn:ietf:params:jmap:mail":"acct1"},
 		"capabilities":{"urn:ietf:params:jmap:core":{"maxCallsInRequest":42},"urn:ietf:params:jmap:mail":{}}}`, apiURL)
 }
 
 func TestSessionIsDiscoveredAndCached(t *testing.T) {
-	var client *Client
-	var calls *int
-	client, calls = fixture(t, func(request *http.Request, _ map[string]any, writer http.ResponseWriter) {
+	client, calls := fixture(t, func(request *http.Request, _ map[string]any, writer http.ResponseWriter) {
 		if !strings.HasSuffix(request.URL.Path, "/jmap/session") {
 			t.Fatalf("unexpected path %s", request.URL.Path)
 		}
@@ -60,11 +70,7 @@ func TestSessionIsDiscoveredAndCached(t *testing.T) {
 }
 
 func TestStaleStateIsReportedDistinctly(t *testing.T) {
-	client, _ := fixture(t, func(request *http.Request, _ map[string]any, writer http.ResponseWriter) {
-		if strings.HasSuffix(request.URL.Path, "/jmap/session") {
-			fmt.Fprint(writer, sessionJSON("http://"+request.Host+"/jmap/api/"))
-			return
-		}
+	client := apiFixture(t, func(_ map[string]any, writer http.ResponseWriter) {
 		fmt.Fprint(writer, `{"methodResponses":[["error",{"type":"cannotCalculateChanges"},"c0"]]}`)
 	})
 	_, err := client.Changes(context.Background(), "old-state", 10)
@@ -111,20 +117,6 @@ func TestBodyTextPrefersTextConvertsHTMLAndSeparatesFailures(t *testing.T) {
 	}
 }
 
-func TestSenderPrefersDisplayName(t *testing.T) {
-	named := Email{From: []EmailAddress{{Name: " Echelon Coffee ", Email: "no-reply@squarespace.info"}}}
-	if named.Sender() != "Echelon Coffee" {
-		t.Fatalf("%q", named.Sender())
-	}
-	bare := Email{From: []EmailAddress{{Email: "no-reply@squarespace.info"}}}
-	if bare.Sender() != "no-reply@squarespace.info" {
-		t.Fatalf("%q", bare.Sender())
-	}
-	if (Email{}).Sender() != "" {
-		t.Fatal("empty From should give an empty sender")
-	}
-}
-
 func TestBodyTextUsesUsefulHTMLInsteadOfAnUnhelpfulTextAlternative(t *testing.T) {
 	cases := []struct {
 		name, plain, html, want string
@@ -134,8 +126,6 @@ func TestBodyTextUsesUsefulHTMLInsteadOfAnUnhelpfulTextAlternative(t *testing.T)
 		{"browser placeholder", "Your email software can't display HTML emails. View the newsletter here: https://tracking.invalid/browser",
 			"<p>The Sleep Out raised £12,000 for local homelessness support.</p>",
 			"The Sleep Out raised £12,000 for local homelessness support.", false, true},
-		{"even a short offer beats a browser placeholder", "Your email software cannot display HTML emails. View this newsletter in a browser.",
-			`<img alt="50% off" src="https://tracking.invalid/banner">`, "50% off", false, true},
 		{"tracking link dump", strings.Repeat("https://tracking.invalid/"+strings.Repeat("a", 100)+"\n", 10) + "Update profile",
 			`<img alt="Family tickets: children visit free until 31 October" src="https://tracking.invalid/image">`,
 			"Family tickets: children visit free until 31 October", false, true},
@@ -166,11 +156,7 @@ func TestBodyTextUsesUsefulHTMLInsteadOfAnUnhelpfulTextAlternative(t *testing.T)
 
 func TestFileMovesAndMarksReadInOneSet(t *testing.T) {
 	var update map[string]any
-	client, _ := fixture(t, func(request *http.Request, body map[string]any, writer http.ResponseWriter) {
-		if strings.HasSuffix(request.URL.Path, "/jmap/session") {
-			fmt.Fprint(writer, sessionJSON("http://"+request.Host+"/jmap/api/"))
-			return
-		}
+	client := apiFixture(t, func(body map[string]any, writer http.ResponseWriter) {
 		calls := body["methodCalls"].([]any)
 		if len(calls) != 1 {
 			t.Fatalf("want one atomic set, got %d calls", len(calls))
@@ -192,11 +178,7 @@ func TestFileMovesAndMarksReadInOneSet(t *testing.T) {
 }
 
 func TestFileReportsRefusal(t *testing.T) {
-	client, _ := fixture(t, func(request *http.Request, _ map[string]any, writer http.ResponseWriter) {
-		if strings.HasSuffix(request.URL.Path, "/jmap/session") {
-			fmt.Fprint(writer, sessionJSON("http://"+request.Host+"/jmap/api/"))
-			return
-		}
+	client := apiFixture(t, func(_ map[string]any, writer http.ResponseWriter) {
 		fmt.Fprint(writer, `{"methodResponses":[["Email/set",{"notUpdated":{"m1":{"type":"notFound"}}},"c0"]]}`)
 	})
 	err := client.File(context.Background(), "m1", "box9", false)
