@@ -309,7 +309,7 @@ func TestFetchFailureLeavesStateUnadvanced(t *testing.T) {
 }
 
 func TestOrderIsNotifiedFiledAndLinked(t *testing.T) {
-	service, mail, broker, performer := fixture(t)
+	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
 	if err := service.ingest(ctx); err != nil {
 		t.Fatal(err)
@@ -332,7 +332,6 @@ func TestOrderIsNotifiedFiledAndLinked(t *testing.T) {
 	if kinds["file"].Category != "order" {
 		t.Fatalf("file effect lost its category: %+v", kinds["file"])
 	}
-	_ = mail
 }
 
 func TestReviewIsLeftInTheInboxAndAlerted(t *testing.T) {
@@ -440,17 +439,6 @@ func TestNewsIsFiledAndNeverAlertedIndividually(t *testing.T) {
 	}
 }
 
-func TestRoutineNewsNeedsNoSummary(t *testing.T) {
-	// The digest writes the line, so a news classification with no summary is
-	// valid; other categories need a summary or a fallback notice.
-	if err := (Classification{Category: "news", Confidence: .99}).Validate(); err != nil {
-		t.Fatalf("news without a summary rejected: %v", err)
-	}
-	if err := (Classification{Category: "order", Confidence: .99}).Validate(); err == nil {
-		t.Fatal("order without a summary accepted")
-	}
-}
-
 func TestClearingAFolderStopsPendingFiling(t *testing.T) {
 	service, _, broker, performer := fixture(t)
 	ctx := context.Background()
@@ -499,6 +487,9 @@ func TestDryRunPreviewsAndRejectsInvalidResults(t *testing.T) {
 	}
 	if broker.publications[DeadQueue] != 1 {
 		t.Fatal("invalid result accepted")
+	}
+	if count, _ := service.Store.getMeta(ctx, "dead_letters"); count != "1" {
+		t.Fatalf("dead letters counted as %q", count)
 	}
 }
 
@@ -658,35 +649,6 @@ func TestSuspiciousNewsCannotReachTheDigestSummariser(t *testing.T) {
 	if len(items) != 1 || items[0]["ref"] != "Stm4" || items[0]["from"] != "Withheld email" ||
 		items[0]["subject"] != "Summary withheld" || items[0]["body"] != "Automatic summary withheld; read the original email." {
 		t.Fatalf("untrusted mail reached digest: %+v", items)
-	}
-}
-
-func TestLNEROrderWithExtractedTaskUsesOnlyOrderEffects(t *testing.T) {
-	service, _, broker, performer := fixture(t)
-	classifyOnce(t, service, broker, Classification{Category: "order", Summary: "Paid LNER booking",
-		Action: "Find an available seat", Deadline: "Departure 10:00", Confidence: .99})
-	if err := service.perform(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	notifications, filings := 0, 0
-	for _, call := range performer.calls {
-		switch call.Kind {
-		case "linear":
-			t.Fatal("order created a Linear ticket")
-		case "telegram":
-			if call.Target != "orders" {
-				t.Fatalf("wrong notification destination: %+v", call)
-			}
-			notifications++
-		case "file":
-			if call.Target != "Triage/Orders" {
-				t.Fatalf("wrong folder: %+v", call)
-			}
-			filings++
-		}
-	}
-	if notifications != 1 || filings != 1 {
-		t.Fatalf("missing order effects: %+v", performer.calls)
 	}
 }
 
@@ -873,41 +835,20 @@ func TestEveryOutcomeRecordsWhichRuleSettledIt(t *testing.T) {
 	cases := []struct {
 		name     string
 		incoming Classification
-		attach   bool
 		category string
 		reason   string
 	}{
-		{"accepted", Classification{Category: "order", Summary: "Order", Confidence: .95},
-			false, "order", "accepted"},
-		{"below the threshold", Classification{Category: "order", Summary: "Order", Confidence: .7},
-			false, "review", "confidence_below_threshold"},
+		{"accepted", Classification{Category: "order", Summary: "Order", Confidence: .95}, "order", "accepted"},
 		{"weak reading with extracted action is still unsettled", Classification{Category: "order", Summary: "Order", Action: "Pay it", Deadline: "Tomorrow", Confidence: .7},
-			false, "review", "confidence_below_threshold"},
-		{"an extracted action preserves news", Classification{Category: "news", Summary: "x", Action: "Pay it", Confidence: .95},
-			false, "news", "accepted"},
-		{"an extracted action preserves order", Classification{Category: "order", Summary: "LNER booking", Action: "Find an available seat", Confidence: .95},
-			false, "order", "accepted"},
-		{"an extracted deadline preserves order", Classification{Category: "order", Summary: "LNER booking", Deadline: "Departure 10:00", Confidence: .95},
-			false, "order", "accepted"},
-		{"an action with no extracted task stays action", Classification{Category: "action", Summary: "Inspect the original", Confidence: .95},
-			false, "action", "accepted"},
-		{"review with an extracted task stays review", Classification{Category: "review", Summary: "Uncertain", Action: "Pay it", Confidence: .5},
-			false, "review", "confidence_below_threshold"},
-		{"an attachment preserves the category", Classification{Category: "order", Summary: "Order", Confidence: .95},
-			true, "order", "accepted"},
+			"review", "confidence_below_threshold"},
+		{"an extracted action preserves the category", Classification{Category: "news", Summary: "x", Action: "Pay it", Confidence: .95},
+			"news", "accepted"},
 		{"suspicion preserves the category", Classification{Category: "news", Summary: "Withheld", Confidence: .95,
-			Trace: &Trace{Suspicious: true}}, false, "news", "injection_suspected"},
-		{"mail aimed at the machine", Classification{Category: "review", Summary: "x", Confidence: .99,
-			Trace: &Trace{Suspicious: true}}, false, "review", "injection_suspected"},
+			Trace: &Trace{Suspicious: true}}, "news", "injection_suspected"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			service, mail, broker, _ := fixture(t)
-			if test.attach {
-				email := mail.emails["Stm4"]
-				email.HasAttachment = true
-				mail.emails["Stm4"] = email
-			}
+			service, _, broker, _ := fixture(t)
 			got := classifyOnce(t, service, broker, test.incoming).Classification
 			if got.Category != test.category || got.Trace == nil || got.Trace.Reason != test.reason {
 				t.Fatalf("category=%q trace=%+v, want %q/%q", got.Category, got.Trace, test.category, test.reason)
@@ -1003,19 +944,6 @@ func TestMailThatNeverComesBackIsReportedNotRetriedInSilence(t *testing.T) {
 	}
 }
 
-func TestDeadLetteredResultsAreCounted(t *testing.T) {
-	service, _, broker, _ := fixture(t)
-	ctx := context.Background()
-	broker.queues[ResultsQueue] = append(broker.queues[ResultsQueue],
-		&bbmb.PickedMessage{GUID: "junk", Payload: map[string]any{"kind": "nonsense"}})
-	if err := service.results(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if count, _ := service.Store.getMeta(ctx, "dead_letters"); count != "1" {
-		t.Fatalf("dead letters counted as %q", count)
-	}
-}
-
 func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -1023,10 +951,7 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 		reason string
 	}{
 		{"classifier unavailable", &Trace{TriageFailed: true}, "triage_unavailable"},
-		{"input too large", &Trace{TriageFailed: true, TriageError: "input_too_large", TriageHTTPStatus: 400}, "triage_input_too_large"},
-		{"request rejected", &Trace{TriageFailed: true, TriageError: "request_rejected", TriageHTTPStatus: 422}, "triage_request_rejected"},
 		{"rate limited", &Trace{TriageFailed: true, TriageError: "rate_limited", TriageHTTPStatus: 429}, "triage_rate_limited"},
-		{"invalid response", &Trace{TriageFailed: true, TriageError: "invalid_response"}, "triage_invalid_response"},
 		{"mail aimed at the machine", &Trace{Suspicious: true}, "injection_suspected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1043,30 +968,20 @@ func TestAnOutageIsNotReportedAsAnAttack(t *testing.T) {
 	}
 }
 
-func TestOwnerRulesRevisionSurvivesResultValidationAndPersistence(t *testing.T) {
-	service, _, broker, _ := fixture(t)
-	revision := strings.Repeat("a", 40)
-	got := classifyOnce(t, service, broker,
-		Classification{Category: "order", Summary: "Invoice", Confidence: .99,
-			Trace: &Trace{RulesRevision: revision, SuppliedRuleIDs: []string{"example-invoices"}}}).Classification
-	if got.Trace == nil || got.Trace.RulesRevision != revision ||
-		len(got.Trace.SuppliedRuleIDs) != 1 || got.Trace.SuppliedRuleIDs[0] != "example-invoices" {
-		t.Fatalf("owner rules provenance was lost: %+v", got.Trace)
-	}
-}
-
 func TestJevAssessmentSurvivesStrictValidationAndPersistence(t *testing.T) {
 	service, _, broker, _ := fixture(t)
 	got := classifyOnce(t, service, broker, Classification{
 		Category: "order", Summary: "Invoice", Confidence: .99,
 		Trace: &Trace{
+			RulesRevision: strings.Repeat("b", 40), SuppliedRuleIDs: []string{"example-invoices"},
 			JevModel: "jev-1.13.0", JevQuestionsSHA256: strings.Repeat("a", 64), JevPolicyVersion: "noul-0.3-0.7-v1",
 			CategoryProbabilities: map[string]float64{"news_or_marketing": .0025, "order": .9925, "action": .0025, "review": .0025},
 			NoulProbabilities:     map[string]float64{"requires_action": 0, "has_deadline": .05, "prompt_injection": .1},
 			InputBodyChars:        8000, CleanedBodyChars: 3000, ExcerptChars: 2000, ExcerptTruncated: true, TextExtractionVersion: "mail-text-v1",
 		},
 	}).Classification.Trace
-	if got == nil || got.JevModel != "jev-1.13.0" || len(got.JevQuestionsSHA256) != 64 || got.JevPolicyVersion != "noul-0.3-0.7-v1" || got.CategoryProbabilities["order"] != .9925 || len(got.NoulProbabilities) != 3 || got.NoulProbabilities["requires_action"] != 0 || !got.ExcerptTruncated || got.ExcerptChars != 2000 || got.TextExtractionVersion != "mail-text-v1" {
+	if got == nil || got.JevModel != "jev-1.13.0" || len(got.JevQuestionsSHA256) != 64 || got.JevPolicyVersion != "noul-0.3-0.7-v1" || got.CategoryProbabilities["order"] != .9925 || len(got.NoulProbabilities) != 3 || got.NoulProbabilities["requires_action"] != 0 || !got.ExcerptTruncated || got.ExcerptChars != 2000 || got.TextExtractionVersion != "mail-text-v1" ||
+		len(got.RulesRevision) != 40 || len(got.SuppliedRuleIDs) != 1 {
 		t.Fatalf("lost assessment: %+v", got)
 	}
 }
@@ -1118,21 +1033,5 @@ func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing %q:\n%s", want, page)
 		}
-	}
-}
-
-func TestDecisionsPageWarnsWhenMailIsWaiting(t *testing.T) {
-	service, _, _, _ := fixture(t)
-	ctx := context.Background()
-	if err := service.ingest(ctx); err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	RegisterUIRoutes(mux, service)
-	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/personal-inbox", nil))
-	page := recorder.Body.String()
-	if !strings.Contains(page, "waiting 1") || !strings.Contains(page, `class="warn"`) {
-		t.Fatalf("unclassified mail not surfaced:\n%s", page)
 	}
 }

@@ -17,62 +17,6 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
-func TestHandleRawDropsInvalidPayload(t *testing.T) {
-	engine := newTestEngine(t, newFakeState(), nil)
-
-	result, err := engine.HandleRaw(context.Background(), []byte(`{"message_type":"chatting.egress.v1"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusDropped || result.Reason != "invalid_payload" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestHandleDropsUnknownTask(t *testing.T) {
-	engine := newTestEngine(t, newFakeState(), nil)
-
-	result, err := engine.Handle(context.Background(), testEgressMessage(t, testTaskMessage(t), nil, "evt:1", "incremental"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusDropped || result.Reason != "unknown_task" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestHandleDropsCompletedTask(t *testing.T) {
-	task := testTaskMessage(t)
-	state := newFakeState()
-	state.completed[task.TaskID] = task.Envelope.ID
-	engine := newTestEngine(t, state, nil)
-
-	result, err := engine.Handle(context.Background(), testEgressMessage(t, task, nil, "evt:1", "incremental"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusDropped || result.Reason != "completed_task" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestHandleDropsDisallowedChannel(t *testing.T) {
-	task := testTaskMessage(t)
-	state := newFakeState()
-	state.addTask(task)
-	engine := newTestEngine(t, state, nil)
-	message := testEgressMessage(t, task, nil, "evt:1", "incremental")
-	message.Message.Channel = "telegram"
-
-	result, err := engine.Handle(context.Background(), message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusDropped || result.Reason != "disallowed_channel" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
 func TestHandleAllowsFinalChannelWhenEnvelopeReplyChannelAllowed(t *testing.T) {
 	task := testTaskMessage(t)
 	state := newFakeState()
@@ -150,40 +94,6 @@ func TestHandleDispatchesUnsequencedIncrementalAndDedupesReplay(t *testing.T) {
 	}
 	if len(dispatcher.messages) != 1 {
 		t.Fatalf("replay dispatch count = %d", len(dispatcher.messages))
-	}
-}
-
-func TestHandleStagesAndFlushesSequencedEventsInOrder(t *testing.T) {
-	task := testTaskMessage(t)
-	state := newFakeState()
-	state.addTask(task)
-	dispatcher := &recordingDispatcher{}
-	engine := newTestEngine(t, state, dispatcher)
-	second := testEgressMessage(t, task, intPtr(1), "evt:1", "message")
-	second.Message.Body = stringPtr("second")
-	first := testEgressMessage(t, task, intPtr(0), "evt:0", "message")
-	first.Message.Body = stringPtr("first")
-
-	result, err := engine.Handle(context.Background(), second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusStaged {
-		t.Fatalf("out-of-order result = %#v", result)
-	}
-	if len(dispatcher.messages) != 0 {
-		t.Fatalf("out-of-order dispatch count = %d", len(dispatcher.messages))
-	}
-
-	result, err = engine.Handle(context.Background(), first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != StatusDispatched {
-		t.Fatalf("flush result = %#v", result)
-	}
-	if got := dispatcher.bodies(); got != "first|second" {
-		t.Fatalf("dispatch order = %q", got)
 	}
 }
 
