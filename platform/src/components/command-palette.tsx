@@ -5,6 +5,7 @@ import { Bell, CalendarClock, Keyboard, ListTodo, Moon, RefreshCw } from 'lucide
 import { useItems, useReminders, useSchedules } from '@/lib/api'
 import { encode, itemName } from '@/lib/format'
 import { NAV } from '@/components/nav'
+import { noAutofill } from '@/lib/no-autofill'
 
 export function CommandPalette({
   open,
@@ -64,7 +65,11 @@ function PaletteBody({
   }
   return (
     <Command label="Command palette" loop>
-      <Command.Input placeholder="Jump to a page, work item, schedule or reminder…" autoFocus />
+      <Command.Input
+        placeholder="Jump to a page, work item, schedule or reminder…"
+        autoFocus
+        {...noAutofill}
+      />
       <Command.List>
         <Command.Empty>No matches</Command.Empty>
         <Command.Group heading="Pages">
