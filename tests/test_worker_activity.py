@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -249,6 +250,229 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertEqual(
                     item["active_executors"][0]["task_id"], task_message.task_id
                 )
+            finally:
+                server.shutdown()
+
+    def _record_run(
+        self,
+        store: SQLiteStateStore,
+        monitor: WorkerActivityMonitor,
+        task_message: TaskQueueMessage,
+        *,
+        run_id: str,
+        status: str,
+        source: str = "im",
+        created_at: datetime,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        monitor.record_task_received(task_message=task_message)
+        record = RunRecord(
+            run_id=run_id,
+            envelope_id=task_message.envelope.id,
+            source=source,  # type: ignore[arg-type]
+            workflow="default",
+            latency_ms=90_000,
+            result_status=status,
+            created_at=created_at,
+            work_item_id="item_legacy_general",
+        )
+        store.append_run(record)
+        store.append_audit_event(
+            AuditEvent(
+                run_id=run_id,
+                envelope_id=record.envelope_id,
+                source=record.source,
+                workflow="default",
+                result_status=status,
+                detail={"task_id": task_message.task_id, **(detail or {})},
+                created_at=created_at,
+            )
+        )
+        monitor.record_executor_finished(
+            task_message=task_message,
+            run_id=run_id,
+            result_status=status,
+            attempt_count=1,
+            reason_codes=[],
+            latency_ms=90_000,
+        )
+
+    def test_runs_dead_letters_and_run_detail_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
+            monitor = WorkerActivityMonitor(store=store, history_limit=5)
+            first = self._build_task_message("Current user message:\nfirst")
+            usage_line = json.dumps(
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": "thread",
+                        "turnId": "turn",
+                        "tokenUsage": {
+                            "last": {
+                                "inputTokens": 100,
+                                "cachedInputTokens": 40,
+                                "outputTokens": 10,
+                                "reasoningOutputTokens": 5,
+                                "totalTokens": 110,
+                            },
+                            "total": {"inputTokens": 100, "outputTokens": 10},
+                        },
+                    },
+                }
+            )
+            model_line = json.dumps(
+                {"method": "chatting/modelSelected", "params": {"model": "gpt-x"}}
+            )
+            monitor.record_executor_output(
+                task_message=first,
+                stream="stdout",
+                content=f"{model_line}\n{usage_line}",
+            )
+            self._record_run(
+                store,
+                monitor,
+                first,
+                run_id="run:first",
+                status="success",
+                created_at=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+                detail={
+                    "executor_backend": "app-server",
+                    "model_tier": "auto",
+                    "executed_model_tier": "low",
+                    "auto_model_decision": {"tier": "low", "reason": "short"},
+                    "execution_result": {"errors": ["executor_exit_nonzero:1"]},
+                    "egress_message_count": 2,
+                },
+            )
+            second = TaskQueueMessage.from_envelope(
+                TaskEnvelope(
+                    id="cron:1",
+                    source="cron",
+                    received_at=datetime(2026, 3, 31, 13, 0, tzinfo=timezone.utc),
+                    actor=None,
+                    content="Prepare a briefing",
+                    attachments=[],
+                    context_refs=[],
+                    reply_channel=ReplyChannel(type="telegram", target="fixture"),
+                    dedupe_key="cron:1",
+                ),
+                trace_id="trace:cron:1",
+            )
+            self._record_run(
+                store,
+                monitor,
+                second,
+                run_id="run:second",
+                status="dead_letter",
+                source="cron",
+                created_at=datetime(2026, 3, 31, 13, 0, tzinfo=timezone.utc),
+            )
+            store.append_dead_letter(
+                run_id="run:second",
+                envelope=second.envelope,
+                reason_codes=["executor_failed"],
+                last_error="boom",
+                attempt_count=2,
+            )
+            store.queue_egress_outbox_event(
+                EgressQueueMessage(
+                    task_id=first.task_id,
+                    envelope_id=first.envelope.id,
+                    trace_id=first.trace_id,
+                    message=OutboundMessage(
+                        channel="telegram", target="fixture", body="hi"
+                    ),
+                    emitted_at=datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc),
+                    event_id="evt:pending",
+                    sequence=0,
+                    event_kind="message",
+                )
+            )
+
+            server = start_worker_activity_server(
+                host="127.0.0.1", port=0, monitor=monitor
+            )
+            base = f"http://127.0.0.1:{server.server.server_address[1]}"
+
+            def get(path: str) -> dict:
+                with urllib.request.urlopen(base + path) as response:
+                    return json.loads(response.read().decode("utf-8"))
+
+            try:
+                runs = get("/api/runs")["runs"]
+                self.assertEqual(
+                    [run["run_id"] for run in runs], ["run:second", "run:first"]
+                )
+                first_run = runs[1]
+                self.assertEqual(first_run["preview"], "first")
+                self.assertEqual(first_run["task_id"], first.task_id)
+                self.assertEqual(first_run["work_item_id"], "item_legacy_general")
+                self.assertEqual(first_run["executed_model_tier"], "low")
+                self.assertEqual(first_run["model"], "gpt-x")
+                self.assertEqual(first_run["tokens"]["input_tokens"], 100)
+                self.assertEqual(first_run["tokens"]["cached_input_tokens"], 40)
+                self.assertEqual(first_run["tokens"]["total_tokens"], 110)
+                self.assertIsNone(runs[0]["tokens"])
+                self.assertEqual(
+                    first_run["execution_errors"], ["executor_exit_nonzero:1"]
+                )
+                self.assertEqual(runs[0]["execution_errors"], [])
+                self.assertIn("reason_codes", first_run)
+                self.assertIn("last_error", first_run)
+                self.assertIn("attempt_count", first_run)
+                self.assertEqual(
+                    [r["run_id"] for r in get("/api/runs?source=cron")["runs"]],
+                    ["run:second"],
+                )
+                self.assertEqual(
+                    [r["run_id"] for r in get("/api/runs?status=success")["runs"]],
+                    ["run:first"],
+                )
+                self.assertEqual(
+                    [
+                        r["run_id"]
+                        for r in get("/api/runs?since=2026-03-31T12:30:00Z")["runs"]
+                    ],
+                    ["run:second"],
+                )
+                limited = get("/api/runs?limit=1&work_item_id=item_legacy_general")
+                self.assertEqual(len(limited["runs"]), 1)
+                self.assertTrue(limited["truncated"])
+                for bad in ("limit=0", "limit=x", "since=yesterday"):
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        urllib.request.urlopen(f"{base}/api/runs?{bad}")
+                    self.assertEqual(caught.exception.code, 400)
+                    caught.exception.close()
+
+                letters = get("/api/dead-letters")["dead_letters"]
+                self.assertEqual(len(letters), 1)
+                self.assertEqual(letters[0]["run_id"], "run:second")
+                self.assertEqual(letters[0]["task_id"], second.task_id)
+                self.assertEqual(letters[0]["source"], "cron")
+                self.assertEqual(letters[0]["reply_channel_type"], "telegram")
+                self.assertEqual(letters[0]["reason_codes"], ["executor_failed"])
+                self.assertEqual(letters[0]["last_error"], "boom")
+                self.assertEqual(letters[0]["attempt_count"], 2)
+                self.assertNotIn("envelope_json", letters[0])
+                self.assertNotIn("content", json.dumps(letters))
+
+                header = get("/api/runs/run%3Afirst")
+                self.assertEqual(header["started_at"], "2026-03-31T11:58:30Z")
+                self.assertEqual(header["finished_at"], "2026-03-31T12:00:00Z")
+                self.assertEqual(header["executor_backend"], "app-server")
+                self.assertEqual(header["model_tier"], "auto")
+                self.assertEqual(header["executed_model_tier"], "low")
+                self.assertEqual(header["auto_model_decision"]["reason"], "short")
+                self.assertEqual(
+                    header["execution_errors"], ["executor_exit_nonzero:1"]
+                )
+                self.assertEqual(header["egress_message_count"], 2)
+                self.assertIsNone(header["last_error"])
+
+                outbox = get("/activity.json")["outbox"]
+                self.assertEqual(outbox["pending"], 1)
+                self.assertIsNotNone(outbox["oldest_created_at"])
             finally:
                 server.shutdown()
 

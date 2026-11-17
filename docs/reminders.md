@@ -65,3 +65,10 @@ created, cancelled, due, late, retried, published, and fired lifecycle events.
 
 The API is served on the handler metrics/admin listener (normally port 9464), so
 it has the same trusted-network boundary as the schedules API.
+
+## Platform collection view
+
+`GET /api/reminders?status=all&latest=1` returns each reminder once, using its
+highest revision. Status filtering applies to that revision. Omitting `latest=1`
+preserves the existing collection behaviour, including historical revisions.
+Individual `?history=1` responses always retain complete revision history.

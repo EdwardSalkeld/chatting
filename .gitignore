@@ -1,3 +1,8 @@
 __pycache__/
 .env
 result
+
+# Platform frontend build and local tooling
+platform/node_modules/
+platform/*.tsbuildinfo
+go/handler/internal/platform/web/dist/

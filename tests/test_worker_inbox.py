@@ -92,7 +92,17 @@ class WorkerInboxTests(unittest.TestCase):
         self.assertEqual(claimed_first.task_message.task_id, first.task_id)
         self.assertEqual(claimed_other.task_message.task_id, other.task_id)
         self.assertIsNone(store.claim_next_inbox_task())
-        self.assertEqual(store.inbox_queue_summary(), {"queued": 1, "running": 2})
+        summary = store.inbox_queue_summary()
+        self.assertEqual((summary["queued"], summary["running"]), (1, 2))
+        with sqlite3.connect(store.db_path) as connection:
+            staged_at, work_item_id = connection.execute(
+                "SELECT staged_at, work_item_id FROM worker_inbox WHERE task_id = ?",
+                (followup.task_id,),
+            ).fetchone()
+        self.assertEqual(summary["oldest_queued_at"], staged_at)
+        overview = {row["work_item_id"]: row for row in store.list_work_item_overview()}
+        if work_item_id in overview:
+            self.assertEqual(overview[work_item_id]["oldest_queued_at"], staged_at)
 
         store.finish_inbox_task(parent_task_id=first.task_id)
         claimed_followup = store.claim_next_inbox_task()

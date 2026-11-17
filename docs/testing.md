@@ -39,3 +39,77 @@ in `.github/workflows/e2e.yml` shows how CI provides it.
 The JMAP connector has an opt-in read-only check against a real account: put a
 read-only token in `~/.config/chatting/fastmail-jmap-token` and run
 `JMAP_LIVE=1 go test ./internal/connectors/jmap/` from `go/handler`.
+
+## Platform UI
+
+The platform frontend has its own locked Node dependencies and checks:
+
+```sh
+npm --prefix platform ci
+npm --prefix platform run format:check
+npm --prefix platform run test
+npm --prefix platform run build
+```
+
+Gateway tests run with the regular Go suite. They exercise real schedule and
+reminder APIs with disposable SQLite databases, upstream errors, encoded IDs,
+method/path restrictions and frontend deep links. Transcript tests cover both
+executor output formats, split chunks, malformed output and delivery visibility.
+
+### Disposable browser preview
+
+Build the frontend first, then the two local binaries:
+
+```sh
+(cd go/handler && go build -o /tmp/chatting-platform ./cmd/chatting-platform)
+(cd go/handler && go build -o /tmp/chatting-platform-handler-fixture ./internal/platform/testserver)
+```
+
+Choose a fresh state directory for each preview. In separate terminals from the
+repository root:
+
+```sh
+/tmp/chatting-platform-handler-fixture --state-dir /tmp/chatting-platform-qa
+PYTHONPATH=. uv run python tests/platform_preview.py --state-dir /tmp/chatting-platform-qa
+```
+
+The fixture handler listens on loopback port 19464, and the worker on 19465. Both
+support `--port` and `--empty`. The handler also accepts `--no-inbox` to
+check the optional-integration state. They use real APIs and stores, but seed example
+work items, schedules, reminders and inbox decisions. No integrations or
+executors are started. Pass `--rich` to both to judge density against realistic
+volume: about 40 work items and 200 runs over 14 days with failures, dead
+letters, token usage, three live executors and one task with over 300 events on
+the worker; 15 versioned schedules, 30 reminders (two overdue), 120 inbox
+decisions and synthetic handler metrics on the handler. The handler fixture
+always serves `/metrics` like the real handler. Start the platform with a
+temporary config:
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 19466,
+  "handler_url": "http://127.0.0.1:19464",
+  "worker_url": "http://127.0.0.1:19465"
+}
+```
+
+```sh
+/tmp/chatting-platform --config /tmp/platform-qa.json
+```
+
+Open `http://127.0.0.1:19466`. The live fixture emits an event every five seconds.
+Creating a `finish-live` file inside its state directory ends the simulated run
+and lets the browser verify the transition to a completed transcript. Stop an
+upstream to inspect unavailable-service and recovery states. For frontend hot
+reload against this gateway, run:
+
+```sh
+CHATTING_PLATFORM_URL=http://127.0.0.1:19466 npm --prefix platform run dev
+```
+
+Browser checks should cover desktop and narrow layouts, each navigation route,
+search and filters, schedule and reminder validation/create/edit/delete or
+cancel, revision history, inbox decision details, live/completed transcripts,
+pause/resume/follow/copy and delivery visibility, empty and unavailable states.
+The fixture state is disposable and must never point at a deployment database.

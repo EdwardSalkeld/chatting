@@ -637,17 +637,23 @@ class SQLiteStateStore:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT state, lease_owner, COUNT(*) AS count FROM worker_inbox
+                SELECT state, lease_owner, COUNT(*) AS count,
+                       MIN(staged_at) AS oldest FROM worker_inbox
                 WHERE state IN ('pending', 'active', 'closing')
                   AND parent_task_id IS NULL
                 GROUP BY state, lease_owner IS NOT NULL
                 """
             ).fetchall()
-        queued = sum(int(row["count"]) for row in rows if row["lease_owner"] is None)
+        waiting = [row for row in rows if row["lease_owner"] is None]
+        queued = sum(int(row["count"]) for row in waiting)
         running = sum(
             int(row["count"]) for row in rows if row["lease_owner"] is not None
         )
-        return {"queued": queued, "running": running}
+        return {
+            "queued": queued,
+            "running": running,
+            "oldest_queued_at": min((row["oldest"] for row in waiting), default=None),
+        }
 
     def recover_inbox_tasks(self, *, supervised_task_ids: tuple[str, ...] = ()) -> None:
         """Recover abandoned leases, leaving live supervisors and their bundles alone."""
@@ -954,7 +960,8 @@ class SQLiteStateStore:
                           item.created_at, COALESCE(runs.run_count, 0) AS run_count,
                           runs.last_run_at,
                           COALESCE(queue.queued, 0) AS queued,
-                          COALESCE(queue.running, 0) AS running
+                          COALESCE(queue.running, 0) AS running,
+                          queue.oldest_queued_at
                    FROM work_items AS item
                    LEFT JOIN (
                        SELECT work_item_id, COUNT(*) AS run_count,
@@ -965,7 +972,8 @@ class SQLiteStateStore:
                    LEFT JOIN (
                        SELECT work_item_id,
                               SUM(CASE WHEN state IN ('pending', 'attached') THEN 1 ELSE 0 END) AS queued,
-                              SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running
+                              SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running,
+                              MIN(CASE WHEN state IN ('pending', 'attached') THEN staged_at END) AS oldest_queued_at
                        FROM worker_inbox GROUP BY work_item_id
                    ) AS queue ON queue.work_item_id = item.work_item_id
                    ORDER BY COALESCE(runs.last_run_at, item.created_at) DESC"""
@@ -982,6 +990,7 @@ class SQLiteStateStore:
                 "last_run_at": row["last_run_at"],
                 "queued": row["queued"],
                 "running": row["running"],
+                "oldest_queued_at": row["oldest_queued_at"],
             }
             for row in rows
         ]
@@ -989,13 +998,46 @@ class SQLiteStateStore:
     def list_work_item_run_cards(
         self, *, work_item_id: str, limit: int
     ) -> list[dict[str, object]]:
+        return self.list_run_cards(limit=limit, work_item_id=work_item_id)
+
+    def list_run_cards(
+        self,
+        *,
+        limit: int,
+        work_item_id: str | None = None,
+        status: str | None = None,
+        source: str | None = None,
+        since: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Newest runs first; internal runs only when ``source='internal'``."""
         if limit <= 0:
             raise ValueError("limit must be positive")
+        clauses = ["run.source = ?" if source else "run.source != 'internal'"]
+        params: list[object] = [source] if source else []
+        for clause, value in (
+            ("run.work_item_id = ?", work_item_id),
+            ("run.result_status = ?", status),
+            ("run.created_at >= ?", since),
+        ):
+            if value:
+                clauses.append(clause)
+                params.append(value)
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                """SELECT run.run_id, run.created_at, run.result_status,
-                          run.latency_ms, run.source,
+                f"""SELECT run.run_id, run.created_at, run.result_status,
+                          run.latency_ms, run.source, run.work_item_id,
                           json_extract(audit.detail_json, '$.task_id') AS task_id,
+                          json_extract(audit.detail_json, '$.executed_model_tier')
+                              AS executed_model_tier,
+                          json_extract(audit.detail_json, '$.attempt_count')
+                              AS attempt_count,
+                          json_extract(audit.detail_json, '$.reason_codes')
+                              AS reason_codes_json,
+                          json_extract(audit.detail_json, '$.last_error') AS last_error,
+                          json_extract(audit.detail_json, '$.last_error_stage')
+                              AS last_error_stage,
+                          json_extract(audit.detail_json, '$.execution_result.errors')
+                              AS execution_errors_json,
                           json_extract(activity.detail_json, '$.content') AS request_content
                    FROM run_records AS run
                    LEFT JOIN audit_events AS audit ON audit.event_id = (
@@ -1006,11 +1048,97 @@ class SQLiteStateStore:
                        WHERE task_id = json_extract(audit.detail_json, '$.task_id')
                          AND phase = 'task_received'
                    )
-                   WHERE run.work_item_id = ? AND run.source != 'internal'
+                   WHERE {" AND ".join(clauses)}
                    ORDER BY run.created_at DESC LIMIT ?""",
-                (work_item_id, limit),
+                (*params, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+            cards = [dict(row) for row in rows]
+            task_ids = sorted({c["task_id"] for c in cards if c["task_id"]})
+            usage = (
+                {
+                    row["run_id"]: row
+                    for row in connection.execute(
+                        f"""SELECT run_id, MAX(model) AS model,
+                                  SUM(input_tokens) AS input_tokens,
+                                  SUM(cached_input_tokens) AS cached_input_tokens,
+                                  SUM(output_tokens) AS output_tokens,
+                                  SUM(reasoning_output_tokens) AS reasoning_output_tokens,
+                                  SUM(COALESCE(total_tokens,
+                                               input_tokens + output_tokens))
+                                      AS total_tokens
+                           FROM model_token_usage
+                           WHERE task_id IN ({",".join("?" * len(task_ids))})
+                             AND run_id IS NOT NULL
+                           GROUP BY run_id""",
+                        task_ids,
+                    )
+                }
+                if task_ids
+                else {}
+            )
+        for card in cards:
+            card["reason_codes"] = _json_strings(card.pop("reason_codes_json"))
+            card["execution_errors"] = _json_strings(card.pop("execution_errors_json"))
+            row = usage.get(card["run_id"])
+            card["model"] = row["model"] if row else None
+            card["tokens"] = (
+                {
+                    key: row[key]
+                    for key in (
+                        "input_tokens",
+                        "cached_input_tokens",
+                        "output_tokens",
+                        "reasoning_output_tokens",
+                        "total_tokens",
+                    )
+                }
+                if row
+                else None
+            )
+        return cards
+
+    def list_dead_letters(self, *, limit: int) -> list[dict[str, object]]:
+        """Dead letters without the envelope body, newest first."""
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT dead.dead_letter_id, dead.run_id, dead.reason_codes_json,
+                          dead.last_error, dead.attempt_count, dead.status,
+                          dead.created_at, dead.replayed_run_id, dead.work_item_id,
+                          json_extract(dead.envelope_json, '$.id') AS envelope_id,
+                          json_extract(dead.envelope_json, '$.source') AS source,
+                          json_extract(dead.envelope_json, '$.received_at')
+                              AS received_at,
+                          json_extract(dead.envelope_json, '$.reply_channel.type')
+                              AS reply_channel_type,
+                          json_extract(dead.envelope_json, '$.reply_channel.target')
+                              AS reply_channel_target,
+                          json_extract(audit.detail_json, '$.task_id') AS task_id
+                   FROM dead_letters AS dead
+                   LEFT JOIN audit_events AS audit ON audit.event_id = (
+                       SELECT MAX(event_id) FROM audit_events WHERE run_id = dead.run_id
+                   )
+                   ORDER BY dead.dead_letter_id DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        letters = []
+        for row in rows:
+            letter = dict(row)
+            letter["reason_codes"] = json.loads(letter.pop("reason_codes_json"))
+            letters.append(letter)
+        return letters
+
+    def egress_outbox_summary(self) -> dict[str, object]:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """SELECT COUNT(*) AS pending, MIN(created_at) AS oldest_created_at
+                   FROM egress_outbox WHERE publish_state = 'pending_publish'"""
+            ).fetchone()
+        return {
+            "pending": row["pending"],
+            "oldest_created_at": row["oldest_created_at"],
+        }
 
     def list_worker_activity_since(
         self, *, task_id: str, after_id: int, limit: int = 100
@@ -1522,3 +1650,17 @@ def _inbox_task_from_row(
 
 def _json_safe_dict(value: dict[str, object]) -> dict[str, object]:
     return json.loads(json.dumps(value, sort_keys=True))
+
+
+def _json_strings(raw: object) -> list[str]:
+    if not isinstance(raw, str):
+        return []
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return []
+    return (
+        [item for item in value if isinstance(item, str)]
+        if isinstance(value, list)
+        else []
+    )

@@ -1,5 +1,5 @@
 {
-  description = "Chatting handler and worker packages";
+  description = "Chatting handler, worker and platform packages";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
@@ -29,11 +29,16 @@
             src = self;
             inherit version;
           };
+          chatting-platform = pkgs.callPackage ./nix/platform.nix {
+            src = self;
+            handler = chatting-handler;
+          };
           chatting = pkgs.symlinkJoin {
             name = "chatting-${version}";
             paths = [
               chatting-handler
               chatting-worker
+              chatting-platform
             ];
           };
           default = chatting;

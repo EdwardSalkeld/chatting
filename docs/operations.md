@@ -20,6 +20,7 @@ after they drain.
 | --- | --- | --- |
 | Broker | `bbmb-server` (provided separately) | Configured in the broker; match the app's `bbmb_address` |
 | Handler | `chatting-handler --config /path/to/handler.json` | `127.0.0.1:9464` metrics/admin, `127.0.0.1:9467` egress, `127.0.0.1:9468` webhook |
+| Platform | `chatting-platform --config /path/to/platform.json` | `127.0.0.1:9466` unified platform interface |
 | Worker | `python -m app.worker.main --config /path/to/worker.json` | `9465` activity UI |
 
 Listener addresses and ports are configurable. Keep control and UI endpoints
@@ -30,6 +31,10 @@ The handler's metrics/admin listener serves `/metrics`, the `/schedules`,
 `/api/reminders` APIs. The egress listener serves `/egress`,
 `/work-items/register-pr` and `/api/personal-inbox`. It binds loopback because
 it can send messages to the outside world; keep it off the metrics listener.
+
+The optional [platform interface](platform-interface.md) combines these handler
+views and worker activity in a separate private, single-operator UI. It has no
+application authentication; network access control belongs to the installation.
 
 The worker's activity UI lists work items and their runs. Active runs stream
 through `/api/tasks/<task_id>/events`; raw activity JSON is at

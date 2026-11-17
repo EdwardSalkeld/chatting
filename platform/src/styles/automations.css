@@ -1,0 +1,250 @@
+.am-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.am-page > .am-toolbar {
+  margin-bottom: 0;
+}
+.am-toolbar > .toolbar-end {
+  min-width: 0;
+}
+
+.am-fg {
+  color: var(--fg);
+}
+.am-sub {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.am-warn {
+  color: var(--warn);
+}
+.am-soon {
+  color: var(--info);
+  font-weight: 500;
+}
+.am-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+.am-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+button.am-link {
+  color: var(--accent);
+  font-weight: 500;
+}
+.am-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--ok-bg);
+  color: var(--ok);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Table columns; widths live here so they can change per breakpoint. */
+.am-table .am-col-cron {
+  width: 240px;
+}
+.am-table .am-col-tz {
+  width: 130px;
+}
+.am-table .am-col-next {
+  width: 170px;
+}
+.am-table .am-col-last {
+  width: 160px;
+}
+.am-table .am-col-target {
+  width: 104px;
+}
+.am-table .am-col-ver {
+  width: 64px;
+}
+.am-table .am-col-when {
+  width: 120px;
+}
+.am-table .am-col-in {
+  width: 120px;
+}
+.am-table .am-col-status {
+  width: 110px;
+}
+.am-table td.am-col-name {
+  color: var(--fg-3);
+}
+.am-human {
+  color: var(--fg);
+}
+.am-raw {
+  margin-left: 8px;
+  color: var(--fg-3);
+}
+@media (max-width: 759px) {
+  .am-table .am-col-next {
+    width: 96px;
+  }
+  .am-table .am-col-last {
+    width: 100px;
+  }
+  .am-table .am-col-when {
+    width: 112px;
+  }
+  .am-table .am-col-in {
+    width: 124px;
+  }
+  .am-table .am-col-status {
+    width: 96px;
+  }
+  .am-table .am-col-next .am-sub {
+    display: none;
+  }
+  .am-table td.am-col-name .cell-secondary {
+    display: none;
+  }
+}
+
+/* Sheet */
+.am-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.am-form fieldset {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.am-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.am-field[data-wide] {
+  grid-column: 1 / -1;
+}
+.am-field > label {
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.am-field textarea {
+  min-height: 0;
+  resize: vertical;
+}
+.am-hint {
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.am-hint.am-warn {
+  color: var(--warn);
+  white-space: normal;
+}
+@media (max-width: 479px) {
+  .am-form fieldset {
+    grid-template-columns: 1fr;
+  }
+}
+
+.am-section h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  height: 24px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  line-height: 24px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.am-section h3 .am-sub {
+  font-size: var(--fs-xs);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.am-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.am-list > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.am-list > li:last-child {
+  border-bottom: 0;
+}
+.am-list > li[data-current] .am-ver {
+  color: var(--accent);
+}
+.am-list .am-end {
+  margin-left: auto;
+  flex: none;
+}
+.am-ver {
+  width: 28px;
+  flex: none;
+  color: var(--fg);
+  font-weight: 500;
+}
+.am-rev-status {
+  width: 64px;
+  flex: none;
+}
+.am-rev-what {
+  min-width: 0;
+  flex: 1;
+  color: var(--fg-3);
+}
+.am-empty {
+  height: 24px;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  line-height: 24px;
+}
+.am-danger {
+  color: var(--danger);
+}
+.am-danger:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.am-spacer {
+  flex: 1;
+}
+.am-clean {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
