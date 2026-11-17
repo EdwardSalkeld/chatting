@@ -1,0 +1,37 @@
+.work-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.work-page > .toolbar {
+  margin-bottom: 0;
+}
+.item-name {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.item-name > .cell-primary {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.item-name > .item-reply {
+  flex: none;
+  white-space: nowrap;
+}
+.item-failures {
+  color: var(--warn);
+}
+.item-facts {
+  padding: 0 2px;
+}
+.item-page .toolbar > .text-link {
+  height: 24px;
+}
+@media (max-width: 759px) {
+  .work-search {
+    width: 100%;
+    margin-left: 0;
+  }
+}

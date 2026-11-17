@@ -1,0 +1,36 @@
+.runs-page,
+.item-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.runs-page > .toolbar,
+.item-page > .toolbar {
+  margin-bottom: 0;
+}
+.runs-item-chip {
+  max-width: 220px;
+}
+.runs-item-chip svg {
+  flex: none;
+}
+.runs-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 16px;
+  min-width: 0;
+  padding: 0 2px;
+}
+.runs-truncated {
+  color: var(--tone);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 759px) {
+  .runs-search {
+    width: 100%;
+    margin-left: 0;
+  }
+}
