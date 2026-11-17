@@ -1,200 +1,949 @@
+import { useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Empty, ErrorNotice, Loading, PageHeading, Panel, StatusBadge } from '@/components/shared'
-import { ApiError, useInbox, useItems, useReminders, useSchedules } from '@/lib/api'
-import { dateTime, encode, itemName, relative } from '@/lib/format'
+import {
+  ErrorStrip,
+  FactsRow,
+  Panel,
+  Stat,
+  StatusBadge,
+  StatusDot,
+  TopbarActions,
+  shortAge,
+  useNow,
+  usePageTitle,
+  type Fact,
+  type Tone,
+} from '@/components/shared'
+import { DataTable, type Column } from '@/components/table'
+import {
+  ApiError,
+  useActivity,
+  useDayRuns,
+  useDeadLetters,
+  useHandlerMetrics,
+  useInbox,
+  useItems,
+  useReminders,
+  useRuns,
+  useSchedules,
+  useWorkerMetrics,
+} from '@/lib/api'
+import type { Executor, RunRow, WorkItem } from '@/lib/types'
+import {
+  encode,
+  fmtBytes,
+  fmtLatency,
+  fmtTokens,
+  fmtUptime,
+  fmtWhen,
+  fullTime,
+  itemName,
+  timeMs,
+} from '@/lib/format'
+import { statusLabel } from '@/lib/status'
+import { useUrlState } from '@/lib/url'
+import { RunStatus, SourceLabel, tokenTitle } from '@/components/runs'
+import { nextRuns } from '@/lib/cron'
+import { parseProm, promSum, promValue } from '@/lib/prom'
+import '@/styles/overview.css'
+
+const DAY = 86400e3
+const ATTENTION_ROWS = 8
+const time = timeMs
+
+/** "14:00", "Tmrw 09:00", "Wed 09:00", "Nov 30 09:00". */
+export function fmtNext(at: number, now: number) {
+  const date = new Date(at)
+  const clock = date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  const days = Math.floor((at - start.getTime()) / DAY)
+  if (days <= 0) return clock
+  if (days === 1) return `Tmrw ${clock}`
+  if (days < 7) return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${clock}`
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${clock}`
+}
+
+export function nextCronFire(cron: string, timezone: string, now: number) {
+  return nextRuns(cron, timezone, 1, new Date(now))[0]?.getTime()
+}
+
+const loopTone = (age: number | undefined): Tone =>
+  age == null ? 'neutral' : age > 300e3 ? 'danger' : age > 60e3 ? 'warn' : 'ok'
+
+interface Attention {
+  key: string
+  status: string
+  tone: Tone
+  label: string
+  title: string
+  secondary?: string
+  source?: string | null
+  detail?: string
+  at: number
+  href: string
+}
+const TONE_RANK: Record<Tone, number> = {
+  danger: 0,
+  warn: 1,
+  live: 2,
+  pending: 3,
+  ok: 4,
+  neutral: 5,
+}
+
+interface Upcoming {
+  key: string
+  kind: 'cron' | 'reminder'
+  at: number
+  title: string
+  detail: string
+  timezone?: string
+  href: string
+}
+
+type Activity =
+  | { kind: 'live'; key: string; executor: Executor }
+  | { kind: 'queued'; key: string; item: WorkItem }
+
+interface InboxCategory {
+  category: string
+  total: number
+  day: number
+  latest: number
+}
+
+const age = (now: number, at: number) => (at ? shortAge(Math.abs(now - at)) : '—')
 
 export function Overview() {
-  const items = useItems(),
-    schedules = useSchedules(),
-    reminders = useReminders(),
-    inbox = useInbox()
-  const active = items.data?.active_executors || []
-  const queued = items.data?.items.reduce((sum, item) => sum + item.queued, 0)
-  const upcoming = (reminders.data?.reminders || [])
-    .filter((r) => r.status === 'scheduled')
-    .sort((a, b) => a.run_at.localeCompare(b.run_at))
-  const metrics = [
+  usePageTitle('Overview')
+  const now = useNow(1000)
+  const minute = Math.floor(now / 60000) * 60000
+  const [attentionView, setAttentionView] = useUrlState('attention')
+
+  const items = useItems()
+  const activity = useActivity()
+  const day = useDayRuns()
+  const recent = useRuns({ limit: 10 })
+  const deadLetters = useDeadLetters()
+  const reminders = useReminders()
+  const schedules = useSchedules()
+  const inbox = useInbox()
+  const handlerMetrics = useHandlerMetrics()
+  const workerMetrics = useWorkerMetrics()
+
+  const itemMap = useMemo(
+    () => new Map((items.data?.items || []).map((item) => [item.work_item_id, item])),
+    [items.data],
+  )
+  const nameOf = (id: string | null | undefined, fallback = '—') => {
+    const item = id ? itemMap.get(id) : undefined
+    return item ? itemName(item) : id || fallback
+  }
+
+  const live = items.data?.active_executors ?? activity.data?.active_executors
+  const queuedItems = (items.data?.items || []).filter((item) => item.queued > 0)
+  const dayRuns = day.data?.runs
+  const dayErrors = useMemo(
+    () => dayRuns?.filter((run) => run.result_status !== 'success'),
+    [dayRuns],
+  )
+  const pendingDead = useMemo(
+    () => deadLetters.data?.dead_letters.filter((d) => !d.replayed_run_id),
+    [deadLetters.data],
+  )
+  const hm = useMemo(() => parseProm(handlerMetrics.data || ''), [handlerMetrics.data])
+  const wm = useMemo(() => parseProm(workerMetrics.data || ''), [workerMetrics.data])
+  const lastLoop = promValue(hm, 'chatting_message_handler_last_loop_completed_timestamp_seconds')
+  const loopAge = lastLoop ? Math.max(0, now - lastLoop * 1000) : undefined
+  const inboxMissing = inbox.error instanceof ApiError && inbox.error.status === 404
+  const outbox = activity.data?.outbox
+
+  const attention = (() => {
+    const rows: Attention[] = []
+    for (const dl of pendingDead || [])
+      rows.push({
+        key: `dl:${dl.dead_letter_id}`,
+        status: 'dead_letter',
+        tone: 'danger',
+        label: 'Dead letter',
+        title: nameOf(dl.work_item_id, dl.task_id || dl.run_id),
+        secondary: `${dl.attempt_count} attempts`,
+        source: dl.source,
+        detail: [dl.reason_codes.join(', '), dl.last_error].filter(Boolean).join(' · '),
+        at: time(dl.created_at),
+        href: `/runs/${encode(dl.run_id)}`,
+      })
+    for (const run of dayErrors || []) {
+      if (run.result_status === 'dead_letter') continue
+      const recovered = dayRuns?.some(
+        (other) =>
+          other.work_item_id === run.work_item_id &&
+          other.result_status === 'success' &&
+          time(other.created_at) > time(run.created_at),
+      )
+      rows.push({
+        key: `run:${run.run_id}`,
+        status: run.result_status,
+        tone: recovered ? 'neutral' : 'warn',
+        label: run.result_status === 'execution_error' ? 'Error' : statusLabel(run.result_status),
+        title: nameOf(run.work_item_id, run.task_id),
+        secondary: recovered ? 'later run ok' : undefined,
+        source: run.source,
+        detail: run.preview,
+        at: time(run.created_at),
+        href: `/runs/${encode(run.run_id)}`,
+      })
+    }
+    for (const reminder of reminders.data?.reminders || []) {
+      const due = time(reminder.run_at)
+      if (reminder.status !== 'scheduled' || !due || due > minute) continue
+      rows.push({
+        key: `rem:${reminder.reminder_id}`,
+        status: 'overdue',
+        tone: 'warn',
+        label: 'Overdue',
+        title: reminder.prompt,
+        secondary: `due ${fmtWhen(reminder.run_at)}`,
+        source: 'reminder',
+        detail: `${reminder.reply_channel.type} ${reminder.reply_channel.target}`,
+        at: due,
+        href: `/reminders?edit=${encode(reminder.reminder_id)}`,
+      })
+    }
+    const mail = inbox.data
+    if (mail) {
+      const oldest = mail.oldest_wait ? `oldest ${mail.oldest_wait}` : undefined
+      if (mail.stuck > 0 || mail.awaiting > 0)
+        rows.push({
+          key: 'inbox:waiting',
+          status: mail.stuck ? 'stuck' : 'waiting',
+          tone: mail.stuck ? 'warn' : 'pending',
+          label: mail.stuck ? 'Stuck' : 'Waiting',
+          title: mail.stuck
+            ? `${mail.stuck} inbox messages stuck in triage`
+            : `${mail.awaiting} inbox messages waiting`,
+          secondary: [mail.stuck ? `${mail.awaiting} waiting` : '', oldest]
+            .filter(Boolean)
+            .join(' · '),
+          source: 'email',
+          at: 0,
+          href: '/inbox?category=waiting',
+        })
+      if (Number(mail.dead_letters) > 0)
+        rows.push({
+          key: 'inbox:dead',
+          status: 'dead_letter',
+          tone: 'danger',
+          label: 'Dead letter',
+          title: `${mail.dead_letters} inbox dead letters`,
+          source: 'email',
+          at: 0,
+          href: '/inbox',
+        })
+      if (mail.last_error)
+        rows.push({
+          key: 'inbox:error',
+          status: 'error',
+          tone: 'danger',
+          label: 'Error',
+          title: 'Inbox last error',
+          source: 'email',
+          detail: mail.last_error,
+          at: 0,
+          href: '/inbox',
+        })
+    }
+    if (outbox?.pending && outbox.oldest_created_at && now - time(outbox.oldest_created_at) > 300e3)
+      rows.push({
+        key: 'outbox',
+        status: 'pending_publish',
+        tone: 'warn',
+        label: 'Outbox',
+        title: `${outbox.pending} replies waiting to publish`,
+        secondary: `oldest ${shortAge(now - time(outbox.oldest_created_at))}`,
+        source: 'internal',
+        at: time(outbox.oldest_created_at),
+        href: '/system',
+      })
+    if (loopTone(loopAge) === 'warn' || loopTone(loopAge) === 'danger')
+      rows.push({
+        key: 'handler:loop',
+        status: 'stale',
+        tone: loopTone(loopAge),
+        label: 'Stale',
+        title: 'Handler loop has not completed recently',
+        secondary: `last ${shortAge(loopAge!)} ago`,
+        source: 'internal',
+        at: now - loopAge!,
+        href: '/system',
+      })
+    // Newest first so today's failures are not buried under week-old dead letters; rows
+    // describing current state (at 0) count as now.
+    return rows.sort(
+      (a, b) => (b.at || now) - (a.at || now) || TONE_RANK[a.tone] - TONE_RANK[b.tone],
+    )
+  })()
+
+  const upcoming = useMemo(() => {
+    const rows: Upcoming[] = []
+    for (const schedule of schedules.data?.schedules || []) {
+      if (schedule.status !== 'active') continue
+      const at = nextCronFire(schedule.cron, schedule.timezone, minute)
+      if (at)
+        rows.push({
+          key: `s:${schedule.schedule_id}`,
+          kind: 'cron',
+          at,
+          title: schedule.job_name,
+          detail: schedule.cron,
+          timezone: schedule.timezone,
+          href: `/schedules?edit=${encode(schedule.schedule_id)}`,
+        })
+    }
+    for (const reminder of reminders.data?.reminders || []) {
+      const at = time(reminder.run_at)
+      if (reminder.status !== 'scheduled' || at <= minute) continue
+      rows.push({
+        key: `r:${reminder.reminder_id}`,
+        kind: 'reminder',
+        at,
+        title: reminder.prompt,
+        detail: `${reminder.reply_channel.type} ${reminder.reply_channel.target}`,
+        href: `/reminders?edit=${encode(reminder.reminder_id)}`,
+      })
+    }
+    return rows.sort((a, b) => a.at - b.at)
+  }, [schedules.data, reminders.data, minute])
+
+  const activityRows: Activity[] | undefined = live && [
+    ...live.map((executor) => ({ kind: 'live' as const, key: executor.task_id, executor })),
+    ...queuedItems.map((item) => ({ kind: 'queued' as const, key: item.work_item_id, item })),
+  ]
+
+  const inboxRows = useMemo(() => {
+    const data = inbox.data
+    if (!data) return undefined
+    const byCategory = new Map<string, InboxCategory>()
+    for (const category of ['waiting', 'review', 'action', 'order', 'news'])
+      byCategory.set(category, { category, total: 0, day: 0, latest: 0 })
+    for (const row of data.rows) {
+      const entry = byCategory.get(row.decision)
+      if (!entry) continue
+      const at = time(row.received_at)
+      if (at > minute - DAY) entry.day++
+      entry.latest = Math.max(entry.latest, at)
+    }
+    for (const entry of byCategory.values())
+      entry.total =
+        entry.category === 'waiting' ? data.awaiting : (data.counts[entry.category] ?? 0)
+    return [...byCategory.values()]
+  }, [inbox.data, minute])
+
+  const showAll = attentionView === 'all'
+  const longest = live?.reduce((max, e) => Math.max(max, now - time(e.started_at)), 0)
+  const latestDead = pendingDead?.reduce((max, d) => Math.max(max, time(d.created_at)), 0)
+  const errorTone: Tone | undefined = !dayErrors?.length
+    ? undefined
+    : dayErrors.some((r) => r.result_status === 'dead_letter')
+      ? 'danger'
+      : 'warn'
+
+  const systemFacts: Fact[] = [
     {
-      label: 'Running',
-      value: items.isError ? '—' : items.data ? active.length : '…',
-      to: '/items?filter=live',
+      label: 'Handler up',
+      value: fmtUptime(promValue(hm, 'chatting_message_handler_uptime_seconds')),
     },
-    { label: 'Queued', value: items.isError ? '—' : (queued ?? '…'), to: '/items?filter=queued' },
     {
-      label: 'Schedules',
-      value: schedules.isError ? '—' : (schedules.data?.schedules.length ?? '…'),
-      to: '/schedules',
+      label: 'Loop',
+      value: loopAge == null ? undefined : `${shortAge(loopAge)} ago`,
+      tone: loopTone(loopAge) === 'ok' ? undefined : loopTone(loopAge),
     },
     {
-      label: 'Unclassified mail',
-      value: inbox.isError ? '—' : (inbox.data?.awaiting ?? '…'),
-      to: '/inbox?category=waiting',
+      label: 'Ingress',
+      value: num(promValue(hm, 'chatting_message_handler_ingress_published_total')),
+    },
+    {
+      label: 'Egress',
+      value:
+        promValue(hm, 'chatting_message_handler_egress_dispatched_total') != null &&
+        `${num(promValue(hm, 'chatting_message_handler_egress_dispatched_total'))} / ${num(promValue(hm, 'chatting_message_handler_egress_received_total'))}`,
+      title: 'dispatched / received',
+    },
+    {
+      label: 'Dropped',
+      value: num(promValue(hm, 'chatting_message_handler_egress_dropped_total')),
+      tone: promValue(hm, 'chatting_message_handler_egress_dropped_total') ? 'warn' : undefined,
+    },
+    {
+      label: 'Dedupe',
+      value: pct(promValue(hm, 'chatting_message_handler_egress_dedupe_hit_rate_pct')),
+    },
+    {
+      label: 'Reminders late',
+      value: num(promValue(hm, 'chatting_message_handler_reminder_late_total')),
+      tone: promValue(hm, 'chatting_message_handler_reminder_late_total') ? 'warn' : undefined,
+      hidden: promValue(hm, 'chatting_message_handler_reminder_late_total') == null,
+    },
+    {
+      label: 'Outbox',
+      value:
+        outbox &&
+        (outbox.pending
+          ? `${outbox.pending} · ${shortAge(now - time(outbox.oldest_created_at))}`
+          : '0'),
+      title: 'Pending replies · age of the oldest',
+    },
+    {
+      label: 'Handler DB',
+      value: fmtBytes(promSum(hm, 'chatting_sqlite_file_size_bytes', { component: 'handler' })),
+      title: 'database + WAL + shm',
+    },
+    {
+      label: 'Worker DB',
+      value: fmtBytes(promSum(wm, 'chatting_sqlite_file_size_bytes', { component: 'worker' })),
+      title: 'database + WAL + shm',
     },
   ]
+
   return (
-    <>
-      <PageHeading title="Overview" />
-      <ErrorNotice
-        error={items.error || schedules.error}
-        retry={() => {
-          void items.refetch()
-          void schedules.refetch()
-        }}
-      />
-      <div className="stats-grid">
-        {metrics.map((metric) => (
-          <Link className="stat-card" key={metric.label} to={metric.to}>
-            <span>{metric.label}</span>
-            <strong>{metric.value}</strong>
-            <ArrowRight size={15} />
+    <div className="overview">
+      <TopbarActions>
+        <Button variant="outline" size="sm" asChild>
+          <Link to="/reminders?new=1">
+            <Plus />
+            Reminder
           </Link>
-        ))}
+        </Button>
+        <Button variant="outline" size="sm" asChild>
+          <Link to="/schedules?new=1">
+            <Plus />
+            Schedule
+          </Link>
+        </Button>
+      </TopbarActions>
+
+      <div className="stat-tiles ov-tiles">
+        <Stat
+          label="Running"
+          value={items.isError && !live ? null : (live?.length ?? '…')}
+          tone={live?.length ? 'live' : undefined}
+          sub={longest ? `longest ${shortAge(longest)}` : undefined}
+          to="/items?filter=live"
+        />
+        <Stat
+          label="Queued"
+          value={activity.isError && !activity.data ? null : (activity.data?.queue.queued ?? '…')}
+          tone={activity.data?.queue.queued ? 'pending' : undefined}
+          sub={outbox?.pending ? `${outbox.pending} to publish` : undefined}
+          to="/items?filter=queued"
+        />
+        <Stat
+          label="Errors 24h"
+          value={day.isError && !dayRuns ? null : (dayErrors?.length ?? '…')}
+          tone={errorTone}
+          sub={dayRuns && `of ${dayRuns.length}${day.data?.truncated ? '+' : ''} runs`}
+          to="/runs?status=error&since=24h"
+        />
+        <Stat
+          label="Dead letters"
+          value={deadLetters.isError && !pendingDead ? null : (pendingDead?.length ?? '…')}
+          tone={pendingDead?.length ? 'danger' : undefined}
+          sub={latestDead ? `latest ${shortAge(now - latestDead)}` : undefined}
+          to="/runs?status=dead_letter"
+        />
+        <Stat
+          label="Inbox waiting"
+          value={
+            inboxMissing
+              ? 'off'
+              : inbox.isError && !inbox.data
+                ? null
+                : (inbox.data?.awaiting ?? '…')
+          }
+          tone={inbox.data?.stuck ? 'warn' : inbox.data?.awaiting ? 'pending' : undefined}
+          sub={
+            inbox.data &&
+            [
+              inbox.data.awaiting && inbox.data.oldest_wait
+                ? `oldest ${inbox.data.oldest_wait}`
+                : '',
+              inbox.data.stuck ? `${inbox.data.stuck} stuck` : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          }
+          title={inboxMissing ? 'Personal inbox is not configured' : undefined}
+          to="/inbox?category=waiting"
+        />
+        <Stat
+          label="Handler loop"
+          value={
+            loopAge != null
+              ? shortAge(loopAge)
+              : handlerMetrics.isError
+                ? null
+                : handlerMetrics.data
+                  ? null
+                  : '…'
+          }
+          tone={loopAge == null ? undefined : loopTone(loopAge)}
+          sub={
+            promValue(hm, 'chatting_message_handler_uptime_seconds') != null
+              ? `up ${fmtUptime(promValue(hm, 'chatting_message_handler_uptime_seconds'))}`
+              : handlerMetrics.isError
+                ? 'metrics unavailable'
+                : undefined
+          }
+          title="Time since the handler last completed a loop"
+          to="/system"
+        />
       </div>
-      <div className="overview-columns">
-        <div className="overview-primary">
-          <Panel title="Running tasks" to="/items?filter=live">
-            {items.isPending ? (
-              <Loading />
-            ) : active.length ? (
-              <div className="live-list">
-                {active.map((run) => (
-                  <Link
-                    className="live-card"
-                    key={run.task_id}
-                    to={`/tasks/${encode(run.task_id)}`}
-                  >
-                    <div className="live-copy">
-                      <div>
-                        <StatusBadge status="live" />
-                        <span>{run.source}</span>
-                      </div>
-                      <h3>{run.preview || run.task_id}</h3>
-                      <p>
-                        {relative(run.started_at)} · Attempt {run.attempt}
-                      </p>
-                    </div>
-                    <ArrowRight size={17} />
-                  </Link>
-                ))}
-              </div>
-            ) : (
-              <Empty title={items.isError ? 'Worker unavailable' : 'No running tasks'} />
-            )}
-          </Panel>
-          <Panel title="Recent work items" to="/items">
-            {items.isPending ? (
-              <Loading />
-            ) : items.data?.items.length ? (
-              <div className="work-list">
-                {items.data.items.slice(0, 8).map((item) => (
-                  <Link
-                    className="work-row"
-                    key={item.work_item_id}
-                    to={`/items/${encode(item.work_item_id)}`}
-                  >
-                    <div className="work-row-copy">
-                      <h3>{itemName(item)}</h3>
-                      <p>
-                        {item.reply?.type || 'Internal'} · {item.run_count}{' '}
-                        {item.run_count === 1 ? 'run' : 'runs'}
-                      </p>
-                    </div>
-                    <span className="row-time">{relative(item.last_run_at)}</span>
-                    <ArrowRight size={16} />
-                  </Link>
-                ))}
-              </div>
-            ) : (
-              <Empty title={items.isError ? 'Worker unavailable' : 'No work items'} />
-            )}
-          </Panel>
-        </div>
-        <div className="overview-secondary">
-          <Panel title="Upcoming reminders" to="/reminders">
-            <ErrorNotice
-              error={reminders.error}
-              retry={() => {
-                void reminders.refetch()
-              }}
+
+      <section className="ov-system" aria-label="System">
+        <Link to="/system" className="ov-system-label">
+          System
+        </Link>
+        {handlerMetrics.isError && !handlerMetrics.data ? (
+          <span className="ov-system-error" data-tone="warn">
+            Handler metrics unavailable
+          </span>
+        ) : null}
+        <FactsRow
+          items={systemFacts.filter((fact) => fact.value != null && fact.value !== false)}
+        />
+      </section>
+
+      <Panel
+        title="Needs attention"
+        count={attention.length || null}
+        className="ov-attention"
+        actions={
+          attention.length > ATTENTION_ROWS && (
+            <button
+              type="button"
+              className="text-link"
+              onClick={() => setAttentionView(showAll ? '' : 'all', { replace: true })}
+            >
+              {showAll ? 'Show fewer' : `Show all ${attention.length}`}
+            </button>
+          )
+        }
+        to="/runs?status=error"
+        toLabel="Failed runs"
+      >
+        <ErrorStrip query={deadLetters} label="Dead letters" />
+        <ErrorStrip query={day} label="Runs" />
+        <DataTable
+          label="Needs attention"
+          columns={attentionColumns(now)}
+          rows={
+            !dayRuns && !pendingDead
+              ? undefined
+              : showAll
+                ? attention
+                : attention.slice(0, ATTENTION_ROWS)
+          }
+          rowKey={(row) => row.key}
+          rowHref={(row) => row.href}
+          loading={day.isPending || deadLetters.isPending}
+          sortParam={false}
+          skeletonRows={4}
+          empty="Nothing needs attention"
+        />
+      </Panel>
+
+      <div className="ov-columns">
+        <div className="ov-column">
+          <Panel
+            title="Running now"
+            count={live?.length || null}
+            meta={queuedItems.length ? `${queuedItems.length} items queued` : undefined}
+            to="/items?filter=live"
+          >
+            <ErrorStrip query={items} label="Worker" />
+            <DataTable
+              label="Running now"
+              columns={activityColumns(now, nameOf)}
+              rows={activityRows}
+              rowKey={(row) => `${row.kind}:${row.key}`}
+              rowHref={(row) =>
+                row.kind === 'live'
+                  ? `/tasks/${encode(row.executor.task_id)}`
+                  : `/items/${encode(row.item.work_item_id)}`
+              }
+              loading={items.isPending}
+              sortParam={false}
+              skeletonRows={3}
+              empty="Nothing running"
             />
-            {reminders.isPending ? (
-              <Loading />
-            ) : upcoming.length ? (
-              <div className="upcoming-list">
-                {upcoming.slice(0, 5).map((reminder) => (
-                  <Link
-                    className="upcoming-row"
-                    key={reminder.reminder_id}
-                    to={`/reminders?edit=${encode(reminder.reminder_id)}`}
-                  >
-                    <div>
-                      <h3>{reminder.prompt}</h3>
-                      <p>{dateTime(reminder.run_at)}</p>
-                    </div>
-                    <ArrowRight size={15} />
-                  </Link>
-                ))}
-              </div>
-            ) : (
-              <Empty
-                title={reminders.isError ? 'Reminders unavailable' : 'No upcoming reminders'}
-              />
-            )}
-            <Link to="/reminders?new=1" className="panel-footer-link">
-              <Plus size={14} />
-              New reminder
-            </Link>
           </Panel>
-          <Panel title="Inbox" to="/inbox">
-            {inbox.isPending ? (
-              <Loading />
-            ) : inbox.isError ? (
-              <div className="small-empty">
-                {inbox.error instanceof ApiError && inbox.error.status === 404
-                  ? 'Not configured'
-                  : 'Inbox unavailable'}
-              </div>
+          <Panel title="Recent runs" to="/runs" className="ov-capped">
+            <ErrorStrip query={recent} label="Runs" />
+            <DataTable
+              label="Recent runs"
+              columns={recentColumns(nameOf)}
+              rows={recent.data?.runs}
+              rowKey={(row) => row.run_id}
+              rowHref={(row) => `/runs/${encode(row.run_id)}`}
+              rowVersion={(row) => row.result_status}
+              loading={recent.isPending}
+              sortParam={false}
+              empty="No runs yet"
+            />
+          </Panel>
+        </div>
+        <div className="ov-column">
+          <Panel
+            title="Upcoming"
+            meta="cron and reminders"
+            count={upcoming.length || null}
+            to="/schedules"
+            toLabel="Schedules"
+            actions={
+              <Link to="/reminders" className="text-link">
+                Reminders
+              </Link>
+            }
+            className="ov-capped"
+          >
+            <ErrorStrip query={schedules} label="Schedules" />
+            <ErrorStrip query={reminders} label="Reminders" />
+            <DataTable
+              label="Upcoming"
+              columns={upcomingColumns(now)}
+              rows={schedules.data || reminders.data ? upcoming.slice(0, 8) : undefined}
+              rowKey={(row) => row.key}
+              rowHref={(row) => row.href}
+              loading={schedules.isPending || reminders.isPending}
+              sortParam={false}
+              empty="Nothing scheduled"
+            />
+          </Panel>
+          <Panel
+            title="Inbox"
+            meta={
+              inbox.data &&
+              `${inbox.data.dry_run ? 'dry run' : 'live'} · threshold ${inbox.data.threshold}`
+            }
+            to="/inbox"
+          >
+            {inboxMissing ? (
+              <div className="ov-note">Personal inbox is not configured</div>
             ) : (
-              inbox.data && (
-                <>
-                  <div className="inbox-overview-status">
-                    <StatusBadge status={inbox.data.dry_run ? 'preview' : 'active'}>
-                      {inbox.data.dry_run ? 'Preview' : 'Active'}
-                    </StatusBadge>
-                    <span>{inbox.data.rows.length} recent decisions</span>
-                  </div>
-                  {inbox.data.rows.length ? (
-                    <div className="inbox-overview-list">
-                      {['action', 'review', 'order', 'news', 'waiting'].map((category) => (
-                        <Link key={category} to={`/inbox?category=${category}`}>
-                          <StatusBadge status={category} />
-                          <strong>
-                            {inbox.data!.rows.filter((row) => row.decision === category).length}
-                          </strong>
-                          <ArrowRight size={13} />
-                        </Link>
-                      ))}
-                    </div>
-                  ) : (
-                    <Empty title="No decisions" />
-                  )}
-                  {!!inbox.data.last_error && (
-                    <ErrorNotice error={new Error(inbox.data.last_error)} />
-                  )}
-                </>
-              )
+              <>
+                <ErrorStrip query={inbox} label="Inbox" />
+                {inbox.data && (
+                  <InboxFacts
+                    stuck={inbox.data.stuck}
+                    deadLetters={inbox.data.dead_letters}
+                    oldest={inbox.data.oldest_wait}
+                    error={inbox.data.last_error}
+                  />
+                )}
+                <DataTable
+                  label="Inbox categories"
+                  columns={inboxColumns(now)}
+                  rows={inboxRows}
+                  rowKey={(row) => row.category}
+                  rowHref={(row) => `/inbox?category=${row.category}`}
+                  loading={inbox.isPending}
+                  sortParam={false}
+                  skeletonRows={5}
+                />
+              </>
             )}
           </Panel>
-          <Button variant="outline" asChild>
-            <Link to="/schedules?new=1">
-              <Plus />
-              New schedule
-            </Link>
-          </Button>
         </div>
       </div>
-    </>
+    </div>
   )
+}
+
+function num(value: number | undefined) {
+  return value == null ? undefined : value.toLocaleString()
+}
+function pct(value: number | undefined) {
+  return value == null ? undefined : `${value.toFixed(1)}%`
+}
+
+function InboxFacts({
+  stuck,
+  deadLetters,
+  oldest,
+  error,
+}: {
+  stuck: number
+  deadLetters: string
+  oldest: string
+  error: string
+}) {
+  return (
+    <div className="ov-inbox-facts">
+      <FactsRow
+        items={[
+          { label: 'Stuck', value: String(stuck), tone: stuck ? 'warn' : undefined },
+          { label: 'Oldest wait', value: oldest || '—' },
+          {
+            label: 'Dead letters',
+            value: deadLetters || '0',
+            tone: Number(deadLetters) > 0 ? 'danger' : undefined,
+          },
+        ]}
+      />
+      {error && (
+        <div className="ov-inbox-error" data-tone="danger" title={error}>
+          <StatusDot tone="danger" label="Error" />
+          <span className="truncate">Last error · {error}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Primary({ title, secondary }: { title: ReactNode; secondary?: ReactNode }) {
+  return (
+    <span className="ov-primary">
+      <span className="cell-primary truncate">{title}</span>
+      {secondary && <span className="cell-secondary truncate">{secondary}</span>}
+    </span>
+  )
+}
+
+function attentionColumns(now: number): Column<Attention>[] {
+  return [
+    {
+      key: 'status',
+      header: 'Status',
+      width: 112,
+      cell: (row) => (
+        <StatusBadge status={row.status} tone={row.tone}>
+          {row.label}
+        </StatusBadge>
+      ),
+    },
+    {
+      key: 'what',
+      header: 'What',
+      cell: (row) => <Primary title={row.title} secondary={row.secondary} />,
+      title: (row) => row.title,
+    },
+    {
+      key: 'source',
+      header: 'Source',
+      width: 104,
+      priority: 2,
+      cell: (row) => <SourceLabel source={row.source} />,
+    },
+    {
+      key: 'detail',
+      header: 'Detail',
+      width: '38%',
+      priority: 3,
+      mono: true,
+      cell: (row) => row.detail || '—',
+      title: (row) => row.detail,
+    },
+    {
+      key: 'age',
+      header: 'Age',
+      width: 56,
+      align: 'right',
+      cell: (row) => age(now, row.at),
+      title: (row) => (row.at ? new Date(row.at).toLocaleString() : undefined),
+    },
+  ]
+}
+
+function activityColumns(
+  now: number,
+  nameOf: (id: string | null | undefined, fallback?: string) => string,
+): Column<Activity>[] {
+  return [
+    {
+      key: 'status',
+      header: 'Status',
+      width: 96,
+      cell: (row) =>
+        row.kind === 'live' ? (
+          <StatusBadge status="live" tone="live">
+            Live
+          </StatusBadge>
+        ) : (
+          <StatusBadge status="queued" kind="run" />
+        ),
+    },
+    {
+      key: 'what',
+      header: 'Work item',
+      cell: (row) =>
+        row.kind === 'live' ? (
+          <Primary
+            title={nameOf(row.executor.work_item_id, row.executor.task_id)}
+            secondary={row.executor.preview}
+          />
+        ) : (
+          <Primary title={itemName(row.item)} secondary={`${row.item.queued} queued`} />
+        ),
+      title: (row) => (row.kind === 'live' ? row.executor.preview : undefined),
+    },
+    {
+      key: 'source',
+      header: 'Source',
+      width: 92,
+      priority: 2,
+      cell: (row) => (
+        <SourceLabel source={row.kind === 'live' ? row.executor.source : row.item.reply?.type} />
+      ),
+    },
+    {
+      key: 'attempt',
+      header: 'Att',
+      width: 44,
+      align: 'right',
+      priority: 3,
+      cell: (row) => (row.kind === 'live' ? row.executor.attempt : '—'),
+    },
+    {
+      key: 'elapsed',
+      header: 'For',
+      width: 56,
+      align: 'right',
+      cell: (row) => (row.kind === 'live' ? age(now, time(row.executor.started_at)) : '—'),
+      title: (row) => (row.kind === 'live' ? fullTime(row.executor.started_at) : undefined),
+    },
+  ]
+}
+
+function recentColumns(
+  nameOf: (id: string | null | undefined, fallback?: string) => string,
+): Column<RunRow>[] {
+  return [
+    {
+      key: 'status',
+      header: 'Status',
+      width: 96,
+      cell: (row) => <RunStatus status={row.result_status} />,
+    },
+    {
+      key: 'when',
+      header: 'When',
+      width: 88,
+      cell: (row) => <span className="num">{fmtWhen(row.created_at)}</span>,
+      title: (row) => fullTime(row.created_at),
+    },
+    {
+      key: 'what',
+      header: 'Work item',
+      cell: (row) => (
+        <Primary title={nameOf(row.work_item_id, row.task_id)} secondary={row.preview} />
+      ),
+      title: (row) => row.preview,
+    },
+    {
+      key: 'source',
+      header: 'Source',
+      width: 92,
+      priority: 3,
+      cell: (row) => <SourceLabel source={row.source} />,
+    },
+    {
+      key: 'latency',
+      header: 'Took',
+      width: 68,
+      align: 'right',
+      priority: 2,
+      cell: (row) => fmtLatency(row.latency_ms),
+    },
+    {
+      key: 'tokens',
+      header: 'Tokens',
+      width: 72,
+      align: 'right',
+      priority: 2,
+      mono: true,
+      cell: (row) => fmtTokens(row.tokens?.total_tokens),
+      title: (row) => tokenTitle(row.tokens, row.model),
+    },
+  ]
+}
+
+function upcomingColumns(now: number): Column<Upcoming>[] {
+  return [
+    {
+      key: 'when',
+      header: 'When',
+      width: 92,
+      cell: (row) => <span className="num">{fmtNext(row.at, now)}</span>,
+      title: (row) => new Date(row.at).toLocaleString(),
+    },
+    {
+      key: 'in',
+      header: 'In',
+      width: 48,
+      align: 'right',
+      cell: (row) => shortAge(row.at - now),
+    },
+    {
+      key: 'kind',
+      header: 'Kind',
+      width: 96,
+      priority: 2,
+      cell: (row) => <SourceLabel source={row.kind} />,
+    },
+    {
+      key: 'what',
+      header: 'What',
+      cell: (row) => (
+        <span className="ov-primary">
+          <span className="cell-primary truncate">{row.title}</span>
+          {row.kind === 'cron' && (
+            <span className="cell-secondary mono truncate" data-priority="3">
+              {row.detail}
+              {row.timezone && row.timezone !== 'UTC' ? ` ${row.timezone}` : ''}
+            </span>
+          )}
+        </span>
+      ),
+      title: (row) => `${row.title} · ${row.detail}${row.timezone ? ` (${row.timezone})` : ''}`,
+    },
+  ]
+}
+
+function inboxColumns(now: number): Column<InboxCategory>[] {
+  return [
+    {
+      key: 'category',
+      header: 'Category',
+      cell: (row) => <StatusBadge status={row.category} kind="inbox" />,
+    },
+    {
+      key: 'total',
+      header: 'Total',
+      width: 64,
+      align: 'right',
+      cell: (row) => row.total.toLocaleString(),
+    },
+    {
+      key: 'day',
+      header: '24h',
+      width: 56,
+      align: 'right',
+      cell: (row) => row.day || '—',
+    },
+    {
+      key: 'latest',
+      header: 'Latest',
+      width: 64,
+      align: 'right',
+      cell: (row) => age(now, row.latest),
+      title: (row) => (row.latest ? new Date(row.latest).toLocaleString() : undefined),
+    },
+  ]
 }
