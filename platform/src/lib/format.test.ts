@@ -50,8 +50,10 @@ it('formats past and future times with one relative style', () => {
   const now = new Date(2026, 10, 17, 12, 0).getTime()
   const at = (d: number, h: number, m = 0) => new Date(2026, 10, 17 + d, h, m).getTime()
   expect(fmtWhen(at(0, 9, 5), { now })).toBe('09:05')
-  expect(fmtWhen(at(-1, 18, 30), { now })).toBe('Yest 18:30')
-  expect(fmtWhen(at(1, 8), { now })).toBe('Tmrw 08:00')
+  const weekday = (d: number) =>
+    new Date(at(d, 0)).toLocaleDateString(undefined, { weekday: 'short' })
+  expect(fmtWhen(at(-1, 18, 30), { now })).toBe(`${weekday(-1)} 18:30`)
+  expect(fmtWhen(at(1, 8), { now })).toBe(`${weekday(1)} 08:00`)
   expect(fmtWhen(at(0, 9, 5) + 7000, { now, seconds: true })).toBe('09:05:07')
   expect(fmtWhen(at(-3, 12), { now })).toMatch(/^\S+ 12:00$/)
   expect(fmtWhen(at(-30, 12), { now })).toMatch(/ 12:00$/)
