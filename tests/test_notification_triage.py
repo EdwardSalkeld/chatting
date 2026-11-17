@@ -58,18 +58,8 @@ class NotificationTriageTests(unittest.TestCase):
         ).start()
         self.addCleanup(patch.stopall)
 
-    def triage(self, mode="enforce"):
-        return NotificationTriage(self.path, repo="repo", key="test-key", mode=mode)
-
-    def test_observation_forwards_and_records_what_would_be_suppressed(self):
-        self.assertTrue(self.triage("observe").forward(task()))
-        with sqlite3.connect(self.path) as db:
-            detail = json.loads(
-                db.execute("SELECT detail FROM decisions").fetchone()[0]
-            )
-        self.assertFalse(detail["would_forward"])
-        self.assertTrue(detail["forward"])
-        self.assertEqual(detail["rules_revision"], "abc123")
+    def triage(self):
+        return NotificationTriage(self.path, repo="repo", key="test-key")
 
     def test_sequence_restart_and_redelivery_preserve_comparison_and_decision(self):
         triage = self.triage()
@@ -132,11 +122,11 @@ class NotificationTriageTests(unittest.TestCase):
             self.assertTrue(triage.forward(message))
         self.post.assert_not_called()
 
-    def test_disabled_by_default_and_missing_configuration_is_safe(self):
+    def test_missing_configuration_is_safe(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(from_environment(self.path))
         with patch.dict(
-            "os.environ", {"CHATTING_NOTIFICATION_TRIAGE_MODE": "observe"}, clear=True
+            "os.environ", {"CHATTING_NOTIFICATION_RULES_REPO": "repo"}, clear=True
         ):
             self.assertIsNone(from_environment(self.path))
 

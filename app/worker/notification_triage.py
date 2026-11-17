@@ -30,10 +30,8 @@ QUESTION = (
 
 
 class NotificationTriage:
-    def __init__(self, path: str, *, repo: str, key: str, mode: str = "observe"):
-        if mode not in ("observe", "enforce"):
-            raise ValueError("notification triage mode must be observe or enforce")
-        self.path, self.repo, self.key, self.mode = path, repo, key, mode
+    def __init__(self, path: str, *, repo: str, key: str):
+        self.path, self.repo, self.key = path, repo, key
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(descriptor)
@@ -104,7 +102,6 @@ class NotificationTriage:
                 previous["updated_at"], field_name="previous.updated_at"
             )
             detail = {
-                "mode": self.mode,
                 "stream": stream,
                 "event_id": task.task_id,
                 "previous_event_id": previous["event_id"] if previous else None,
@@ -161,8 +158,8 @@ class NotificationTriage:
             except Exception as error:  # noqa: BLE001
                 detail.setdefault("reason", "assessment_failed")
                 detail["error_type"] = type(error).__name__
-            forward = self.mode == "observe" or attention
-            detail.update(would_forward=attention, forward=forward)
+            forward = attention
+            detail.update(forward=forward)
             # The single collector persists decisions before staging/ACK. A crash
             # reuses this decision and stages it before collecting later events.
             with db:
@@ -186,20 +183,13 @@ class NotificationTriage:
 
 
 def from_environment(db_path: str) -> NotificationTriage | None:
-    mode = os.environ.get("CHATTING_NOTIFICATION_TRIAGE_MODE", "off")
-    if mode == "off":
-        return None
-    if mode not in ("observe", "enforce"):
-        raise ValueError("invalid notification triage mode")
     repo = os.environ.get("CHATTING_NOTIFICATION_RULES_REPO", "")
     key = os.environ.get("TYPESAFE_API_KEY", "")
     if not repo or not key:
         LOGGER.warning("notification_triage_disabled reason=missing_configuration")
         return None
     try:
-        return NotificationTriage(
-            f"{db_path}.notifications", repo=repo, key=key, mode=mode
-        )
+        return NotificationTriage(f"{db_path}.notifications", repo=repo, key=key)
     except Exception as error:  # noqa: BLE001
         LOGGER.warning("notification_triage_disabled type=%s", type(error).__name__)
         return None

@@ -28,7 +28,7 @@ def main() -> int:
     mismatches = 0
     with tempfile.TemporaryDirectory() as directory:
         path = str(Path(directory) / "replay.db")
-        triage = NotificationTriage(path, repo=args.rules_repo, key=key, mode="enforce")
+        triage = NotificationTriage(path, repo=args.rules_repo, key=key)
         with Path(args.input).open() as source:
             for line in source:
                 example = json.loads(line)
