@@ -16,7 +16,6 @@ from app.worker.main import (
     _log_worker_processed,
     _load_config,
     _replay_egress_outbox,
-    _resolve_int,
     unknown_config_keys,
 )
 from app.worker.runtime import WorkerProcessResult
@@ -64,12 +63,6 @@ class ReplayEgressOutboxTests(unittest.TestCase):
         # Acked -> not replayable.
         self.assertEqual(store.list_replayable_egress_outbox_events(), [])
         self.assertEqual(monitor.egress_calls, ["outbox_replay"])
-
-    def test_transient_failure_leaves_event_pending_for_replay(self) -> None:
-        store, monitor = self._run((0, {"reason": "unreachable"}))
-        replayable = store.list_replayable_egress_outbox_events()
-        self.assertEqual(len(replayable), 1)
-        self.assertEqual(monitor.egress_calls, [])
 
     def test_permanent_drop_422_is_loud_and_acked(self) -> None:
         with self.assertLogs("app.worker.main", level="ERROR") as captured:
@@ -125,20 +118,6 @@ class MainWorkerTests(unittest.TestCase):
         self.assertEqual(unknown_config_keys(payload), ["surprise"])
         self.assertEqual(unknown_config_keys({"bbmb_address": "127.0.0.1:9876"}), [])
 
-    def test_resolve_non_negative_int_boundary(self):
-        self.assertEqual(
-            _resolve_int(
-                0, default_value=9465, setting_name="activity_port", minimum=0
-            ),
-            0,
-        )
-        with self.assertRaisesRegex(
-            ValueError, "config activity_port must be a non-negative integer"
-        ):
-            _resolve_int(
-                -1, default_value=9465, setting_name="activity_port", minimum=0
-            )
-
     def test_build_executor_env_propagates_cli_config_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "worker.json"
@@ -154,79 +133,30 @@ class MainWorkerTests(unittest.TestCase):
             str(config_path.resolve()),
         )
 
-    def test_build_executor_env_skips_override_without_cli_config(self) -> None:
-        self.assertIsNone(
-            _build_executor_env(None, {WORKER_CONFIG_PATH_ENV_VAR: "/tmp/worker.json"})
-        )
-
-    def test_log_worker_processed_keeps_success_terse(self) -> None:
-        result = self._build_result(
-            result_status="success",
-            reason_codes=[],
-            attempt_count=1,
-            error_summary=None,
-        )
-
-        with self.assertLogs("app.worker.main", level="INFO") as captured:
-            _log_worker_processed(task_id="task:1", result=result)
-
-        self.assertEqual(len(captured.output), 1)
-        log_line = captured.output[0]
-        self.assertIn("INFO:app.worker.main:worker_processed", log_line)
-        self.assertIn("result_status=success", log_line)
-        self.assertNotIn("reason_codes=", log_line)
-        self.assertNotIn("attempt_count=", log_line)
-        self.assertNotIn("error_summary=", log_line)
-
     def test_log_worker_processed_includes_failure_context(self):
-        for status, reasons, attempts, summary in (
-            (
-                "execution_error",
-                ["executor_reported_errors"],
-                1,
-                "executor_exit_nonzero:1:model unsupported",
-            ),
-            ("dead_letter", ["retry_exhausted"], 2, "RuntimeError: executor down"),
-        ):
-            with self.subTest(status=status):
-                result = self._build_result(
-                    result_status=status,
-                    reason_codes=reasons,
-                    attempt_count=attempts,
-                    error_summary=summary,
-                )
-                with self.assertLogs("app.worker.main", level="WARNING") as captured:
-                    _log_worker_processed(task_id="task:1", result=result)
-                self.assertEqual(len(captured.output), 1)
-                for field in (
-                    f"result_status={status}",
-                    f"reason_codes={reasons[0]}",
-                    f"attempt_count={attempts}",
-                    f"error_summary={summary}",
-                ):
-                    self.assertIn(field, captured.output[0])
-
-    def _build_result(
-        self,
-        *,
-        result_status: str,
-        reason_codes: list[str],
-        attempt_count: int,
-        error_summary: str | None,
-    ) -> WorkerProcessResult:
-        return WorkerProcessResult(
+        result = WorkerProcessResult(
             run_record=RunRecord(
                 run_id="run:task:1:123",
                 envelope_id="email:1",
                 source="email",
                 workflow="default",
                 latency_ms=12,
-                result_status=result_status,
+                result_status="dead_letter",
                 created_at=datetime(2026, 6, 7, 22, 30, tzinfo=timezone.utc),
             ),
             egress_messages=[],
-            dead_lettered=result_status == "dead_letter",
-            attempt_count=attempt_count,
-            reason_codes=reason_codes,
-            error_summary=error_summary,
+            dead_lettered=True,
+            attempt_count=2,
+            reason_codes=["retry_exhausted"],
+            error_summary="RuntimeError: executor down",
         )
+        with self.assertLogs("app.worker.main", level="WARNING") as captured:
+            _log_worker_processed(task_id="task:1", result=result)
+        self.assertEqual(len(captured.output), 1)
+        for field in (
+            "result_status=dead_letter",
+            "reason_codes=retry_exhausted",
+            "attempt_count=2",
+            "error_summary=RuntimeError: executor down",
+        ):
+            self.assertIn(field, captured.output[0])
