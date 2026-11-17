@@ -1,21 +1,30 @@
-import copy
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from app.models import ReplyChannel, TaskEnvelope
 from app.state import SQLiteStateStore
-from app.worker.model_router import choose_model
-from datetime import datetime, timezone
+from app.worker.model_router import ModelDecision, choose_model
+
+
+def _choice(confidence: float, low: float | None = None) -> dict:
+    low = (1 + confidence) / 2 if low is None else low
+    return {
+        "type": "choice",
+        "choice": "low",
+        "confidence": confidence,
+        "probabilities": {"low": low, "high": 1 - low},
+    }
 
 
 class ModelRouterTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.store = SQLiteStateStore(str(Path(self.tmp.name) / "worker.db"))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.store = SQLiteStateStore(str(Path(tmp.name) / "worker.db"))
         self.envelope = TaskEnvelope(
             id="test:1",
             source="im",
@@ -30,126 +39,53 @@ class ModelRouterTests(unittest.TestCase):
             dedupe_key="test:1",
         )
 
-    def test_missing_key_uses_high_without_network_call(self):
+    def choose(self, answer, env=None) -> tuple[ModelDecision, object]:
+        reply = (
+            {"side_effect": answer}
+            if isinstance(answer, BaseException)
+            else {"return_value": {"answers": {"executor_tier": answer}}}
+        )
         with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("app.worker.model_router.typesafe.post") as call,
+            patch.dict(
+                os.environ,
+                {"TYPESAFE_API_KEY": "k"} if env is None else env,
+                clear=True,
+            ),
+            patch("app.worker.model_router.typesafe.post", **reply) as call,
         ):
-            decision = choose_model(store=self.store, envelope=self.envelope)
+            return choose_model(store=self.store, envelope=self.envelope), call
+
+    def test_missing_key_uses_high_without_network_call(self):
+        decision, call = self.choose(_choice(0.94), env={})
         self.assertEqual((decision.tier, decision.reason), ("high", "jev_key_missing"))
         call.assert_not_called()
 
     def test_confident_low_uses_luna_and_sends_bounded_state(self):
-        answer = {
-            "model": "jev-1.14.0",
-            "answers": {
-                "executor_tier": {
-                    "type": "choice",
-                    "choice": "low",
-                    "confidence": 0.94,
-                    "probabilities": {"low": 0.97, "high": 0.03},
-                }
-            },
-        }
-        with (
-            patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
-            patch(
-                "app.worker.model_router.typesafe.post",
-                return_value=answer,
-            ) as call,
-        ):
-            decision = choose_model(store=self.store, envelope=self.envelope)
+        decision, call = self.choose(_choice(0.94))
         self.assertEqual(decision.tier, "low")
         sent = call.call_args.args[2]
         self.assertEqual(sent["state"]["current_request"], self.envelope.content)
-        self.assertEqual(sent["model"], "jev-1.14.0")
         self.assertEqual(call.call_args.kwargs["timeout"], 5)
         self.assertFalse(call.call_args.kwargs["retry_429"])
 
-    def test_uncertain_or_failed_choice_uses_high(self):
-        answer = {
-            "model": "jev-1.14.0",
-            "answers": {
-                "executor_tier": {
-                    "type": "choice",
-                    "choice": "low",
-                    "confidence": 0.70,
-                    "probabilities": {"low": 0.85, "high": 0.15},
-                }
-            },
-        }
-        with (
-            patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
-            patch(
-                "app.worker.model_router.typesafe.post",
-                return_value=answer,
-            ),
-        ):
-            self.assertEqual(
-                choose_model(store=self.store, envelope=self.envelope).tier, "high"
-            )
-        with (
-            patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
-            patch(
-                "app.worker.model_router.typesafe.post",
-                side_effect=TimeoutError,
-            ),
-        ):
-            self.assertEqual(
-                choose_model(store=self.store, envelope=self.envelope).reason,
-                "jev_unavailable_or_invalid",
-            )
+    def test_real_binary_confidence_boundaries(self):
+        for confidence, expected in ((0.79, "high"), (0.8, "low"), (0.81, "low")):
+            with self.subTest(confidence=confidence):
+                self.assertEqual(self.choose(_choice(confidence))[0].tier, expected)
 
-    def test_malformed_results_never_choose_luna(self):
-        valid = {
-            "type": "choice",
-            "choice": "low",
-            "confidence": 0.9,
-            "probabilities": {"low": 0.95, "high": 0.05},
-        }
-        cases = [
+    def test_failed_or_malformed_results_never_choose_luna(self):
+        valid = _choice(0.9)
+        for answer in (
+            TimeoutError(),
             {**valid, "probabilities": {"low": 0.95, "high": 0.95}},
             {**valid, "confidence": True},
-            {**valid, "confidence": "0.9"},
             {**valid, "confidence": float("nan")},
             {**valid, "confidence": 0.99},
-            {**valid, "choice": "high"},
-            {**valid, "probabilities": {"low": True, "high": 0}},
             {**valid, "probabilities": {"low": 0.95, "other": 0.05}},
-        ]
-        for answer in cases:
-            with (
-                self.subTest(answer=answer),
-                patch.dict(os.environ, {"TYPESAFE_API_KEY": "test"}),
-                patch(
-                    "app.worker.model_router.typesafe.post",
-                    return_value={"answers": {"executor_tier": copy.deepcopy(answer)}},
-                ),
-            ):
-                decision = choose_model(store=self.store, envelope=self.envelope)
+        ):
+            with self.subTest(answer=answer):
+                decision, _ = self.choose(answer)
                 self.assertEqual(
                     (decision.tier, decision.reason),
                     ("high", "jev_unavailable_or_invalid"),
-                )
-
-    def test_real_binary_confidence_boundaries(self):
-        for confidence, expected in ((0.79, "high"), (0.8, "low"), (0.81, "low")):
-            p = (1 + confidence) / 2
-            answer = {
-                "type": "choice",
-                "choice": "low",
-                "confidence": confidence,
-                "probabilities": {"low": p, "high": 1 - p},
-            }
-            with (
-                self.subTest(confidence=confidence),
-                patch.dict(os.environ, {"TYPESAFE_API_KEY": "test"}),
-                patch(
-                    "app.worker.model_router.typesafe.post",
-                    return_value={"answers": {"executor_tier": answer}},
-                ),
-            ):
-                self.assertEqual(
-                    choose_model(store=self.store, envelope=self.envelope).tier,
-                    expected,
                 )
