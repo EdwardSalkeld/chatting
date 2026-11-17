@@ -111,7 +111,11 @@ func (service *Service) listReminders(writer http.ResponseWriter, request *http.
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	records, err := service.store.ListReminders(request.Context(), status)
+	list := service.store.ListReminders
+	if request.URL.Query().Get("latest") == "1" {
+		list = service.store.ListLatestReminders
+	}
+	records, err := list(request.Context(), status)
 	if err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err.Error())
 		return

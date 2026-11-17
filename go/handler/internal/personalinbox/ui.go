@@ -1,6 +1,7 @@
 package personalinbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -14,29 +15,33 @@ const uiRoutePrefix = "/personal-inbox"
 // than anywhere reachable from outside.
 func RegisterUIRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc(uiRoutePrefix, service.handleUIDecisions)
+	// The platform reads the same bounded decision view as the existing page.
+	// This remains on the private metrics/admin mux, never webhook ingress.
+	mux.HandleFunc("/api/personal-inbox/decisions", service.handleUIDecisions)
 }
 
 type decisionRow struct {
-	Received     string
-	Sender       string
-	Subject      string
-	Decision     string
-	Score        string
-	Why          string
-	Link         string
-	Unclassified bool
+	Received     string `json:"received"`
+	ReceivedAt   string `json:"received_at"`
+	Sender       string `json:"sender"`
+	Subject      string `json:"subject"`
+	Decision     string `json:"decision"`
+	Score        string `json:"score"`
+	Why          string `json:"why"`
+	Link         string `json:"link"`
+	Unclassified bool   `json:"unclassified"`
 }
 
 type decisionsView struct {
-	DryRun     bool
-	Threshold  string
-	Counts     map[string]int
-	Awaiting   int
-	Stuck      int
-	OldestWait string
-	DeadLetter string
-	LastError  string
-	Rows       []decisionRow
+	DryRun     bool           `json:"dry_run"`
+	Threshold  string         `json:"threshold"`
+	Counts     map[string]int `json:"counts"`
+	Awaiting   int            `json:"awaiting"`
+	Stuck      int            `json:"stuck"`
+	OldestWait string         `json:"oldest_wait"`
+	DeadLetter string         `json:"dead_letters"`
+	LastError  string         `json:"last_error"`
+	Rows       []decisionRow  `json:"rows"`
 }
 
 func (service *Service) handleUIDecisions(writer http.ResponseWriter, request *http.Request) {
@@ -68,15 +73,17 @@ func (service *Service) handleUIDecisions(writer http.ResponseWriter, request *h
 		OldestWait: humaniseAge(oldest),
 		DeadLetter: deadLetters,
 		LastError:  lastError,
+		Rows:       []decisionRow{},
 	}
 	if view.DeadLetter == "" {
 		view.DeadLetter = "0"
 	}
 	for _, message := range messages {
 		row := decisionRow{
-			Received: time.Unix(message.Created, 0).UTC().Format("02 Jan 15:04"),
-			Sender:   message.Mail.From,
-			Subject:  message.Mail.Subject,
+			Received:   time.Unix(message.Created, 0).UTC().Format("02 Jan 15:04"),
+			ReceivedAt: time.Unix(message.Created, 0).UTC().Format(time.RFC3339),
+			Sender:     message.Mail.From,
+			Subject:    message.Mail.Subject,
 		}
 		classification := message.Classification
 		if classification == nil {
@@ -99,6 +106,12 @@ func (service *Service) handleUIDecisions(writer http.ResponseWriter, request *h
 			view.Counts[classification.Category]++
 		}
 		view.Rows = append(view.Rows, row)
+	}
+	if request.URL.Path == "/api/personal-inbox/decisions" {
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		writer.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(writer).Encode(view)
+		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := decisionsTemplate.Execute(writer, view); err != nil {

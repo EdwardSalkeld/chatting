@@ -172,3 +172,42 @@ func TestReminderErrorsIncludeCorrectiveUsage(t *testing.T) {
 		})
 	}
 }
+
+func TestLatestReminderCollectionFiltersAfterSelectingRevision(t *testing.T) {
+	server, _ := newTestServer(t)
+	create, err := server.Client().Post(server.URL+"/api/reminders", "application/json", strings.NewReader(validBody("latest-create", "Original")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := decodeReminder(t, readBody(t, create))
+	request, _ := http.NewRequest("PUT", server.URL+"/api/reminders/"+original.ReminderID, strings.NewReader(validBody("latest-update", "Rescheduled")))
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := decodeReminder(t, readBody(t, response))
+	if updated.Revision != 2 {
+		t.Fatal("expected second revision")
+	}
+	for _, tc := range []struct {
+		query string
+		count int
+	}{{"status=all", 2}, {"status=all&latest=1", 1}, {"status=cancelled&latest=1", 0}, {"status=scheduled&latest=1", 1}} {
+		response, err := server.Client().Get(server.URL + "/api/reminders?" + tc.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Reminders []reminderJSON `json:"reminders"`
+		}
+		if err := json.Unmarshal(readBody(t, response), &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Reminders) != tc.count {
+			t.Fatalf("%s: got %d want %d", tc.query, len(body.Reminders), tc.count)
+		}
+		if tc.count == 1 && (body.Reminders[0].Revision != 2 || body.Reminders[0].Prompt != "Rescheduled") {
+			t.Fatalf("not the current revision: %+v", body.Reminders)
+		}
+	}
+}

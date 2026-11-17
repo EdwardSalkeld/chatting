@@ -191,11 +191,29 @@ func (store *Store) GetReminderHistory(ctx context.Context, reminderID string) (
 }
 
 func (store *Store) ListReminders(ctx context.Context, status string) ([]ReminderRecord, error) {
+	return store.listReminders(ctx, status, false)
+}
+
+// ListLatestReminders lists logical reminders rather than every revision. Status
+// filtering applies after choosing the latest revision, so a rescheduled item
+// does not also appear as cancelled in a history list.
+func (store *Store) ListLatestReminders(ctx context.Context, status string) ([]ReminderRecord, error) {
+	return store.listReminders(ctx, status, true)
+}
+
+func (store *Store) listReminders(ctx context.Context, status string, latest bool) ([]ReminderRecord, error) {
 	query := reminderSelectColumns + ` FROM reminders`
 	args := []any{}
+	conditions := []string{}
+	if latest {
+		conditions = append(conditions, `revision = (SELECT MAX(current.revision) FROM reminders AS current WHERE current.reminder_id = reminders.reminder_id)`)
+	}
 	if status != "" && status != "all" {
-		query += ` WHERE status = ?`
+		conditions = append(conditions, `status = ?`)
 		args = append(args, status)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	query += ` ORDER BY run_at ASC, reminder_id ASC, revision DESC`
 	rows, err := store.db.QueryContext(ctx, query, args...)

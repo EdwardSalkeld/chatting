@@ -15,14 +15,17 @@ The flake exports these packages for `x86_64-linux` and `aarch64-linux`:
 - `chatting-worker`: a wrapper with Python 3.14. The worker has no
   third-party runtime dependencies. Its build compiles the application and
   runs the installed entry point's `--help` command.
-- `chatting` and `default`: both executables together.
+- `chatting-platform`: the Go platform service with its React frontend embedded.
+  `nix/platform.nix` builds the locked npm dependencies and reuses the handler’s
+  Go package recipe and vendor hash. Node is not a runtime dependency.
+- `chatting` and `default`: all three executables together.
 
 Build and check on the current system:
 
 ```sh
 nix build .#chatting
 nix flake check --no-update-lock-file --print-build-logs
-nix fmt -- --check flake.nix nix/handler.nix nix/worker.nix
+nix fmt -- --check flake.nix nix/handler.nix nix/worker.nix nix/platform.nix
 ```
 
 CI currently builds on x86_64 Linux. The aarch64 outputs are available for native
@@ -66,6 +69,11 @@ fixed-output result, so use a placeholder to force recalculation when needed.
 The CI package build catches stale hashes or inconsistent vendoring before a
 release is published. Downstream updates then move the source and matching
 hash together, without deployment-side hash scraping.
+
+Frontend dependency changes must update `platform/package-lock.json` and the
+`npmDepsHash` in `nix/platform.nix`. Calculate the latter with
+`prefetch-npm-deps platform/package-lock.json` from the pinned nixpkgs, then
+build/check `.#chatting-platform`. Generated frontend assets are not committed.
 
 ## Release publication
 
