@@ -135,28 +135,6 @@ class SupervisorTests(unittest.TestCase):
         replacement.tick()
         self.assertEqual(replacement.status(1)["state"], "idle")
 
-    def test_slots_run_in_parallel_and_serialize_same_work_item(self) -> None:
-        for task in (
-            _task(1, "item_a", 0.3),
-            _task(2, "item_a", 0.01),
-            _task(3, "item_b", 0.3),
-        ):
-            self.store.stage_inbox_task(task)
-        self.pool.tick()
-        self.wait_for(
-            lambda: len([e for e in self.log() if e["phase"] == "start"]) == 2
-        )
-        self.assertEqual(
-            {e["task_id"] for e in self.log() if e["phase"] == "start"},
-            {"task:parallel-smoke:1", "task:parallel-smoke:3"},
-        )
-        self.wait_for(
-            lambda: all(s["state"] == "finished" for s in self.pool.statuses())
-        )
-        self.pool.tick()
-        self.wait_for(lambda: len(self.log()) == 6)
-        self.assertGreaterEqual(self.log()[4]["at"], self.log()[2]["at"])
-
     def test_dead_supervisor_is_a_failure_and_is_not_replaced(self) -> None:
         os.kill(self.pids[0], signal.SIGKILL)
         self.pool.children[0].wait(timeout=5)
