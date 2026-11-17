@@ -40,17 +40,104 @@ export interface ItemSnapshot {
   runs: RunCard[]
   active_executors: Executor[]
 }
+export interface AutoModelDecision {
+  tier: string
+  reason?: string
+  confidence?: number | string
+  [key: string]: unknown
+}
 export interface RunHeader {
   run_id: string
   task_id: string | null
   work_item_id: string
+  preview?: string
   request: string
   status: string
   source: string
   started_at: string
+  finished_at?: string
   duration_ms: number
   attempt_count: number | null
   reason_codes: string[]
+  executor_backend?: string | null
+  model_tier?: string | null
+  executed_model_tier?: string | null
+  auto_model_decision?: AutoModelDecision | null
+  escalation_reason?: string | null
+  last_error?: string | null
+  last_error_stage?: string | null
+  execution_errors?: string[]
+  egress_message_count?: number | null
+  executor_launch_count?: number | null
+  max_attempts?: number | null
+  supervised_recovery_used?: boolean | null
+}
+export interface TokenTotals {
+  input_tokens: number | null
+  cached_input_tokens: number | null
+  output_tokens: number | null
+  reasoning_output_tokens: number | null
+  total_tokens: number | null
+}
+export interface RunRow extends RunCard {
+  work_item_id: string | null
+  task_id: string
+  executed_model_tier: string | null
+  model: string | null
+  tokens: TokenTotals | null
+}
+export interface RunsQuery {
+  limit?: number
+  status?: string
+  source?: string
+  work_item_id?: string
+  since?: string
+}
+export interface RunsSnapshot {
+  runs: RunRow[]
+  limit: number
+  truncated: boolean
+}
+export interface DeadLetter {
+  dead_letter_id: number
+  run_id: string
+  task_id: string | null
+  work_item_id: string | null
+  envelope_id: string | null
+  source: string | null
+  received_at: string | null
+  reply_channel_type: string | null
+  reply_channel_target: string | null
+  reason_codes: string[]
+  last_error: string | null
+  attempt_count: number
+  status: string
+  replayed_run_id: string | null
+  created_at: string
+}
+export interface DeadLettersSnapshot {
+  dead_letters: DeadLetter[]
+  limit: number
+  truncated: boolean
+}
+export interface QueueSummary {
+  queued: number
+  running: number
+}
+export interface OutboxSummary {
+  pending: number
+  oldest_created_at: string | null
+}
+export interface ActivitySnapshot {
+  current_executor: Partial<Executor> & { active: boolean; phase?: string }
+  active_executors: Executor[]
+  queue: QueueSummary
+  outbox?: OutboxSummary
+  current_run: Record<string, unknown> | null
+  recent_activity: (ActivityEvent & { source?: string | null; is_internal?: boolean })[]
+  history_limit: number
+  history_truncated: boolean
+  include_internal: boolean
 }
 export interface ActivityEvent {
   activity_id: number

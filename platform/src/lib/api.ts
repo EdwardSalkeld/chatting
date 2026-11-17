@@ -1,5 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import type { InboxSnapshot, ItemsSnapshot, Reminder, Schedule } from './types'
+import type {
+  ActivitySnapshot,
+  DeadLettersSnapshot,
+  InboxSnapshot,
+  ItemsSnapshot,
+  Reminder,
+  RunsQuery,
+  RunsSnapshot,
+  Schedule,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -8,7 +17,7 @@ export class ApiError extends Error {
     this.status = status
   }
 }
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+async function request(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`/api/${path}`, {
     ...init,
     cache: 'no-store',
@@ -34,13 +43,61 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(message, response.status)
   }
+  return response
+}
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await request(path, init)
   return response.status === 204 ? (undefined as T) : response.json()
+}
+export async function apiText(path: string): Promise<string> {
+  return (await request(path)).text()
+}
+export function runsPath(params: RunsQuery = {}): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params))
+    if (value !== undefined && value !== '') search.set(key, String(value))
+  const query = search.toString()
+  return query ? `worker/runs?${query}` : 'worker/runs'
 }
 export const useItems = () =>
   useQuery({
     queryKey: ['items'],
     queryFn: () => api<ItemsSnapshot>('worker/items'),
     refetchInterval: 4000,
+  })
+export const useActivity = () =>
+  useQuery({
+    queryKey: ['activity'],
+    queryFn: () => api<ActivitySnapshot>('worker/activity'),
+    refetchInterval: 4000,
+  })
+export const useRuns = (params: RunsQuery = {}) =>
+  useQuery({
+    queryKey: ['runs', params],
+    queryFn: () => api<RunsSnapshot>(runsPath(params)),
+    refetchInterval: 5000,
+    placeholderData: (previous) => previous,
+  })
+export const useDeadLetters = (limit?: number) =>
+  useQuery({
+    queryKey: ['dead-letters', limit],
+    queryFn: () =>
+      api<DeadLettersSnapshot>(
+        limit ? `worker/dead-letters?limit=${limit}` : 'worker/dead-letters',
+      ),
+    refetchInterval: 10000,
+  })
+export const useHandlerMetrics = () =>
+  useQuery({
+    queryKey: ['metrics', 'handler'],
+    queryFn: () => apiText('handler/metrics'),
+    refetchInterval: 10000,
+  })
+export const useWorkerMetrics = () =>
+  useQuery({
+    queryKey: ['metrics', 'worker'],
+    queryFn: () => apiText('worker/metrics'),
+    refetchInterval: 10000,
   })
 export const useSchedules = () =>
   useQuery({
