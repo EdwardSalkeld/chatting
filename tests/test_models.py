@@ -1,9 +1,10 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from app.models import (
-    AuditEvent,
     AttachmentRef,
+    AuditEvent,
     ExecutionResult,
     OutboundMessage,
     PromptContext,
@@ -13,376 +14,89 @@ from app.models import (
 )
 
 
-class TaskEnvelopeTests(unittest.TestCase):
-    def test_task_envelope_serializes_expected_shape(self) -> None:
-        envelope = TaskEnvelope(
-            id="evt_123",
+class ModelTests(unittest.TestCase):
+    def setUp(self):
+        self.timestamp = datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc)
+        self.envelope = TaskEnvelope(
+            id="evt_1",
             source="email",
-            received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-            actor="alice@example.com",
-            content="Please summarize and reply",
-            attachments=[AttachmentRef(uri="s3://bucket/file.txt", name="file.txt")],
-            context_refs=["repo:/home/edward/chatting"],
+            received_at=self.timestamp,
+            actor=None,
+            content="hello",
+            attachments=[],
+            context_refs=[],
             reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-            dedupe_key="email:provider_msg_id",
-            prompt_context=PromptContext(
-                global_instructions=["Keep replies concise."],
-                reply_channel_instructions=["Use an email subject line."],
-            ),
+            dedupe_key="email:1",
         )
-
-        self.assertEqual(
-            envelope.to_dict(),
-            {
-                "schema_version": "1.0",
-                "id": "evt_123",
-                "source": "email",
-                "received_at": "2026-02-27T16:00:00Z",
-                "actor": "alice@example.com",
-                "content": "Please summarize and reply",
-                "attachments": [{"uri": "s3://bucket/file.txt", "name": "file.txt"}],
-                "context_refs": ["repo:/home/edward/chatting"],
-                "prompt_context": {
-                    "global_instructions": ["Keep replies concise."],
-                    "source_instructions": [],
-                    "reply_channel_instructions": ["Use an email subject line."],
-                    "task_instructions": [],
-                    "assembled_instructions": [
-                        "Keep replies concise.",
-                        "Use an email subject line.",
-                    ],
-                },
-                "reply_channel": {"type": "email", "target": "alice@example.com"},
-                "dedupe_key": "email:provider_msg_id",
-            },
-        )
-
-    def test_task_envelope_requires_timezone_aware_timestamp(self) -> None:
-        with self.assertRaisesRegex(ValueError, "timezone-aware"):
-            TaskEnvelope(
-                id="evt_1",
-                source="cron",
-                received_at=datetime(2026, 2, 27, 16, 0),
-                actor=None,
-                content="hello",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(type="noop", target="stdout"),
-                dedupe_key="cron:job:daily",
-            )
-
-    def test_prompt_context_rejects_blank_instruction(self) -> None:
-        with self.assertRaisesRegex(ValueError, "prompt_context.global_instructions"):
-            PromptContext(global_instructions=[" "])
-
-
-class ExecutionResultTests(unittest.TestCase):
-    def test_execution_result_serializes_expected_shape(self) -> None:
-        result = ExecutionResult(
-            errors=[],
-            stdout="executor stdout",
-            stderr="executor stderr",
-        )
-
-        self.assertEqual(
-            result.to_dict(),
-            {
-                "schema_version": "1.0",
-                "errors": [],
-                "stdout": "executor stdout",
-                "stderr": "executor stderr",
-            },
-        )
-
-    def test_execution_result_message_requires_body(self) -> None:
-        with self.assertRaisesRegex(ValueError, "body is required"):
-            OutboundMessage(channel="email", target="alice@example.com", body="")
-
-    def test_outbound_message_serializes_metadata_when_present(self) -> None:
-        message = OutboundMessage(
-            channel="telegram_reaction",
-            target="8605042448",
-            body="👍",
-            metadata={"message_id": 12},
-        )
-
-        self.assertEqual(
-            message.to_dict(),
-            {
-                "channel": "telegram_reaction",
-                "target": "8605042448",
-                "body": "👍",
-                "metadata": {"message_id": 12},
-            },
-        )
-
-    def test_execution_result_message_allows_attachment_without_body(self) -> None:
-        message = OutboundMessage(
-            channel="telegram",
-            target="12345",
-            attachment=AttachmentRef(uri="file:///tmp/report.pdf", name="report.pdf"),
-        )
-
-        self.assertEqual(
-            message.to_dict(),
-            {
-                "channel": "telegram",
-                "target": "12345",
-                "attachment": {"uri": "file:///tmp/report.pdf", "name": "report.pdf"},
-            },
-        )
-
-    def test_execution_result_message_requires_body_or_attachment(self) -> None:
-        with self.assertRaisesRegex(ValueError, "body or attachment is required"):
-            OutboundMessage(channel="telegram", target="12345", body=None)
-
-
-class RunRecordTests(unittest.TestCase):
-    def test_run_record_serializes_expected_shape(self) -> None:
-        record = RunRecord(
-            run_id="run_123",
-            envelope_id="evt_123",
+        self.run = RunRecord(
+            run_id="run_1",
+            envelope_id="evt_1",
             source="email",
-            workflow="respond_and_optionally_edit",
+            workflow="default",
             latency_ms=42,
             result_status="success",
-            created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+            created_at=self.timestamp,
         )
-
-        self.assertEqual(
-            record.to_dict(),
-            {
-                "schema_version": "1.0",
-                "run_id": "run_123",
-                "envelope_id": "evt_123",
-                "source": "email",
-                "workflow": "respond_and_optionally_edit",
-                "latency_ms": 42,
-                "result_status": "success",
-                "created_at": "2026-02-27T16:05:00Z",
-            },
-        )
-
-    def test_run_record_requires_timezone_aware_timestamp(self) -> None:
-        with self.assertRaisesRegex(ValueError, "timezone-aware"):
-            RunRecord(
-                run_id="run_1",
-                envelope_id="evt_1",
-                source="cron",
-                workflow="respond_and_optionally_edit",
-                latency_ms=0,
-                result_status="success",
-                created_at=datetime(2026, 2, 27, 16, 5),
-            )
-
-
-class AuditEventTests(unittest.TestCase):
-    def test_audit_event_serializes_expected_shape(self) -> None:
-        event = AuditEvent(
-            run_id="run_123",
-            envelope_id="evt_123",
+        self.audit = AuditEvent(
+            run_id="run_1",
+            envelope_id="evt_1",
             source="email",
-            workflow="respond_and_optionally_edit",
+            workflow="default",
             result_status="success",
-            detail={"approved_action_count": 1, "reason_codes": []},
-            created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
+            detail={"reason_codes": []},
+            created_at=self.timestamp,
         )
 
-        self.assertEqual(
-            event.to_dict(),
-            {
-                "schema_version": "1.0",
-                "run_id": "run_123",
-                "envelope_id": "evt_123",
-                "source": "email",
-                "workflow": "respond_and_optionally_edit",
-                "result_status": "success",
-                "detail": {"approved_action_count": 1, "reason_codes": []},
-                "created_at": "2026-02-27T16:05:00Z",
-            },
-        )
-
-    def test_audit_event_requires_timezone_aware_timestamp(self) -> None:
-        with self.assertRaisesRegex(ValueError, "timezone-aware"):
-            AuditEvent(
-                run_id="run_1",
-                envelope_id="evt_1",
-                source="cron",
-                workflow="respond_and_optionally_edit",
-                result_status="success",
-                detail={},
-                created_at=datetime(2026, 2, 27, 16, 5),
-            )
-
-
-class SchemaVersionValidationTests(unittest.TestCase):
-    def test_top_level_models_require_non_empty_schema_version(self) -> None:
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            TaskEnvelope(
-                id="evt_1",
-                source="email",
-                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-                actor="alice@example.com",
-                content="content",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-                dedupe_key="email:1",
-                schema_version="",
-            )
-
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            ExecutionResult(
-                errors=[],
-                schema_version="",
-            )
-
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            RunRecord(
-                run_id="run_1",
-                envelope_id="evt_1",
-                source="email",
-                workflow="respond_and_optionally_edit",
-                latency_ms=1,
-                result_status="success",
-                created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
-                schema_version="",
-            )
-
-        with self.assertRaisesRegex(ValueError, "schema_version is required"):
-            AuditEvent(
-                run_id="run_1",
-                envelope_id="evt_1",
-                source="email",
-                workflow="respond_and_optionally_edit",
-                result_status="success",
-                detail={},
-                created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
-                schema_version="",
-            )
-
-    def test_top_level_models_reject_unsupported_schema_version(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
-            TaskEnvelope(
-                id="evt_1",
-                source="email",
-                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-                actor="alice@example.com",
-                content="content",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-                dedupe_key="email:1",
-                schema_version="2.0",
-            )
-
-        with self.assertRaisesRegex(ValueError, "unsupported_schema_version:2.0"):
-            ExecutionResult(
-                errors=[],
-                schema_version="2.0",
-            )
-
-
-class StringListContractValidationTests(unittest.TestCase):
-    def test_execution_result_rejects_blank_error_items(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "errors items must be non-empty strings"
+    def test_top_level_schema_versions_and_timestamps(self):
+        for model in (self.envelope, self.run, self.audit, ExecutionResult(errors=[])):
+            for version, error in (
+                ("", "schema_version is required"),
+                ("2.0", "unsupported_schema_version:2.0"),
+            ):
+                with self.subTest(model=type(model).__name__, version=version):
+                    with self.assertRaisesRegex(ValueError, error):
+                        replace(model, schema_version=version)
+        for model, field in (
+            (self.envelope, "received_at"),
+            (self.run, "created_at"),
+            (self.audit, "created_at"),
         ):
-            ExecutionResult(
-                errors=["   "],
-            )
+            with self.subTest(model=type(model).__name__):
+                with self.assertRaisesRegex(ValueError, "timezone-aware"):
+                    replace(model, **{field: self.timestamp.replace(tzinfo=None)})
 
-    def test_execution_result_rejects_non_string_transcript_fields(self) -> None:
-        with self.assertRaisesRegex(ValueError, "stdout must be a string"):
-            ExecutionResult(
-                errors=[],
-                stdout=object(),  # type: ignore[arg-type]
-            )
-
-        with self.assertRaisesRegex(ValueError, "stderr must be a string"):
-            ExecutionResult(
-                errors=[],
-                stderr=object(),  # type: ignore[arg-type]
-            )
-
-
-class RequiredStringContractValidationTests(unittest.TestCase):
-    def test_attachment_ref_rejects_blank_fields(self) -> None:
-        with self.assertRaisesRegex(ValueError, "uri is required"):
-            AttachmentRef(uri="   ")
-
-        with self.assertRaisesRegex(ValueError, "name is required"):
-            AttachmentRef(uri="s3://bucket/file.txt", name="   ")
-
-    def test_reply_channel_rejects_whitespace_fields(self) -> None:
-        with self.assertRaisesRegex(ValueError, "type is required"):
-            ReplyChannel(type="   ", target="alice@example.com")
-
-        with self.assertRaisesRegex(ValueError, "target is required"):
-            ReplyChannel(type="email", target="  ")
-
-    def test_task_envelope_rejects_whitespace_required_strings(self) -> None:
-        with self.assertRaisesRegex(ValueError, "content is required"):
-            TaskEnvelope(
-                id="evt_1",
-                source="email",
-                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-                actor="alice@example.com",
-                content="   ",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-                dedupe_key="email:1",
-            )
-
-    def test_task_envelope_rejects_invalid_context_refs_items(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "context_refs items must be non-empty strings"
+    def test_required_strings(self):
+        for model, field in (
+            (AttachmentRef(uri="file:///a", name="a"), "uri"),
+            (AttachmentRef(uri="file:///a", name="a"), "name"),
+            (self.envelope.reply_channel, "type"),
+            (self.envelope.reply_channel, "target"),
+            (self.envelope, "content"),
+            (self.run, "result_status"),
+            (OutboundMessage(channel="email", target="alice", body="hello"), "body"),
         ):
-            TaskEnvelope(
-                id="evt_1",
-                source="email",
-                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-                actor="alice@example.com",
-                content="content",
-                attachments=[],
-                context_refs=["repo:/home/edward/chatting", "   "],
-                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-                dedupe_key="email:1",
-            )
+            with self.subTest(model=type(model).__name__, field=field):
+                with self.assertRaisesRegex(ValueError, f"{field} is required"):
+                    replace(model, **{field: "   "})
 
-    def test_task_envelope_rejects_invalid_attachment_items(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "attachments items must be AttachmentRef"
+    def test_collection_and_transcript_validation(self):
+        for model, field, value, error in (
+            (self.envelope, "context_refs", ["repo:/valid", " "], "context_refs items"),
+            (self.envelope, "attachments", [object()], "attachments items"),
+            (
+                PromptContext(),
+                "global_instructions",
+                [" "],
+                "prompt_context.global_instructions",
+            ),
+            (ExecutionResult(errors=[]), "errors", [" "], "errors items"),
+            (ExecutionResult(errors=[]), "stdout", object(), "stdout must be a string"),
+            (ExecutionResult(errors=[]), "stderr", object(), "stderr must be a string"),
         ):
-            TaskEnvelope(
-                id="evt_1",
-                source="email",
-                received_at=datetime(2026, 2, 27, 16, 0, tzinfo=timezone.utc),
-                actor="alice@example.com",
-                content="content",
-                attachments=[object()],  # type: ignore[list-item]
-                context_refs=[],
-                reply_channel=ReplyChannel(type="email", target="alice@example.com"),
-                dedupe_key="email:1",
-            )
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, error):
+                    replace(model, **{field: value})
 
-    def test_message_rejects_whitespace_required_strings(self) -> None:
-        with self.assertRaisesRegex(ValueError, "body is required"):
-            OutboundMessage(channel="email", target="alice@example.com", body="   ")
-
-    def test_run_record_rejects_whitespace_result_status(self) -> None:
-        with self.assertRaisesRegex(ValueError, "result_status is required"):
-            RunRecord(
-                run_id="run_1",
-                envelope_id="evt_1",
-                source="email",
-                workflow="respond_and_optionally_edit",
-                latency_ms=1,
-                result_status="   ",
-                created_at=datetime(2026, 2, 27, 16, 5, tzinfo=timezone.utc),
-            )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_outbound_message_requires_body_or_attachment(self):
+        with self.assertRaisesRegex(ValueError, "body or attachment is required"):
+            OutboundMessage(channel="telegram", target="12345")

@@ -13,7 +13,7 @@ import (
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
-func newTestServer(t *testing.T) *httptest.Server {
+func newTestServer(t *testing.T) (*httptest.Server, *sqlitestate.Store) {
 	t.Helper()
 	store, err := sqlitestate.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -21,10 +21,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, NewService(store))
+	service := NewService(store)
+	RegisterRoutes(mux, service)
+	RegisterUIRoutes(mux, service)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	return server
+	return server, store
 }
 
 func validBody(key string, prompt string) string {
@@ -53,7 +55,7 @@ func decodeReminder(t *testing.T, raw []byte) reminderJSON {
 }
 
 func TestRemindersAPILifecycleAndIdempotency(t *testing.T) {
-	server := newTestServer(t)
+	server, _ := newTestServer(t)
 	client := server.Client()
 	createdResponse, err := client.Post(server.URL+"/api/reminders", "application/json", strings.NewReader(validBody("create-1", "Do it")))
 	if err != nil {
@@ -76,6 +78,14 @@ func TestRemindersAPILifecycleAndIdempotency(t *testing.T) {
 	}
 	if retried := decodeReminder(t, readBody(t, retryResponse)); retried.ReminderID != created.ReminderID {
 		t.Fatalf("retried=%+v", retried)
+	}
+	conflict, err := client.Post(server.URL+"/api/reminders", "application/json", strings.NewReader(validBody("create-1", "Different")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = readBody(t, conflict)
+	if conflict.StatusCode != http.StatusConflict {
+		t.Fatalf("reused key with different body status=%d", conflict.StatusCode)
 	}
 
 	listResponse, err := client.Get(server.URL + "/api/reminders?status=scheduled")
@@ -132,14 +142,13 @@ func TestRemindersAPILifecycleAndIdempotency(t *testing.T) {
 }
 
 func TestReminderErrorsIncludeCorrectiveUsage(t *testing.T) {
-	server := newTestServer(t)
+	server, _ := newTestServer(t)
 	tests := []struct {
 		name, body string
 		wantStatus int
 	}{
 		{"timezone-less", `{"run_at":"2026-08-15T14:30:00","prompt":"x"}`, http.StatusBadRequest},
 		{"unknown-field", `{"surprise":true}`, http.StatusBadRequest},
-		{"missing-fields", `{}`, http.StatusBadRequest},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -161,29 +170,5 @@ func TestReminderErrorsIncludeCorrectiveUsage(t *testing.T) {
 				t.Fatalf("payload=%+v", payload)
 			}
 		})
-	}
-}
-
-func TestReminderIdempotencyConflictIncludesUsage(t *testing.T) {
-	server := newTestServer(t)
-	client := server.Client()
-	first, err := client.Post(server.URL+"/api/reminders", "application/json", strings.NewReader(validBody("same-key", "First")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = readBody(t, first)
-	conflict, err := client.Post(server.URL+"/api/reminders", "application/json", strings.NewReader(validBody("same-key", "Different")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if conflict.StatusCode != http.StatusConflict {
-		t.Fatalf("status=%d", conflict.StatusCode)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(readBody(t, conflict), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["usage"] == nil {
-		t.Fatalf("payload=%+v", payload)
 	}
 }

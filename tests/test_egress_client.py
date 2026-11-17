@@ -98,32 +98,15 @@ class SubmitEgressTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn("unreachable", str(body["reason"]))
 
-    def test_read_timeout_is_transient(self) -> None:
-        with egress_server("stall") as (url, received):
-            status, body = self._submit(url)
-        self.assertEqual(status, 0)
-        self.assertIn("transport error", str(body["reason"]))
-        # The handler had the request: this is the case where a retry must
-        # reuse the event id.
-        self.assertEqual(len(received), 1)
-
-    def test_connection_closed_before_response_is_transient(self) -> None:
-        with egress_server("close_before_response") as (url, _):
-            status, body = self._submit(url)
-        self.assertEqual(status, 0)
-        self.assertIn("RemoteDisconnected", str(body["reason"]))
-
-    def test_connection_closed_mid_body_is_transient(self) -> None:
-        with egress_server("close_mid_body") as (url, _):
-            status, body = self._submit(url)
-        self.assertEqual(status, 0)
-        self.assertIn("IncompleteRead", str(body["reason"]))
-
-    def test_connection_reset_is_transient(self) -> None:
-        with egress_server("reset") as (url, _):
-            status, _ = self._submit(url)
-        self.assertEqual(status, 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_transport_failures_after_send_are_transient(self):
+        for mode, reason in (
+            ("stall", "transport error"),
+            ("close_before_response", "RemoteDisconnected"),
+            ("close_mid_body", "IncompleteRead"),
+            ("reset", "transport error"),
+        ):
+            with self.subTest(mode=mode), egress_server(mode) as (url, received):
+                status, body = self._submit(url)
+                self.assertEqual(status, 0)
+                self.assertIn(reason, str(body["reason"]))
+                self.assertEqual(len(received), 1)

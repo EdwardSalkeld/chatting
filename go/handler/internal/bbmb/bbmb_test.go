@@ -103,52 +103,20 @@ func TestAdapterPickupJSONReturnsObjectPayload(t *testing.T) {
 	}
 }
 
-func TestAdapterPickupJSONReturnsNilForEmptyQueue(t *testing.T) {
-	server := newFakeServer(t, func(request bbmbRequest) []byte {
-		if request.command != commandPickupMessage {
-			t.Fatalf("unexpected command: %d", request.command)
-		}
-		return []byte{statusEmptyQueue}
-	})
-	defer server.close()
-
-	adapter := newTestAdapter(t, server.address)
-	picked, err := adapter.PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if picked != nil {
-		t.Fatalf("picked = %#v", picked)
-	}
-}
-
-func TestAdapterPickupJSONRejectsMalformedJSON(t *testing.T) {
-	server := newPickupPayloadServer(t, "guid-bad", `{not-json`)
-	defer server.close()
-
-	adapter := newTestAdapter(t, server.address)
-	_, err := adapter.PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
-	var opErr *OperationError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("error = %#v", err)
-	}
-	if opErr.Operation != "pickup_payload_invalid_json" {
-		t.Fatalf("operation = %q", opErr.Operation)
-	}
-}
-
-func TestAdapterPickupJSONRejectsNonObjectPayload(t *testing.T) {
-	server := newPickupPayloadServer(t, "guid-array", `["not","object"]`)
-	defer server.close()
-
-	adapter := newTestAdapter(t, server.address)
-	_, err := adapter.PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
-	var opErr *OperationError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("error = %#v", err)
-	}
-	if opErr.Operation != "pickup_payload_invalid_type" {
-		t.Fatalf("operation = %q", opErr.Operation)
+func TestAdapterRejectsInvalidPickupPayload(t *testing.T) {
+	for _, tc := range []struct{ payload, operation string }{
+		{`{not-json`, "pickup_payload_invalid_json"},
+		{`["not","object"]`, "pickup_payload_invalid_type"},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			server := newPickupPayloadServer(t, "guid-bad", tc.payload)
+			defer server.close()
+			_, err := newTestAdapter(t, server.address).PickupJSON(context.Background(), "chatting.egress.v1", 0, 0)
+			var opErr *OperationError
+			if !errors.As(err, &opErr) || opErr.Operation != tc.operation {
+				t.Fatalf("error = %#v", err)
+			}
+		})
 	}
 }
 

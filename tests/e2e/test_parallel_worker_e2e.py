@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,14 +32,8 @@ def _task(number: int, item: str, duration: float) -> TaskQueueMessage:
         reply_channel=ReplyChannel(type="log", target="parallel-smoke"),
         dedupe_key=f"parallel-smoke:{number}",
     )
-    original = TaskQueueMessage.from_envelope(
-        envelope, trace_id=f"parallel-smoke:{number}"
-    )
-    return TaskQueueMessage(
-        envelope=original.envelope,
-        trace_id=original.trace_id,
-        task_id=original.task_id,
-        emitted_at=original.emitted_at,
+    return replace(
+        TaskQueueMessage.from_envelope(envelope, trace_id=f"parallel-smoke:{number}"),
         work_item_id=item,
     )
 
@@ -116,20 +111,13 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                 else:
                     self.fail("timed out waiting for three worker runs")
                 log = [json.loads(line) for line in events.read_text().splitlines()]
-                intervals = {
-                    task_id: {
+                first, second, other = (
+                    {
                         event["phase"]: event["at"]
                         for event in log
-                        if event["task_id"] == task_id
+                        if event["task_id"] == f"task:parallel-smoke:{n}"
                     }
-                    for task_id in (
-                        "task:parallel-smoke:1",
-                        "task:parallel-smoke:2",
-                        "task:parallel-smoke:3",
-                    )
-                }
-                first, second, other = (
-                    intervals[f"task:parallel-smoke:{n}"] for n in (1, 2, 3)
+                    for n in (1, 2, 3)
                 )
                 self.assertLess(other["start"], first["end"])
                 self.assertLess(first["start"], other["end"])
@@ -184,10 +172,6 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                     if run.envelope_id == interrupted.envelope.id
                 ]
                 self.assertEqual(len(completed), 1)
-                self.assertEqual(
-                    store.get_inbox_task(task_id=interrupted.task_id).state,
-                    "completed",
-                )
                 after = [
                     request(directory / f"supervisor-{n}.sock", "status")
                     for n in (1, 2)
@@ -215,7 +199,3 @@ class ParallelWorkerE2ETests(unittest.TestCase):
                 from tests.e2e.worker_cleanup import stop_test_supervisors
 
                 stop_test_supervisors(db)
-
-
-if __name__ == "__main__":
-    unittest.main()

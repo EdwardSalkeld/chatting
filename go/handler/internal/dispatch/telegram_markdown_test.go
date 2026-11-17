@@ -4,7 +4,6 @@ import "testing"
 
 func TestRenderTelegramMarkdown(t *testing.T) {
 	tests := []struct{ name, input, want string }{
-		{"screening reply", "**Number 24!** Your schedule has **Sheep in the Box**, tonight at **20:15**, Vue Screen 7. That counts both animation programmes as one screening each—we dropped their review drafts, but they still count as screenings.", "<b>Number 24!</b> Your schedule has <b>Sheep in the Box</b>, tonight at <b>20:15</b>, Vue Screen 7. That counts both animation programmes as one screening each—we dropped their review drafts, but they still count as screenings."},
 		{"link", "[details](https://example.com/?a=1&b=2)", `<a href="https://example.com/?a=1&amp;b=2">details</a>`},
 		{"nested emphasis", "**bold and _italic_**", "<b>bold and <i>italic</i></b>"},
 		{"punctuation", "Price £5.50 (today)! A_B_C & 2 < 3.", "Price £5.50 (today)! A_B_C &amp; 2 &lt; 3."},

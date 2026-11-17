@@ -17,7 +17,3 @@ class NormalizeTelegramOutboundTextTests(unittest.TestCase):
             ),
             "Line 1.\nLine 2.\n\nEscaped (paren)",
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

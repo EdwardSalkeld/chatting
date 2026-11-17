@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/testutil"
 )
 
@@ -205,47 +206,11 @@ func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T
 }
 
 func TestPollNormalizesAllowedChannelPostAndMyChatMemberObservation(t *testing.T) {
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(`{
-			"ok": true,
-			"result": [
-				{
-					"update_id": 2001,
-					"channel_post": {
-						"message_id": 9,
-						"date": 1779345600,
-						"chat": {"id": -100999, "type": "channel", "title": "Deploys", "username": "deploys"},
-						"sender_chat": {"id": -100999, "type": "channel", "title": "Deploys"},
-						"text": "release shipped"
-					}
-				},
-				{
-					"update_id": 2002,
-					"my_chat_member": {
-						"chat": {"id": -100123, "type": "supergroup", "title": "Test Group"}
-					}
-				}
-			]
-		}`), nil
-	}}
-	observed := []ChatObservation{}
-	connector, err := New(Config{
-		BotToken:          "token",
-		AllowedChannelIDs: []string{"-100999"},
-		HTTPClient:        client,
-		ObserveChat: func(ctx context.Context, observation ChatObservation) error {
-			observed = append(observed, observation)
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelopes, observed := pollUpdates(t, Config{AllowedChannelIDs: []string{"-100999"}}, `[
+		{"update_id": 2001, "channel_post": {"message_id": 9, "date": 1779345600, "chat": {"id": -100999, "type": "channel", "title": "Deploys", "username": "deploys"},
+			"sender_chat": {"id": -100999, "type": "channel", "title": "Deploys"}, "text": "release shipped"}},
+		{"update_id": 2002, "my_chat_member": {"chat": {"id": -100123, "type": "supergroup", "title": "Test Group"}}}
+	]`, nil)
 
 	if len(envelopes) != 1 {
 		t.Fatalf("envelopes = %#v", envelopes)
@@ -267,414 +232,119 @@ func TestPollNormalizesAllowedChannelPostAndMyChatMemberObservation(t *testing.T
 	}
 }
 
-func TestPollBuildsInternalNoticeForDisallowedChannelPost(t *testing.T) {
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(`{
-			"ok": true,
-			"result": [
-				{
-					"update_id": 2101,
-					"channel_post": {
-						"message_id": 19,
-						"date": 1779345600,
-						"chat": {"id": -100777, "type": "channel", "title": "Ops"},
-						"sender_chat": {"id": -100777, "type": "channel", "title": "Ops"},
-						"text": "hello"
-					}
-				}
-			]
-		}`), nil
-	}}
-	observed := []ChatObservation{}
-	connector, err := New(Config{
-		BotToken:          "token",
-		AllowedChannelIDs: []string{"-100999"},
-		HTTPClient:        client,
-		ObserveChat: func(ctx context.Context, observation ChatObservation) error {
-			observed = append(observed, observation)
-			return nil
-		},
-		Now: func() time.Time { return testutil.MustTime(t, "2026-05-21T06:40:00Z") },
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestPollBuildsInternalNoticesForDisallowedChannelAndGroup(t *testing.T) {
+	envelopes, observed := pollUpdates(t, Config{AllowedChatIDs: []string{"12345"}, AllowedChannelIDs: []string{"-100999"}}, `[
+		{"update_id": 2101, "channel_post": {"message_id": 19, "date": 1779345600, "chat": {"id": -100777, "type": "channel", "title": "Ops"}, "text": "hello"}},
+		{"update_id": 2201, "message": {"message_id": 29, "date": 1779345600, "chat": {"id": -100888, "type": "supergroup", "title": "Ops Group"}, "from": {"id": 7}, "text": "hello group"}}
+	]`, nil)
+	if len(envelopes) != 2 || len(observed) != 2 {
+		t.Fatalf("envelopes = %#v observed = %#v", envelopes, observed)
 	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(envelopes) != 1 {
-		t.Fatalf("envelopes = %#v", envelopes)
-	}
-	envelope := envelopes[0]
-	if envelope.Source != "internal" {
-		t.Fatalf("source = %q", envelope.Source)
-	}
-	if envelope.ReplyChannel.Type != "telegram" || envelope.ReplyChannel.Target != "-100777" {
-		t.Fatalf("reply channel = %#v", envelope.ReplyChannel)
-	}
-	if envelope.Content != "Not enabled in channel -100777. Add this id to telegram_allowed_channel_ids to enable replies here." {
-		t.Fatalf("content = %q", envelope.Content)
-	}
-	if envelope.ReplyChannel.Metadata["internal_notice"] != "telegram_channel_not_enabled" {
-		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
-	}
-	if envelope.ReplyChannel.Metadata["message_id"] != float64(19) && envelope.ReplyChannel.Metadata["message_id"] != int64(19) {
-		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
-	}
-	if len(observed) != 1 || observed[0].ChatID != "-100777" || observed[0].UpdateKind != "channel_post" {
-		t.Fatalf("observed = %#v", observed)
-	}
-}
-
-func TestPollBuildsInternalNoticeForDisallowedGroupMessage(t *testing.T) {
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(`{
-			"ok": true,
-			"result": [
-				{
-					"update_id": 2201,
-					"message": {
-						"message_id": 29,
-						"date": 1779345600,
-						"chat": {"id": -100888, "type": "supergroup", "title": "Ops Group"},
-						"from": {"id": 7, "username": "sender"},
-						"text": "hello group"
-					}
-				}
-			]
-		}`), nil
-	}}
-	observed := []ChatObservation{}
-	connector, err := New(Config{
-		BotToken:       "token",
-		AllowedChatIDs: []string{"12345"},
-		HTTPClient:     client,
-		ObserveChat: func(ctx context.Context, observation ChatObservation) error {
-			observed = append(observed, observation)
-			return nil
-		},
-		Now: func() time.Time { return testutil.MustTime(t, "2026-05-21T06:40:00Z") },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(envelopes) != 1 {
-		t.Fatalf("envelopes = %#v", envelopes)
-	}
-	envelope := envelopes[0]
-	if envelope.Source != "internal" {
-		t.Fatalf("source = %q", envelope.Source)
-	}
-	if envelope.ReplyChannel.Type != "telegram" || envelope.ReplyChannel.Target != "-100888" {
-		t.Fatalf("reply channel = %#v", envelope.ReplyChannel)
-	}
-	if envelope.Content != "Not enabled in group -100888. Add this id to telegram_allowed_chat_ids to enable replies here." {
-		t.Fatalf("content = %q", envelope.Content)
-	}
-	if envelope.ReplyChannel.Metadata["internal_notice"] != "telegram_group_not_enabled" {
-		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
-	}
-	if envelope.ReplyChannel.Metadata["message_id"] != float64(29) && envelope.ReplyChannel.Metadata["message_id"] != int64(29) {
-		t.Fatalf("metadata = %#v", envelope.ReplyChannel.Metadata)
-	}
-	if len(observed) != 1 || observed[0].ChatID != "-100888" || observed[0].UpdateKind != "message" {
-		t.Fatalf("observed = %#v", observed)
-	}
-}
-
-func TestPollDownloadsPhotoAttachmentAndUsesCaptionAsContent(t *testing.T) {
-	attachmentDir := t.TempDir()
-	requestedURLs := []string{}
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		requestedURLs = append(requestedURLs, req.URL.String())
-		switch {
-		case strings.Contains(req.URL.Path, "/getUpdates"):
-			return jsonResponse(`{
-				"ok": true,
-				"result": [{
-					"update_id": 3001,
-					"message": {
-						"message_id": 77,
-						"date": 1779345600,
-						"chat": {"id": 12345, "type": "private"},
-						"from": {"id": 7},
-						"caption": "leaf spot",
-						"photo": [
-							{"file_id": "small", "file_unique_id": "small-unique", "width": 90, "height": 60, "file_size": 10},
-							{"file_id": "large", "file_unique_id": "large/unique", "width": 900, "height": 600, "file_size": 100}
-						]
-					}
-				}]
-			}`), nil
-		case strings.Contains(req.URL.Path, "/getFile"):
-			if got := req.URL.Query().Get("file_id"); got != "large" {
-				t.Fatalf("getFile file_id = %q", got)
-			}
-			return jsonResponse(`{"ok": true, "result": {"file_path": "photos/leaf.jpg"}}`), nil
-		case strings.Contains(req.URL.Path, "/file/bottoken/photos/leaf.jpg"):
-			return bytesResponse("jpeg-bytes"), nil
-		default:
-			t.Fatalf("unexpected request URL: %s", req.URL.String())
-			return nil, nil
+	for i, want := range []struct{ target, content, notice string }{
+		{"-100777", "Not enabled in channel -100777. Add this id to telegram_allowed_channel_ids to enable replies here.", "telegram_channel_not_enabled"},
+		{"-100888", "Not enabled in group -100888. Add this id to telegram_allowed_chat_ids to enable replies here.", "telegram_group_not_enabled"},
+	} {
+		envelope := envelopes[i]
+		if envelope.Source != "internal" || envelope.ReplyChannel.Target != want.target || envelope.Content != want.content || envelope.ReplyChannel.Metadata["internal_notice"] != want.notice {
+			t.Fatalf("notice %d = %#v", i, envelope)
 		}
-	}}
-	connector, err := New(Config{
-		BotToken:          "token",
-		APIBaseURL:        "https://telegram.example.test",
-		AllowedChatIDs:    []string{"12345"},
-		AttachmentRootDir: attachmentDir,
-		HTTPClient:        client,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(envelopes) != 1 {
-		t.Fatalf("envelopes = %#v", envelopes)
-	}
-	envelope := envelopes[0]
-	if envelope.Content != "leaf spot" {
-		t.Fatalf("content = %q", envelope.Content)
-	}
-	if len(envelope.Attachments) != 1 {
-		t.Fatalf("attachments = %#v", envelope.Attachments)
-	}
-	attachment := envelope.Attachments[0]
-	if deref(attachment.Name) != "leaf.jpg" {
-		t.Fatalf("attachment name = %#v", attachment.Name)
-	}
-	if !strings.HasPrefix(attachment.URI, "file://") || !strings.Contains(attachment.URI, "telegram-3001-77-large_unique.jpg") {
-		t.Fatalf("attachment URI = %q", attachment.URI)
-	}
-	downloadedPath := filepath.Join(attachmentDir, "telegram-3001-77-large_unique.jpg")
-	raw, err := os.ReadFile(downloadedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != "jpeg-bytes" {
-		t.Fatalf("downloaded bytes = %q", string(raw))
-	}
-	// The worker runs as a separate OS user, so the attachment must be
-	// readable beyond the owner (see extractAttachments). Assert the
-	// group/other read bits survive rather than the file staying 0600.
-	info, err := os.Stat(downloadedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm&0o044 != 0o044 {
-		t.Fatalf("attachment mode = %o, want group/other readable", perm)
-	}
-	if len(requestedURLs) != 3 {
-		t.Fatalf("requested URLs = %#v", requestedURLs)
 	}
 }
 
-func TestPollAcceptsPhotoOnlyMessageWithPlaceholderContent(t *testing.T) {
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		switch {
-		case strings.Contains(req.URL.Path, "/getUpdates"):
-			return jsonResponse(`{
-				"ok": true,
-				"result": [{
-					"update_id": 3002,
-					"message": {
-						"message_id": 78,
-						"date": 1779345600,
-						"chat": {"id": 12345, "type": "private"},
-						"photo": [{"file_id": "only", "width": 800, "height": 600}]
-					}
-				}]
-			}`), nil
-		case strings.Contains(req.URL.Path, "/getFile"):
-			return jsonResponse(`{"ok": true, "result": {"file_path": "photos/photo.jpg"}}`), nil
-		case strings.Contains(req.URL.Path, "/file/bottoken/photos/photo.jpg"):
-			return bytesResponse("jpeg-bytes"), nil
-		default:
-			t.Fatalf("unexpected request URL: %s", req.URL.String())
-			return nil, nil
-		}
-	}}
-	connector, err := New(Config{
-		BotToken:          "token",
-		AllowedChatIDs:    []string{"12345"},
-		AttachmentRootDir: t.TempDir(),
-		HTTPClient:        client,
+func TestPollDownloadsAttachmentsReadableByWorker(t *testing.T) {
+	dir := t.TempDir()
+	envelopes, _ := pollUpdates(t, Config{AttachmentRootDir: dir}, `[
+		{"update_id": 3001, "message": {"message_id": 77, "date": 1779345600, "chat": {"id": 12345, "type": "private"}, "caption": "leaf spot", "photo": [
+			{"file_id": "small", "file_unique_id": "small-unique", "width": 90, "height": 60, "file_size": 10},
+			{"file_id": "large", "file_unique_id": "large/unique", "width": 900, "height": 600, "file_size": 100}
+		]}},
+		{"update_id": 3002, "message": {"message_id": 78, "date": 1779345600, "chat": {"id": 12345, "type": "private"}, "photo": [{"file_id": "only", "width": 800, "height": 600}]}},
+		{"update_id": 3003, "message": {"message_id": 79, "date": 1779345600, "chat": {"id": 12345, "type": "private"}, "document": {
+			"file_id": "doc", "file_unique_id": "document/unique", "file_name": "quarterly-report.pdf", "mime_type": "application/pdf", "file_size": 14
+		}}}
+	]`, map[string][2]string{
+		"large": {"photos/leaf.jpg", "jpeg-bytes"},
+		"only":  {"photos/photo.jpg", "jpeg-bytes"},
+		"doc":   {"documents/file_42.dat", "pdf-file-bytes"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(envelopes) != 1 {
+	if len(envelopes) != 3 {
 		t.Fatalf("envelopes = %#v", envelopes)
 	}
-	if envelopes[0].Content != "[photo attached]" {
-		t.Fatalf("content = %q", envelopes[0].Content)
-	}
-	if len(envelopes[0].Attachments) != 1 {
-		t.Fatalf("attachments = %#v", envelopes[0].Attachments)
-	}
-}
-
-func TestPollDownloadsStandaloneDocumentAndPreservesOriginalFilename(t *testing.T) {
-	attachmentDir := t.TempDir()
-	requestCount := 0
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		requestCount++
-		switch {
-		case strings.Contains(req.URL.Path, "/getUpdates"):
-			return jsonResponse(`{
-				"ok": true,
-				"result": [{
-					"update_id": 3003,
-					"message": {
-						"message_id": 79,
-						"date": 1779345600,
-						"chat": {"id": 12345, "type": "private"},
-						"from": {"id": 7, "username": "sender"},
-						"document": {
-							"file_id": "document-file-id",
-							"file_unique_id": "document/unique",
-							"file_name": "quarterly-report.pdf",
-							"mime_type": "application/pdf",
-							"file_size": 14
-						}
-					}
-				}]
-			}`), nil
-		case strings.Contains(req.URL.Path, "/getFile"):
-			if got := req.URL.Query().Get("file_id"); got != "document-file-id" {
-				t.Fatalf("getFile file_id = %q", got)
-			}
-			return jsonResponse(`{"ok": true, "result": {"file_path": "documents/file_42.dat"}}`), nil
-		case strings.Contains(req.URL.Path, "/file/bottoken/documents/file_42.dat"):
-			return bytesResponse("pdf-file-bytes"), nil
-		default:
-			t.Fatalf("unexpected request URL: %s", req.URL.String())
-			return nil, nil
+	for i, want := range []struct{ content, name, file, body string }{
+		{"leaf spot", "leaf.jpg", "telegram-3001-77-large_unique.jpg", "jpeg-bytes"},
+		{"[photo attached]", "photo.jpg", "", ""},
+		{"[document attached: quarterly-report.pdf]", "quarterly-report.pdf", "telegram-3003-79-document_unique.pdf", "pdf-file-bytes"},
+	} {
+		envelope := envelopes[i]
+		if envelope.Content != want.content || len(envelope.Attachments) != 1 || deref(envelope.Attachments[0].Name) != want.name {
+			t.Fatalf("envelope %d = %#v", i, envelope)
 		}
-	}}
-	connector, err := New(Config{
-		BotToken:          "token",
-		AllowedChatIDs:    []string{"12345"},
-		AttachmentRootDir: attachmentDir,
-		HTTPClient:        client,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(envelopes) != 1 {
-		t.Fatalf("envelopes = %#v", envelopes)
-	}
-	envelope := envelopes[0]
-	if envelope.Content != "[document attached: quarterly-report.pdf]" {
-		t.Fatalf("content = %q", envelope.Content)
-	}
-	if len(envelope.Attachments) != 1 {
-		t.Fatalf("attachments = %#v", envelope.Attachments)
-	}
-	attachment := envelope.Attachments[0]
-	if deref(attachment.Name) != "quarterly-report.pdf" {
-		t.Fatalf("attachment name = %#v", attachment.Name)
-	}
-	if !strings.HasPrefix(attachment.URI, "file://") || !strings.Contains(attachment.URI, "telegram-3003-79-document_unique.pdf") {
-		t.Fatalf("attachment URI = %q", attachment.URI)
-	}
-	downloadedPath := filepath.Join(attachmentDir, "telegram-3003-79-document_unique.pdf")
-	raw, err := os.ReadFile(downloadedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != "pdf-file-bytes" {
-		t.Fatalf("downloaded bytes = %q", string(raw))
-	}
-	info, err := os.Stat(downloadedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm&0o044 != 0o044 {
-		t.Fatalf("attachment mode = %o, want group/other readable", perm)
-	}
-	if requestCount != 3 {
-		t.Fatalf("request count = %d", requestCount)
+		if want.file == "" {
+			continue
+		}
+		if envelope.Attachments[0].URI != "file://"+filepath.Join(dir, want.file) {
+			t.Fatalf("attachment URI = %q", envelope.Attachments[0].URI)
+		}
+		path := filepath.Join(dir, want.file)
+		if raw, err := os.ReadFile(path); err != nil || string(raw) != want.body {
+			t.Fatalf("downloaded %q, %v", raw, err)
+		}
+		// The worker runs as a separate OS user, so the attachment must be
+		// readable beyond the owner (see extractAttachments).
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm()&0o044 != 0o044 {
+			t.Fatalf("attachment mode = %v, %v; want group/other readable", info, err)
+		}
 	}
 }
 
 func TestPollKeepsOversizedDocumentVisibleWithoutDownloadingIt(t *testing.T) {
-	requestCount := 0
-	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
-		requestCount++
-		if !strings.Contains(req.URL.Path, "/getUpdates") {
-			t.Fatalf("unexpected download request for oversized document: %s", req.URL.String())
+	envelopes, _ := pollUpdates(t, Config{}, `[{"update_id": 3004, "message": {"message_id": 80, "date": 1779345600, "chat": {"id": 12345, "type": "private"},
+		"document": {"file_id": "too-large", "file_unique_id": "too-large-unique", "file_name": "archive.zip", "file_size": 20971521}}}]`, nil)
+	if len(envelopes) != 1 || len(envelopes[0].Attachments) != 0 ||
+		envelopes[0].Content != "[document not downloaded: archive.zip exceeds Telegram's 20 MB bot download limit]" {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+}
+
+// pollUpdates polls once for the given getUpdates result. files maps a
+// file_id to its Telegram file_path and body; any other download fails the test.
+func pollUpdates(t *testing.T, config Config, updates string, files map[string][2]string) ([]contracts.TaskEnvelope, []ChatObservation) {
+	t.Helper()
+	var observed []ChatObservation
+	config.BotToken = "token"
+	if config.AllowedChatIDs == nil {
+		config.AllowedChatIDs = []string{"12345"}
+	}
+	config.ObserveChat = func(_ context.Context, observation ChatObservation) error {
+		observed = append(observed, observation)
+		return nil
+	}
+	config.HTTPClient = &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/getUpdates") {
+			return jsonResponse(`{"ok": true, "result": ` + updates + `}`), nil
 		}
-		return jsonResponse(`{
-			"ok": true,
-			"result": [{
-				"update_id": 3004,
-				"message": {
-					"message_id": 80,
-					"date": 1779345600,
-					"chat": {"id": 12345, "type": "private"},
-					"document": {
-						"file_id": "too-large",
-						"file_unique_id": "too-large-unique",
-						"file_name": "archive.zip",
-						"file_size": 20971521
-					}
-				}
-			}]
-		}`), nil
+		if strings.HasSuffix(req.URL.Path, "/getFile") {
+			if file, ok := files[req.URL.Query().Get("file_id")]; ok {
+				return jsonResponse(`{"ok": true, "result": {"file_path": "` + file[0] + `"}}`), nil
+			}
+		}
+		for _, file := range files {
+			if strings.HasSuffix(req.URL.Path, "/file/bottoken/"+file[0]) {
+				return bytesResponse(file[1]), nil
+			}
+		}
+		t.Errorf("unexpected request: %s", req.URL)
+		return nil, errors.New("unexpected request")
 	}}
-	connector, err := New(Config{
-		BotToken:       "token",
-		AllowedChatIDs: []string{"12345"},
-		HTTPClient:     client,
-	})
+	connector, err := New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	envelopes, err := connector.Poll(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(envelopes) != 1 {
-		t.Fatalf("envelopes = %#v", envelopes)
-	}
-	if envelopes[0].Content != "[document not downloaded: archive.zip exceeds Telegram's 20 MB bot download limit]" {
-		t.Fatalf("content = %q", envelopes[0].Content)
-	}
-	if len(envelopes[0].Attachments) != 0 {
-		t.Fatalf("attachments = %#v", envelopes[0].Attachments)
-	}
-	if requestCount != 1 {
-		t.Fatalf("request count = %d", requestCount)
-	}
+	return envelopes, observed
 }
 
 type fakeHTTPClient struct {

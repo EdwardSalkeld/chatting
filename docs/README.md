@@ -4,6 +4,7 @@
 - [Database maintenance](database-maintenance.md): duplicate transcript cleanup and configurable diagnostic retention
 - [Message flow](bbmb-message-flow.md): how tasks and replies move between handler and worker
 - [Testing](testing.md)
+- [Test suite audit](test-suite-audit.md): counts, consolidation and removed duplication
 - [Nix packages and releases](packaging-and-releases.md): app-owned builds and source releases for downstream consumers
 - [Connectors](connectors/README.md)
 - [Schedules](schedules.md) and [one-off reminders](reminders.md)

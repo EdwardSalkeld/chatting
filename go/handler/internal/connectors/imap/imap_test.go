@@ -3,10 +3,11 @@ package imap
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 )
 
 func TestPollNormalizesMessagesToEnvelopes(t *testing.T) {
@@ -71,26 +72,8 @@ func TestPollNormalizesMessagesToEnvelopes(t *testing.T) {
 
 func TestPollFallsBackToNowForInvalidDateHeader(t *testing.T) {
 	raw := buildRawEmail("alice@example.com", "No Date", "Body", "not-a-date")
-	fake := &fakeClient{messages: map[string][]byte{"201": []byte(raw)}}
 	fallback := time.Date(2026, 2, 28, 11, 0, 0, 0, time.UTC)
-	connector, err := New(Config{
-		Host:     "imap.example.com",
-		Port:     993,
-		Username: "bot@example.com",
-		Password: "secret",
-		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
-			return fake, nil
-		},
-		Now: func() time.Time { return fallback },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelopes := pollRaw(t, "201", raw, fallback)
 	if !envelopes[0].ReceivedAt.Equal(fallback) {
 		t.Fatalf("ReceivedAt = %s", envelopes[0].ReceivedAt.Format(time.RFC3339))
 	}
@@ -98,24 +81,7 @@ func TestPollFallsBackToNowForInvalidDateHeader(t *testing.T) {
 
 func TestPollUsesUsernameAsReplyTargetWhenFromAddressIsMissing(t *testing.T) {
 	raw := "To: bot@example.com\r\nSubject: No Sender\r\nDate: Sat, 28 Feb 2026 10:15:00 +0000\r\n\r\nBody"
-	fake := &fakeClient{messages: map[string][]byte{"301": []byte(raw)}}
-	connector, err := New(Config{
-		Host:     "imap.example.com",
-		Port:     993,
-		Username: "bot@example.com",
-		Password: "secret",
-		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
-			return fake, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelopes := pollRaw(t, "301", raw, time.Time{})
 	if envelopes[0].Actor != nil {
 		t.Fatalf("Actor = %#v", envelopes[0].Actor)
 	}
@@ -136,24 +102,7 @@ func TestPollFallsBackToHTMLBodyWhenPlainTextIsMissing(t *testing.T) {
 		"\r\n" +
 		"<div>Hello <b>there</b></div><p>Second &amp; line</p>\r\n" +
 		"--alt--\r\n"
-	fake := &fakeClient{messages: map[string][]byte{"401": []byte(raw)}}
-	connector, err := New(Config{
-		Host:     "imap.example.com",
-		Port:     993,
-		Username: "bot@example.com",
-		Password: "secret",
-		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
-			return fake, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelopes := pollRaw(t, "401", raw, time.Time{})
 
 	if envelopes[0].Content != "Subject: HTML only\n\nHello there\nSecond & line" {
 		t.Fatalf("Content = %q", envelopes[0].Content)
@@ -182,25 +131,7 @@ func TestPollExtractsNestedPlainTextAndAttachments(t *testing.T) {
 		"\r\n" +
 		"JVBERi0xLjQK\r\n" +
 		"--outer--\r\n"
-	fake := &fakeClient{messages: map[string][]byte{"402": []byte(raw)}}
-	connector, err := New(Config{
-		Host:     "imap.example.com",
-		Port:     993,
-		Username: "bot@example.com",
-		Password: "secret",
-		ClientFactory: func(ctx context.Context, config ClientConfig) (Client, error) {
-			return fake, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	connector.attachmentDir = t.TempDir()
-
-	envelopes, err := connector.Poll(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelopes := pollRaw(t, "402", raw, time.Time{})
 
 	envelope := envelopes[0]
 	if envelope.Content != "Subject: Forwarded policy\n\nPolicy details go here." {
@@ -212,10 +143,34 @@ func TestPollExtractsNestedPlainTextAndAttachments(t *testing.T) {
 	if envelope.Attachments[0].Name == nil || *envelope.Attachments[0].Name != "policy.pdf" {
 		t.Fatalf("Attachment name = %#v", envelope.Attachments[0].Name)
 	}
-	wantPath := filepath.Join(connector.attachmentDir, "402", "policy.pdf")
-	if _, err := os.Stat(wantPath); err != nil {
+	if _, err := os.Stat(strings.TrimPrefix(envelope.Attachments[0].URI, "file://")); err != nil {
 		t.Fatalf("attachment path missing: %v", err)
 	}
+}
+
+// pollRaw polls a connector whose mailbox holds only raw under uid; a zero now
+// leaves the connector's clock at its default.
+func pollRaw(t *testing.T, uid string, raw string, now time.Time) []contracts.TaskEnvelope {
+	t.Helper()
+	config := Config{
+		Host: "imap.example.com", Port: 993, Username: "bot@example.com", Password: "secret",
+		ClientFactory: func(context.Context, ClientConfig) (Client, error) {
+			return &fakeClient{messages: map[string][]byte{uid: []byte(raw)}}, nil
+		},
+	}
+	if !now.IsZero() {
+		config.Now = func() time.Time { return now }
+	}
+	connector, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector.attachmentDir = t.TempDir()
+	envelopes, err := connector.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelopes
 }
 
 type fakeClient struct {

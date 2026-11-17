@@ -13,136 +13,77 @@ from app.state import SQLiteStateStore
 from app.worker.main import WORKER_CONFIG_PATH_ENV_VAR
 
 
-def _worker_config(config_path: Path):
-    return patch.dict("os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(config_path)})
-
-
 class MainHistoryCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db_path = Path(tmp.name) / "worker.db"
+        self.config_path = Path(tmp.name) / "worker.json"
+        self.config_path.write_text(json.dumps({"db_path": str(db_path)}))
+        self.store = SQLiteStateStore(str(db_path))
+
+    def stage(self, number: int, sender: str = "edward", topic: int | None = None):
+        metadata = {"message_id": number}
+        if topic is not None:
+            metadata["message_thread_id"] = topic
+        envelope = TaskEnvelope(
+            id=f"telegram:{number}",
+            source="im",
+            received_at=datetime(2026, 8, 16, 11, number, tzinfo=timezone.utc),
+            actor=sender,
+            content=f"plan number {number}",
+            attachments=[],
+            context_refs=[],
+            reply_channel=ReplyChannel(
+                type="telegram", target="-123", metadata=metadata
+            ),
+            dedupe_key=f"telegram:{number}",
+        )
+        self.store.stage_inbox_task(
+            TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:{number}")
+        )
+
+    def run_cli(self, *args: str) -> dict:
+        stdout = io.StringIO()
+        argv = ["main_history.py", "--channel", "telegram", "--target", "-123"]
+        with (
+            patch("sys.stdout", stdout),
+            patch.dict(
+                "os.environ", {WORKER_CONFIG_PATH_ENV_VAR: str(self.config_path)}
+            ),
+            patch("sys.argv", [*argv, *args]),
+        ):
+            self.assertEqual(main(), 0)
+        return json.loads(stdout.getvalue())
+
     def test_returns_ordered_window_around_telegram_message(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "worker.db"
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            store = SQLiteStateStore(str(db_path))
-            for number in (10, 11, 12):
-                envelope = TaskEnvelope(
-                    id=f"telegram:{number}",
-                    source="im",
-                    received_at=datetime(2026, 8, 16, 11, number, tzinfo=timezone.utc),
-                    actor="edward",
-                    content=f"turn {number}",
-                    attachments=[],
-                    context_refs=[],
-                    reply_channel=ReplyChannel(
-                        type="telegram",
-                        target="-123",
-                        metadata={"message_id": number},
-                    ),
-                    dedupe_key=f"telegram:{number}",
-                )
-                store.stage_inbox_task(
-                    TaskQueueMessage.from_envelope(
-                        envelope, trace_id=f"trace:telegram:{number}"
-                    )
-                )
-
-            stdout = io.StringIO()
-            with (
-                patch("sys.stdout", stdout),
-                _worker_config(config_path),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_history.py",
-                        "--channel",
-                        "telegram",
-                        "--target",
-                        "-123",
-                        "--around-message-id",
-                        "11",
-                        "--before",
-                        "1",
-                        "--after",
-                        "1",
-                    ],
-                ),
-            ):
-                exit_code = main()
-
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(exit_code, 0)
-            self.assertTrue(payload["anchor_found"])
-            self.assertEqual(
-                [turn["message_id"] for turn in payload["turns"]], [10, 11, 12]
-            )
-            self.assertTrue(payload["turns"][1]["is_anchor"])
+        for number in (10, 11, 12):
+            self.stage(number)
+        payload = self.run_cli(
+            "--around-message-id", "11", "--before", "1", "--after", "1"
+        )
+        self.assertTrue(payload["anchor_found"])
+        self.assertEqual(
+            [turn["message_id"] for turn in payload["turns"]], [10, 11, 12]
+        )
+        self.assertTrue(payload["turns"][1]["is_anchor"])
 
     def test_search_filters_sender_date_and_topic(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "worker.db"
-            store = SQLiteStateStore(str(db_path))
-            for number, topic, sender in (
-                (10, 7, "alice"),
-                (11, 8, "alice"),
-                (12, 7, "bob"),
-                (13, 7, "alice"),
-            ):
-                envelope = TaskEnvelope(
-                    id=f"telegram:{number}",
-                    source="im",
-                    received_at=datetime(2026, 8, 16, 11, number, tzinfo=timezone.utc),
-                    actor=sender,
-                    content=f"plan number {number}",
-                    attachments=[],
-                    context_refs=[],
-                    reply_channel=ReplyChannel(
-                        type="telegram",
-                        target="-123",
-                        metadata={
-                            "message_id": number,
-                            "message_thread_id": topic,
-                        },
-                    ),
-                    dedupe_key=f"telegram:{number}",
-                )
-                store.stage_inbox_task(
-                    TaskQueueMessage.from_envelope(envelope, trace_id=f"trace:{number}")
-                )
-            config_path = Path(tmpdir) / "worker.json"
-            config_path.write_text(
-                json.dumps({"db_path": str(db_path)}), encoding="utf-8"
-            )
-            stdout = io.StringIO()
-            with (
-                patch("sys.stdout", stdout),
-                _worker_config(config_path),
-                patch(
-                    "sys.argv",
-                    [
-                        "main_history.py",
-                        "--channel",
-                        "telegram",
-                        "--target",
-                        "-123",
-                        "--topic-id",
-                        "7",
-                        "--query",
-                        "plan",
-                        "--sender",
-                        "alice",
-                        "--since",
-                        "2026-08-16T11:11:00Z",
-                    ],
-                ),
-            ):
-                self.assertEqual(main(), 0)
-            self.assertEqual(
-                [turn["message_id"] for turn in json.loads(stdout.getvalue())["turns"]],
-                [13],
-            )
-
-
-if __name__ == "__main__":
-    unittest.main()
+        for number, topic, sender in (
+            (10, 7, "alice"),
+            (11, 8, "alice"),
+            (12, 7, "bob"),
+            (13, 7, "alice"),
+        ):
+            self.stage(number, sender, topic)
+        payload = self.run_cli(
+            "--topic-id",
+            "7",
+            "--query",
+            "plan",
+            "--sender",
+            "alice",
+            "--since",
+            "2026-08-16T11:11:00Z",
+        )
+        self.assertEqual([turn["message_id"] for turn in payload["turns"]], [13])

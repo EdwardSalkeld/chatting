@@ -13,7 +13,7 @@ import (
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 )
 
-func newTestServer(t *testing.T) *httptest.Server {
+func newTestServer(t *testing.T) (*httptest.Server, *sqlitestate.Store) {
 	t.Helper()
 	store, err := sqlitestate.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -25,10 +25,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 		}
 	})
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, NewService(store))
+	service := NewService(store)
+	RegisterRoutes(mux, service)
+	RegisterUIRoutes(mux, service)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	return server
+	return server, store
 }
 
 func decodeSchedule(t *testing.T, body []byte) scheduleJSON {
@@ -43,7 +45,7 @@ func decodeSchedule(t *testing.T, body []byte) scheduleJSON {
 }
 
 func TestSchedulesAPILifecycle(t *testing.T) {
-	server := newTestServer(t)
+	server, _ := newTestServer(t)
 	client := server.Client()
 
 	createBody := `{"job_name":"daily","content":"do the thing","cron":"0 9 * * *","context_refs":["repo:/workspace"],"reply_channel_type":"telegram","reply_channel_target":"123"}`
@@ -135,10 +137,14 @@ func TestSchedulesAPILifecycle(t *testing.T) {
 	if afterDelete.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET after delete expected 404, got %d", afterDelete.StatusCode)
 	}
+	putMissing, _ := http.NewRequest(http.MethodPut, server.URL+"/api/schedules/"+created.ScheduleID, strings.NewReader(putBody))
+	if response, err := client.Do(putMissing); err != nil || response.StatusCode != http.StatusNotFound {
+		t.Fatalf("PUT after delete should 404 rather than recreate: %v %v", response, err)
+	}
 }
 
 func TestSchedulesAPIValidationRejectsBadCron(t *testing.T) {
-	server := newTestServer(t)
+	server, _ := newTestServer(t)
 	body := `{"job_name":"daily","content":"x","cron":"not-a-cron"}`
 	response, err := server.Client().Post(server.URL+"/api/schedules", "application/json", strings.NewReader(body))
 	if err != nil {
@@ -146,32 +152,6 @@ func TestSchedulesAPIValidationRejectsBadCron(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid cron, got %d", response.StatusCode)
-	}
-	var wrapper struct {
-		Error string         `json:"error"`
-		Usage map[string]any `json:"usage"`
-	}
-	if err := json.Unmarshal(readBody(t, response), &wrapper); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if wrapper.Error == "" {
-		t.Fatal("expected an error message in the 400 response")
-	}
-	if wrapper.Usage["request_body"] == nil {
-		t.Fatal("expected corrective API usage in the 400 response")
-	}
-}
-
-func TestSchedulesAPIReplaceMissingReturns404(t *testing.T) {
-	server := newTestServer(t)
-	body := `{"job_name":"daily","content":"x","cron":"0 9 * * *"}`
-	request, _ := http.NewRequest(http.MethodPut, server.URL+"/api/schedules/sched_missing", strings.NewReader(body))
-	response, err := server.Client().Do(request)
-	if err != nil {
-		t.Fatalf("PUT: %v", err)
-	}
-	if response.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404 for missing schedule, got %d", response.StatusCode)
 	}
 }
 

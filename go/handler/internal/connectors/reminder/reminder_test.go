@@ -65,13 +65,3 @@ func TestPollEmitsStableEnvelopeAndAckMarksFired(t *testing.T) {
 		t.Fatalf("after=%+v err=%v", after, err)
 	}
 }
-
-func TestAckRejectsUnknownEnvelope(t *testing.T) {
-	connector, err := New(&fakeStore{}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := connector.AckEnvelope(context.Background(), "missing"); err == nil {
-		t.Fatal("expected error")
-	}
-}

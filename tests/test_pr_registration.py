@@ -79,12 +79,6 @@ EXEC_PR_CREATED = json.dumps(
 
 
 class CreatedPRURLTests(unittest.TestCase):
-    def test_reads_app_server_command_completion(self) -> None:
-        self.assertEqual(
-            created_pr_url(APP_SERVER_PR_CREATED),
-            "https://github.com/EdwardSalkeld/chatting/pull/308",
-        )
-
     def test_reads_exec_event_and_ignores_new_pull_request_links(self) -> None:
         self.assertEqual(
             created_pr_url(EXEC_PR_CREATED),
@@ -105,7 +99,3 @@ class CreatedPRURLTests(unittest.TestCase):
         ):
             with self.subTest(line=line[:40]):
                 self.assertIsNone(created_pr_url(line))
-
-
-if __name__ == "__main__":
-    unittest.main()

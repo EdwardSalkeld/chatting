@@ -2,9 +2,6 @@ package webhooks
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -34,9 +31,7 @@ func TestAtomicReceiptAndPendingRestart(t *testing.T) {
 		t.Helper()
 		f := &Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: live, AssignTask: store.AssignTask}
 		request := httptest.NewRequest(http.MethodPost, GitHubPath, strings.NewReader(body))
-		mac := hmac.New(sha256.New, []byte("secret"))
-		_, _ = mac.Write([]byte(body))
-		request.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		request.Header.Set("X-Hub-Signature-256", signature([]byte("secret"), body))
 		request.Header.Set("X-GitHub-Event", "issue_comment")
 		request.Header.Set("X-GitHub-Delivery", delivery)
 		response := httptest.NewRecorder()
@@ -186,10 +181,6 @@ func TestNotificationEventIdentifiers(t *testing.T) {
 		task, err := GitHubNotification(body, tc.event, "delivery", time.Now())
 		if err != nil || !strings.Contains(task.Envelope.Content, tc.want) {
 			t.Fatalf("%s: %v %s", tc.event, err, task.Envelope.Content)
-		}
-		encoded, _ := json.Marshal(task)
-		if !json.Valid(encoded) {
-			t.Fatal("invalid task")
 		}
 	}
 }

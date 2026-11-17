@@ -330,36 +330,23 @@ class SplitModeE2ETests(unittest.TestCase):
                 msg=f"worker exited non-zero\nstdout:\n{worker_out}\nstderr:\n{worker_err}",
             )
 
-            worker_store = SQLiteStateStore(str(worker_db_path))
-            worker_runs = worker_store.list_runs()
-            matching_worker_runs = [
-                run
-                for run in worker_runs
-                if run.envelope_id.startswith("cron:ci-split-smoke:")
-            ]
-            self.assertTrue(
-                matching_worker_runs,
-                msg="missing worker run for cron:ci-split-smoke",
+            succeeded = {
+                run.envelope_id
+                for run in SQLiteStateStore(str(worker_db_path)).list_runs()
+                if run.result_status == "success"
+            }
+            logs = f"stdout:\n{worker_out}\nstderr:\n{worker_err}"
+            cron_runs = sorted(
+                e for e in succeeded if e.startswith("cron:ci-split-smoke:")
             )
-            self.assertTrue(
-                any(
-                    run.envelope_id == "reminder:rem_ci_split_smoke:1"
-                    and run.result_status == "success"
-                    for run in worker_runs
-                ),
-                msg=f"missing successful worker run for one-off reminder\nstdout:\n{worker_out}\nstderr:\n{worker_err}",
-            )
-            expected_envelope_id = matching_worker_runs[0].envelope_id
-            self.assertTrue(
-                any(
-                    run.envelope_id == expected_envelope_id
-                    and run.result_status == "success"
-                    for run in worker_runs
-                ),
-                msg=f"missing successful worker run for expected envelope_id={expected_envelope_id!r}",
+            self.assertTrue(cron_runs, msg=f"missing successful cron run\n{logs}")
+            self.assertIn(
+                "reminder:rem_ci_split_smoke:1",
+                succeeded,
+                msg=f"missing successful one-off reminder run\n{logs}",
             )
 
-            expected_task_id = f"task:{expected_envelope_id}"
+            expected_task_id = f"task:{cron_runs[0]}"
             expected_event_id = f"evt:{expected_task_id}:0:completion:internal"
             with sqlite3.connect(str(handler_db_path)) as connection:
                 dispatched = connection.execute(
@@ -373,7 +360,3 @@ class SplitModeE2ETests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(reminder_status, "fired")
             self.assertIsNotNone(fired_at)
-
-
-if __name__ == "__main__":
-    unittest.main()

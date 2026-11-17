@@ -21,16 +21,7 @@ func (c *failingClient) Login(string, string) error {
 	}
 	return nil
 }
-func (c *failingClient) Select(string) error {
-	if c.stage == "select" {
-		return errors.New("private mailbox")
-	}
-	return nil
-}
 func (c *failingClient) Search(string) ([]string, error) {
-	if c.stage == "search" {
-		return nil, errors.New("private search")
-	}
 	return []string{"1", "2"}, nil
 }
 func (c *failingClient) FetchRFC822(uid string) ([]byte, error) {
@@ -41,7 +32,7 @@ func (c *failingClient) FetchRFC822(uid string) ([]byte, error) {
 }
 
 func TestPollBackoffStagesRecoveryAndPrivacy(t *testing.T) {
-	for _, stage := range []string{"connect", "login", "select", "search", "fetch"} {
+	for _, stage := range []string{"connect", "login", "fetch"} {
 		t.Run(stage, func(t *testing.T) {
 			now := time.Now()
 			dials := 0

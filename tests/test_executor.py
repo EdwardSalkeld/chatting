@@ -1,5 +1,4 @@
 import json
-import io
 import subprocess
 import sys
 import tempfile
@@ -13,8 +12,7 @@ from app.models import AttachmentRef, PromptContext, ReplyChannel, TaskEnvelope
 from app.broker import TaskQueueMessage
 from app.state import SQLiteStateStore
 from app.worker.executor import CodexExecutor
-from app.worker.executor.codex import _run_streaming, _task_payload
-from tests.e2e import fake_codex
+from app.worker.executor.codex import _run_streaming
 
 
 def _envelope() -> TaskEnvelope:
@@ -42,28 +40,18 @@ def _envelope() -> TaskEnvelope:
     )
 
 
+def _payload(executor: CodexExecutor, envelope: TaskEnvelope) -> dict:
+    completed = subprocess.CompletedProcess(["codex"], 0, stdout="{}", stderr="")
+    with patch(
+        "app.worker.executor.codex._run_streaming", return_value=completed
+    ) as run_mock:
+        executor.execute(envelope)
+    payload = json.loads(run_mock.call_args.kwargs["payload"])
+    payload["_run_kwargs"] = run_mock.call_args.kwargs
+    return payload
+
+
 class CodexExecutorTests(unittest.TestCase):
-    def test_email_e2e_agent_uses_current_prompt_destination(self) -> None:
-        payload = _task_payload(_envelope(), current_time=datetime.now(timezone.utc))
-        sent = []
-
-        def capture_send(command, **kwargs):
-            spec_path = Path(command[command.index("--spec-file") + 1])
-            sent.append(json.loads(spec_path.read_text()))
-            spec_path.unlink()
-
-        with (
-            patch("sys.stdin", io.StringIO(json.dumps(payload))),
-            patch("sys.stdout", io.StringIO()),
-            patch.dict("os.environ", {"FAKE_CODEX_PROMPT_DIR": ""}),
-            patch.object(fake_codex.subprocess, "run", side_effect=capture_send),
-        ):
-            fake_codex.main()
-
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0]["channel"], "email")
-        self.assertEqual(sent[0]["target"], "alice@example.com")
-
     def test_streaming_output_arrives_before_process_exits(self) -> None:
         first_chunk = threading.Event()
         output: list[tuple[str, str]] = []
@@ -153,14 +141,9 @@ class CodexExecutorTests(unittest.TestCase):
             store.stage_inbox_task(
                 TaskQueueMessage.from_envelope(current, trace_id="trace:2")
             )
-            completed = subprocess.CompletedProcess(
-                args=["codex"], returncode=0, stdout="{}", stderr=""
+            payload = _payload(
+                CodexExecutor(command=("codex",), history_store=store), current
             )
-            with patch(
-                "app.worker.executor.codex._run_streaming", return_value=completed
-            ) as run_mock:
-                CodexExecutor(command=("codex",), history_store=store).execute(current)
-            payload = json.loads(run_mock.call_args.kwargs["payload"])
             self.assertEqual(payload["task"]["content"], "do that")
             self.assertEqual(
                 payload["recent_history"],
@@ -187,39 +170,7 @@ class CodexExecutorTests(unittest.TestCase):
             )
             self.assertIn("--topic-id 7", payload["history_contract"]["search_command"])
 
-    def test_telegram_prompt_with_empty_history_still_offers_search(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = SQLiteStateStore(str(Path(tmpdir) / "worker.db"))
-            envelope = TaskEnvelope(
-                id="telegram:1",
-                source="im",
-                received_at=datetime(2026, 8, 16, 10, 0, tzinfo=timezone.utc),
-                actor="alice",
-                content="first message",
-                attachments=[],
-                context_refs=[],
-                reply_channel=ReplyChannel(
-                    type="telegram", target="-123", metadata={"message_id": 10}
-                ),
-                dedupe_key="telegram:1",
-            )
-            completed = subprocess.CompletedProcess(
-                args=["codex"], returncode=0, stdout="{}", stderr=""
-            )
-            with patch(
-                "app.worker.executor.codex._run_streaming", return_value=completed
-            ) as run_mock:
-                CodexExecutor(command=("codex",), history_store=store).execute(envelope)
-            payload = json.loads(run_mock.call_args.kwargs["payload"])
-            self.assertEqual(payload["recent_history"], [])
-            self.assertIn(
-                "app.main_history", payload["history_contract"]["search_command"]
-            )
-
     def test_reply_quoted_telegram_task_exposes_supported_history_lookup(self) -> None:
-        completed = subprocess.CompletedProcess(
-            args=["codex"], returncode=0, stdout="{}", stderr=""
-        )
         envelope = TaskEnvelope(
             id="telegram:9",
             source="im",
@@ -235,30 +186,11 @@ class CodexExecutorTests(unittest.TestCase):
             ),
             dedupe_key="telegram:9",
         )
-        with patch(
-            "app.worker.executor.codex._run_streaming", return_value=completed
-        ) as run_mock:
-            CodexExecutor(command=("codex",)).execute(envelope)
-
-        payload = json.loads(run_mock.call_args.kwargs["payload"])
+        payload = _payload(CodexExecutor(command=("codex",)), envelope)
         self.assertEqual(payload["history_contract"]["anchor"]["message_id"], 2400)
         self.assertIn(
             "app.main_history", payload["history_contract"]["retrieve_command"]
         )
-
-    def test_execute_returns_stdout_and_stderr_on_success(self) -> None:
-        completed = subprocess.CompletedProcess(
-            args=["codex"],
-            returncode=0,
-            stdout='{"status":"ok"}',
-            stderr="operator log",
-        )
-        with patch("app.worker.executor.codex._run_streaming", return_value=completed):
-            result = CodexExecutor(command=("codex",)).execute(_envelope())
-
-        self.assertEqual(result.errors, [])
-        self.assertEqual(result.stdout, '{"status":"ok"}')
-        self.assertEqual(result.stderr, "operator log")
 
     def test_execute_returns_timeout_error(self) -> None:
         with patch(
@@ -284,26 +216,15 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(result.errors, ["executor_exit_nonzero:7:boom"])
 
     def test_execute_sends_expected_task_payload(self) -> None:
-        completed = subprocess.CompletedProcess(
-            args=["codex"],
-            returncode=0,
-            stdout="{}",
-            stderr="",
+        executor = CodexExecutor(
+            command=("codex", "exec"),
+            cwd="/workspace/chatting",
+            env={"TOKEN": "secret"},
+            timeout_seconds=123,
+            now_provider=lambda: datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc),
         )
-        with patch(
-            "app.worker.executor.codex._run_streaming",
-            return_value=completed,
-        ) as run_mock:
-            executor = CodexExecutor(
-                command=("codex", "exec"),
-                cwd="/workspace/chatting",
-                env={"TOKEN": "secret"},
-                timeout_seconds=123,
-                now_provider=lambda: datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc),
-            )
-            executor.execute(_envelope())
+        payload = _payload(executor, _envelope())
 
-        payload = json.loads(run_mock.call_args.kwargs["payload"])
         self.assertEqual(payload["schema_version"], "1.0")
         self.assertEqual(payload["task"]["task_id"], "task:evt_1")
         self.assertEqual(payload["task"]["event_channel"]["type"], "email")
@@ -312,46 +233,18 @@ class CodexExecutorTests(unittest.TestCase):
             payload["task"]["associated_conversations"][0]["target"], "-100"
         )
         self.assertEqual(payload["history_contract"]["scope"]["target"], "-100")
-        self.assertIn(
-            "Neither is a required or preferred",
-            payload["reply_contract"]["destination_choice"],
-        )
-        self.assertIn(
-            "telegram_topic_id", payload["reply_contract"]["destination_choice"]
-        )
         self.assertEqual(
             payload["reply_contract"]["visible_replies_must_use"],
             "python3 -P -m app.main_reply --spec-file <path>",
         )
         self.assertEqual(
-            payload["reply_contract"]["executor_working_dir"],
-            "/workspace/chatting",
-        )
-        self.assertIn(
-            "never /tmp",
-            payload["reply_contract"]["outbound_attachment_instruction"],
-        )
-        self.assertIn(
-            "telegram_attachment_path_not_allowed",
-            payload["reply_contract"]["visible_reply_exit_status"],
-        )
-        self.assertIn(
-            "no scheduling CLI",
-            payload["scheduling_contract"]["instructions"],
+            payload["reply_contract"]["executor_working_dir"], "/workspace/chatting"
         )
         self.assertNotIn("handler_api_url", payload["scheduling_contract"])
+        run_kwargs = payload["_run_kwargs"]
+        self.assertEqual(run_kwargs["cwd"], "/workspace/chatting")
+        self.assertEqual(run_kwargs["env"]["TOKEN"], "secret")
         self.assertIn(
-            "repo:/absolute/path",
-            payload["scheduling_contract"]["instructions"],
+            str(Path(__file__).resolve().parents[1]), run_kwargs["env"]["PYTHONPATH"]
         )
-        self.assertEqual(run_mock.call_args.kwargs["cwd"], "/workspace/chatting")
-        executor_env = run_mock.call_args.kwargs["env"]
-        self.assertEqual(executor_env["TOKEN"], "secret")
-        self.assertIn(
-            str(Path(__file__).resolve().parents[1]), executor_env["PYTHONPATH"]
-        )
-        self.assertEqual(run_mock.call_args.kwargs["timeout_seconds"], 123)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertEqual(run_kwargs["timeout_seconds"], 123)

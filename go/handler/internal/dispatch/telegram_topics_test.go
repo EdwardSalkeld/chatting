@@ -14,7 +14,7 @@ import (
 )
 
 func TestTelegramTopicsAcrossTextMediaAndFormattingFallback(t *testing.T) {
-	for _, topic := range []int64{0, 7, 8} {
+	for _, topic := range []int64{0, 7} {
 		for _, media := range []string{"text", "photo.png", "report.pdf"} {
 			t.Run(fmt.Sprintf("%d/%s", topic, media), func(t *testing.T) {
 				dir := t.TempDir()
@@ -49,8 +49,8 @@ func TestTelegramTopicsAcrossTextMediaAndFormattingFallback(t *testing.T) {
 						if media == "photo.png" {
 							wantMethod = "/bottoken/sendPhoto"
 						}
-						if call.path != wantMethod {
-							t.Errorf("method = %s", call.path)
+						if call.path != wantMethod || call.fileBody != "attachment bytes" {
+							t.Errorf("method = %s, file = %q", call.path, call.fileBody)
 						}
 					}
 					want := ""

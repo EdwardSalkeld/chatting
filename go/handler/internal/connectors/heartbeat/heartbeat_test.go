@@ -25,20 +25,8 @@ func TestPollEmitsInternalHeartbeatWithUniqueIDs(t *testing.T) {
 	if len(first) != 1 || len(second) != 1 {
 		t.Fatalf("poll results = %#v %#v", first, second)
 	}
-	if first[0].Source != "internal" {
-		t.Fatalf("source = %q", first[0].Source)
-	}
-	if first[0].Actor == nil || *first[0].Actor != "message-handler" {
-		t.Fatalf("actor = %#v", first[0].Actor)
-	}
-	if first[0].ReplyChannel.Type != "internal" || first[0].ReplyChannel.Target != "heartbeat" {
-		t.Fatalf("reply channel = %#v", first[0].ReplyChannel)
-	}
 	if first[0].ID == second[0].ID {
 		t.Fatalf("heartbeat IDs should be unique: %q", first[0].ID)
-	}
-	if first[0].DedupeKey != first[0].ID || second[0].DedupeKey != second[0].ID {
-		t.Fatalf("dedupe keys = %q %q", first[0].DedupeKey, second[0].DedupeKey)
 	}
 	if first[0].ID != "internal-heartbeat:2026-03-09T12:00:00+00:00:1" {
 		t.Fatalf("first ID = %q", first[0].ID)

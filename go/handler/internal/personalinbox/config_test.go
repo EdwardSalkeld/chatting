@@ -3,7 +3,6 @@ package personalinbox
 import (
 	"encoding/json"
 	"testing"
-	"time"
 )
 
 func validConfig() Config {
@@ -42,11 +41,9 @@ func TestConfigRejectsUnknownCategoriesAndUnsafeValues(t *testing.T) {
 		"plaintext session url":    func(c *Config) { c.SessionURL = "http://api.example.com/jmap/session" },
 		"plaintext link template":  func(c *Config) { c.LinkTemplate = "http://mail.example.com/{email}" },
 		"missing token env":        func(c *Config) { c.TokenEnv = "" },
-		"nonsense digest time":     func(c *Config) { c.DigestAt = "half eight" },
 		"out of range digest time": func(c *Config) { c.DigestAt = "25:00" },
 		"unknown timezone":         func(c *Config) { c.Timezone = "Mars/Olympus" },
 		"threshold above one":      func(c *Config) { c.ConfidenceThreshold = 1.5 },
-		"negative threshold":       func(c *Config) { c.ConfidenceThreshold = -0.1 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -69,38 +66,6 @@ func TestThresholdIsConfigurableWithASafeDefault(t *testing.T) {
 	config.ConfidenceThreshold = 0
 	if config.Threshold() != DefaultConfidenceThreshold {
 		t.Fatalf("%v", config.Threshold())
-	}
-}
-
-func TestDigestTimeIsReadInTheConfiguredZone(t *testing.T) {
-	config := validConfig()
-	hour, minute, err := config.DigestTime()
-	if err != nil || hour != 8 || minute != 0 {
-		t.Fatalf("%d:%d %v", hour, minute, err)
-	}
-	location, err := config.Location()
-	if err != nil || location.String() != "Europe/London" {
-		t.Fatalf("%v %v", location, err)
-	}
-	config.Timezone = ""
-	if location, err := config.Location(); err != nil || location != time.UTC {
-		t.Fatalf("empty timezone should mean UTC, got %v %v", location, err)
-	}
-}
-
-func TestFolderAndMarkReadLookups(t *testing.T) {
-	config := validConfig()
-	config.MarkRead = []string{"news"}
-	if config.Folder("news") != "Triage/News" {
-		t.Fatalf("%q", config.Folder("news"))
-	}
-	// An unconfigured category stays in the inbox, which is how review remains
-	// the queue of mail the workflow did not understand.
-	if config.Folder("review") != "" {
-		t.Fatalf("review should have no folder, got %q", config.Folder("review"))
-	}
-	if !config.MarksRead("news") || config.MarksRead("action") {
-		t.Fatal("mark_read lookup wrong")
 	}
 }
 

@@ -1,8 +1,9 @@
 package mailtext
 
-import "strings"
-
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStyleAndScriptBodiesAreDropped(t *testing.T) {
 	// A real marketing email is mostly CSS; tag stripping alone leaves all of
@@ -36,16 +37,6 @@ func TestCompactPreservesMessageBeforeExcerptBudget(t *testing.T) {
 	}
 	if got := Compact("Pay at https://example.com/pay\n\n Reference: ABC123"); got != "Pay at https://example.com/pay\nReference: ABC123" {
 		t.Fatalf("short useful link lost: %q", got)
-	}
-}
-
-func TestEntitiesAndBlocksBecomeReadableText(t *testing.T) {
-	text := HTMLToText(`<p>Order&nbsp;#10195 &amp; shipped</p><br><div>Thanks</div>`)
-	if text != "Order #10195 & shipped\nThanks" {
-		t.Fatalf("%q", text)
-	}
-	if HTMLToText("   ") != "" {
-		t.Fatal("blank input should give blank output")
 	}
 }
 

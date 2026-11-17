@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,23 +13,6 @@ import (
 	handlerconfig "github.com/EdwardSalkeld/chatting/go/handler/internal/config"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/dispatch"
 )
-
-func TestRunPrintsVersion(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	status := runWithFactory(context.Background(), []string{"--version"}, &stdout, &stderr, newRuntimeRunner)
-
-	if status != 0 {
-		t.Fatalf("status = %d", status)
-	}
-	if strings.TrimSpace(stdout.String()) != version {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
-	if stderr.String() != "" {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
 
 func TestRunRequiresConfigFlag(t *testing.T) {
 	var stdout bytes.Buffer
@@ -44,15 +26,6 @@ func TestRunRequiresConfigFlag(t *testing.T) {
 	if !strings.Contains(stderr.String(), "config path must not be empty") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
-}
-
-func writeMinimalConfig(t *testing.T) string {
-	t.Helper()
-	configPath := filepath.Join(t.TempDir(), "handler.json")
-	if err := os.WriteFile(configPath, []byte(`{"db_path": "/tmp/handler.db"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return configPath
 }
 
 func TestShouldNotifyEgressDrop(t *testing.T) {
@@ -97,52 +70,26 @@ func TestRunParsesConfigFlagBeforeBootstrapExit(t *testing.T) {
 	}
 }
 
-func TestRunRejectsInvalidConfig(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "handler.json")
-	if err := os.WriteFile(configPath, []byte(`{"db_path": ""}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	status := runWithFactory(context.Background(), []string{"--config", configPath}, &stdout, &stderr, newRuntimeRunner)
-
-	if status != 2 {
-		t.Fatalf("status = %d", status)
-	}
-	if !strings.Contains(stderr.String(), "config error: config db_path must be a non-empty string") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
-func TestRunReportsRuntimeSetupError(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	factory := &fakeRunnerFactory{err: errors.New("boom")}
-
-	status := runWithFactory(context.Background(), []string{"--config", writeMinimalConfig(t)}, &stdout, &stderr, factory.newRunner)
-
-	if status != 2 {
-		t.Fatalf("status = %d", status)
-	}
-	if !strings.Contains(stderr.String(), "runtime setup error: boom") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
-func TestRunReportsRuntimeError(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	factory := &fakeRunnerFactory{runner: &fakeRunner{err: errors.New("failed")}}
-
-	status := runWithFactory(context.Background(), []string{"--config", writeMinimalConfig(t)}, &stdout, &stderr, factory.newRunner)
-
-	if status != 1 {
-		t.Fatalf("status = %d", status)
-	}
-	if !strings.Contains(stderr.String(), "runtime error: failed") {
-		t.Fatalf("stderr = %q", stderr.String())
+func TestRunReportsFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, message string
+		factory               fakeRunnerFactory
+		status                int
+	}{
+		{name: "config", config: `{"db_path":""}`, message: "config error: config db_path must be a non-empty string", status: 2},
+		{name: "setup", config: `{"db_path":"/tmp/handler.db"}`, factory: fakeRunnerFactory{err: errors.New("boom")}, message: "runtime setup error: boom", status: 2},
+		{name: "runtime", config: `{"db_path":"/tmp/handler.db"}`, factory: fakeRunnerFactory{runner: &fakeRunner{err: errors.New("failed")}}, message: "runtime error: failed", status: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "handler.json")
+			if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if status := runWithFactory(context.Background(), []string{"--config", path}, &stdout, &stderr, tc.factory.newRunner); status != tc.status || !strings.Contains(stderr.String(), tc.message) {
+				t.Fatalf("status=%d stderr=%q", status, stderr.String())
+			}
+		})
 	}
 }
 
@@ -178,81 +125,27 @@ func TestBuildDispatcherRequiresTelegramTokenWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestBuildDispatcherConfiguresGitHubWhenGHAvailable(t *testing.T) {
+func TestBuildDispatcherGitHubAvailability(t *testing.T) {
 	originalLookPath := ghLookPath
-	ghLookPath = func(file string) (string, error) {
-		if file != "gh" {
-			t.Fatalf("unexpected binary lookup = %q", file)
+	t.Cleanup(func() { ghLookPath = originalLookPath })
+	for _, available := range []bool{true, false} {
+		ghLookPath = func(file string) (string, error) {
+			if file != "gh" {
+				t.Fatalf("unexpected binary lookup = %q", file)
+			}
+			if available {
+				return "/usr/bin/gh", nil
+			}
+			return "", exec.ErrNotFound
 		}
-		return "/usr/bin/gh", nil
-	}
-	defer func() {
-		ghLookPath = originalLookPath
-	}()
-
-	dispatcher, _, err := buildDispatcher(handlerconfig.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	typed, ok := dispatcher.(dispatch.Dispatcher)
-	if !ok {
-		t.Fatalf("dispatcher type = %T", dispatcher)
-	}
-	if typed.GitHubSender == nil {
-		t.Fatal("GitHubSender was not configured")
-	}
-}
-
-func TestBuildDispatcherSkipsGitHubWhenGHUnavailable(t *testing.T) {
-	originalLookPath := ghLookPath
-	ghLookPath = func(file string) (string, error) {
-		if file != "gh" {
-			t.Fatalf("unexpected binary lookup = %q", file)
+		dispatcher, _, err := buildDispatcher(handlerconfig.Config{})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return "", exec.ErrNotFound
-	}
-	defer func() {
-		ghLookPath = originalLookPath
-	}()
-
-	dispatcher, _, err := buildDispatcher(handlerconfig.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	typed, ok := dispatcher.(dispatch.Dispatcher)
-	if !ok {
-		t.Fatalf("dispatcher type = %T", dispatcher)
-	}
-	if typed.GitHubSender != nil {
-		t.Fatal("GitHubSender should be nil when gh is unavailable")
-	}
-}
-
-func TestBuildDispatcherLogsAllowedChannelsWithoutSender(t *testing.T) {
-	originalLookPath := ghLookPath
-	ghLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
-	defer func() {
-		ghLookPath = originalLookPath
-	}()
-
-	var buffer bytes.Buffer
-	previousWriter := log.Writer()
-	log.SetOutput(&buffer)
-	defer log.SetOutput(previousWriter)
-
-	if _, _, err := buildDispatcher(handlerconfig.Config{AllowedEgressChannels: []string{"email", "telegram", "log"}}); err != nil {
-		t.Fatal(err)
-	}
-	if logged := buffer.String(); !strings.Contains(logged, "handler_egress_channels_unconfigured channels=email,telegram:") {
-		t.Fatalf("log = %q", logged)
-	}
-
-	buffer.Reset()
-	if _, _, err := buildDispatcher(handlerconfig.Config{AllowedEgressChannels: []string{"log"}}); err != nil {
-		t.Fatal(err)
-	}
-	if buffer.Len() != 0 {
-		t.Fatalf("expected no warning, got %q", buffer.String())
+		typed, ok := dispatcher.(dispatch.Dispatcher)
+		if !ok || (typed.GitHubSender != nil) != available {
+			t.Fatalf("available=%t dispatcher=%#v", available, dispatcher)
+		}
 	}
 }
 
