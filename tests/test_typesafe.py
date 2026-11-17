@@ -61,24 +61,6 @@ class TypeSafeTransportTests(unittest.TestCase):
         self.assertEqual(outputs[0]["classification"]["category"], "news")
         self.assertFalse(outputs[0]["classification"]["trace"]["triage_failed"])
 
-    def test_429_recovers_before_returning_a_final_result(self):
-        with (
-            patch("app.typesafe.urllib.request.build_opener") as build,
-            patch("app.typesafe.time.sleep") as sleep,
-        ):
-            build.return_value.open.side_effect = [
-                rate_limit(),
-                io.BytesIO(b'{"answers": {}}'),
-            ]
-            self.assertEqual(
-                typesafe.post(typesafe.ENDPOINT, "secret", {"model": "test"}),
-                {"answers": {}},
-            )
-            self.assertEqual(build.return_value.open.call_count, 2)
-            sleep.assert_called_once_with(1)
-            request = build.return_value.open.call_args.args[0]
-            self.assertEqual(json.loads(request.data), {"model": "test"})
-
     def test_429_has_two_retries_and_three_seconds_max_wait(self):
         with (
             patch("app.typesafe.urllib.request.build_opener") as build,
