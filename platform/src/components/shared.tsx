@@ -173,6 +173,8 @@ export interface Fact {
   tone?: Tone
   title?: string
   hidden?: boolean
+  /** 3 hides below 1100px, 2 hides below 760px. */
+  priority?: 2 | 3
 }
 /** Inline key/value strip used under page and sheet headers. Wraps on narrow screens. */
 export function FactsRow({ items, className }: { items: Fact[]; className?: string }) {
@@ -181,7 +183,7 @@ export function FactsRow({ items, className }: { items: Fact[]; className?: stri
       {items
         .filter((item) => !item.hidden)
         .map((item) => (
-          <div key={item.label}>
+          <div key={item.label} data-priority={item.priority}>
             <dt>{item.label}</dt>
             <dd className={item.mono ? 'mono' : undefined} data-tone={item.tone} title={item.title}>
               {item.value ?? '—'}
@@ -295,6 +297,7 @@ export function ErrorStrip({
   label = 'Request',
   retry = query ? () => void query.refetch() : undefined,
   tone = 'danger',
+  message,
 }: {
   query?: QueryLike
   error?: Error | null
@@ -303,12 +306,14 @@ export function ErrorStrip({
   label?: string
   retry?: () => void
   tone?: 'danger' | 'warn'
+  /** Replaces the "<label> unavailable since…" wording, e.g. for a failed save. */
+  message?: string
 }) {
   if (!error) return null
   const status = 'status' in error && typeof error.status === 'number' ? ` (${error.status})` : ''
-  const text = `${label} unavailable${since ? ` since ${clock(since)}` : ''}${status}`
+  const text = message ?? `${label} unavailable${since ? ` since ${clock(since)}` : ''}${status}`
   return (
-    <div className="error-strip" role="alert" data-tone={tone}>
+    <div className={cn('error-strip', message && 'is-wrap')} role="alert" data-tone={tone}>
       <AlertCircle size={14} />
       <span title={error.message}>
         {text}

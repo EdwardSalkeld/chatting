@@ -5,7 +5,7 @@ import { Command, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen }
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Tip, TooltipProvider } from '@/components/ui/tooltip'
-import { useInbox, useItems, useReminders, useSchedules } from '@/lib/api'
+import { useDayRuns, useInbox, useItems, useReminders, useSchedules } from '@/lib/api'
 import { useShortcuts } from '@/lib/keys'
 import { Overview } from '@/pages/overview'
 import { WorkItems, WorkItemDetail } from '@/pages/work'
@@ -230,14 +230,32 @@ export default function App() {
 
 function DocumentTitle({ title }: { title: string }) {
   const live = !!useItems().data?.active_executors.length
+  const attention =
+    (useFailedRuns().count || 0) + (useOverdue() || 0) + (useInbox().data?.stuck || 0)
   useEffect(() => {
-    document.title = `${live ? '● ' : ''}${title} · Chatting`
-  }, [live, title])
+    document.title = `${live ? '● ' : ''}${attention ? `(${attention}) ` : ''}${title} · Chatting`
+  }, [live, attention, title])
   return null
+}
+
+function useFailedRuns() {
+  const runs = useDayRuns().data?.runs
+  const failed = runs?.filter((r) => r.result_status !== 'success')
+  return {
+    count: failed?.length,
+    tone: (failed?.some((r) => r.result_status === 'dead_letter') ? 'danger' : 'warn') as Tone,
+  }
+}
+function useOverdue() {
+  const reminders = useReminders().data?.reminders
+  const now = Date.now()
+  return reminders?.filter((r) => r.status === 'scheduled' && new Date(r.run_at).getTime() < now)
+    .length
 }
 
 function NavCount({ to }: { to: string }) {
   if (to === '/items') return <ItemsCount />
+  if (to === '/runs') return <FailedCount />
   if (to === '/reminders') return <OverdueCount />
   if (to === '/inbox') return <InboxCount />
   return null
@@ -255,12 +273,11 @@ function ItemsCount() {
   return <Counted value={useItems().data?.active_executors.length} tone="live" />
 }
 function OverdueCount() {
-  const reminders = useReminders().data?.reminders
-  const now = Date.now()
-  const overdue = reminders?.filter(
-    (r) => r.status === 'scheduled' && new Date(r.run_at).getTime() < now,
-  ).length
-  return <Counted value={overdue} tone="warn" />
+  return <Counted value={useOverdue()} tone="warn" />
+}
+function FailedCount() {
+  const { count, tone } = useFailedRuns()
+  return <Counted value={count} tone={tone} />
 }
 function InboxCount() {
   return <Counted value={useInbox().data?.awaiting} tone="pending" />

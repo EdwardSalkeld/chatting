@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type {
   ActivitySnapshot,
@@ -78,6 +79,18 @@ export const useRuns = (params: RunsQuery = {}) =>
     refetchInterval: 5000,
     placeholderData: (previous) => previous,
   })
+function useMinute() {
+  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000) * 60000)
+  useEffect(() => {
+    const id = setInterval(() => setMinute(Math.floor(Date.now() / 60000) * 60000), 5000)
+    return () => clearInterval(id)
+  }, [])
+  return minute
+}
+/** Runs from the last 24h; `since` is bucketed to the minute so every caller shares one query. */
+export function useDayRuns() {
+  return useRuns({ limit: 1000, since: new Date(useMinute() - 86400e3).toISOString() })
+}
 export const useDeadLetters = (limit?: number) =>
   useQuery({
     queryKey: ['dead-letters', limit],

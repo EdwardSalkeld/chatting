@@ -769,6 +769,28 @@ kbd,
 .text-link:hover {
   text-decoration: underline;
 }
+button.text-link {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.toolbar-select {
+  height: 24px;
+  max-width: 160px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.toolbar-select:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
 .stack {
   display: flex;
   flex-direction: column;
@@ -832,12 +854,11 @@ kbd,
 }
 .filter-chips {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 .filter-chip {
   display: inline-flex;
@@ -1135,6 +1156,131 @@ a.cell-primary:hover {
   }
 }
 
+.dt th {
+  width: var(--w, auto);
+}
+@media (max-width: 759px) {
+  .dt th {
+    width: var(--w-narrow, var(--w, auto));
+  }
+}
+.dt th.col-expand,
+.dt td.col-expand {
+  width: 28px;
+  padding: 0 0 0 6px;
+}
+.expand-button {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-3);
+}
+.expand-button:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+.expand-button svg {
+  width: 14px;
+  height: 14px;
+}
+.dt tbody tr[aria-expanded='true'] td {
+  border-bottom-color: transparent;
+}
+.dt tbody tr.expand-row td {
+  height: auto;
+  padding: 0 12px 8px 34px;
+  white-space: normal;
+  background: var(--surface);
+  cursor: default;
+}
+.dt tbody tr.expand-row:hover td {
+  background: var(--surface);
+}
+.dt tbody tr[data-tone='live'] td {
+  background: color-mix(in srgb, var(--accent-bg) 45%, transparent);
+}
+.dt tbody tr[data-tone='live']:hover td {
+  background: var(--surface-2);
+}
+@media (max-width: 759px) {
+  .dt th.col-expand,
+  .dt td.col-expand {
+    width: 22px;
+    padding-left: 2px;
+  }
+  .dt tbody tr.expand-row td {
+    padding-left: 8px;
+  }
+}
+
+/* Run table (components/runs.tsx) */
+.source-label {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  vertical-align: middle;
+  gap: 5px;
+  max-width: 100%;
+  color: var(--fg-2);
+}
+.source-label > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+  color: var(--fg-3);
+}
+.source-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.model-cell > .mono {
+  font-size: var(--fs-mono-sm);
+  color: var(--fg);
+}
+.model-cell > .muted {
+  font-size: var(--fs-sm);
+}
+.request-cell {
+  color: var(--fg);
+}
+
+.dl-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--danger);
+  background: var(--surface-2);
+  border-radius: 0 4px 4px 0;
+}
+.dl-error {
+  margin: 0;
+  color: var(--tone);
+  font-family: var(--font-mono-stack);
+  font-size: var(--fs-mono-sm);
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dl-detail .facts-row dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* Loading / empty / error */
 .inline-empty {
   display: flex;
@@ -1221,6 +1367,13 @@ a.cell-primary:hover {
   color: inherit;
   font-weight: 600;
   text-decoration: underline;
+}
+.error-strip.is-wrap {
+  padding: 4px 12px;
+}
+.error-strip.is-wrap > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .error-strip[data-tone='warn'] {
   background: var(--warn-bg);
@@ -1320,7 +1473,7 @@ a.cell-primary:hover {
   align-items: center;
   gap: 8px;
   min-height: 40px;
-  padding: 0 6px 0 16px;
+  padding: 6px 6px 6px 16px;
   border-bottom: 1px solid var(--border);
   flex: none;
 }

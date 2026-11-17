@@ -12,6 +12,8 @@ export interface WorkItem {
   model_tier: string
   last_run_at: string | null
   explicit_finish: boolean
+  created_at?: string
+  running?: number
 }
 export interface Executor {
   task_id: string
@@ -37,7 +39,7 @@ export interface RunCard {
 }
 export interface ItemSnapshot {
   item: WorkItem
-  runs: RunCard[]
+  runs: RunRow[]
   active_executors: Executor[]
 }
 export interface AutoModelDecision {

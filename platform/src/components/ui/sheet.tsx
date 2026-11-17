@@ -20,6 +20,7 @@ function SheetContent({
   description,
   actions,
   footer,
+  onOpenAutoFocus,
   ...props
 }: Omit<React.ComponentProps<typeof SheetPrimitive.Content>, 'title'> & {
   title: React.ReactNode
@@ -35,6 +36,13 @@ function SheetContent({
         className={cn('sheet-content', className)}
         aria-describedby={description ? undefined : props['aria-describedby']}
         {...props}
+        onOpenAutoFocus={(event) => {
+          onOpenAutoFocus?.(event)
+          if (event.defaultPrevented) return
+          // Radix focuses the first button (often Close or Previous), which shows a stray focus ring.
+          event.preventDefault()
+          ;(event.currentTarget as HTMLElement | null)?.focus()
+        }}
       >
         <div className="sheet-header">
           <div>

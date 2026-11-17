@@ -1,6 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { parseSort, sortRows, toggleSort, useUrlState } from '@/lib/url'
 import { InlineEmpty, SkeletonRows } from '@/components/shared'
@@ -15,6 +24,8 @@ export interface Column<T> {
   sortDescFirst?: boolean
   /** CSS width, e.g. 120 or '30%'. Columns without one share the rest. */
   width?: number | string
+  /** Width below 760px, where fixed widths that fit a desktop table can overflow a phone. */
+  narrowWidth?: number | string
   align?: 'left' | 'right'
   mono?: boolean
   /** 3 hides below 1100px, 2 hides below 760px. */
@@ -48,6 +59,23 @@ export interface DataTableProps<T> {
   stickyTop?: number
   className?: string
   skeletonRows?: number
+  /** Rows kept above the sorted rows in their given order, e.g. running executors. */
+  pinned?: (row: T) => boolean
+  /**
+   * Detail shown in a full-width row under `row`; rows returning nothing are not expandable.
+   * Adds a chevron column; →/← and Space open and close the focused row.
+   */
+  expand?: (row: T) => ReactNode
+  expandLabel?: string
+}
+
+const px = (value: number | string | undefined) =>
+  typeof value === 'number' ? `${value}px` : value
+function widthStyle(column: { width?: number | string; narrowWidth?: number | string }) {
+  return {
+    ...(column.width != null && { '--w': px(column.width) }),
+    ...(column.narrowWidth != null && { '--w-narrow': px(column.narrowWidth) }),
+  } as CSSProperties
 }
 
 const INTERACTIVE =
@@ -71,6 +99,9 @@ export function DataTable<T>({
   stickyTop,
   className,
   skeletonRows = 6,
+  pinned,
+  expand,
+  expandLabel = 'details',
 }: DataTableProps<T>) {
   const navigate = useNavigate()
   const [urlSort, setUrlSort] = useUrlState(sortParam || '__nosort', defaultSort)
@@ -78,13 +109,16 @@ export function DataTable<T>({
   const sortValue = sortParam ? urlSort : localSort
   const sort = parseSort(sortValue)
   const [focused, setFocused] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
 
   const sorted = useMemo(() => {
     if (!rows) return undefined
-    if (!sort) return rows
-    const column = columns.find((c) => c.key === sort.key)
-    return column?.sortValue ? sortRows(rows, column.sortValue, sort.desc) : rows
-  }, [rows, columns, sort?.key, sort?.desc])
+    const column = sort && columns.find((c) => c.key === sort.key)
+    const order = (list: readonly T[]) =>
+      column?.sortValue ? sortRows(list, column.sortValue, sort!.desc) : list
+    if (!pinned) return order(rows)
+    return [...rows.filter(pinned), ...order(rows.filter((row) => !pinned(row)))]
+  }, [rows, columns, sort?.key, sort?.desc, pinned])
 
   const wrap = useRef<HTMLDivElement>(null)
   const [scrolls, setScrolls] = useState(false)
@@ -114,12 +148,20 @@ export function DataTable<T>({
   })
 
   const clickable = !!(rowHref || onRowClick)
-  function open(row: T, newTab = false) {
+  function openRow(row: T, newTab = false) {
     const href = rowHref?.(row)
     if (href) {
       if (newTab) window.open(href, '_blank', 'noopener')
       else navigate(href)
     } else onRowClick?.(row)
+  }
+  function toggle(key: string, open?: boolean) {
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (open ?? !next.has(key)) next.add(key)
+      else next.delete(key)
+      return next
+    })
   }
   function setSort(column: Column<T>) {
     const next = toggleSort(sortValue, column.key, column.sortDescFirst)
@@ -127,6 +169,7 @@ export function DataTable<T>({
     else setLocalSort(next)
   }
 
+  const span = columns.length + (expand ? 1 : 0)
   return (
     <div ref={wrap} className={cn('table-wrap', scrolls && 'is-scroll')}>
       <table
@@ -139,6 +182,7 @@ export function DataTable<T>({
       >
         <thead>
           <tr>
+            {expand && <th className="col-expand" aria-label={`Expand ${expandLabel}`} />}
             {columns.map((column) => {
               const active = sort?.key === column.key
               const ariaSort = column.sortValue
@@ -153,7 +197,7 @@ export function DataTable<T>({
                 <th
                   key={column.key}
                   scope="col"
-                  style={{ width: column.width }}
+                  style={widthStyle(column)}
                   data-align={column.align}
                   data-priority={column.priority}
                   aria-sort={ariaSort}
@@ -175,10 +219,10 @@ export function DataTable<T>({
         </thead>
         <tbody>
           {!sorted && loading ? (
-            <SkeletonRows rows={skeletonRows} colSpan={columns.length} />
+            <SkeletonRows rows={skeletonRows} colSpan={span} />
           ) : !sorted?.length ? (
             <tr>
-              <td className="inline-empty-cell" colSpan={columns.length}>
+              <td className="inline-empty-cell" colSpan={span}>
                 <InlineEmpty>{empty}</InlineEmpty>
               </td>
             </tr>
@@ -186,65 +230,107 @@ export function DataTable<T>({
             sorted.map((row, index) => {
               const key = rowKey(row)
               const selected = selectedKey === key || (selectedKey == null && focused === key)
+              const detail = expand?.(row)
+              const open = detail != null && detail !== false && expanded.has(key)
+              const canExpand = detail != null && detail !== false
               return (
-                <tr
-                  key={key}
-                  data-row={clickable || undefined}
-                  data-tone={rowTone?.(row)}
-                  tabIndex={clickable ? 0 : undefined}
-                  aria-selected={clickable ? selected : undefined}
-                  className={cn(flashing.has(key) && 'is-flash')}
-                  onFocus={(event) => {
-                    if (event.target === event.currentTarget) setFocused(key)
-                  }}
-                  onClick={(event) => {
-                    if (!clickable) return
-                    const target = event.target as HTMLElement
-                    if (target.closest(INTERACTIVE) && target.closest('tr') === event.currentTarget)
-                      return
-                    if (window.getSelection()?.toString()) return
-                    open(row, event.metaKey || event.ctrlKey)
-                  }}
-                  onAuxClick={(event) => {
-                    if (event.button === 1 && rowHref?.(row)) open(row, true)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.target !== event.currentTarget) return
-                    if (event.key === 'Enter' || event.key === 'o') {
+                <Fragment key={key}>
+                  <tr
+                    data-row={clickable || undefined}
+                    data-tone={rowTone?.(row)}
+                    tabIndex={clickable ? 0 : undefined}
+                    aria-selected={clickable ? selected : undefined}
+                    aria-expanded={canExpand ? open : undefined}
+                    className={cn(flashing.has(key) && 'is-flash')}
+                    onFocus={(event) => {
+                      if (event.target === event.currentTarget) setFocused(key)
+                    }}
+                    onClick={(event) => {
+                      if (!clickable) return
+                      const target = event.target as HTMLElement
+                      if (
+                        target.closest(INTERACTIVE) &&
+                        target.closest('tr') === event.currentTarget
+                      )
+                        return
+                      if (window.getSelection()?.toString()) return
+                      openRow(row, event.metaKey || event.ctrlKey)
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button === 1 && rowHref?.(row)) openRow(row, true)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return
+                      if (event.key === 'Enter' || event.key === 'o') {
+                        event.preventDefault()
+                        openRow(row, event.metaKey || event.ctrlKey)
+                        return
+                      }
+                      if (
+                        canExpand &&
+                        (event.key === 'ArrowRight' ||
+                          event.key === 'ArrowLeft' ||
+                          event.key === ' ')
+                      ) {
+                        event.preventDefault()
+                        toggle(key, event.key === ' ' ? undefined : event.key === 'ArrowRight')
+                        return
+                      }
+                      const step =
+                        event.key === 'ArrowDown' || event.key === 'j'
+                          ? 1
+                          : event.key === 'ArrowUp' || event.key === 'k'
+                            ? -1
+                            : 0
+                      if (!step) return
                       event.preventDefault()
-                      open(row, event.metaKey || event.ctrlKey)
-                      return
-                    }
-                    const step =
-                      event.key === 'ArrowDown' || event.key === 'j'
-                        ? 1
-                        : event.key === 'ArrowUp' || event.key === 'k'
-                          ? -1
-                          : 0
-                    if (!step) return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    const sibling = (
-                      step > 0
-                        ? event.currentTarget.nextElementSibling
-                        : event.currentTarget.previousElementSibling
-                    ) as HTMLElement | null
-                    sibling?.focus()
-                  }}
-                >
-                  {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      data-align={column.align}
-                      data-priority={column.priority}
-                      data-mono={column.mono || undefined}
-                      className={column.className}
-                      title={column.title?.(row)}
-                    >
-                      {column.cell(row, index)}
-                    </td>
-                  ))}
-                </tr>
+                      event.stopPropagation()
+                      let sibling = (
+                        step > 0
+                          ? event.currentTarget.nextElementSibling
+                          : event.currentTarget.previousElementSibling
+                      ) as HTMLElement | null
+                      while (sibling && !sibling.hasAttribute('data-row'))
+                        sibling = (
+                          step > 0 ? sibling.nextElementSibling : sibling.previousElementSibling
+                        ) as HTMLElement | null
+                      sibling?.focus()
+                    }}
+                  >
+                    {expand && (
+                      <td className="col-expand">
+                        {canExpand && (
+                          <button
+                            type="button"
+                            className="expand-button"
+                            aria-label={`${open ? 'Hide' : 'Show'} ${expandLabel}`}
+                            aria-expanded={open}
+                            onClick={() => toggle(key)}
+                          >
+                            {open ? <ChevronDown /> : <ChevronRight />}
+                          </button>
+                        )}
+                      </td>
+                    )}
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        data-align={column.align}
+                        data-priority={column.priority}
+                        data-mono={column.mono || undefined}
+                        className={column.className}
+                        title={column.title?.(row)}
+                      >
+                        {column.cell(row, index)}
+                      </td>
+                    ))}
+                  </tr>
+                  {open && (
+                    <tr className="expand-row">
+                      <td colSpan={span}>{detail}</td>
+                    </tr>
+                  )}
+                </Fragment>
               )
             })
           )}
