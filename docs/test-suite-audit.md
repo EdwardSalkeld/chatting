@@ -82,3 +82,30 @@ This audit used test inventory, targeted source review and before/after suite
 runs. It did not measure mutation scores or prove unchanged branch coverage.
 External-service/live tests were not exercised locally; Nix packaging was not
 rerun because application and package inputs did not change.
+
+## Go second pass — 17 November 2026
+
+A second Go-only pass: 282 → 229 top-level tests (−53) and 11,255 → 9,322
+test-file lines (−1,933). Production code is unchanged.
+
+- **Duplicates of stronger tests:** per-channel dispatcher and Telegram sender
+  tests (covered by the topics matrix and failure-reason tables), egress drop
+  tests (covered by the surfaced-drop and SQLite-backed engine tests), runtime
+  seen-envelope and max-loops tests, and personal inbox order, news and
+  dead-letter tests.
+- **Trivial checks:** version printing, config default constants and field
+  round-trips (now one `DeepEqual` mapping test), getters, status-code lookups,
+  router 404/405s, constant `Source`/`DedupeKey` fields, `json.Marshal`
+  validity and the `task_ledger` column-order pin.
+- **Same-branch table rows:** webhook event types, IMAP backoff stages,
+  Telegram topic IDs, context-ref validator rows and triage outcome rows.
+- **Folded into lifecycles:** missing-schedule sentinels, 404-after-delete,
+  idempotency conflicts and task-completion round trips.
+- **Shared helpers:** webhook signing, Telegram polling, IMAP polling, JMAP
+  session fixtures and API/UI test servers.
+
+Kept: webhook signature rejections, public-mux route exposure, attachment
+path/symlink boundaries, SMTP/IMAP/bbmb/HTTP timeouts and cancellation,
+restart recovery, migrations, concurrent topic creation, watermark ordering
+and cross-language contract fixtures. `go test ./...`, `go vet ./...` and
+`gofmt -l .` pass.
