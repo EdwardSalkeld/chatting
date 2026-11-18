@@ -269,13 +269,14 @@ func (engine *Engine) Flush(ctx context.Context, taskID string) (Result, error) 
 			if !ok {
 				return Result{}, err
 			}
-			if _, err := engine.dropFailedDispatch(ctx, message, reason); err != nil {
+			drop, err := engine.dropFailedDispatch(ctx, message, reason)
+			if err != nil {
 				return Result{}, err
 			}
 			if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
 				return Result{}, err
 			}
-			last = Result{Status: StatusDropped, Reason: "dispatch_failed"}
+			last = drop
 			continue
 		}
 		if err := engine.state.MarkStagedEventDispatched(ctx, taskID, staged.EventID, staged.Sequence); err != nil {
@@ -343,8 +344,8 @@ func (engine *Engine) skipSequencedEvent(ctx context.Context, message contracts.
 // drop (loud log + operator alert via the hook), records the event as dispatched so it
 // is not retried, and reports the event as dropped. The egress message is acked by the
 // caller, so a single bad event no longer crash-loops the handler. reasonCode carries
-// the upstream API description for the log/alert; the Result reason stays "dispatch_failed"
-// so metrics bucket dispatch failures together.
+// the upstream API description for the log/alert. The response exposes only the
+// stable reason code, without potentially sensitive upstream descriptions.
 func (engine *Engine) dropFailedDispatch(ctx context.Context, message contracts.EgressQueueMessage, reasonCode string) (Result, error) {
 	if _, err := engine.surfaceDrop(ctx, message, reasonCode); err != nil {
 		return Result{}, err
@@ -352,7 +353,11 @@ func (engine *Engine) dropFailedDispatch(ctx context.Context, message contracts.
 	if err := engine.state.MarkDispatchedEventID(ctx, message.TaskID, message.EventID); err != nil {
 		return Result{}, err
 	}
-	return Result{Status: StatusDropped, Reason: "dispatch_failed"}, nil
+	code, _, _ := strings.Cut(reasonCode, " ")
+	if !strings.HasPrefix(code, "telegram_attachment_") {
+		code = "dispatch_failed"
+	}
+	return Result{Status: StatusDropped, Reason: code}, nil
 }
 
 // dispatchFailureReason reports whether err is a per-message dispatch failure (as
