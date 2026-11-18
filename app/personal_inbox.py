@@ -106,6 +106,10 @@ TRIAGE_QUESTIONS = {
         ),
         "criteria": CATEGORIES,
     },
+    "auth_related": {
+        "type": "noul",
+        "instructions": "Is the primary function of this email authentication or account access, such as account verification, a one-time code, sign-in link, or password reset?",
+    },
     "requires_action": {
         "type": "noul",
         "instructions": (
@@ -225,6 +229,7 @@ class Triage:
     category: str
     confidence: float
     action: float
+    auth: float
     deadline: float
     injection: float
     probabilities: dict[str, float]
@@ -237,7 +242,7 @@ def jev_triage(mail: dict[str, Any], key: str, *, rules_context: str = "") -> Tr
     and whether the email is talking to the machine rather than the reader."""
     questions = {
         name: {**question, "instructions": question["instructions"] + rules_context}
-        if name != "prompt_injection"
+        if name not in {"prompt_injection", "auth_related"}
         else question
         for name, question in TRIAGE_QUESTIONS.items()
     }
@@ -250,12 +255,14 @@ def jev_triage(mail: dict[str, Any], key: str, *, rules_context: str = "") -> Tr
     category, confidence = check_answer(answers["category"], CATEGORIES)
     category = CATEGORY_RESULT.get(category, category)
     action = check_noul(answers["requires_action"])
+    auth = check_noul(answers["auth_related"])
     deadline = check_noul(answers["has_deadline"])
     injection = check_noul(answers["prompt_injection"])
     return Triage(
         category,
         confidence,
         action,
+        auth,
         deadline,
         injection,
         answers["category"]["probabilities"],
@@ -552,6 +559,7 @@ def classify(
             category_probabilities=assessment.probabilities,
             noul_probabilities={
                 "requires_action": assessment.action,
+                "auth_related": assessment.auth,
                 "has_deadline": assessment.deadline,
                 "prompt_injection": assessment.injection,
             },
@@ -572,6 +580,11 @@ def classify(
                 **summary,
             },
         }
+
+    if assessment is not None and assessment.auth > NOUL_CLEAR_NO:
+        return result(
+            "auth", assessment.auth, {"summary": "", "action": "", "deadline": ""}
+        )
 
     # Mail that talks to the machine never reaches the agent that has a shell.
     # It still reaches its owner, who can read the original themselves. Losing

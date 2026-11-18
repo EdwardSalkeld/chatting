@@ -1035,3 +1035,14 @@ func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthPlanOnlyNotifiesMetadata(t *testing.T) {
+	service := &Service{}
+	message := Message{ID: "auth-id", Classification: &Classification{Category: "auth"}}
+	message.Mail.Subject = "Verification"
+	message.Mail.From = "sender@example.com"
+	effects := service.plan(message)
+	if len(effects) != 1 || effects[0].Kind != "telegram" || effects[0].Body != "auth: Verification\nFrom: sender@example.com" {
+		t.Fatalf("unexpected auth effects: %+v", effects)
+	}
+}
