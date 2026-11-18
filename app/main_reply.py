@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -299,11 +302,37 @@ def main() -> int:
     delivered_content = False
 
     for outbound_message in outbound_messages:
+        staged_path: Path | None = None
+        send_message = outbound_message
+        staging_dir = os.environ.get("CHATTING_OUTBOUND_ATTACHMENT_DIR")
+        if (
+            staging_dir
+            and outbound_message.channel == "telegram"
+            and outbound_message.attachment
+        ):
+            source = Path(args.attachment_path)
+            fd, name = tempfile.mkstemp(
+                prefix="outbound-", suffix=source.suffix, dir=staging_dir
+            )
+            staged_path = Path(name)
+            try:
+                with os.fdopen(fd, "wb") as target, source.open("rb") as src:
+                    shutil.copyfileobj(src, target)
+                    os.fchmod(target.fileno(), 0o640)
+            except BaseException:
+                staged_path.unlink(missing_ok=True)
+                raise
+            send_message = replace(
+                outbound_message,
+                attachment=AttachmentRef(
+                    uri=staged_path.as_uri(), name=outbound_message.attachment.name
+                ),
+            )
         egress_message = EgressQueueMessage(
             task_id=args.task_id,
             envelope_id=envelope_id,
             trace_id=trace_id,
-            message=outbound_message,
+            message=send_message,
             emitted_at=datetime.now(timezone.utc),
             event_id=_message_event_id(
                 base_event_id,
@@ -317,6 +346,10 @@ def main() -> int:
         status_code, response = submit_egress(
             handler_egress_url, egress_message.to_dict()
         )
+        # On a timeout the handler may still be reading. Aged temporary files
+        # are removed by the deployment's staging directory cleanup policy.
+        if staged_path is not None and status_code in (200, 202, 422):
+            staged_path.unlink(missing_ok=True)
         result_status = (
             str(response.get("status", "")) if isinstance(response, dict) else ""
         )

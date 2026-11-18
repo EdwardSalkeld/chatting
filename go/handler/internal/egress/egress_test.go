@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"reflect"
@@ -222,6 +223,28 @@ func TestFlushDropsAndContinuesOnStagedUnconfiguredChannel(t *testing.T) {
 	}
 	if got, _ := state.ExpectedSequence(ctx, task.TaskID); got != 1 {
 		t.Fatalf("expected sequence = %d, want 1 (must advance past the dropped event)", got)
+	}
+}
+
+func TestAttachmentDispatchFailureReturnsActionableCode(t *testing.T) {
+	for _, sequenced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sequenced=%v", sequenced), func(t *testing.T) {
+			task := testTaskMessage(t)
+			state := newFakeState()
+			state.addTask(task)
+			dispatcher := &recordingDispatcher{err: dispatch.MessageDispatchError{ReasonCode: "telegram_attachment_send_failed description=private details"}}
+			engine := newTestEngineWithState(t, state, dispatcher, nil)
+			var sequence *int
+			kind := "incremental"
+			if sequenced {
+				sequence = intPtr(0)
+				kind = "message"
+			}
+			result, err := engine.Handle(context.Background(), testEgressMessage(t, task, sequence, "evt:attachment", kind))
+			if err != nil || result.Status != StatusDropped || result.Reason != "telegram_attachment_send_failed" {
+				t.Fatalf("result = %#v, err = %v", result, err)
+			}
+		})
 	}
 }
 

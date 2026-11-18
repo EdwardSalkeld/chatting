@@ -137,6 +137,7 @@ repaired by creating another conversation.
   - the referenced file must already exist on disk when dispatch runs
   - upload/API failures surface deterministic Telegram reason codes such as `telegram_attachment_missing` and `telegram_attachment_send_failed`
 - Outbound attachments under `telegram_attachment_dir` are tracked in the same cleanup ledger as inbound downloads and become cleanup-eligible after task completion.
+- If worker and handler have different Unix users, `CHATTING_OUTBOUND_ATTACHMENT_DIR` can point `main_reply` at a shared staging directory. The directory must be writable by the worker, readable and traversable by the handler, setgid to a shared group, and included in `egress_attachment_allowed_dirs`. The worker creates a group-readable copy and removes it after a definitive reply; configure age-based cleanup for copies left by timeouts or crashes. Keep the original attachment in the work-item directory.
 - Successful send responses retain Telegram's returned `message_id`; `app.main_reply` stores that id in the worker history ledger.
 
 Outbound text and attachment captions use CommonMark Markdown by default. The Go

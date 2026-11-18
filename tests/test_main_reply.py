@@ -113,6 +113,55 @@ def _telegram_task_message(
 
 
 class MainReplyCliTests(unittest.TestCase):
+    def test_telegram_attachment_is_staged_for_handler(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staging = root / "staging"
+            staging.mkdir()
+            source = root / "diagram.png"
+            source.write_bytes(b"image contents")
+            observed = []
+
+            def submit(_url, payload):
+                from urllib.parse import unquote, urlparse
+
+                uri = payload["message"]["attachment"]["uri"]
+                path = Path(unquote(urlparse(uri).path))
+                observed.append(
+                    (path.parent, path.read_bytes(), path.stat().st_mode & 0o777)
+                )
+                return 200, {"status": "dispatched"}
+
+            with patch.dict(
+                "os.environ", {"CHATTING_OUTBOUND_ATTACHMENT_DIR": str(staging)}
+            ):
+                code, _, _ = _run(
+                    root, {**TELEGRAM_SPEC, "attachment_path": str(source)}, submit
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(observed, [(staging, b"image contents", 0o640)])
+            self.assertEqual(list(staging.iterdir()), [])
+
+    def test_timed_out_attachment_is_kept_for_inflight_handler(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staging = root / "staging"
+            staging.mkdir()
+            source = root / "diagram.png"
+            source.write_bytes(b"image contents")
+            with patch.dict(
+                "os.environ", {"CHATTING_OUTBOUND_ATTACHMENT_DIR": str(staging)}
+            ):
+                code, _, _ = _run(
+                    root,
+                    {**TELEGRAM_SPEC, "attachment_path": str(source)},
+                    _FakeSubmit(0, {"reason": "timeout"}),
+                )
+            self.assertEqual(code, EXIT_TRANSIENT)
+            self.assertEqual(
+                [p.read_bytes() for p in staging.iterdir()], [b"image contents"]
+            )
+
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
