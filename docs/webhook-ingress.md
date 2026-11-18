@@ -338,16 +338,12 @@ journal preview. Oversized, incomplete or out-of-order candidates are forwarded.
 
 Worker environment settings:
 
-- `CHATTING_NOTIFICATION_TRIAGE_MODE`: `off` (default), `observe`, or `enforce`.
 - `CHATTING_NOTIFICATION_RULES_REPO`: checkout with an `origin/main` containing
   `notifications/rules.json`; the loader fetches a private ref without changing
   the working tree.
 - `TYPESAFE_API_KEY`: existing TypeSafe credential, never supplied to the executor.
 
-Start with `observe`: every event is forwarded, and the decision records what
-would have been suppressed. `enforce` suppresses only a clear no (`noul <= 0.3`)
-to whether the notification adds information worth agent attention. Uncertainty,
-missing rules, failed fetches, malformed answers and provider errors forward.
+The worker suppresses only a clear no (`noul <= 0.3`) to whether a notification adds information worth agent attention. Uncertainty, missing rules, failed fetches, malformed answers and provider errors forward. Missing credentials or rules repository also leave events on the normal forwarding path.
 The TypeSafe request uses the existing bounded transport with an eight-second
 request budget. Rules fetching also has bounded subprocess timeouts. Triage is
 serialized in the collector, so a slow assessment can delay later broker pickup;
@@ -360,11 +356,11 @@ independent comments, fetch GitHub or infer relationships across work items.
 
 `<worker-db-path>.notifications` stores decisions by task ID and the latest
 comparison bodies per comment. A replay after a failed ACK reuses the saved
-decision even if rules or mode changed. Decisions and comparison state commit
+decision even if rules changed. Decisions and comparison state commit
 together before admission/ACK; the one collector stages a forwarded event before
 collecting the next. Missing/unavailable optional triage storage forwards events.
 `notification_triage` journal records include rule revision, supplied IDs, model,
-probability, mode and compared event IDs, without message bodies or credentials.
+probability and compared event IDs, without message bodies or credentials.
 An ingress `keep` receipt may therefore have a later worker triage decision that
 suppresses executor work; audit both records rather than treating every absence
 of an agent turn as a lost task.
