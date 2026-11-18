@@ -3,6 +3,8 @@
 The manager can disappear at any point. Claiming and processing a task both
 belong to the supervisor, so reconnecting never needs to repeat a handoff.
 Supervisor crashes are deliberately fatal; there is no supervisor recovery.
+The one exception is a slot lock written during an earlier boot: a reboot
+killed its owner, so its slot can be started again.
 """
 
 from __future__ import annotations
@@ -48,6 +50,28 @@ _SERVICE_ENVIRONMENT = {
 
 class SupervisorError(RuntimeError):
     pass
+
+
+def _boot_id() -> str | None:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def _owner_record() -> str:
+    return json.dumps({"pid": os.getpid(), "boot_id": _boot_id()})
+
+
+def _from_previous_boot(owner: str) -> bool:
+    # Locks without a boot id (older releases, or hosts without one) cannot be
+    # told apart from a crash in this boot, so they stay fatal.
+    try:
+        recorded = json.loads(owner).get("boot_id")
+    except ValueError, AttributeError:
+        return False
+    current = _boot_id()
+    return bool(recorded and current and recorded != current)
 
 
 def request(path: Path, command: str, **fields: object) -> dict:
@@ -228,8 +252,21 @@ class SupervisorPool:
         marker = self.directory / f"supervisor-{slot}.lock"
         # A lock file remains after a crash. Never silently replace a dead or
         # unresponsive supervisor; resolving that failure is an operator action.
+        # A lock from an earlier boot is different: its owner cannot be alive.
         if marker.exists():
-            raise SupervisorError(f"supervisor {slot} is unavailable; inspect {marker}")
+            unavailable = SupervisorError(
+                f"supervisor {slot} is unavailable; inspect {marker}"
+            )
+            with marker.open("r") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise unavailable from exc
+                if not _from_previous_boot(lock.read()):
+                    raise unavailable
+                LOGGER.warning("supervisor_lock_from_previous_boot slot=%s", slot)
+                self.path(slot).unlink(missing_ok=True)
+                marker.unlink()
         settings_path = self.directory / f"supervisor-{slot}.json"
         settings_path.write_text(json.dumps(self.settings), encoding="utf-8")
         settings_path.chmod(0o600)
@@ -349,11 +386,12 @@ def main() -> int:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         lock.seek(0)
         previous = lock.read()
-        if previous:
+        if previous and not _from_previous_boot(previous):
             raise SupervisorError(
                 "slot already has an owner; supervisor recovery is disabled"
             )
-        lock.write(str(os.getpid()))
+        lock.truncate(0)
+        lock.write(_owner_record())
         lock.flush()
         settings = json.loads(stem.with_suffix(".json").read_text())
         supervisor = Supervisor(slot=args.slot, settings=settings)

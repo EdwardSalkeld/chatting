@@ -12,9 +12,15 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from app.state import SQLiteStateStore
-from app.worker.supervisor import SupervisorError, SupervisorPool, request
+from app.worker.supervisor import (
+    SupervisorError,
+    SupervisorPool,
+    _from_previous_boot,
+    request,
+)
 from tests.e2e.test_parallel_worker_e2e import _task
 from tests.e2e.exec_backend import use_exec_backend
 from tests.test_worker_inbox import _telegram_task
@@ -142,6 +148,42 @@ class SupervisorTests(unittest.TestCase):
             self.connect()
         self.assertEqual(self.pool.status(2)["pid"], self.pids[1])
 
+    def kill_supervisors(self, boot_id: str) -> None:
+        """Leave slot files behind as a reboot would, owned by ``boot_id``."""
+        for slot, (child, pid) in enumerate(zip(self.pool.children, self.pids), 1):
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait(timeout=5)
+            lock = self.root / f"slots/supervisor-{slot}.lock"
+            lock.write_text(json.dumps({"pid": pid, "boot_id": boot_id}))
+        self.assertTrue((self.root / "slots/supervisor-1.sock").exists())
+
+    def test_lock_from_previous_boot_is_replaced_and_its_lease_recovered(
+        self,
+    ) -> None:
+        task = _task(1, "item_reboot", 30)
+        self.store.stage_inbox_task(task)
+        self.pool.tick()
+        self.wait_for(lambda: len(self.log()) == 1)
+        self.kill_supervisors("previous-boot")
+        with mock.patch("app.worker.supervisor._boot_id", return_value="this-boot"):
+            replacement = self.connect()
+        statuses = replacement.statuses()
+        self.assertEqual([s["state"] for s in statuses], ["idle", "idle"])
+        self.assertTrue(set(s["pid"] for s in statuses).isdisjoint(self.pids))
+        self.store.recover_inbox_tasks(
+            supervised_task_ids=tuple(s["task_id"] for s in statuses if s["task_id"])
+        )
+        self.assertEqual(
+            self.store.claim_next_inbox_task().task_message.task_id, task.task_id
+        )
+
+    def test_dead_lock_from_this_boot_is_not_replaced(self) -> None:
+        self.kill_supervisors("this-boot")
+        with mock.patch("app.worker.supervisor._boot_id", return_value="this-boot"):
+            with self.assertRaises(SupervisorError):
+                self.connect()
+        self.assertTrue((self.root / "slots/supervisor-1.lock").exists())
+
     def test_busy_claim_keeps_supervisor_alive_and_retries(self) -> None:
         task = _task(1, "item_busy", 0.1)
         self.store.stage_inbox_task(task)
@@ -249,3 +291,17 @@ class SupervisorTests(unittest.TestCase):
         subprocess.run(command, check=True, capture_output=True, timeout=5)
         self.wait_for(lambda: not list((self.root / "slots").glob("*.lock")))
         self.assertEqual([event["phase"] for event in self.log()], ["start", "end"])
+
+
+class PreviousBootTests(unittest.TestCase):
+    @mock.patch("app.worker.supervisor._boot_id", return_value="this-boot")
+    def test_only_a_recorded_other_boot_counts_as_previous(self, _) -> None:
+        self.assertTrue(_from_previous_boot('{"pid": 1, "boot_id": "old"}'))
+        self.assertFalse(_from_previous_boot('{"pid": 1, "boot_id": "this-boot"}'))
+        self.assertFalse(_from_previous_boot('{"pid": 1, "boot_id": null}'))
+        # Locks written before boot ids were recorded hold only the pid.
+        self.assertFalse(_from_previous_boot("1234"))
+
+    @mock.patch("app.worker.supervisor._boot_id", return_value=None)
+    def test_unknown_current_boot_never_counts_as_previous(self, _) -> None:
+        self.assertFalse(_from_previous_boot('{"pid": 1, "boot_id": "old"}'))
