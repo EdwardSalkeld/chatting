@@ -107,12 +107,12 @@ func (value Classification) Validate() error {
 	if math.IsNaN(value.Confidence) || math.IsInf(value.Confidence, 0) || value.Confidence < 0 || value.Confidence > 1 {
 		return errors.New("invalid confidence")
 	}
-	if value.Category != "news" && value.Category != "order" && value.Category != "action" && value.Category != "review" {
+	if value.Category != "auth" && value.Category != "news" && value.Category != "order" && value.Category != "action" && value.Category != "review" {
 		return errors.New("invalid category")
 	}
 	// Routine mail carries no summary: the digest writes one line per message
 	// from a single batch call rather than buying one summary per newsletter.
-	if value.Category != "news" && strings.TrimSpace(value.Summary) == "" {
+	if value.Category != "auth" && value.Category != "news" && strings.TrimSpace(value.Summary) == "" {
 		return errors.New("classification needs a summary")
 	}
 	if len([]rune(value.Summary)) > 600 || len([]rune(value.Action)) > 600 || len([]rune(value.Deadline)) > 100 {
@@ -129,7 +129,8 @@ func (value Classification) Validate() error {
 			if len(item.values) == 0 {
 				continue
 			}
-			if len(item.values) != len(item.keys) {
+			auth, hasAuth := item.values["auth_related"]
+			if len(item.values) != len(item.keys) && !(len(item.keys) == 3 && len(item.values) == 4 && hasAuth && auth >= 0 && auth <= 1 && !math.IsNaN(auth)) {
 				return errors.New("invalid assessment keys")
 			}
 			for _, key := range item.keys {
@@ -497,6 +498,8 @@ func (service *Service) classificationResult(ctx context.Context, raw []byte) (b
 		case "input_too_large", "request_rejected", "rate_limited", "invalid_response":
 			classification.Trace.Reason = "triage_" + classification.Trace.TriageError
 		}
+	case classification.Category == "auth":
+		classification.Trace.Reason = "auth"
 	case classification.Confidence < service.Config.Threshold():
 		classification.Category, classification.Trace.Reason = "review", "confidence_below_threshold"
 	case classification.Trace.Suspicious:
@@ -576,6 +579,13 @@ func (service *Service) link(message Message, folder string) string {
 func (service *Service) plan(message Message) []Effect {
 	classification := message.Classification
 	folder := service.Config.Folder(classification.Category)
+	if classification.Category == "auth" {
+		status := "pending"
+		if service.Config.DryRun {
+			status = "preview"
+		}
+		return []Effect{{ID: message.ID + ":telegram", MessageID: message.ID, Kind: "telegram", Category: "auth", Target: service.Config.ActionTarget, Body: "auth: " + message.Mail.Subject + "\nFrom: " + message.Mail.From, Status: status}}
+	}
 	summary, action, deadline := classification.Summary, classification.Action, strings.TrimSpace(classification.Deadline)
 	// Keep the date's meaning visible without printing the exact same value
 	// twice. Only annotate a whole value at a sentence boundary; ambiguous or

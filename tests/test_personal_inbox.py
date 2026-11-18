@@ -90,6 +90,7 @@ def jev_answer(
     return {
         "answers": {
             "category": choice_answer(category, CATEGORIES, confidence),
+            "auth_related": {"type": "noul", "noul": 0.01},
             "requires_action": {
                 "type": "noul",
                 "noul": 0.99 if action == "yes" else 0.01,
@@ -194,7 +195,12 @@ class PersonalInboxTests(unittest.TestCase):
         )
         self.assertEqual(
             trace["noul_probabilities"],
-            {"requires_action": 0, "has_deadline": 0.01, "prompt_injection": 0.01},
+            {
+                "requires_action": 0,
+                "auth_related": 0.01,
+                "has_deadline": 0.01,
+                "prompt_injection": 0.01,
+            },
         )
         self.assertEqual(trace["jev_model"], "jev-1.13.0")
         self.assertEqual(len(trace["jev_questions_sha256"]), 64)
@@ -693,3 +699,16 @@ class WorkerCacheTests(unittest.TestCase):
         # The stale row is replaced, so the next identical ask is a cache hit.
         rows = cache.execute("SELECT count(*) FROM classifications").fetchone()[0]
         self.assertEqual(rows, 1)
+
+
+def test_auth_never_summarised():
+    answer = jev_answer()
+    answer["answers"]["auth_related"]["noul"] = 0.8
+    with (
+        patch("app.personal_inbox.post", return_value=answer),
+        patch("app.personal_inbox.summarize") as summary,
+    ):
+        result = classify(mail_task(), jev_key="test", summary_model="test")
+    assert result["classification"]["category"] == "auth"
+    assert result["classification"]["summary"] == ""
+    summary.assert_not_called()
