@@ -12,26 +12,33 @@ import (
 )
 
 type Recorder struct {
-	mu                sync.Mutex
-	now               func() time.Time
-	startedAt         time.Time
-	loopsTotal        int64
-	ingressPublished  int64
-	egressReceived    int64
-	egressDispatched  int64
-	egressDeduped     int64
-	egressDropped     int64
-	egressDroppedBy   map[string]int64
-	egressMessage     int64
-	egressCompletion  int64
-	reminderCreated   int64
-	reminderCancelled int64
-	reminderDue       int64
-	reminderRetried   int64
-	reminderLate      int64
-	reminderFired     int64
-	lastLoopAt        time.Time
-	sqlitePath        string
+	mu                    sync.Mutex
+	now                   func() time.Time
+	startedAt             time.Time
+	loopsTotal            int64
+	ingressPublished      int64
+	egressReceived        int64
+	egressDispatched      int64
+	egressDeduped         int64
+	egressDropped         int64
+	egressDroppedBy       map[string]int64
+	egressMessage         int64
+	egressCompletion      int64
+	reminderCreated       int64
+	reminderCancelled     int64
+	reminderDue           int64
+	reminderRetried       int64
+	reminderLate          int64
+	reminderFired         int64
+	lastLoopAt            time.Time
+	telegramEnabled       bool
+	telegramPollFailed    bool
+	telegramPollErrorCode int
+	telegramPollFailures  int64
+	telegramLastPoll      time.Time
+	telegramLastSuccess   time.Time
+	egressLastDropped     time.Time
+	sqlitePath            string
 }
 
 // SetSQLitePath configures the database owned by this handler instance.
@@ -65,6 +72,26 @@ func New(startedAt time.Time, now func() time.Time) *Recorder {
 	}
 }
 
+// EnableTelegram distinguishes a disabled connector from one awaiting its first poll.
+func (recorder *Recorder) EnableTelegram() {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.telegramEnabled = true
+}
+
+func (recorder *Recorder) RecordTelegramPoll(err error, code int) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.telegramLastPoll = recorder.now()
+	recorder.telegramPollFailed = err != nil
+	recorder.telegramPollErrorCode = code
+	if err != nil {
+		recorder.telegramPollFailures++
+	} else {
+		recorder.telegramLastSuccess = recorder.telegramLastPoll
+	}
+}
+
 func (recorder *Recorder) RecordLoop(ingressPublished int, completedAt time.Time) {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -88,6 +115,7 @@ func (recorder *Recorder) RecordEgressResult(status string, reason string) {
 		recorder.egressDeduped++
 	case "dropped":
 		recorder.egressDropped++
+		recorder.egressLastDropped = recorder.now()
 		if reason != "" {
 			recorder.egressDroppedBy[reason]++
 		}
@@ -140,31 +168,45 @@ func (recorder *Recorder) Snapshot() map[string]float64 {
 	// reminder_published_total and incremental_dispatched_total repeat
 	// reminder_fired_total and dispatched_total: each pair only ever moved
 	// together, and the duplicate series are kept for existing dashboards.
+	enabled, failed := 0.0, 0.0
+	if recorder.telegramEnabled {
+		enabled = 1
+	}
+	if recorder.telegramPollFailed {
+		failed = 1
+	}
 	return map[string]float64{
-		"uptime_seconds":                        recorder.now().Sub(recorder.startedAt).Seconds(),
-		"process_start_time_seconds":            float64(recorder.startedAt.UnixNano()) / float64(time.Second),
-		"loops_total":                           float64(recorder.loopsTotal),
-		"ingress_published_total":               float64(recorder.ingressPublished),
-		"reminder_created_total":                float64(recorder.reminderCreated),
-		"reminder_cancelled_total":              float64(recorder.reminderCancelled),
-		"reminder_due_total":                    float64(recorder.reminderDue),
-		"reminder_published_total":              float64(recorder.reminderFired),
-		"reminder_retried_total":                float64(recorder.reminderRetried),
-		"reminder_late_total":                   float64(recorder.reminderLate),
-		"reminder_fired_total":                  float64(recorder.reminderFired),
-		"last_loop_completed_timestamp_seconds": unixTimestamp(recorder.lastLoopAt),
-		"received_total":                        float64(recorder.egressReceived),
-		"dispatched_total":                      float64(recorder.egressDispatched),
-		"deduped_total":                         float64(recorder.egressDeduped),
-		"dedupe_hit_rate_pct":                   dedupeRate,
-		"dropped_total":                         float64(recorder.egressDropped),
-		"dropped_unknown_task_total":            float64(recorder.egressDroppedBy["unknown_task"]),
-		"dropped_completed_task_total":          float64(recorder.egressDroppedBy["completed_task"]),
-		"dropped_disallowed_channel_total":      float64(recorder.egressDroppedBy["disallowed_channel"]),
-		"dropped_missing_event_id_total":        float64(recorder.egressDroppedBy["missing_event_id"]),
-		"incremental_dispatched_total":          float64(recorder.egressDispatched),
-		"message_dispatched_total":              float64(recorder.egressMessage),
-		"completion_applied_total":              float64(recorder.egressCompletion),
+		"telegram_enabled":                        enabled,
+		"telegram_poll_failed":                    failed,
+		"telegram_poll_error_code":                float64(recorder.telegramPollErrorCode),
+		"telegram_poll_failures_total":            float64(recorder.telegramPollFailures),
+		"telegram_last_poll_timestamp_seconds":    unixTimestamp(recorder.telegramLastPoll),
+		"telegram_last_success_timestamp_seconds": unixTimestamp(recorder.telegramLastSuccess),
+		"egress_last_dropped_timestamp_seconds":   unixTimestamp(recorder.egressLastDropped),
+		"uptime_seconds":                          recorder.now().Sub(recorder.startedAt).Seconds(),
+		"process_start_time_seconds":              float64(recorder.startedAt.UnixNano()) / float64(time.Second),
+		"loops_total":                             float64(recorder.loopsTotal),
+		"ingress_published_total":                 float64(recorder.ingressPublished),
+		"reminder_created_total":                  float64(recorder.reminderCreated),
+		"reminder_cancelled_total":                float64(recorder.reminderCancelled),
+		"reminder_due_total":                      float64(recorder.reminderDue),
+		"reminder_published_total":                float64(recorder.reminderFired),
+		"reminder_retried_total":                  float64(recorder.reminderRetried),
+		"reminder_late_total":                     float64(recorder.reminderLate),
+		"reminder_fired_total":                    float64(recorder.reminderFired),
+		"last_loop_completed_timestamp_seconds":   unixTimestamp(recorder.lastLoopAt),
+		"received_total":                          float64(recorder.egressReceived),
+		"dispatched_total":                        float64(recorder.egressDispatched),
+		"deduped_total":                           float64(recorder.egressDeduped),
+		"dedupe_hit_rate_pct":                     dedupeRate,
+		"dropped_total":                           float64(recorder.egressDropped),
+		"dropped_unknown_task_total":              float64(recorder.egressDroppedBy["unknown_task"]),
+		"dropped_completed_task_total":            float64(recorder.egressDroppedBy["completed_task"]),
+		"dropped_disallowed_channel_total":        float64(recorder.egressDroppedBy["disallowed_channel"]),
+		"dropped_missing_event_id_total":          float64(recorder.egressDroppedBy["missing_event_id"]),
+		"incremental_dispatched_total":            float64(recorder.egressDispatched),
+		"message_dispatched_total":                float64(recorder.egressMessage),
+		"completion_applied_total":                float64(recorder.egressCompletion),
 	}
 }
 
@@ -245,6 +287,13 @@ type metricDefinition struct {
 }
 
 var definitions = []metricDefinition{
+	{"chatting_message_handler_telegram_poll_error_code", "gauge", "HTTP or Telegram API error code from the latest poll, zero on success or transport failure.", "telegram_poll_error_code"},
+	{"chatting_message_handler_telegram_enabled", "gauge", "Whether Telegram polling is configured.", "telegram_enabled"},
+	{"chatting_message_handler_telegram_poll_failed", "gauge", "Whether the latest Telegram API poll failed; remains set during backoff.", "telegram_poll_failed"},
+	{"chatting_message_handler_telegram_poll_failures_total", "counter", "Failed Telegram API polls.", "telegram_poll_failures_total"},
+	{"chatting_message_handler_telegram_last_poll_timestamp_seconds", "gauge", "Unix timestamp of the latest Telegram API poll outcome.", "telegram_last_poll_timestamp_seconds"},
+	{"chatting_message_handler_telegram_last_success_timestamp_seconds", "gauge", "Unix timestamp of the latest successful Telegram API poll, including empty polls.", "telegram_last_success_timestamp_seconds"},
+	{"chatting_message_handler_egress_last_dropped_timestamp_seconds", "gauge", "Unix timestamp of the latest dropped egress message.", "egress_last_dropped_timestamp_seconds"},
 	{"chatting_message_handler_uptime_seconds", "gauge", "Seconds since the message handler process started.", "uptime_seconds"},
 	{"chatting_message_handler_process_start_time_seconds", "gauge", "Unix timestamp when the message handler process started.", "process_start_time_seconds"},
 	{"chatting_message_handler_loops_total", "counter", "Completed message handler loops.", "loops_total"},

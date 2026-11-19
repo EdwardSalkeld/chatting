@@ -50,6 +50,7 @@ import { useUrlState } from '@/lib/url'
 import { RunStatus, SourceLabel, runError, tokenTitle } from '@/components/runs'
 import { nextRuns } from '@/lib/cron'
 import { parseProm, promSum, promValue } from '@/lib/prom'
+import { handlerHealth } from '@/lib/health'
 import '@/styles/overview.css'
 
 const DAY = 86400e3
@@ -163,13 +164,25 @@ export function Overview() {
   )
   const hm = useMemo(() => parseProm(handlerMetrics.data || ''), [handlerMetrics.data])
   const wm = useMemo(() => parseProm(workerMetrics.data || ''), [workerMetrics.data])
+  const health = handlerHealth(hm, now)
   const lastLoop = promValue(hm, 'chatting_message_handler_last_loop_completed_timestamp_seconds')
   const loopAge = lastLoop ? Math.max(0, now - lastLoop * 1000) : undefined
   const inboxMissing = inbox.error instanceof ApiError && inbox.error.status === 404
   const outbox = activity.data?.outbox
 
   const attention = (() => {
-    const rows: Attention[] = []
+    const rows: Attention[] = health.issues.map((issue) => ({
+      key: `health:${issue.key}`,
+      status: 'error',
+      tone: 'danger',
+      label: 'Error',
+      title: issue.title,
+      detail: issue.detail,
+      detailKind: 'text',
+      source: issue.key === 'telegram' ? 'telegram' : 'internal',
+      at: 0,
+      href: '/system',
+    }))
     for (const dl of pendingDead || [])
       rows.push({
         key: `dl:${dl.dead_letter_id}`,
@@ -400,6 +413,12 @@ export function Overview() {
 
   const systemFacts: Fact[] = [
     {
+      label: 'Telegram',
+      value: health.telegram,
+      tone: health.telegram === 'Failing' || health.telegram === 'Stale' ? 'danger' : undefined,
+      title: 'Telegram polling health; process reachability alone does not confirm connectivity',
+    },
+    {
       label: 'Handler up',
       value: fmtUptime(promValue(hm, 'chatting_message_handler_uptime_seconds')),
     },
@@ -606,7 +625,7 @@ export function Overview() {
           label="Needs attention"
           columns={attentionColumns(now)}
           rows={
-            !dayRuns && !pendingDead
+            !dayRuns && !pendingDead && !attention.length
               ? undefined
               : showAll
                 ? attention

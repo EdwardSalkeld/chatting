@@ -213,6 +213,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		if len(telegramContextRefs) == 0 {
 			telegramContextRefs = config.ContextRefs
 		}
+		metricRecorder.EnableTelegram()
 		connector, err := telegram.New(telegram.Config{
 			BotToken:           token,
 			APIBaseURL:         config.TelegramAPIBaseURL,
@@ -222,6 +223,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 			ContextRefs:        telegramContextRefs,
 			AttachmentRootDir:  config.TelegramAttachmentDir,
 			ObserveChat:        store.RecordTelegramChat,
+			ObservePoll:        metricRecorder.RecordTelegramPoll,
 		})
 		if err != nil {
 			return nil, err

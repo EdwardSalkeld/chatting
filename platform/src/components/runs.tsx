@@ -48,7 +48,18 @@ export function SourceLabel({ source }: { source: string | null | undefined }) {
 }
 
 export function RunStatus({ status, title }: { status: string; title?: string }) {
-  return <StatusBadge status={status} kind="run" title={title} />
+  return (
+    <StatusBadge
+      status={status}
+      kind="run"
+      title={
+        title ||
+        (status === 'success'
+          ? 'Execution completed successfully. Reply delivery is tracked separately.'
+          : undefined)
+      }
+    />
+  )
 }
 
 /** The one-line reason a run failed, from the executor errors, last error or reason codes. */

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -26,6 +27,7 @@ func main() {
 	port := flag.Int("port", 19464, "Loopback fixture port")
 	empty := flag.Bool("empty", false, "Start with empty fixtures")
 	noInbox := flag.Bool("no-inbox", false, "Omit the optional personal inbox endpoint")
+	telegramOutage := flag.Bool("telegram-outage", false, "Simulate Telegram API 502 responses and a dropped reply")
 	rich := flag.Bool("rich", false, "Also seed many schedules, reminders, inbox decisions and handler metrics")
 	flag.Parse()
 	if *dir == "" {
@@ -107,6 +109,11 @@ func main() {
 		startedAt = startedAt.Add(-76 * time.Hour)
 	}
 	recorder := metrics.New(startedAt, nil)
+	if *telegramOutage {
+		recorder.EnableTelegram()
+		recorder.RecordTelegramPoll(errors.New("telegram_http_status=502"), 502)
+		recorder.RecordEgressResult("dropped", "telegram_send_failed")
+	}
 	recorder.SetSQLitePath(filepath.Join(*dir, "handler.db"))
 	if *rich && !*empty {
 		seedRichMetrics(recorder, time.Now())
