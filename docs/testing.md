@@ -81,7 +81,10 @@ executors are started. Pass `--rich` to both to judge density against realistic
 volume: about 40 work items and 200 runs over 14 days with failures, dead
 letters, token usage, three live executors and one task with over 300 events on
 the worker; 15 versioned schedules, 30 reminders (two overdue), 120 inbox
-decisions and synthetic handler metrics on the handler. The handler fixture
+decisions and synthetic handler metrics on the handler. Pass `--telegram-outage` to the handler fixture to simulate Telegram HTTP 502
+failures alongside a dropped reply, without contacting Telegram. The warning
+banner should appear on every route, and System should show the failing poll
+and its error code. The handler fixture
 always serves `/metrics` like the real handler. Start the platform with a
 temporary config:
 

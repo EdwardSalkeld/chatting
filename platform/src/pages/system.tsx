@@ -21,6 +21,7 @@ import { parseProm, promSamples, promValue, sampleKey, type PromMetrics } from '
 import { useUrlParams, useUrlState } from '@/lib/url'
 import type { Executor } from '@/lib/types'
 import { usageByModel, type ModelUsage } from '@/lib/usage'
+import { handlerHealth } from '@/lib/health'
 import '@/styles/system.css'
 
 const H = 'chatting_message_handler_'
@@ -162,7 +163,39 @@ function handlerGroups(metrics: PromMetrics | undefined, rates: Map<string, numb
     .filter((m): m is RegExpExecArray => !!m)
   const late = r.value(`${H}reminder_late_total`)
   const droppedTotal = r.value(`${H}egress_dropped_total`)
+  const health = handlerHealth(metrics || { samples: [], help: {}, type: {} }, now)
+  r.value(`${H}telegram_enabled`)
+  r.value(`${H}telegram_poll_failed`)
+  r.value(`${H}telegram_last_poll_timestamp_seconds`)
+  r.value(`${H}telegram_last_success_timestamp_seconds`)
+  const pollCode = r.value(`${H}telegram_poll_error_code`)
   const groups: KvGroup[] = [
+    {
+      title: 'Telegram',
+      rows: [
+        {
+          label: 'polling',
+          value: health.telegram,
+          tone: health.failed || health.stale ? 'danger' : undefined,
+        },
+        {
+          label: 'latest error code',
+          value: pollCode || '—',
+          metric: `${H}telegram_poll_error_code`,
+        },
+        r.row('failed polls', `${H}telegram_poll_failures_total`),
+        {
+          label: 'last poll',
+          value: health.lastPoll ? stamp(health.lastPoll * 1000) : 'Never',
+          metric: `${H}telegram_last_poll_timestamp_seconds`,
+        },
+        {
+          label: 'last successful poll',
+          value: health.lastSuccess ? stamp(health.lastSuccess * 1000) : 'Never',
+          metric: `${H}telegram_last_success_timestamp_seconds`,
+        },
+      ],
+    },
     {
       title: 'Process',
       rows: [
@@ -220,6 +253,13 @@ function handlerGroups(metrics: PromMetrics | undefined, rates: Map<string, numb
     {
       title: 'Egress',
       rows: [
+        {
+          label: 'last dropped',
+          value: stamp(
+            (r.value(`${H}egress_last_dropped_timestamp_seconds`) || 0) * 1000 || undefined,
+          ),
+          metric: `${H}egress_last_dropped_timestamp_seconds`,
+        },
         r.row('received', `${H}egress_received_total`),
         r.row('dispatched', `${H}egress_dispatched_total`),
         r.row('incremental', `${H}egress_incremental_dispatched_total`),

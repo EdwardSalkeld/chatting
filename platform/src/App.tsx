@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Tip, TooltipProvider } from '@/components/ui/tooltip'
 import { useDayRuns, useInbox, useItems, useReminders, useSchedules } from '@/lib/api'
+import { CommunicationBanner, TelegramStatus } from '@/components/communication-health'
 import { PALETTE_KEY, useShortcuts } from '@/lib/keys'
 import { fmtClock } from '@/lib/format'
 import { Overview } from '@/pages/overview'
@@ -161,6 +162,7 @@ function Shell() {
               </div>
             </header>
             <ServiceBanner />
+            <CommunicationBanner />
             <main id="main" className="main-content">
               <Routes>
                 <Route path="/" element={<Overview />} />
@@ -362,11 +364,12 @@ function ZoneLabel() {
 }
 function ServiceAges() {
   return (
-    <div className="service-ages" aria-label="Data age">
+    <div className="service-ages" aria-label="Service connectivity">
+      <TelegramStatus />
       {useServices().map((s) => (
         <AgeChip
           key={s.name}
-          label={s.name}
+          label={`${s.name} API`}
           updatedAt={s.updatedAt}
           interval={s.interval}
           error={s.error}

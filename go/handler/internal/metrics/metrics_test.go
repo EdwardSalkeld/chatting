@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -46,5 +47,37 @@ func TestRecorderSnapshotAndPrometheusRendering(t *testing.T) {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("rendered metrics missing %q:\n%s", expected, rendered)
 		}
+	}
+}
+
+func TestTelegramHealthTracksFailureAndRecovery(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := New(now, func() time.Time { return now })
+	if r.Snapshot()["telegram_enabled"] != 0 {
+		t.Fatal("disabled connector reported enabled")
+	}
+	r.EnableTelegram()
+	r.RecordTelegramPoll(nil, 0)
+	now = now.Add(time.Minute)
+	r.RecordTelegramPoll(errors.New("upstream failure"), 502)
+	r.RecordEgressResult("dropped", "telegram_send_failed")
+	snapshot := r.Snapshot()
+	for key, want := range map[string]float64{
+		"telegram_enabled": 1, "telegram_poll_failed": 1, "telegram_poll_error_code": 502,
+		"telegram_poll_failures_total": 1, "telegram_last_success_timestamp_seconds": 1000,
+		"telegram_last_poll_timestamp_seconds": 1060, "egress_last_dropped_timestamp_seconds": 1060,
+	} {
+		if snapshot[key] != want {
+			t.Errorf("%s = %v, want %v", key, snapshot[key], want)
+		}
+	}
+	if !strings.Contains(RenderPrometheus(snapshot), "chatting_message_handler_telegram_poll_failed 1") {
+		t.Fatal("Telegram outage missing from metrics endpoint")
+	}
+	now = now.Add(time.Minute)
+	r.RecordTelegramPoll(nil, 0)
+	snapshot = r.Snapshot()
+	if snapshot["telegram_poll_failed"] != 0 || snapshot["telegram_poll_error_code"] != 0 || snapshot["telegram_poll_failures_total"] != 1 || snapshot["telegram_last_success_timestamp_seconds"] != 1120 {
+		t.Fatalf("recovery must clear current error but retain failure history: %#v", snapshot)
 	}
 }

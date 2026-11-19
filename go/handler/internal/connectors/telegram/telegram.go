@@ -47,7 +47,9 @@ type Config struct {
 	RequestTimeout     time.Duration
 	HTTPClient         HTTPClient
 	ObserveChat        ObserveChatFunc
-	Now                func() time.Time
+	// ObservePoll receives actual API outcomes, including failures swallowed for retry.
+	ObservePoll func(error, int)
+	Now         func() time.Time
 }
 
 type Connector struct {
@@ -116,9 +118,15 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 			delay = max(delay, time.Duration(response.Parameters.RetryAfter)*time.Second)
 		}
 		connector.nextPollAt = connector.now().Add(delay)
+		if connector.config.ObservePoll != nil {
+			connector.config.ObservePoll(err, response.ErrorCode)
+		}
 		// Do not log request URLs, tokens, response bodies or upstream descriptions.
 		log.Printf("Telegram polling failed: %v; retry in %s", err, delay)
 		return nil, nil
+	}
+	if connector.config.ObservePoll != nil {
+		connector.config.ObservePoll(nil, 0)
 	}
 	connector.pollDelay = 0
 	connector.nextPollAt = time.Time{}
@@ -163,6 +171,7 @@ func (connector *Connector) getUpdates(ctx context.Context) (getUpdatesResponse,
 		var decoded getUpdatesResponse
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&decoded)
 		decoded.OK = false
+		decoded.ErrorCode = resp.StatusCode
 		return decoded, fmt.Errorf("telegram_http_status=%d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(resp.Body)

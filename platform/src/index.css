@@ -2206,3 +2206,22 @@ a.cell-primary:hover {
   flex: 1 1 0;
   min-width: 0;
 }
+
+.communication-banner {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--tone);
+  background: var(--surface);
+  color: var(--tone);
+}
+.communication-banner > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.communication-banner span {
+  color: var(--fg-2);
+}
+.communication-banner a {
+  text-decoration: underline;
+}

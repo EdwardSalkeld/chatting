@@ -19,6 +19,8 @@ import (
 func TestPollingFailuresBackOffWithoutExitingAndResetAfterRecovery(t *testing.T) {
 	now := time.Now()
 	calls := 0
+	var observed []bool
+	var codes []int
 	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
 		calls++
 		if calls == 1 {
@@ -40,7 +42,7 @@ func TestPollingFailuresBackOffWithoutExitingAndResetAfterRecovery(t *testing.T)
 		}
 		return jsonResponse(`{"ok":false,"error_code":429,"parameters":{"retry_after":20}}`), nil
 	}}
-	c, err := New(Config{BotToken: "token", HTTPClient: client, Now: func() time.Time { return now }})
+	c, err := New(Config{BotToken: "token", HTTPClient: client, Now: func() time.Time { return now }, ObservePoll: func(err error, code int) { observed = append(observed, err != nil); codes = append(codes, code) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +73,12 @@ func TestPollingFailuresBackOffWithoutExitingAndResetAfterRecovery(t *testing.T)
 	}
 	if c.pollDelay != time.Second || !c.nextPollAt.Equal(now.Add(20*time.Second)) {
 		t.Fatal("rate limit not honoured")
+	}
+	if !reflect.DeepEqual(observed, []bool{true, true, true, false, true}) {
+		t.Fatalf("poll observations = %v; backoff must preserve failure until a successful API call", observed)
+	}
+	if !reflect.DeepEqual(codes, []int{0, 503, 0, 0, 429}) {
+		t.Fatalf("poll error codes = %v", codes)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

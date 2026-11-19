@@ -142,3 +142,28 @@ For total apparent bytes, use `sum by (instance, component) (chatting_sqlite_fil
 divide by `1024^2` for MiB. Alert on `chatting_sqlite_file_stat_success == 0`
 alongside the usual Prometheus `up` check. File samples are collected separately,
 so a concurrent checkpoint can change the files between measurements.
+
+## Connection health in the platform UI
+
+The header's handler and worker API indicators report API reachability. Telegram
+has a separate polling indicator. Failed or stalled polling produces a warning
+on every page and an entry under Overview's Needs attention; System shows the
+latest error code, last poll, last successful poll and failed-poll count.
+An empty successful poll counts as healthy, and retry backoff does not clear a
+failed state. A successful executor run does not confirm reply delivery.
+
+The handler exports these Telegram gauges with the
+`chatting_message_handler_telegram_` prefix: `enabled`, `poll_failed`,
+`poll_error_code`, `last_poll_timestamp_seconds` and
+`last_success_timestamp_seconds`, plus the `poll_failures_total` counter.
+Error codes are numeric; no bot credentials or upstream response bodies are
+exposed. Disabled connectors, startup and missing health metrics are distinct
+from a successful connection.
+
+Recent dropped egress events also produce a delivery warning. The count is
+cumulative since handler startup; the warning stays visible for 24 hours after
+the most recent drop, even after polling recovers. The timestamp is exported as
+`chatting_message_handler_egress_last_dropped_timestamp_seconds`.
+Older handlers without that timestamp show a warning whenever their dropped
+count is nonzero. These counters reset on process restart and are not a durable
+delivery ledger.
