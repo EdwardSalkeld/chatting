@@ -1037,12 +1037,20 @@ func TestDecisionsPageShowsWhatWasDecidedAndWhy(t *testing.T) {
 }
 
 func TestAuthPlanOnlyNotifiesMetadata(t *testing.T) {
-	service := &Service{}
-	message := Message{ID: "auth-id", Classification: &Classification{Category: "auth"}}
+	service, _, _, _ := fixture(t)
+	message := Message{ID: "auth-id", ThreadID: "thread-id", Classification: &Classification{Category: "auth"}}
 	message.Mail.Subject = "Verification"
 	message.Mail.From = "sender@example.com"
+	message.Mail.Body = "secret code"
 	effects := service.plan(message)
-	if len(effects) != 1 || effects[0].Kind != "telegram" || effects[0].Body != "auth: Verification\nFrom: sender@example.com" {
+	link := service.link(message, "")
+	want := "auth: Verification\nFrom: sender@example.com\n" + link
+	if link == "" || len(effects) != 1 || effects[0].Kind != "telegram" || effects[0].Target != "actions" || effects[0].Body != want {
 		t.Fatalf("unexpected auth effects: %+v", effects)
+	}
+	message.ThreadID = ""
+	effects = service.plan(message)
+	if len(effects) != 1 || effects[0].Body != "auth: Verification\nFrom: sender@example.com\nMail reference: auth-id" {
+		t.Fatalf("unexpected fallback: %+v", effects)
 	}
 }
