@@ -584,7 +584,13 @@ func (service *Service) plan(message Message) []Effect {
 		if service.Config.DryRun {
 			status = "preview"
 		}
-		return []Effect{{ID: message.ID + ":telegram", MessageID: message.ID, Kind: "telegram", Category: "auth", Target: service.Config.ActionTarget, Body: "auth: " + message.Mail.Subject + "\nFrom: " + message.Mail.From, Status: status}}
+		body := limitRunes("auth: "+message.Mail.Subject+"\nFrom: "+message.Mail.From, 1800)
+		if link := service.link(message, ""); link != "" {
+			body += "\n" + link
+		} else {
+			body += "\nMail reference: " + message.ID
+		}
+		return []Effect{{ID: message.ID + ":telegram", MessageID: message.ID, Kind: "telegram", Category: "auth", Target: service.Config.ActionTarget, Body: body, Status: status}}
 	}
 	summary, action, deadline := classification.Summary, classification.Action, strings.TrimSpace(classification.Deadline)
 	// Keep the date's meaning visible without printing the exact same value

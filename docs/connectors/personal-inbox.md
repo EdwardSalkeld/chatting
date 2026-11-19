@@ -10,7 +10,7 @@ asks Jev for a category and Codex for a summary/action/deadline. It returns data
 records every external effect. Personal mail never enters `chatting.tasks.v1` or
 the general-purpose Codex executor.
 
-Jev also screens for authentication and account-access mail, including verification, one-time codes and password resets. A positive or uncertain auth assessment bypasses Codex summarisation, keeps the message in its current mailbox, and sends only its type, sender and subject to the action Telegram destination. If Jev fails, the existing fail-closed review path applies.
+Jev also screens for authentication and account-access mail, including verification, one-time codes and password resets. A positive or uncertain auth assessment bypasses Codex summarisation, keeps the message in its current mailbox, and sends its type, sender, subject and a mail-client link (or message reference if a link is unavailable) to the action Telegram destination. If Jev fails, the existing fail-closed review path applies.
 
 All messages share the logical work item `personal-inbox:<account>`, with durable
 individual message records. This is a separate mail processing lane, not a
