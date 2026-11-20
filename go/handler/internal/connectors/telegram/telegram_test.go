@@ -104,6 +104,99 @@ func TestPollingBackoffCapsAtOneMinute(t *testing.T) {
 	}
 }
 
+func TestAttachmentFailureRetriesWithoutLosingUpdates(t *testing.T) {
+	for _, stage := range []string{"metadata", "download"} {
+		t.Run(stage, func(t *testing.T) {
+			now := time.Now()
+			attempts, polls := 0, 0
+			var offsets []string
+			client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.HasSuffix(req.URL.Path, "/getUpdates"):
+					polls++
+					offsets = append(offsets, req.URL.Query().Get("offset"))
+					if polls == 1 {
+						return jsonResponse(`{"ok":true,"result":[{"update_id":10,"message":{"message_id":10,"chat":{"id":12345,"type":"private"},"text":"first"}},{"update_id":11,"message":{"message_id":11,"chat":{"id":12345,"type":"private"},"photo":[{"file_id":"photo"}]}},{"update_id":12,"message":{"message_id":12,"chat":{"id":12345,"type":"private"},"text":"last"}}]}`), nil
+					}
+					return jsonResponse(`{"ok":true,"result":[{"update_id":11,"message":{"message_id":11,"chat":{"id":12345,"type":"private"},"photo":[{"file_id":"photo"}]}},{"update_id":12,"message":{"message_id":12,"chat":{"id":12345,"type":"private"},"text":"last"}}]}`), nil
+				case strings.HasSuffix(req.URL.Path, "/getFile"):
+					if stage == "metadata" {
+						attempts++
+						if attempts <= 2 {
+							r := jsonResponse(`{"ok":false}`)
+							r.StatusCode = 503
+							return r, nil
+						}
+					}
+					return jsonResponse(`{"ok":true,"result":{"file_path":"photos/a.jpg"}}`), nil
+				case strings.Contains(req.URL.Path, "/file/"):
+					if stage == "download" {
+						attempts++
+						if attempts == 1 {
+							r := bytesResponse("upstream error page")
+							r.StatusCode = 503
+							return r, nil
+						}
+						if attempts == 2 {
+							return nil, errors.New("sensitive upstream details")
+						}
+					}
+					return bytesResponse("image"), nil
+				}
+				t.Fatal("unexpected request")
+				return nil, nil
+			}}
+			c, err := New(Config{BotToken: "token", HTTPClient: client, Now: func() time.Time { return now }, AttachmentRootDir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := c.Poll(context.Background())
+			if err != nil || len(first) != 1 || first[0].ID != "telegram:10" {
+				t.Fatalf("first=%v err=%v", first, err)
+			}
+			if c.nextOffset == nil || *c.nextOffset != 11 {
+				t.Fatalf("offset=%v", c.nextOffset)
+			}
+			if got, err := c.Poll(context.Background()); err != nil || len(got) != 0 || polls != 1 {
+				t.Fatalf("backoff got=%v err=%v polls=%d", got, err, polls)
+			}
+			now = c.nextPollAt
+			if got, err := c.Poll(context.Background()); err != nil || len(got) != 0 || c.attachmentDelay != 2*time.Second {
+				t.Fatalf("second retry got=%v err=%v delay=%s", got, err, c.attachmentDelay)
+			}
+			now = c.nextPollAt
+			got, err := c.Poll(context.Background())
+			if err != nil || len(got) != 2 || got[0].ID != "telegram:11" || len(got[0].Attachments) != 1 || got[1].ID != "telegram:12" {
+				t.Fatalf("recovered=%v err=%v", got, err)
+			}
+			if *c.nextOffset != 13 || c.attachmentDelay != 0 || !reflect.DeepEqual(offsets, []string{"", "11", "11"}) {
+				t.Fatalf("offsets=%v next=%v delay=%v", offsets, c.nextOffset, c.attachmentDelay)
+			}
+		})
+	}
+}
+
+func TestAttachmentCancellationPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/getUpdates") {
+			return jsonResponse(`{"ok":true,"result":[{"update_id":1,"message":{"message_id":1,"chat":{"id":1,"type":"private"},"photo":[{"file_id":"photo"}]}}]}`), nil
+		}
+		cancel()
+		return nil, context.Canceled
+	}}
+	c, err := New(Config{BotToken: "token", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Poll(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation=%v", err)
+	}
+	if c.nextOffset != nil {
+		t.Fatal("cancelled update was acknowledged")
+	}
+}
+
 func TestPollNormalizesAllowedMessageAndObservesChatBeforeAllowlist(t *testing.T) {
 	var requestedURL string
 	client := &fakeHTTPClient{do: func(req *http.Request) (*http.Response, error) {

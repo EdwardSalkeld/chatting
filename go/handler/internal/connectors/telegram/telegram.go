@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,7 @@ type Connector struct {
 	nextOffset        *int64
 	pollDelay         time.Duration
 	nextPollAt        time.Time
+	attachmentDelay   time.Duration
 }
 
 func New(config Config) (*Connector, error) {
@@ -91,6 +93,19 @@ func New(config Config) (*Connector, error) {
 		allowedChatIDs:    stringSet(config.AllowedChatIDs),
 		allowedChannelIDs: stringSet(config.AllowedChannelIDs),
 	}, nil
+}
+
+// attachmentFetchError is restricted to remote API/download failures, never local state errors.
+type attachmentFetchError struct {
+	stage  string
+	status int
+}
+
+func (e *attachmentFetchError) Error() string {
+	if e.status != 0 {
+		return fmt.Sprintf("telegram_attachment_%s_status=%d", e.stage, e.status)
+	}
+	return "telegram_attachment_" + e.stage + "_error"
 }
 
 func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
@@ -131,20 +146,42 @@ func (connector *Connector) Poll(ctx context.Context) ([]contracts.TaskEnvelope,
 	connector.pollDelay = 0
 	connector.nextPollAt = time.Time{}
 	envelopes := make([]contracts.TaskEnvelope, 0, len(response.Result))
+	// A failed update must never be acknowledged because a later one was handled.
+	sort.SliceStable(response.Result, func(i, j int) bool { return response.Result[i].UpdateID < response.Result[j].UpdateID })
 	var highestUpdateID *int64
 	for _, update := range response.Result {
+		envelope, err := connector.normalizeUpdate(ctx, update)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			var fetchErr *attachmentFetchError
+			if !errors.As(err, &fetchErr) {
+				return envelopes, err
+			}
+			// Publish earlier envelopes now; never acknowledge the failed update.
+			if highestUpdateID != nil {
+				next := *highestUpdateID + 1
+				connector.nextOffset = &next
+			}
+			if connector.attachmentDelay == 0 {
+				connector.attachmentDelay = time.Second
+			} else {
+				connector.attachmentDelay = min(connector.attachmentDelay*2, time.Minute)
+			}
+			connector.nextPollAt = connector.now().Add(connector.attachmentDelay)
+			log.Printf("Telegram attachment fetch failed: %v; retry in %s", fetchErr, connector.attachmentDelay)
+			return envelopes, nil
+		}
 		if highestUpdateID == nil || update.UpdateID > *highestUpdateID {
 			value := update.UpdateID
 			highestUpdateID = &value
-		}
-		envelope, err := connector.normalizeUpdate(ctx, update)
-		if err != nil {
-			return envelopes, err
 		}
 		if envelope != nil {
 			envelopes = append(envelopes, *envelope)
 		}
 	}
+	connector.attachmentDelay = 0
 	if highestUpdateID != nil {
 		next := *highestUpdateID + 1
 		connector.nextOffset = &next
@@ -215,7 +252,7 @@ func (connector *Connector) normalizeMessage(ctx context.Context, updateID int64
 		}
 		return nil, nil
 	}
-	return connector.buildEnvelope(updateID, message, chatID, actor)
+	return connector.buildEnvelope(ctx, updateID, message, chatID, actor)
 }
 
 func (connector *Connector) normalizeChannelPost(ctx context.Context, updateID int64, message telegramMessage) (*contracts.TaskEnvelope, error) {
@@ -233,7 +270,7 @@ func (connector *Connector) normalizeChannelPost(ctx context.Context, updateID i
 	if len(connector.allowedChannelIDs) == 0 || !connector.allowedChannelIDs[chatID] {
 		return connector.buildDisallowedChannelNoticeEnvelope(updateID, message, chatID), nil
 	}
-	return connector.buildEnvelope(updateID, message, chatID, connector.actorFromChat(message.SenderChat))
+	return connector.buildEnvelope(ctx, updateID, message, chatID, connector.actorFromChat(message.SenderChat))
 }
 
 func (connector *Connector) buildDisallowedChannelNoticeEnvelope(updateID int64, message telegramMessage, chatID string) *contracts.TaskEnvelope {
@@ -289,8 +326,8 @@ func (connector *Connector) buildDisallowedTelegramNoticeEnvelope(
 	}
 }
 
-func (connector *Connector) buildEnvelope(updateID int64, message telegramMessage, chatID string, actor *string) (*contracts.TaskEnvelope, error) {
-	attachments, err := connector.extractAttachments(updateID, message)
+func (connector *Connector) buildEnvelope(ctx context.Context, updateID int64, message telegramMessage, chatID string, actor *string) (*contracts.TaskEnvelope, error) {
+	attachments, err := connector.extractAttachments(ctx, updateID, message)
 	if err != nil {
 		return nil, err
 	}
@@ -365,9 +402,9 @@ func (connector *Connector) buildEnvelope(updateID int64, message telegramMessag
 	}, nil
 }
 
-func (connector *Connector) extractAttachments(updateID int64, message telegramMessage) ([]contracts.AttachmentRef, error) {
+func (connector *Connector) extractAttachments(ctx context.Context, updateID int64, message telegramMessage) ([]contracts.AttachmentRef, error) {
 	if message.Document != nil {
-		return connector.extractDocumentAttachment(updateID, message.MessageID, *message.Document)
+		return connector.extractDocumentAttachment(ctx, updateID, message.MessageID, *message.Document)
 	}
 	if len(message.Photo) == 0 {
 		return []contracts.AttachmentRef{}, nil
@@ -376,7 +413,7 @@ func (connector *Connector) extractAttachments(updateID int64, message telegramM
 	if strings.TrimSpace(photo.FileID) == "" {
 		return nil, errors.New("telegram_photo_missing_file_id")
 	}
-	metadata, err := connector.resolveFileMetadata(photo.FileID)
+	metadata, err := connector.resolveFileMetadata(ctx, photo.FileID)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +444,7 @@ func (connector *Connector) extractAttachments(updateID int64, message telegramM
 		return nil, err
 	}
 	fileURL := connector.buildFileDownloadURL(metadata.FilePath)
-	raw, err := connector.fetchRaw(fileURL)
+	raw, err := connector.fetchRaw(ctx, fileURL)
 	if err != nil {
 		return nil, err
 	}
@@ -433,14 +470,14 @@ func (connector *Connector) extractAttachments(updateID int64, message telegramM
 	}}, nil
 }
 
-func (connector *Connector) extractDocumentAttachment(updateID int64, messageID int64, document telegramDocument) ([]contracts.AttachmentRef, error) {
+func (connector *Connector) extractDocumentAttachment(ctx context.Context, updateID int64, messageID int64, document telegramDocument) ([]contracts.AttachmentRef, error) {
 	if strings.TrimSpace(document.FileID) == "" {
 		return nil, errors.New("telegram_document_missing_file_id")
 	}
 	if document.FileSize > telegramBotDownloadLimitBytes {
 		return []contracts.AttachmentRef{}, nil
 	}
-	metadata, err := connector.resolveFileMetadata(document.FileID)
+	metadata, err := connector.resolveFileMetadata(ctx, document.FileID)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +508,7 @@ func (connector *Connector) extractDocumentAttachment(updateID int64, messageID 
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return nil, err
 	}
-	raw, err := connector.fetchRaw(connector.buildFileDownloadURL(metadata.FilePath))
+	raw, err := connector.fetchRaw(ctx, connector.buildFileDownloadURL(metadata.FilePath))
 	if err != nil {
 		return nil, err
 	}
@@ -490,45 +527,54 @@ func (connector *Connector) extractDocumentAttachment(updateID int64, messageID 
 	}}, nil
 }
 
-func (connector *Connector) resolveFileMetadata(fileID string) (telegramFileMetadata, error) {
+func (connector *Connector) resolveFileMetadata(ctx context.Context, fileID string) (telegramFileMetadata, error) {
 	endpoint := strings.TrimRight(connector.config.APIBaseURL, "/") + "/bot" + connector.config.BotToken + "/getFile"
 	query := url.Values{"file_id": []string{fileID}}
-	req, err := http.NewRequest(http.MethodGet, endpoint+"?"+query.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 	if err != nil {
-		return telegramFileMetadata{}, err
+		return telegramFileMetadata{}, &attachmentFetchError{stage: "metadata"}
 	}
 	resp, err := connector.client.Do(req)
 	if err != nil {
-		return telegramFileMetadata{}, errors.New("telegram_http_error")
+		return telegramFileMetadata{}, &attachmentFetchError{stage: "metadata"}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return telegramFileMetadata{}, &attachmentFetchError{stage: "metadata", status: resp.StatusCode}
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return telegramFileMetadata{}, errors.New("telegram_http_error")
+		return telegramFileMetadata{}, &attachmentFetchError{stage: "metadata"}
 	}
 	var decoded getFileResponse
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return telegramFileMetadata{}, errors.New("telegram_invalid_json")
+		return telegramFileMetadata{}, &attachmentFetchError{stage: "metadata"}
 	}
 	if !decoded.OK || strings.TrimSpace(decoded.Result.FilePath) == "" {
-		return telegramFileMetadata{}, errors.New("telegram_invalid_response_shape")
+		return telegramFileMetadata{}, &attachmentFetchError{stage: "metadata"}
 	}
 	return decoded.Result, nil
 }
 
-func (connector *Connector) fetchRaw(rawURL string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+func (connector *Connector) fetchRaw(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, &attachmentFetchError{stage: "download"}
 	}
 	resp, err := connector.client.Do(req)
 	if err != nil {
-		return nil, errors.New("telegram_http_error")
+		return nil, &attachmentFetchError{stage: "download"}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &attachmentFetchError{stage: "download", status: resp.StatusCode}
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, telegramBotDownloadLimitBytes+1))
 	if err != nil {
-		return nil, errors.New("telegram_http_error")
+		return nil, &attachmentFetchError{stage: "download"}
+	}
+	if int64(len(raw)) > telegramBotDownloadLimitBytes {
+		return nil, errors.New("telegram_document_too_large")
 	}
 	return raw, nil
 }
