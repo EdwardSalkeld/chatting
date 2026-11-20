@@ -19,7 +19,7 @@ type AtomicReceiver interface {
 
 type HeldStore interface {
 	HoldGitHub(context.Context, string, string, string, []byte, string, time.Time) error
-	ClearHeldGitHub(context.Context, string) error
+	ResolveHeldGitHub(context.Context, string, string, string, string, time.Time) error
 }
 
 func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter, body []byte, event, delivery string, now time.Time) (Decision, *contracts.TaskQueueMessage, error) {
@@ -85,7 +85,11 @@ func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter,
 		if d.Disposition == "needs_context" {
 			err = held.HoldGitHub(ctx, key, event, delivery, body, d.Reason, now)
 		} else {
-			err = held.ClearHeldGitHub(ctx, key)
+			id := ""
+			if notification != nil {
+				id = notification.Envelope.ID
+			}
+			err = held.ResolveHeldGitHub(ctx, key, d.Disposition, d.Reason, id, now)
 		}
 	}
 	return d, notification, err

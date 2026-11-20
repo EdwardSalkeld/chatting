@@ -1,5 +1,7 @@
 # Webhook transit probe
 
+Resolved holds are recorded in the handler SQLite database in `github_webhook_hold_outcomes`. Each record includes the original delivery and hold reason, the final decision and reason, timestamps, and the staged notification ID when applicable. A notification ID means the notification was staged; consult the worker ledger for execution and replies. Unresolved events remain in `github_webhook_held`. The outcome record does not retain the payload.
+
 The handler starts an isolated IPv4 loopback listener on port `9468` by default.
 Set `webhook_http_port` to `0` to disable it. The transit probe exposes
 `POST /webhooks/test`, accepts any content type without credentials, and never

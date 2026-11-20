@@ -172,6 +172,11 @@ func (store *Store) initialize(ctx context.Context) error {
 			event_key TEXT PRIMARY KEY, event TEXT NOT NULL, delivery TEXT NOT NULL,
 			body BLOB NOT NULL, reason TEXT NOT NULL, received_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS github_webhook_hold_outcomes (
+            event_key TEXT NOT NULL, event TEXT NOT NULL, delivery TEXT NOT NULL,
+            hold_reason TEXT NOT NULL, held_at TEXT NOT NULL, outcome TEXT NOT NULL,
+            outcome_reason TEXT NOT NULL, notification_id TEXT NOT NULL, resolved_at TEXT NOT NULL
+        )`,
 		`CREATE TABLE IF NOT EXISTS github_webhook_observed_runs (
 			run_url TEXT PRIMARY KEY, attempt INTEGER NOT NULL, envelope_json TEXT NOT NULL
 		)`,

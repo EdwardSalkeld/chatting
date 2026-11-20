@@ -8,6 +8,24 @@ import (
 	"time"
 )
 
+func TestResolvedHoldIsRecordedOnce(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.HoldGitHub(ctx, "key", "issues", "delivery", []byte(`{}`), "missing_subject", time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := store.ResolveHeldGitHub(ctx, "key", "drop", "unwatched", "", time.Unix(200, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	var outcome, reason string
+	if err := store.db.QueryRow(`SELECT count(*), max(outcome), max(outcome_reason) FROM github_webhook_hold_outcomes`).Scan(&count, &outcome, &reason); err != nil || count != 1 || outcome != "drop" || reason != "unwatched" {
+		t.Fatalf("%d %s %s %v", count, outcome, reason, err)
+	}
+}
+
 func TestWebhookStatusReportsPagedHoldsWithoutChangingThem(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

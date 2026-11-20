@@ -160,6 +160,10 @@ func TestLateRunRegistrationReconcilesHeldCompletionAtomically(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT count(*) FROM github_webhook_held`).Scan(&held); err != nil || held != 0 {
 		t.Fatalf("reconciled completion still held: %d %v", held, err)
 	}
+	var outcome, notification string
+	if err := store.db.QueryRow(`SELECT outcome,notification_id FROM github_webhook_hold_outcomes`).Scan(&outcome, &notification); err != nil || outcome != "keep" || notification != pending[0].ID {
+		t.Fatalf("missing resolution: %s %s %v", outcome, notification, err)
+	}
 }
 
 func TestWorkflowDestinationRecoversAcrossCommits(t *testing.T) {

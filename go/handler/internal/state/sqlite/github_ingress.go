@@ -144,7 +144,24 @@ func (store *Store) HoldGitHub(ctx context.Context, key, event, delivery string,
 	return err
 }
 
-func (store *Store) ClearHeldGitHub(ctx context.Context, key string) error {
-	_, err := store.db.ExecContext(ctx, `DELETE FROM github_webhook_held WHERE event_key = ?`, key)
+func (store *Store) ResolveHeldGitHub(ctx context.Context, key, outcome, reason, notificationID string, now time.Time) error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := recordHeldOutcome(ctx, tx, key, outcome, reason, notificationID, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func recordHeldOutcome(ctx context.Context, tx *sql.Tx, key, outcome, reason, notificationID string, now time.Time) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO github_webhook_hold_outcomes
+        SELECT event_key,event,delivery,reason,received_at,?,?,?,? FROM github_webhook_held WHERE event_key=?`, outcome, reason, notificationID, formatTimestamp(now), key)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM github_webhook_held WHERE event_key=?`, key)
 	return err
 }
