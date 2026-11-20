@@ -67,3 +67,30 @@ func TestMaintenanceHandlesFreshAndLegacySchemasAndPreservesActiveDelivery(t *te
 		}
 	}
 }
+
+func TestMaintenanceExpiresHoldsAndPrunesOldOutcomes(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	cutoff := time.Now().UTC().Add(-14 * 24 * time.Hour)
+	if err := store.HoldGitHub(ctx, "old", "issues", "d1", []byte(`{}`), "missing_subject", cutoff.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HoldGitHub(ctx, "new", "issues", "d2", []byte(`{}`), "missing_subject", cutoff.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO github_webhook_hold_outcomes VALUES ('past','issues','d','reason','2020-01-01','drop','reason','','2020-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := store.PruneDiagnostics(ctx, cutoff)
+	if err != nil || counts["github_webhook_held_expired"] != 1 || counts["github_webhook_hold_outcomes"] != 1 {
+		t.Fatalf("%v %v", counts, err)
+	}
+	var outcome string
+	if err := store.db.QueryRow(`SELECT outcome FROM github_webhook_hold_outcomes WHERE event_key='old'`).Scan(&outcome); err != nil || outcome != "expired" {
+		t.Fatalf("%s %v", outcome, err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT count(*) FROM github_webhook_held WHERE event_key='new'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("%d %v", count, err)
+	}
+}

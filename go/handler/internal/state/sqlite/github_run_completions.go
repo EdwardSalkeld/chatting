@@ -101,6 +101,5 @@ func reconcileRunCompletion(ctx context.Context, tx *sql.Tx, runURL, owner strin
 	if err := stageRunCompletion(ctx, tx, &envelope); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM github_webhook_held WHERE event_key=?`, eventKey)
-	return err
+	return recordHeldOutcome(ctx, tx, eventKey, "keep", "registered_run_completion", envelope.ID, time.Now())
 }
