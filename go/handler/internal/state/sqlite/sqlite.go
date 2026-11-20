@@ -177,6 +177,8 @@ func (store *Store) initialize(ctx context.Context) error {
             hold_reason TEXT NOT NULL, held_at TEXT NOT NULL, outcome TEXT NOT NULL,
             outcome_reason TEXT NOT NULL, notification_id TEXT NOT NULL, resolved_at TEXT NOT NULL
         )`,
+		`CREATE INDEX IF NOT EXISTS github_webhook_held_received_at ON github_webhook_held(received_at)`,
+		`CREATE INDEX IF NOT EXISTS github_webhook_hold_outcomes_resolved_at ON github_webhook_hold_outcomes(resolved_at)`,
 		`CREATE TABLE IF NOT EXISTS github_webhook_observed_runs (
 			run_url TEXT PRIMARY KEY, attempt INTEGER NOT NULL, envelope_json TEXT NOT NULL
 		)`,
