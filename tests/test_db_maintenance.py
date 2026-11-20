@@ -99,6 +99,19 @@ def test_prune_age_boundary_protects_unfinished_work_and_durable_state(database)
     add_run(database, "recent", "2026-11-01T00:00:00Z", "completed")
     for state in ("pending", "attached", "active", "closing"):
         add_run(database, state, old, state)
+    for run, date in (
+        ("old", old),
+        ("orphan", old),
+        ("active", old),
+        ("boundary", "2026-10-22T02:00:00+02:00"),
+        ("recent", "2026-11-01T00:00:00Z"),
+    ):
+        database.execute(
+            """INSERT INTO dead_letters
+            (run_id,envelope_json,reason_codes_json,attempt_count,status,created_at,schema_version)
+            VALUES (?,'{}','[]',1,'pending',?,'1')""",
+            (run, date),
+        )
     database.execute(
         """INSERT INTO worker_telegram_history
         (target,message_id,role,attachments_json,occurred_at,created_at)
@@ -119,7 +132,17 @@ def test_prune_age_boundary_protects_unfinished_work_and_durable_state(database)
         now=datetime(2026, 11, 5, tzinfo=timezone.utc),
         batch_size=1,
     )
-    assert counts == {"run_records": 2, "audit_events": 2, "worker_activity_events": 2}
+    assert counts == {
+        "run_records": 2,
+        "dead_letters": 2,
+        "audit_events": 2,
+        "worker_activity_events": 2,
+    }
+    assert {row[0] for row in database.execute("SELECT run_id FROM dead_letters")} == {
+        "active",
+        "boundary",
+        "recent",
+    }
     assert database.execute("SELECT * FROM worker_inbox").fetchall() == inbox_before
     assert (
         database.execute("SELECT count(*) FROM worker_telegram_history").fetchone()[0]
@@ -142,7 +165,12 @@ def test_prune_age_boundary_protects_unfinished_work_and_durable_state(database)
         database,
         retention_days=3,
         now=datetime(2026, 11, 5, tzinfo=timezone.utc),
-    ) == {"run_records": 2, "audit_events": 2, "worker_activity_events": 2}
+    ) == {
+        "run_records": 2,
+        "dead_letters": 2,
+        "audit_events": 2,
+        "worker_activity_events": 2,
+    }
 
 
 @pytest.mark.parametrize("days,batch", [(0, 1), (14, 0)])

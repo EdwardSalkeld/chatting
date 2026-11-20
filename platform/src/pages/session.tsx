@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowDown,
@@ -29,7 +29,7 @@ import {
   usePageTitle,
   type Fact,
 } from '@/components/shared'
-import { api, useItems } from '@/lib/api'
+import { api, useDeadLetters, useItems } from '@/lib/api'
 import { encode, fmtLatency, fmtTokens, fmtWhen, itemName } from '@/lib/format'
 import { isEditableTarget } from '@/lib/keys'
 import {
@@ -163,6 +163,13 @@ function useEvents(taskID: string | null | undefined, paused: boolean, initialAc
 
 function SessionView({ id }: { id: string }) {
   const completed = useLocation().pathname.startsWith('/runs/')
+  const deadLetters = useDeadLetters(1000)
+  const deadLetter = deadLetters.data?.dead_letters.find((d) => d.run_id === id)
+  const queryClient = useQueryClient()
+  const dismiss = useMutation({
+    mutationFn: (id: number) => api(`worker/dead-letters/${id}/dismiss`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dead-letters'] }),
+  })
   const [params, update] = useUrlParams()
   const show = useMemo(() => parseShow(params.get('show')), [params])
   const find = params.get('find') || ''
@@ -369,6 +376,19 @@ function SessionView({ id }: { id: string }) {
         taskID={taskID}
       />
       {request && <RequestLine text={request} />}
+      {completed && deadLetter?.status === 'pending' && !deadLetter.replayed_run_id && (
+        <div className="t-actions">
+          <button
+            type="button"
+            className="t-btn"
+            disabled={dismiss.isPending}
+            onClick={() => dismiss.mutate(deadLetter.dead_letter_id)}
+          >
+            {dismiss.isPending ? 'Dismissing…' : 'Dismiss from needs attention'}
+          </button>
+          {dismiss.isError && <span role="alert">Could not dismiss: {dismiss.error.message}</span>}
+        </div>
+      )}
       <div className="t-toolbar" data-chips={chipsOpen ? 'open' : 'closed'}>
         <button
           type="button"

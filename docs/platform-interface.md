@@ -163,6 +163,7 @@ The browser uses same-origin APIs. The platform forwards only these routes:
 | `/api/worker/runs?limit=&status=&source=&work_item_id=&since=` | Worker `/api/runs`                      | GET              |
 | `/api/worker/runs/{id}`                                        | Worker `/api/runs/{id}`                 | GET              |
 | `/api/worker/dead-letters?limit=`                              | Worker `/api/dead-letters`              | GET              |
+| `/api/worker/dead-letters/{id}/dismiss`                        | Worker `/api/dead-letters/{id}/dismiss` | POST             |
 | `/api/worker/tasks/{id}/events?after=N`                        | Worker `/api/tasks/{id}/events?after=N` | GET              |
 | `/api/worker/activity`                                         | Worker `/activity.json`                 | GET              |
 | `/api/worker/metrics`                                          | Worker `/metrics` (Prometheus text)     | GET              |
@@ -198,6 +199,10 @@ envelope body: `dead_letter_id`, `run_id`, `task_id`, `work_item_id`,
 `envelope_id`, `source`, `received_at`, `reply_channel_type`,
 `reply_channel_target`, `reason_codes`, `last_error`, `attempt_count`, `status`,
 `replayed_run_id` and `created_at`. It takes the same `limit` as runs.
+`POST /api/dead-letters/{id}/dismiss` marks a pending dead letter dismissed;
+repeated requests are safe. It does not retry the task or alter the run. A
+missing or non-pending letter returns 404. Dismissed records remain available
+until diagnostic retention removes them.
 
 `GET /api/runs/{id}` reports `started_at` (finish time minus duration) and
 `finished_at`, plus the executor detail recorded in the run's audit event:

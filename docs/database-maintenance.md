@@ -80,8 +80,11 @@ Unfinished inbox state is rechecked within each deletion transaction.
 
 These two explicit commands only modify diagnostics. Scheduled maintenance also
 prunes acknowledged outbox history using the same retention window. Conversation
-history, work item/routing state, inbox payloads, token usage and dead letters
+history, work item/routing state, inbox payloads and token usage
 are preserved, as are external actions such as comments and pull requests.
+Dead letters expire with their run diagnostics, using the same retention window
+and protection for unfinished inbox tasks. Previously orphaned dead letters
+older than the cutoff are also pruned.
 
 Deploy the writer change before stripping transcripts. The strip command can be
 repeated after supervisors running older code finish, to catch any late audit

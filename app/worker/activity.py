@@ -311,6 +311,9 @@ class WorkerActivityMonitor:
             "truncated": len(letters) >= limit,
         }
 
+    def dismiss_dead_letter(self, dead_letter_id: int) -> bool:
+        return self._store.dismiss_dead_letter(dead_letter_id)
+
     def live_events(self, *, task_id: str, after_id: int) -> dict[str, object]:
         events = self._store.list_worker_activity_since(
             task_id=task_id, after_id=after_id
