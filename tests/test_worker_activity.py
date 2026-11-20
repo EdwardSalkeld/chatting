@@ -457,6 +457,28 @@ class WorkerActivityTests(unittest.TestCase):
                 self.assertNotIn("envelope_json", letters[0])
                 self.assertNotIn("content", json.dumps(letters))
 
+                dismiss_url = (
+                    f"{base}/api/dead-letters/{letters[0]['dead_letter_id']}/dismiss"
+                )
+                for _ in range(2):
+                    with urllib.request.urlopen(
+                        urllib.request.Request(dismiss_url, data=b"", method="POST")
+                    ) as response:
+                        self.assertEqual(json.load(response)["status"], "dismissed")
+                self.assertEqual(
+                    get("/api/dead-letters")["dead_letters"][0]["status"], "dismissed"
+                )
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base}/api/dead-letters/999999/dismiss",
+                            data=b"",
+                            method="POST",
+                        )
+                    )
+                self.assertEqual(caught.exception.code, 404)
+                caught.exception.close()
+
                 header = get("/api/runs/run%3Afirst")
                 self.assertEqual(header["started_at"], "2026-03-31T11:58:30Z")
                 self.assertEqual(header["finished_at"], "2026-03-31T12:00:00Z")

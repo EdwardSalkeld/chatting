@@ -1,9 +1,10 @@
-"""Small read-only HTTP surface for the worker activity application."""
+"""Small HTTP surface for the worker activity application."""
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,22 @@ _HTML = Path(__file__).with_name("activity_ui.html")
 
 def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            match = re.fullmatch(r"/api/dead-letters/([1-9][0-9]*)/dismiss", self.path)
+            if not match:
+                self._json({"error": "not found"}, status=404)
+                return
+            dead_letter_id = int(match.group(1))
+            if dead_letter_id > 2**63 - 1:
+                self._json({"error": "not found"}, status=404)
+                return
+            if monitor.dismiss_dead_letter(dead_letter_id):
+                self._json({"status": "dismissed"})
+            else:
+                self._json(
+                    {"error": "dead letter not found or not pending"}, status=404
+                )
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path

@@ -67,6 +67,26 @@ func TestGatewayOnlyForwardsSupportedRoutesAndMethods(t *testing.T) {
 		t.Fatalf("unsupported requests reached upstream: %d", calls)
 	}
 }
+
+func TestGatewayDismissDeadLetter(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/dead-letters/42/dismiss" {
+			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	server := platformServer(t, upstream.URL)
+	request, _ := http.NewRequest("POST", server.URL+"/api/worker/dead-letters/42/dismiss", nil)
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("got %d", response.StatusCode)
+	}
+}
 func TestGatewayRewritesEncodedIDsQueriesAndStripsBrowserCredentials(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tasks/task:one/events" || r.URL.Query().Get("after") != "42" {

@@ -71,6 +71,14 @@ def prune_worker_diagnostics(
               ON inbox.task_id = json_extract(audit.detail_json, '$.task_id')
             WHERE audit.run_id = run_records.run_id AND inbox.state != 'completed'
         )""",
+        "dead_letters": """julianday(created_at) < julianday(?) AND NOT EXISTS (
+            SELECT 1 FROM run_records AS run WHERE run.run_id = dead_letters.run_id
+        ) AND NOT EXISTS (
+            SELECT 1 FROM audit_events AS audit
+            JOIN worker_inbox AS inbox
+              ON inbox.task_id = json_extract(audit.detail_json, '$.task_id')
+            WHERE audit.run_id = dead_letters.run_id AND inbox.state != 'completed'
+        )""",
         "audit_events": """julianday(created_at) < julianday(?) AND NOT EXISTS (
             SELECT 1 FROM worker_inbox AS inbox
             WHERE inbox.task_id = json_extract(audit_events.detail_json, '$.task_id')

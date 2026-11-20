@@ -159,7 +159,8 @@ export function Overview() {
     [dayRuns],
   )
   const pendingDead = useMemo(
-    () => deadLetters.data?.dead_letters.filter((d) => !d.replayed_run_id),
+    () =>
+      deadLetters.data?.dead_letters.filter((d) => d.status === 'pending' && !d.replayed_run_id),
     [deadLetters.data],
   )
   const hm = useMemo(() => parseProm(handlerMetrics.data || ''), [handlerMetrics.data])

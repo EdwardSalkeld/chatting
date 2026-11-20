@@ -1097,6 +1097,18 @@ class SQLiteStateStore:
             )
         return cards
 
+    def dismiss_dead_letter(self, dead_letter_id: int) -> bool:
+        """Acknowledge a dead letter without changing its run or retrying it."""
+        with closing(self._connect()) as connection, connection:
+            return (
+                connection.execute(
+                    "UPDATE dead_letters SET status = 'dismissed' "
+                    "WHERE dead_letter_id = ? AND status IN ('pending', 'dismissed')",
+                    (dead_letter_id,),
+                ).rowcount
+                > 0
+            )
+
     def list_dead_letters(self, *, limit: int) -> list[dict[str, object]]:
         """Dead letters without the envelope body, newest first."""
         if limit <= 0:

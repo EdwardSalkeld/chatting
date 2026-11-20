@@ -78,6 +78,7 @@ func (config Config) Validate() error {
 var collection = regexp.MustCompile(`^/api/handler/(schedules|reminders)$`)
 var member = regexp.MustCompile(`^/api/handler/(schedules|reminders)/[^/]+$`)
 var worker = regexp.MustCompile(`^/api/worker/(items|items/[^/]+/runs|runs|runs/[^/]+|dead-letters|tasks/[^/]+/events|activity|metrics)$`)
+var dismissDeadLetter = regexp.MustCompile(`^/api/worker/dead-letters/[1-9][0-9]*/dismiss$`)
 var page = regexp.MustCompile(`^/(|overview|items|items/[^/]+|runs|runs/[^/]+|tasks/[^/]+|schedules|reminders|inbox|system)$`)
 
 func writeError(writer http.ResponseWriter, status int, message string) {
@@ -125,6 +126,8 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 				upstream, allowed = handlerProxy, "GET, PUT, DELETE"
 			case request.URL.Path == "/api/handler/inbox", request.URL.Path == "/api/handler/metrics":
 				upstream, allowed = handlerProxy, "GET"
+			case dismissDeadLetter.MatchString(routePath):
+				upstream, allowed = workerProxy, "POST"
 			case worker.MatchString(routePath):
 				upstream, allowed = workerProxy, "GET"
 			default:
