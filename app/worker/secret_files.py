@@ -64,7 +64,7 @@ def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
     try:
         # _safe_id accepts only bounded ASCII basenames; O_NOFOLLOW prevents
         # a workspace symlink from escaping the already-open root directory.
-        work_fd = os.open(item, flags, dir_fd=root_fd)  # lgtm[py/path-injection]
+        work_fd = os.open(item, flags, dir_fd=root_fd)
         try:
             try:
                 os.mkdir(".chatting-secrets", 0o700, dir_fd=work_fd)
@@ -80,7 +80,7 @@ def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
                     # The request is also a validated basename and the lookup
                     # is relative to the verified private directory descriptor.
                     existing = os.stat(
-                        request,  # lgtm[py/path-injection]
+                        request,
                         dir_fd=directory_fd,
                         follow_symlinks=False,
                     )
