@@ -9,6 +9,7 @@
 - [Nix packages and releases](packaging-and-releases.md): app-owned builds and source releases for downstream consumers
 - [Connectors](connectors/README.md)
 - [Schedules](schedules.md) and [one-off reminders](reminders.md)
+- [Secret requests](secrets.md)
 - [Explicit executor termination](explicit-finish.md)
 - [Work item model selection](model-selection.md)
 - [Background model usage](background-usage.md): scheduled-task context, model routing and personal-mail metering

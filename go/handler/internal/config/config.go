@@ -26,6 +26,8 @@ const (
 )
 
 type Config struct {
+	SecretsWorkspaceRoot             string
+	SecretsPublicBaseURL             string
 	MaintenanceCron                  string
 	RetentionDays                    int
 	PersonalInbox                    *personalinbox.Config
@@ -221,6 +223,8 @@ func list(dst *[]string, key string) field    { return bind(dst, key, decodeStri
 // the order validation errors are reported in.
 func (c *Config) fields(payload map[string]json.RawMessage) []field {
 	return []field{
+		str(&c.SecretsWorkspaceRoot, "secrets_workspace_root"),
+		str(&c.SecretsPublicBaseURL, "secrets_public_base_url"),
 		str(&c.MaintenanceCron, "maintenance_cron"),
 		posInt(&c.RetentionDays, "retention_days"),
 		{key: "personal_inbox", keepNull: true, decode: func(raw json.RawMessage) error {

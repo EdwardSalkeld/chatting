@@ -32,6 +32,7 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/reminders"
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/secrets"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/webhooks"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
@@ -149,6 +150,14 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	metricRecorder := metrics.New(time.Time{}, nil)
 	metricRecorder.SetSQLitePath(config.DBPath)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
+	var secretService *secrets.Service
+	if config.SecretsWorkspaceRoot != "" || config.SecretsPublicBaseURL != "" {
+		secretService, err = secrets.New(store, config.SecretsWorkspaceRoot, config.SecretsPublicBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("secret requests: %w", err)
+		}
+		connectors = append(connectors, secretService)
+	}
 	if config.GitHubWebhookDeliveryEnabled {
 		connectors = append(connectors, webhooks.Connector{Store: store})
 	}
@@ -233,6 +242,9 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	scheduleService := schedules.NewService(store)
 	reminderService := reminders.NewService(store, metricRecorder)
 	metricsServer, err := metrics.StartServer(metricRecorder, config.MetricsHost, config.MetricsPort, func(mux *http.ServeMux) {
+		if secretService != nil {
+			secretService.RegisterUI(mux)
+		}
 		schedules.RegisterRoutes(mux, scheduleService)
 		schedules.RegisterUIRoutes(mux, scheduleService)
 		reminders.RegisterRoutes(mux, reminderService)
@@ -254,6 +266,9 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	egressServer, err := egress.StartHTTPServer("127.0.0.1", config.EgressHTTPPort, engine, func(result egress.Result) {
 		metricRecorder.RecordEgressResult(result.Status, result.Reason)
 	}, func(mux *http.ServeMux) {
+		if secretService != nil {
+			secretService.RegisterWorker(mux)
+		}
 		workitems.RegisterRoutes(mux, store)
 		var creator workitems.TopicCreator
 		if concrete, ok := dispatcher.(dispatch.Dispatcher); ok {

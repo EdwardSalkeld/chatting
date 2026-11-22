@@ -80,6 +80,7 @@ var member = regexp.MustCompile(`^/api/handler/(schedules|reminders)/[^/]+$`)
 var worker = regexp.MustCompile(`^/api/worker/(items|items/[^/]+/runs|runs|runs/[^/]+|dead-letters|tasks/[^/]+/events|activity|metrics)$`)
 var dismissDeadLetter = regexp.MustCompile(`^/api/worker/dead-letters/[1-9][0-9]*/dismiss$`)
 var page = regexp.MustCompile(`^/(|overview|items|items/[^/]+|runs|runs/[^/]+|tasks/[^/]+|schedules|reminders|inbox|system)$`)
+var secretPage = regexp.MustCompile(`^/secrets/[a-f0-9]{64}$`)
 
 func writeError(writer http.ResponseWriter, status int, message string) {
 	writer.Header().Set("Content-Type", "application/json")
@@ -111,11 +112,43 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 		return nil, err
 	}
 	handlerProxy, workerProxy := proxy(config.HandlerURL), proxy(config.WorkerURL)
+	secretProxy := proxy(config.HandlerURL)
+	secretRewrite := secretProxy.Rewrite
+	secretProxy.Rewrite = func(request *httputil.ProxyRequest) {
+		secretRewrite(request)
+		if request.In.Method == http.MethodPost {
+			request.Out.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		routePath := request.URL.EscapedPath()
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+		if secretPage.MatchString(routePath) {
+			writer.Header().Set("Referrer-Policy", "no-referrer")
+			if request.Method != http.MethodGet && request.Method != http.MethodPost {
+				writer.Header().Set("Allow", "GET, POST")
+				writeError(writer, http.StatusMethodNotAllowed, "Method not allowed")
+				return
+			}
+			if request.Method == http.MethodPost {
+				if origin := request.Header.Get("Origin"); origin != "" {
+					parsed, err := url.Parse(origin)
+					if err != nil || parsed.Host != request.Host {
+						writeError(writer, http.StatusForbidden, "Cross-origin writes are not allowed")
+						return
+					}
+				}
+				request.Body = http.MaxBytesReader(writer, request.Body, 65536)
+			}
+			secretProxy.ServeHTTP(writer, request)
+			return
+		}
+		if strings.HasPrefix(request.URL.Path, "/secrets/") {
+			http.NotFound(writer, request)
+			return
+		}
 		if strings.HasPrefix(request.URL.Path, "/api/") {
 			var upstream *httputil.ReverseProxy
 			var allowed string

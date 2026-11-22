@@ -634,6 +634,15 @@ def _task_payload(
                 "with endpoints, an example body, and correction notes."
             ),
         },
+        "secret_request_contract": {
+            "command": f"python3 -P -m app.main_work_items request-secret task:{envelope.id} --label '<purpose>'",
+            "instructions": (
+                "When a user needs to provide a secret, create a request with this command and send the returned URL to the user. "
+                "The link is single-use and expires after 24 hours. The worker will receive a new event with the saved file path. "
+                "Read the file only when needed, never reveal its contents in a reply or logs, and delete it after use. "
+                "If the command is unavailable, use the existing secure file handoff instead."
+            ),
+        },
         "pull_request_contract": {
             "register_command": (
                 "python3 -P -m app.main_work_items register-pr "

@@ -1,0 +1,12 @@
+# Secret requests
+
+A worker can run `python3 -P -m app.main_work_items request-secret <task-id> --label 'Purpose'` and send the resulting URL to the user. The label must describe the request without containing the secret. Anyone who possesses the URL can submit once; there is no sign-in. Links expire after 24 hours. The user submits text on the page, and the handler writes it to a generated file under the requesting work item's `.chatting-secrets` directory. A subsequent event in the same work item contains the path, not the secret. The worker should use the file promptly and delete it after use. Expiry applies to links, not saved files; files left behind require manual removal. Deletion does not guarantee removal from backups or storage snapshots.
+
+Enable the feature by setting both handler configuration keys:
+
+- `secrets_workspace_root`: absolute path to the worker's `workspace_root`, visible at the same path to both processes.
+- `secrets_public_base_url`: externally reachable base URL of the platform UI, for example `https://chat.example`.
+
+The handler and worker need access under the same OS user: secret files are mode 0600, and the private directory is mode 0700. The workspace filesystem must support Linux `O_TMPFILE`, `linkat` with `AT_EMPTY_PATH`, and directory fsync. Both processes need the same view of the filesystem. The feature fails closed if these requirements are not met; test them in the target deployment. The platform forwards `/secrets/<token>` to the handler's metrics/admin listener. Proxy only the intended paths to LAN clients, and configure the proxy and any monitoring to omit URL paths, query strings, request bodies and referrers for these requests. Use HTTPS when the network is not trusted. Tokens are bearer credentials; browsers, messaging systems and proxies may retain URLs, so treat links accordingly. Do not expose the loopback worker API publicly.
+
+Only a token hash and request metadata are stored in the handler database. The file is written as an unnamed inode, synced, and linked atomically; a pending request with a linked file is recovered on the next handler poll. Completion uses the handler's existing durable ingress, deterministic event ID and deduplication. Ingress is at-least-once: as with other handler events, consumers must tolerate redelivery after a crash. The event is assigned directly to the original work item, independent of its reply channel. A retry after a successful submission cannot replace the file. Database records do not automatically delete saved files.

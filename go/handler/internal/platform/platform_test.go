@@ -68,6 +68,49 @@ func TestGatewayOnlyForwardsSupportedRoutesAndMethods(t *testing.T) {
 	}
 }
 
+func TestGatewayForwardsSecretFormWithoutCredentials(t *testing.T) {
+	token := strings.Repeat("a", 64)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/secrets/"+token || r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" {
+			t.Error("unexpected request")
+		}
+		if r.Method == http.MethodPost {
+			if r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+				t.Error("incorrect form content type")
+			}
+			if err := r.ParseForm(); err != nil || r.PostForm.Get("secret") != "example" {
+				t.Error("form not forwarded")
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	server := platformServer(t, upstream.URL)
+	for _, method := range []string{"GET", "POST"} {
+		r, _ := http.NewRequest(method, server.URL+"/secrets/"+token, strings.NewReader("secret=example"))
+		r.Header.Set("Cookie", "session=private")
+		r.Header.Set("Authorization", "Bearer private")
+		response, err := server.Client().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			t.Fatalf("%s: %d", method, response.StatusCode)
+		}
+	}
+	r, _ := http.NewRequest("POST", server.URL+"/secrets/"+token, strings.NewReader("secret=example"))
+	r.Header.Set("Origin", "https://attacker.example")
+	response, err := server.Client().Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin post: %d", response.StatusCode)
+	}
+}
+
 func TestGatewayDismissDeadLetter(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.URL.Path != "/api/dead-letters/42/dismiss" {

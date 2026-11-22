@@ -65,6 +65,25 @@ class WorkerConfigTests(unittest.TestCase):
             self.assertEqual(main(), 0)
         return output.getvalue()
 
+    def test_request_secret_uses_assigned_task_and_handler(self):
+        result = {"url": "https://example.test/secrets/token", "expires_at": "tomorrow"}
+        with patch(
+            "urllib.request.urlopen",
+            return_value=io.BytesIO(json.dumps(result).encode()),
+        ) as call:
+            output = self._main(
+                "request-secret", self.task.task_id, "--label", "API token"
+            )
+        request = call.call_args.args[0]
+        self.assertEqual(
+            request.full_url, "http://127.0.0.1:9999/work-items/secret-request"
+        )
+        self.assertEqual(
+            json.loads(request.data),
+            {"task_id": self.task.task_id, "label": "API token"},
+        )
+        self.assertEqual(json.loads(output), result)
+
     def test_ensure_topic_uses_handler_config_and_returns_reusable_destination(self):
         result = {
             "conversation": {
