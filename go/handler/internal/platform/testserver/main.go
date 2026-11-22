@@ -20,10 +20,12 @@ import (
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/reminders"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	state "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/webchat"
 )
 
 func main() {
 	dir := flag.String("state-dir", "", "Disposable fixture directory (required)")
+	webSocket := flag.String("web-socket", "", "Private socket for disposable web conversation ingress")
 	port := flag.Int("port", 19464, "Loopback fixture port")
 	empty := flag.Bool("empty", false, "Start with empty fixtures")
 	noInbox := flag.Bool("no-inbox", false, "Omit the optional personal inbox endpoint")
@@ -107,6 +109,14 @@ func main() {
 	startedAt := time.Now()
 	if *rich && !*empty {
 		startedAt = startedAt.Add(-76 * time.Hour)
+	}
+	if *webSocket != "" {
+		if err := seedWebConversations(filepath.Join(*dir, "handler.db")); err != nil {
+			log.Fatal(err)
+		}
+		if _, err := (webchat.Service{Store: store}).Start(*webSocket); err != nil {
+			log.Fatal(err)
+		}
 	}
 	recorder := metrics.New(startedAt, nil)
 	if *telegramOutage {

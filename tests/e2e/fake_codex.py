@@ -28,7 +28,7 @@ def main():
     # undeliverable by design. Send the reply on "log" in that case rather than
     # emitting an undeliverable one: main_reply is now synchronous and would
     # exit non-zero on a dropped send, failing this run.
-    _DELIVERABLE = {"email", "telegram", "telegram_reaction", "github", "log"}
+    _DELIVERABLE = {"email", "telegram", "telegram_reaction", "github", "log", "web"}
     if channel not in _DELIVERABLE:
         channel = "log"
 

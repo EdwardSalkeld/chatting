@@ -390,6 +390,9 @@ func outboundMetadata(message *contracts.OutboundMessage) map[string]any {
 }
 
 func (engine *Engine) channelAllowed(message contracts.EgressQueueMessage, task *TaskRecord) bool {
+	if message.Message.Channel == "web" || (message.Message.Channel == "final" && task != nil && task.TaskMessage.Envelope.ReplyChannel.Type == "web") {
+		return task != nil && task.TaskMessage.Envelope.ReplyChannel.Type == "web" && message.Message.Target == task.TaskMessage.Envelope.ReplyChannel.Target && message.Message.Attachment == nil && message.Message.Body != nil
+	}
 	if message.EventKind == "completion" {
 		return true
 	}

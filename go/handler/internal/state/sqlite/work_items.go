@@ -41,6 +41,11 @@ func (store *Store) AssignTask(ctx context.Context, task contracts.TaskQueueMess
 		if err = tx.Commit(); err != nil {
 			return task, err
 		}
+		if existingReason == "web_conversation" && task.Envelope.ReplyChannel.Type == "web" {
+			// Web ingress already carries the selected Telegram route. Preserve
+			// that scope when several conversations share one workspace.
+			return task, nil
+		}
 		return store.addConversationContext(ctx, task)
 	}
 	if err != sql.ErrNoRows {

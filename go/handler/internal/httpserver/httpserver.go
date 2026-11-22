@@ -2,9 +2,14 @@
 package httpserver
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -36,6 +41,10 @@ func Start(host string, port int, handler http.Handler) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	return serve(listener, handler), nil
+}
+
+func serve(listener net.Listener, handler http.Handler) *Server {
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: serverTimeouts.readHeader,
@@ -48,7 +57,7 @@ func Start(host string, port int, handler http.Handler) (*Server, error) {
 		defer close(done)
 		_ = server.Serve(listener)
 	}()
-	return &Server{server: server, done: done, addr: listener.Addr().String()}, nil
+	return &Server{server: server, done: done, addr: listener.Addr().String()}
 }
 
 func (server *Server) Addr() string {
@@ -65,4 +74,43 @@ func (server *Server) Close() error {
 	err := server.server.Close()
 	<-server.done
 	return err
+}
+
+// StartUnix requires an existing protected parent directory. Only a stale socket
+// which refuses connections may be removed; files and active listeners are kept.
+func StartUnix(path string, handler http.Handler) (*Server, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("socket path must be absolute")
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("socket path already exists and is not a socket")
+		}
+		connection, dialErr := net.DialTimeout("unix", path, 200*time.Millisecond)
+		if dialErr == nil {
+			connection.Close()
+			return nil, fmt.Errorf("socket already has an active listener")
+		}
+		if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+			return nil, dialErr
+		}
+		current, statErr := os.Lstat(path)
+		if statErr != nil || !os.SameFile(info, current) {
+			return nil, fmt.Errorf("socket changed during startup")
+		}
+		if err := os.Remove(path); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.Chmod(path, 0660); err != nil {
+		listener.Close()
+		return nil, err
+	}
+	return serve(listener, handler), nil
 }

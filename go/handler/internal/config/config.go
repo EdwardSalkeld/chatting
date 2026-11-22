@@ -36,6 +36,7 @@ type Config struct {
 	MetricsHost                      string
 	MetricsPort                      int
 	EgressHTTPPort                   int
+	PlatformAPISocket                string
 	WebhookHTTPPort                  int
 	GitHubWebhookSecretEnv           string
 	GitHubWebhookLogin               string
@@ -237,6 +238,7 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		str(&c.MetricsHost, "metrics_host"),
 		posInt(&c.MetricsPort, "metrics_port"),
 		posInt(&c.EgressHTTPPort, "egress_http_port"),
+		str(&c.PlatformAPISocket, "platform_api_socket"),
 		bind(&c.WebhookHTTPPort, "webhook_http_port", func(raw json.RawMessage, name string) (int, error) {
 			var port int
 			err := json.Unmarshal(raw, &port)

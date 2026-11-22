@@ -248,6 +248,11 @@ def _resolve_reply_messages(
             )
         )
 
+    if args.channel == "web" and (
+        attachment is not None or args.telegram_reaction is not None
+    ):
+        raise ValueError("web replies support text only")
+
     if not messages:
         raise ValueError("message or attachment is required")
 
@@ -279,6 +284,8 @@ def main() -> int:
 
     outbound_messages = _resolve_reply_messages(args, config)
     db_path = worker_db_path(config)
+    if args.channel == "web" and db_path is None:
+        raise ValueError("web replies require the worker database")
     intended_content = any(
         message.channel != "telegram_reaction" for message in outbound_messages
     )
@@ -393,6 +400,15 @@ def main() -> int:
                 message_id=sent_message_id,
                 content=outbound_message.body,
                 attachment=outbound_message.attachment,
+                task_id=egress_message.task_id,
+                event_id=egress_message.event_id,
+                occurred_at=egress_message.emitted_at,
+            )
+
+        if delivered and db_path is not None and outbound_message.channel == "web":
+            SQLiteStateStore(db_path).record_web_outbound(
+                target=outbound_message.target,
+                content=outbound_message.body or "",
                 task_id=egress_message.task_id,
                 event_id=egress_message.event_id,
                 occurred_at=egress_message.emitted_at,

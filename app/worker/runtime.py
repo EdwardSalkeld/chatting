@@ -225,7 +225,7 @@ def process_task_message(
             if execution_result.errors:
                 reason_codes.append("executor_reported_errors")
             if (
-                _requires_visible_telegram_reply(task_message)
+                _requires_visible_reply(task_message)
                 and not explicit_finish
                 and not execution_result.errors
                 and published_incremental_reply_count == 0
@@ -796,12 +796,12 @@ def _result_status(reason_codes: list[str]) -> str:
 
 
 def _should_run_supervised_recovery(task_message: TaskQueueMessage) -> bool:
-    return _requires_visible_telegram_reply(task_message)
+    return _requires_visible_reply(task_message)
 
 
-def _requires_visible_telegram_reply(task_message: TaskQueueMessage) -> bool:
+def _requires_visible_reply(task_message: TaskQueueMessage) -> bool:
     return (
-        task_message.envelope.reply_channel.type == "telegram"
+        task_message.envelope.reply_channel.type in {"telegram", "web"}
         and task_message.envelope.source != "webhook"
     )
 
@@ -827,10 +827,13 @@ def _build_visible_error_body(
 
 
 def _build_missing_visible_reply_error(*, task_message: TaskQueueMessage) -> str | None:
-    if not _requires_visible_telegram_reply(task_message):
+    if not _requires_visible_reply(task_message):
         return None
+    destination = (
+        "web" if task_message.envelope.reply_channel.type == "web" else "Telegram"
+    )
     return (
-        "I finished the task internally but failed to publish the Telegram reply, "
+        f"I finished the task internally but failed to publish the {destination} reply, "
         "so this run was marked failed instead of completing silently."
     )
 

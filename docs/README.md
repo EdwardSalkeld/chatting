@@ -1,6 +1,7 @@
 # Documentation
 
 - [Platform interface](platform-interface.md): unified private UI, build and API gateway
+- [Web conversations](web-conversations.md): independent web messages and replies in existing chat/topic workspaces
 - [Operations](operations.md): runtime requirements, process interfaces and the worker's supervisors
 - [Database maintenance](database-maintenance.md): duplicate transcript cleanup and configurable diagnostic retention
 - [Message flow](bbmb-message-flow.md): how tasks and replies move between handler and worker

@@ -168,6 +168,7 @@ func (store *Store) Close() error {
 
 func (store *Store) initialize(ctx context.Context) error {
 	statements := []string{
+		"CREATE TABLE IF NOT EXISTS web_ingress (envelope_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, envelope_json TEXT NOT NULL, published_at TEXT)",
 		`CREATE TABLE IF NOT EXISTS github_webhook_held (
 			event_key TEXT PRIMARY KEY, event TEXT NOT NULL, delivery TEXT NOT NULL,
 			body BLOB NOT NULL, reason TEXT NOT NULL, received_at TEXT NOT NULL

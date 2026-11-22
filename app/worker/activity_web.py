@@ -48,6 +48,24 @@ def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler
                     monitor.prometheus_metrics(),
                 )
                 return
+            if path.startswith("/api/conversations/") and path.endswith("/messages"):
+                conversation_id = unquote(
+                    path[len("/api/conversations/") : -len("/messages")]
+                )
+                try:
+                    query = parse_qs(parsed.query)
+                    self._json(
+                        monitor.conversation_messages(
+                            conversation_id,
+                            before=_param(query, "before"),
+                            limit=min(_limit(query), 100),
+                        )
+                    )
+                except ValueError:
+                    self._json(
+                        {"error": "invalid conversation or history query"}, status=400
+                    )
+                return
             if path == "/api/items":
                 self._json(monitor.list_items_snapshot())
                 return

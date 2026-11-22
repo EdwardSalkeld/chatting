@@ -68,6 +68,19 @@ class WorkerActivityMonitor:
         with self._lock:
             self._supervisor_executors = executors
 
+    def conversation_messages(
+        self,
+        conversation_id: str,
+        *,
+        before: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        return self._store.web_conversation_snapshot(
+            conversation_id=conversation_id,
+            before=before,
+            limit=limit,
+        )
+
     def prometheus_metrics(self) -> bytes:
         from app.worker.metrics import render_sqlite_metrics
 

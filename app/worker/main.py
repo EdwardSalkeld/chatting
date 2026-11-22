@@ -467,6 +467,20 @@ def _deliver_egress_event(
     reason = str(response.get("reason", "")) if isinstance(response, dict) else ""
 
     if status_code in (200, 202):
+        task = store.get_inbox_task(task_id=egress_message.task_id)
+        if (
+            task is not None
+            and task.task_message.envelope.reply_channel.type == "web"
+            and egress_message.message.channel in {"web", "final"}
+            and egress_message.event_kind != "completion"
+        ):
+            store.record_web_outbound(
+                target=task.task_message.envelope.reply_channel.target,
+                content=egress_message.message.body or "",
+                task_id=egress_message.task_id,
+                event_id=egress_message.event_id,
+                occurred_at=egress_message.emitted_at,
+            )
         store.mark_egress_outbox_event_acked(event_id=egress_message.event_id)
         activity_monitor.record_egress(
             egress_message=egress_message,

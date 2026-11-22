@@ -197,6 +197,9 @@ class SQLiteStateStore:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._transaction() as connection:
             connection.executescript(_SCHEMA)
+            from app.state import web_chat
+
+            web_chat.initialize(connection)
             work_items.initialize(connection)
             work_items.migrate_identity(connection)
             token_usage.initialize(connection)
@@ -260,6 +263,9 @@ class SQLiteStateStore:
                     (assignment.work_item_id, task_message.task_id),
                 )
             self._record_telegram_inbound(connection, task_message, created_at=now)
+            from app.state import web_chat
+
+            web_chat.record_inbound(connection, task_message)
         return cursor.rowcount > 0
 
     def get_work_assignment(self, *, task_id: str) -> work_items.WorkAssignment | None:
@@ -463,6 +469,41 @@ class SQLiteStateStore:
                     now,
                     task_id,
                 ),
+            )
+
+    def record_web_outbound(
+        self,
+        *,
+        target: str,
+        content: str,
+        task_id: str,
+        event_id: str,
+        occurred_at: datetime,
+    ) -> None:
+        from app.state import web_chat
+
+        with self._transaction() as connection:
+            web_chat.record_reply(
+                connection,
+                target=target,
+                content=content,
+                task_id=task_id,
+                event_id=event_id,
+                occurred_at=occurred_at,
+            )
+
+    def web_conversation_snapshot(
+        self,
+        *,
+        conversation_id: str,
+        before: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        from app.state import web_chat
+
+        with closing(self._connect()) as connection:
+            return web_chat.snapshot(
+                connection, conversation_id=conversation_id, before=before, limit=limit
             )
 
     def list_telegram_history_around(

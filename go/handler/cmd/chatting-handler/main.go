@@ -33,6 +33,7 @@ import (
 	handlerruntime "github.com/EdwardSalkeld/chatting/go/handler/internal/runtime"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/schedules"
 	sqlitestate "github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/webchat"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/webhooks"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/workitems"
 )
@@ -149,6 +150,19 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	metricRecorder := metrics.New(time.Time{}, nil)
 	metricRecorder.SetSQLitePath(config.DBPath)
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
+	if config.PlatformAPISocket != "" {
+		refs := config.TelegramContextRefs
+		if len(refs) == 0 {
+			refs = config.ContextRefs
+		}
+		service := webchat.Service{Store: store, ContextRefs: refs}
+		server, startErr := service.Start(config.PlatformAPISocket)
+		if startErr != nil {
+			return nil, startErr
+		}
+		closers = append(closers, server)
+		connectors = append(connectors, service)
+	}
 	if config.GitHubWebhookDeliveryEnabled {
 		connectors = append(connectors, webhooks.Connector{Store: store})
 	}

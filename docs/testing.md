@@ -116,3 +116,35 @@ search and filters, schedule and reminder validation/create/edit/delete or
 cancel, revision history, inbox decision details, live/completed transcripts,
 pause/resume/follow/copy and delivery visibility, empty and unavailable states.
 The fixture state is disposable and must never point at a deployment database.
+
+
+### Web conversation preview
+
+Build the handler fixture and platform as above, then choose fresh disposable
+directories and a short private socket path. For example:
+
+```sh
+mkdir -m 700 /tmp/chatting-web-preview-socket
+/tmp/chatting-platform-handler-fixture --state-dir /tmp/chatting-web-handler \
+  --port 30464 --web-socket /tmp/chatting-web-preview-socket/handler.sock --telegram-outage
+PYTHONPATH=. uv run python tests/web_chat_preview.py \
+  --state-dir /tmp/chatting-web-worker \
+  --handler-fixture-db /tmp/chatting-web-handler/handler.db --port 30465
+```
+
+The dedicated worker fixture seeds two separate topics and simulates web replies
+after a short delay. It reads the explicitly supplied **fixture** handler DB to
+simulate queue handoff, without a broker, executor, Telegram API or live state.
+Never point either fixture at deployment databases.
+
+Configure the platform with handler/worker URLs on 30464/30465, its own free
+loopback port, and `handler_socket` pointing to the fixture socket. Open
+`/conversations`. Verify topic isolation, web-only sending, queued/answered
+transitions, older history, retained drafts after navigation/reload, error
+recovery when the fixture handler stops, and desktop/mobile layouts.
+
+`tests/e2e/test_web_chat_e2e.py` separately exercises the actual private API,
+durable ingress loop, real BBMB transport, worker/executor helper, web reply
+history and completion path with Telegram disabled. It uses the standard E2E
+binary environment variables above and a fake executor; it does not need model
+credentials or Telegram.
