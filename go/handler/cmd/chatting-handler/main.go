@@ -264,6 +264,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 			AllowedChatIDs: config.TelegramAllowedChatIDs,
 		}).RegisterRoutes(mux)
 		webhooks.RegisterStatusRoutes(mux, store)
+		webhooks.RegisterInstructionsRoutes(mux, store)
 		if personal != nil {
 			personal.RegisterRoutes(mux)
 		}
@@ -276,6 +277,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 		Store: store, Login: config.GitHubWebhookLogin, ReleaseRepositories: config.GitHubWebhookReleaseRepositories,
 		SelfLogins:      config.GitHubWebhookSelfLogins,
 		DeliveryEnabled: config.GitHubWebhookDeliveryEnabled, AssignTask: store.AssignTask,
+		InstructionsRepository: config.InstructionsRepository, InstructionsStore: store,
 	})
 	if err != nil {
 		return nil, err

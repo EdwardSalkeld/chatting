@@ -329,6 +329,19 @@ def main() -> int:
     personal = collector_from_environment(broker, store)
     if personal is not None:
         personal.start()
+    updater = None
+    if config.get("instructions_repo"):
+        from app.worker.workspace_instructions import UpdatePoller
+
+        workspace_root = config.get("workspace_root") or (
+            Path(str(config.get("codex_working_dir") or Path.cwd()))
+            / ".chatting-workspaces"
+        )
+        updater = UpdatePoller(
+            str(config["instructions_repo"]),
+            Path(str(workspace_root)),
+            handler_egress_url,
+        )
     try:
         loop_count = 0
         while True:
@@ -340,6 +353,12 @@ def main() -> int:
                 handler_egress_url=handler_egress_url,
                 activity_monitor=activity_monitor,
             )
+            if updater is not None:
+                updater.poll(
+                    idle=all(
+                        status["state"] == "idle" for status in supervisors.statuses()
+                    )
+                )
             supervisors.tick()
             activity_monitor.set_supervisor_executors(
                 [

@@ -1,9 +1,12 @@
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+from io import BytesIO
 from pathlib import Path
 
 from app.worker.executor.codex import CodexExecutor
+from app.worker.workspace_instructions import UpdatePoller
 
 
 class WorkspaceInstructionsTests(unittest.TestCase):
@@ -52,3 +55,56 @@ class WorkspaceInstructionsTests(unittest.TestCase):
             (workspace / "AGENTS.md").write_text("local\n")
             executor.for_workspace(work_item_id="one")
             self.assertEqual((workspace / "AGENTS.md").read_text(), "local\n")
+
+    def test_notification_refresh_waits_until_idle_and_retries_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "item_one"
+            second = root / "item_two"
+            first.mkdir()
+            second.mkdir()
+            outside = root / "other"
+            outside.mkdir()
+            (root / "item_link").symlink_to(outside, target_is_directory=True)
+            poller = UpdatePoller("repo", root, "http://127.0.0.1:9467/egress")
+            with (
+                patch(
+                    "app.worker.workspace_instructions.time.monotonic", return_value=11
+                ),
+                patch(
+                    "app.worker.workspace_instructions.urllib.request.urlopen",
+                    return_value=BytesIO(b'{"generation": 1}'),
+                ) as get,
+                patch(
+                    "app.worker.workspace_instructions.fetch",
+                    return_value=("abc", b"approved\n"),
+                ) as fetch,
+            ):
+                poller.poll(idle=False)
+                get.assert_not_called()
+                poller.poll(idle=True)
+                self.assertEqual((first / "AGENTS.md").read_text(), "approved\n")
+                self.assertEqual((second / "AGENTS.md").read_text(), "approved\n")
+                self.assertFalse((outside / "AGENTS.md").exists())
+                self.assertEqual(poller.generation, 1)
+                self.assertEqual(fetch.call_count, 1)
+                poller.next_poll = 0
+                get.return_value = BytesIO(b'{"generation": 1}')
+                poller.poll(idle=True)
+                self.assertEqual(fetch.call_count, 1)
+            poller.next_poll = 0
+            with (
+                patch(
+                    "app.worker.workspace_instructions.time.monotonic", return_value=22
+                ),
+                patch(
+                    "app.worker.workspace_instructions.urllib.request.urlopen",
+                    return_value=BytesIO(b'{"generation": 2}'),
+                ),
+                patch(
+                    "app.worker.workspace_instructions.fetch",
+                    side_effect=OSError("unavailable"),
+                ),
+            ):
+                poller.poll(idle=True)
+                self.assertEqual(poller.generation, 1)
