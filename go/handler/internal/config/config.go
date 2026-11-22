@@ -26,6 +26,9 @@ const (
 )
 
 type Config struct {
+	SecretsWorkspaceRoot             string
+	SecretsPublicBaseURL             string
+	SecretsWorkerURL                 string
 	MaintenanceCron                  string
 	RetentionDays                    int
 	PersonalInbox                    *personalinbox.Config
@@ -80,6 +83,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
+		SecretsWorkerURL:            "http://127.0.0.1:9465",
 		RetentionDays:               14,
 		BBMBAddress:                 DefaultBBMBAddress,
 		DBPath:                      filepath.Join(os.TempDir(), "chatting-message-handler-state.db"),
@@ -221,6 +225,9 @@ func list(dst *[]string, key string) field    { return bind(dst, key, decodeStri
 // the order validation errors are reported in.
 func (c *Config) fields(payload map[string]json.RawMessage) []field {
 	return []field{
+		str(&c.SecretsWorkspaceRoot, "secrets_workspace_root"),
+		str(&c.SecretsPublicBaseURL, "secrets_public_base_url"),
+		str(&c.SecretsWorkerURL, "secrets_worker_url"),
 		str(&c.MaintenanceCron, "maintenance_cron"),
 		posInt(&c.RetentionDays, "retention_days"),
 		{key: "personal_inbox", keepNull: true, decode: func(raw json.RawMessage) error {

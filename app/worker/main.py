@@ -311,6 +311,15 @@ def main() -> int:
         host=DEFAULT_ACTIVITY_HOST,
         port=activity_port,
         monitor=activity_monitor,
+        secret_workspace_root=Path(
+            str(
+                config.get("workspace_root")
+                or (
+                    Path(str(config.get("codex_working_dir") or Path.cwd()))
+                    / ".chatting-workspaces"
+                )
+            )
+        ).resolve(),
     )
     broker = BBMBQueueAdapter(address=bbmb_address)
     broker.ensure_queue(TASK_QUEUE_NAME)

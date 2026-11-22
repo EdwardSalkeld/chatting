@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, ThreadingHTTPServer
+from pathlib import Path
 from threading import Lock, Thread
 from typing import Callable
 
@@ -465,10 +466,13 @@ def start_worker_activity_server(
     host: str,
     port: int,
     monitor: WorkerActivityMonitor,
+    secret_workspace_root: Path | None = None,
 ) -> WorkerActivityServer:
     from app.worker.activity_web import build_handler
 
-    server = ThreadingHTTPServer((host, port), build_handler(monitor))
+    server = ThreadingHTTPServer(
+        (host, port), build_handler(monitor, secret_workspace_root)
+    )
     thread = Thread(
         target=server.serve_forever, name="worker-activity-server", daemon=True
     )

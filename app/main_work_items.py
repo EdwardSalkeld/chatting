@@ -45,6 +45,15 @@ def main() -> int:
     register = commands.add_parser("register-pr")
     register.add_argument("task_id")
     register.add_argument("pr_url")
+    secret = commands.add_parser(
+        "request-secret", help="Create a one-use secret submission link"
+    )
+    secret.add_argument("task_id")
+    secret.add_argument(
+        "--label",
+        required=True,
+        help="What the secret is needed for; do not include the secret",
+    )
     for command in ("subject", "repository", "run", "workflow"):
         artifact = commands.add_parser(f"register-{command}")
         artifact.add_argument("task_id")
@@ -88,6 +97,19 @@ def main() -> int:
     assignment = store.get_work_assignment(task_id=args.task_id)
     if assignment is None:
         parser.error("unknown task")
+    if args.command == "request-secret":
+        request = urllib.request.Request(
+            handler_url.rstrip("/") + "/work-items/secret-request",
+            data=json.dumps({"task_id": args.task_id, "label": args.label}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                print(json.dumps(json.load(response)))
+        except (urllib.error.URLError, OSError) as error:
+            parser.exit(1, f"Could not create secret request: {error}\n")
+        return 0
     if args.command == "ensure-telegram-topic":
         request = urllib.request.Request(
             handler_url.rstrip("/") + "/work-items/telegram-topic",
