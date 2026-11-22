@@ -64,9 +64,10 @@ the assignment rather than using an unapproved working-tree file. Leave the
 setting unset to retain existing behaviour.
 
 This installs or refreshes files when work is assigned. It does not process push
-webhooks or proactively refresh idle workspaces. Existing persistent Codex
-threads may retain previously loaded instructions; a file refresh alone does not
-guarantee that a resumed thread has reloaded them.
+webhooks or proactively refresh idle workspaces. When the approved revision
+changes between turns, the persistent executor starts a fresh app-server process
+and resumes the same thread, so Codex reloads workspace instructions while
+keeping its conversation history. In-flight turns finish before this happens.
 
 ### Supervisors
 

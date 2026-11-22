@@ -58,6 +58,7 @@ class CodexExecutor:
     cwd: str | None = None
     workspace_root: str | None = None
     instructions_repo: str | None = None
+    instructions_revision: str | None = None
     work_item_id: str | None = None
     model_tier: str | None = None
     history_store: SQLiteStateStore | None = None
@@ -86,14 +87,16 @@ class CodexExecutor:
         directory.mkdir(mode=0o700, exist_ok=True)
         if directory.is_symlink() or directory.resolve().parent != root:
             raise ValueError("workspace directory escapes workspace root")
+        revision = None
         if self.instructions_repo:
             from app.worker.workspace_instructions import install
 
-            install(self.instructions_repo, directory)
+            revision = install(self.instructions_repo, directory)
         return replace(
             self,
             cwd=str(directory),
             work_item_id=work_item_id,
+            instructions_revision=revision,
         )
 
     def execute(self, envelope: TaskEnvelope) -> ExecutionResult:
