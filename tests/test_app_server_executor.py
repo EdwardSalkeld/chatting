@@ -242,8 +242,6 @@ class AppServerExecutorTests(unittest.TestCase):
             self.executor, env={**os.environ, "CHATTING_SESSION_TEST": "new"}
         )
         task = _telegram_task(2)
-        retired = changed.execute(task.envelope)
-        self.assertIn("config_changed", retired.errors[0])
         self.assertEqual(changed.execute(task.envelope).errors, [])
         self.assertEqual(len(self.calls("turn/start")), 2)
         self.assertEqual(len(self.calls("thread/resume")), 1)

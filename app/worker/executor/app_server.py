@@ -180,24 +180,38 @@ class AppServerExecutor(CodexExecutor):
         }
         captured: dict[str, list[str]] = {"stdout": [], "stderr": []}
         try:
-            with (directory / "startup.lock").open("a+") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                self._migrate_session(directory)
-                connection = self._connect(path, directory, environment, generation)
-            with connection:
-                connection.settimeout(self.timeout_seconds + 15)
-                connection.sendall(json.dumps(request).encode() + b"\n")
-                with connection.makefile("rb") as stream:
-                    for raw in stream:
-                        event = json.loads(raw)
-                        if "result" in event:
-                            return ExecutionResult(**event["result"])
-                        name = event["stream"]
-                        content = event["content"]
-                        captured[name].append(content)
-                        if self.output_callback:
-                            self.output_callback(name, content)
-            raise RuntimeError("session disconnected; outcome may be uncertain")
+            for attempt in range(3):
+                with (directory / "startup.lock").open("a+") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    self._migrate_session(directory)
+                    connection = self._connect(path, directory, environment, generation)
+                with connection:
+                    connection.settimeout(self.timeout_seconds + 15)
+                    connection.sendall(json.dumps(request).encode() + b"\n")
+                    with connection.makefile("rb") as stream:
+                        for raw in stream:
+                            event = json.loads(raw)
+                            if "result" in event:
+                                result = ExecutionResult(**event["result"])
+                                # This response is emitted before execution begins.
+                                if (
+                                    result.errors
+                                    == [
+                                        "app_server_config_changed:retry_with_new_owner"
+                                    ]
+                                    and attempt < 2
+                                ):
+                                    break
+                                return result
+                            name = event["stream"]
+                            content = event["content"]
+                            captured[name].append(content)
+                            if self.output_callback:
+                                self.output_callback(name, content)
+                        else:
+                            raise RuntimeError(
+                                "session disconnected; outcome may be uncertain"
+                            )
         except (OSError, ValueError, RuntimeError) as exc:
             return ExecutionResult(
                 errors=[f"app_server_transport:{exc}"],
