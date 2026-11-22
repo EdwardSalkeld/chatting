@@ -34,7 +34,46 @@ func setup(t *testing.T) (*Service, contracts.TaskQueueMessage, *http.ServeMux) 
 	if err = os.Mkdir(filepath.Join(root, owner.WorkItemID), 0700); err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(store, root, "https://example.test")
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			WorkItemID string  `json:"work_item_id"`
+			ID         string  `json:"request_id"`
+			Expires    string  `json:"expires_at"`
+			Secret     *string `json:"secret"`
+		}
+		if json.NewDecoder(r.Body).Decode(&input) != nil {
+			http.Error(w, "invalid", 400)
+			return
+		}
+		workspace := filepath.Join(root, input.WorkItemID)
+		info, statErr := os.Lstat(workspace)
+		if statErr != nil || !info.IsDir() {
+			http.Error(w, "invalid", 500)
+			return
+		}
+		dir := filepath.Join(workspace, ".chatting-secrets")
+		if os.MkdirAll(dir, 0700) != nil {
+			http.Error(w, "invalid", 500)
+			return
+		}
+		path := filepath.Join(dir, input.ID)
+		_, statErr = os.Stat(path)
+		existing := statErr == nil
+		if !existing {
+			expires, _ := time.Parse(time.RFC3339, input.Expires)
+			if input.Secret == nil || time.Now().After(expires) {
+				http.Error(w, "unavailable", 410)
+				return
+			}
+			if err := os.WriteFile(path, []byte(*input.Secret), 0600); err != nil {
+				http.Error(w, "invalid", 500)
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"path": path, "existing": existing})
+	}))
+	t.Cleanup(worker.Close)
+	service, err := New(store, root, "https://example.test", worker.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +202,13 @@ func TestExpiredAndSymlinkWorkspace(t *testing.T) {
 	}
 	if w := submit(mux, prefix+token, "value"); w.Code != 410 {
 		t.Fatal(w.Code)
+	}
+	if _, err := s.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := s.Store.SecretByHash(context.Background(), hash(token))
+	if err != nil || expired.Status != "expired" {
+		t.Fatalf("expired request still pending: %+v %v", expired, err)
 	}
 	path := create(t, mux, owner.TaskID)
 	directory := filepath.Join(s.Root, owner.WorkItemID)

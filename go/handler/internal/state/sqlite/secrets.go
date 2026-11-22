@@ -99,6 +99,11 @@ func (s *Store) AckSecret(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *Store) ExpireSecret(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE secret_requests SET status='expired' WHERE id=? AND status='pending'`, id)
+	return err
+}
+
 func (r SecretRequest) Expired(now time.Time) bool {
 	t, err := time.Parse(time.RFC3339, r.ExpiresAt)
 	return err != nil || !now.Before(t)

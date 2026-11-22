@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
 import re
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app.timefmt import format_utc, parse_utc
@@ -20,9 +21,14 @@ LOGGER = logging.getLogger(__name__)
 _HTML = Path(__file__).with_name("activity_ui.html")
 
 
-def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler]:
+def build_handler(
+    monitor: WorkerActivityMonitor, secret_workspace_root: Path | None = None
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/internal/secret-file":
+                self._secret_file()
+                return
             match = re.fullmatch(r"/api/dead-letters/([1-9][0-9]*)/dismiss", self.path)
             if not match:
                 self._json({"error": "not found"}, status=404)
@@ -37,6 +43,37 @@ def build_handler(monitor: WorkerActivityMonitor) -> type[BaseHTTPRequestHandler
                 self._json(
                     {"error": "dead letter not found or not pending"}, status=404
                 )
+
+        def _secret_file(self) -> None:
+            from app.worker.secret_files import Unavailable, save_secret
+
+            # This privileged endpoint is never proxied by the platform.
+            # Reject remote clients, browsers, DNS rebinding and non-JSON forms.
+            if (
+                secret_workspace_root is None
+                or not ipaddress.ip_address(self.client_address[0]).is_loopback
+                or self.headers.get("Host")
+                != f"127.0.0.1:{cast(HTTPServer, self.server).server_port}"
+                or self.headers.get("Origin") is not None
+                or self.headers.get("Content-Type") != "application/json"
+            ):
+                self._json({"error": "not found"}, status=404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 262144:
+                    raise ValueError("invalid length")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid payload")
+                result = save_secret(secret_workspace_root, payload)
+            except ValueError, UnicodeError, Unavailable:
+                self._json({"error": "unavailable"}, status=410)
+                return
+            except OSError:
+                self._json({"error": "unable to save secret"}, status=500)
+                return
+            self._json(result)
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)

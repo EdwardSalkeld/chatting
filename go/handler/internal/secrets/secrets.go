@@ -2,6 +2,7 @@
 package secrets
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,7 +16,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,7 +23,6 @@ import (
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/contracts"
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
-	"golang.org/x/sys/unix"
 )
 
 const prefix = "/secrets/"
@@ -33,16 +32,23 @@ var tokenPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var page = template.Must(template.New("secret").Parse(`<!doctype html><html><head><meta name="referrer" content="no-referrer"><title>Send a secret</title></head><body><h1>Send a secret</h1><p>{{.Label}}</p><p>Expires {{.ExpiresAt}}.</p><form method="post"><label>Secret<br><textarea name="secret" rows="8" cols="60" required></textarea></label><br><button type="submit">Save secret</button></form></body></html>`))
 
 type Service struct {
-	Store         *sqlite.Store
-	Root, BaseURL string
+	Store                    *sqlite.Store
+	Root, BaseURL, WorkerURL string
+	client                   *http.Client
 }
 
-func New(store *sqlite.Store, root, baseURL string) (*Service, error) {
+func New(store *sqlite.Store, root, baseURL, workerURL string) (*Service, error) {
 	u, err := url.Parse(baseURL)
 	if store == nil || !filepath.IsAbs(root) || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("secrets require an absolute workspace root and public base URL")
 	}
-	return &Service{store, filepath.Clean(root), strings.TrimRight(baseURL, "/")}, nil
+	worker, err := url.Parse(workerURL)
+	if err != nil || worker.Scheme != "http" || worker.Hostname() != "127.0.0.1" || worker.Port() == "" || worker.User != nil || worker.Path != "" || worker.RawQuery != "" || worker.Fragment != "" {
+		return nil, errors.New("secret worker URL must be an HTTP loopback origin")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &Service{Store: store, Root: filepath.Clean(root), BaseURL: strings.TrimRight(baseURL, "/"), WorkerURL: workerURL, client: &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func hash(token string) string { h := sha256.Sum256([]byte(token)); return hex.EncodeToString(h[:]) }
 func randomHex(n int) (string, error) {
@@ -147,86 +153,42 @@ func (s *Service) form(w http.ResponseWriter, r *http.Request) {
 
 var errUnavailable = errors.New("unavailable")
 
-// Open each directory without following symlinks; all file names are generated.
-func (s *Service) directory(req sqlite.SecretRequest) (int, error) {
-	if !safeID.MatchString(req.WorkItemID) || !safeID.MatchString(req.ID) {
-		return -1, errUnavailable
-	}
-	root, err := unix.Open(s.Root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return -1, err
-	}
-	defer unix.Close(root)
-	work, err := unix.Openat(root, req.WorkItemID, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return -1, err
-	}
-	defer unix.Close(work)
-	if err = unix.Mkdirat(work, ".chatting-secrets", 0700); err != nil && !errors.Is(err, unix.EEXIST) {
-		return -1, err
-	}
-	if err = unix.Fsync(work); err != nil {
-		return -1, err
-	}
-	dir, err := unix.Openat(work, ".chatting-secrets", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return -1, err
-	}
-	var st unix.Stat_t
-	if err = unix.Fstat(dir, &st); err != nil || st.Mode&0077 != 0 || st.Uid != uint32(os.Geteuid()) {
-		unix.Close(dir)
-		return -1, errUnavailable
-	}
-	return dir, nil
-}
-func exists(dir int, name string) (bool, error) {
-	var st unix.Stat_t
-	err := unix.Fstatat(dir, name, &st, unix.AT_SYMLINK_NOFOLLOW)
-	if errors.Is(err, unix.ENOENT) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if st.Mode&unix.S_IFMT != unix.S_IFREG {
-		return false, errUnavailable
-	}
-	return true, nil
-}
+// The worker owns workspaces and writes the file under its own identity.
 func (s *Service) save(req sqlite.SecretRequest, value []byte) (bool, error) {
-	dir, err := s.directory(req)
-	if err != nil {
-		return false, err
-	}
-	defer unix.Close(dir)
-	present, err := exists(dir, req.ID)
-	if err != nil {
-		return false, err
-	}
-	if present {
-		return true, unix.Fsync(dir)
-	}
-	if req.Expired(time.Now()) || value == nil {
+	if !safeID.MatchString(req.WorkItemID) || !safeID.MatchString(req.ID) {
 		return false, errUnavailable
 	}
-	// An unnamed inode cannot leave partial secret bytes behind after a crash.
-	fd, err := unix.Openat(dir, ".", unix.O_WRONLY|unix.O_TMPFILE|unix.O_CLOEXEC, 0600)
+	var secret *string
+	if value != nil {
+		text := string(value)
+		secret = &text
+	}
+	data, err := json.Marshal(map[string]any{"work_item_id": req.WorkItemID, "request_id": req.ID, "expires_at": req.ExpiresAt, "secret": secret, "workspace_root": s.Root})
 	if err != nil {
 		return false, err
 	}
-	file := os.NewFile(uintptr(fd), "secret")
-	defer file.Close()
-	_, err = file.Write(value)
-	if err == nil {
-		err = file.Sync()
-	}
+	response, err := s.client.Post(s.WorkerURL+"/internal/secret-file", "application/json", bytes.NewReader(data))
 	if err != nil {
 		return false, err
 	}
-	if err = unix.Linkat(fd, "", dir, req.ID, unix.AT_EMPTY_PATH); err != nil {
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusGone {
+		return false, errUnavailable
+	}
+	if response.StatusCode != http.StatusOK {
+		return false, errors.New("worker secret file service failed")
+	}
+	var result struct {
+		Path     string `json:"path"`
+		Existing bool   `json:"existing"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result); err != nil {
 		return false, err
 	}
-	return false, unix.Fsync(dir)
+	if result.Path != s.path(req) {
+		return false, errors.New("worker workspace root does not match handler configuration")
+	}
+	return result.Existing, nil
 }
 func (s *Service) path(req sqlite.SecretRequest) string {
 	return filepath.Join(s.Root, req.WorkItemID, ".chatting-secrets", req.ID)
@@ -242,7 +204,12 @@ func (s *Service) Poll(ctx context.Context) ([]contracts.TaskEnvelope, error) {
 		if r.Status == "pending" {
 			_, err = s.Store.CompleteSecret(ctx, r.TokenHash, func(req sqlite.SecretRequest) error { _, saveErr := s.save(req, nil); return saveErr })
 			if err != nil {
-				if errors.Is(err, errUnavailable) || errors.Is(err, unix.ENOENT) || errors.Is(err, sqlite.ErrSecretUsed) {
+				if errors.Is(err, errUnavailable) && r.Expired(time.Now()) {
+					if expireErr := s.Store.ExpireSecret(ctx, r.ID); expireErr != nil {
+						return nil, expireErr
+					}
+				}
+				if errors.Is(err, errUnavailable) || errors.Is(err, sqlite.ErrSecretUsed) {
 					continue
 				}
 				// One unavailable workspace must not stall every other ingress source.

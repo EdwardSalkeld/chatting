@@ -152,7 +152,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	connectors := []handlerruntime.Connector{heartbeat.New(nil)}
 	var secretService *secrets.Service
 	if config.SecretsWorkspaceRoot != "" || config.SecretsPublicBaseURL != "" {
-		secretService, err = secrets.New(store, config.SecretsWorkspaceRoot, config.SecretsPublicBaseURL)
+		secretService, err = secrets.New(store, config.SecretsWorkspaceRoot, config.SecretsPublicBaseURL, config.SecretsWorkerURL)
 		if err != nil {
 			return nil, fmt.Errorf("secret requests: %w", err)
 		}
