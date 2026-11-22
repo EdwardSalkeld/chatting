@@ -212,6 +212,7 @@ class AppServerExecutor(CodexExecutor):
                             raise RuntimeError(
                                 "session disconnected; outcome may be uncertain"
                             )
+            raise RuntimeError("app-server owner handover retries exhausted")
         except (OSError, ValueError, RuntimeError) as exc:
             return ExecutionResult(
                 errors=[f"app_server_transport:{exc}"],
