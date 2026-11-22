@@ -52,6 +52,22 @@ persistent per-work-item workspaces. The worker runs up to
 `executor_pool_size` tasks at once (default two); tasks for one work item run
 one at a time in arrival order. Run only one worker against a worker database.
 
+Optional worker setting `instructions_repo` is the absolute path of a writable
+local Git checkout whose `origin` is the approved instructions repository. On
+work-item assignment the worker fetches its `main` branch and atomically
+replaces that workspace's `AGENTS.md` with the file from the fetched commit.
+Local changes to that workspace file are overwritten. The configured repository
+checkout is not reset or edited, though a lock file and Git ref are maintained
+in it; the worker needs network access and permission to fetch. The commit is
+logged. A failed fetch or missing, empty, invalid UTF-8 or oversized file fails
+the assignment rather than using an unapproved working-tree file. Leave the
+setting unset to retain existing behaviour.
+
+This installs or refreshes files when work is assigned. It does not process push
+webhooks or proactively refresh idle workspaces. Existing persistent Codex
+threads may retain previously loaded instructions; a file refresh alone does not
+guarantee that a resumed thread has reloaded them.
+
 ### Supervisors
 
 The worker process is a manager for one supervisor process per slot. Each
