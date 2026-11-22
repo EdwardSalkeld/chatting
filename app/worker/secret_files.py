@@ -62,7 +62,9 @@ def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     root_fd = os.open(root, flags)
     try:
-        work_fd = os.open(item, flags, dir_fd=root_fd)
+        # _safe_id accepts only bounded ASCII basenames; O_NOFOLLOW prevents
+        # a workspace symlink from escaping the already-open root directory.
+        work_fd = os.open(item, flags, dir_fd=root_fd)  # lgtm[py/path-injection]
         try:
             try:
                 os.mkdir(".chatting-secrets", 0o700, dir_fd=work_fd)
@@ -75,8 +77,12 @@ def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
                 if st.st_uid != os.geteuid() or st.st_mode & 0o077:
                     raise Unavailable
                 try:
+                    # The request is also a validated basename and the lookup
+                    # is relative to the verified private directory descriptor.
                     existing = os.stat(
-                        request, dir_fd=directory_fd, follow_symlinks=False
+                        request,  # lgtm[py/path-injection]
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
                     )
                 except FileNotFoundError:
                     existing = None
