@@ -194,6 +194,7 @@ class Session:
         self.settings = settings
         self.server: AppServer | None = None
         self.loaded = False
+        self.loaded_instructions_revision: str | None = None
 
     def execute(
         self, request: dict, emit: Callable[[str, str], None]
@@ -241,6 +242,15 @@ class Session:
 
         deadline = time.monotonic() + request["timeout"]
         try:
+            # The session owner serializes turns. Resume the same thread in a
+            # fresh server only after the prior turn has finished, so Codex
+            # reloads workspace guidance without discarding its history.
+            revision = request.get("instructions_revision")
+            if self.loaded and revision != self.loaded_instructions_revision:
+                assert self.server is not None
+                self.server.close()
+                self.server = None
+                self.loaded = False
             if self.server is None:
                 self.server = AppServer(self.settings["command"])
                 self.server.rpc(
@@ -276,6 +286,7 @@ class Session:
                 thread_id = result["thread"]["id"]
                 _write(state_file, {"thread_id": thread_id})
                 self.loaded = True
+                self.loaded_instructions_revision = revision
             else:
                 assert thread_id is not None
             # Rebuild history only when creating the conversation, never on resume.

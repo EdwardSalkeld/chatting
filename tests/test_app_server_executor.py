@@ -81,6 +81,20 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(len({t["params"]["threadId"] for t in turns}), 3)
         self.assertEqual(len({t["params"]["cwd"] for t in turns}), 1)
 
+    def test_instruction_revision_change_resumes_same_thread_between_turns(self):
+        executor = replace(self.executor, instructions_revision="revision-a")
+        self.assertEqual(executor.execute(_telegram_task(801).envelope).errors, [])
+        self.assertEqual(executor.execute(_telegram_task(802).envelope).errors, [])
+        original = self.calls("turn/start")[0]["params"]["threadId"]
+        self.assertEqual(len(self.calls("initialize")), 1)
+        changed = replace(executor, instructions_revision="revision-b")
+        self.assertEqual(changed.execute(_telegram_task(803).envelope).errors, [])
+        self.assertEqual(len(self.calls("initialize")), 2)
+        self.assertEqual(
+            self.calls("thread/resume")[-1]["params"]["threadId"], original
+        )
+        self.assertEqual(self.calls("turn/start")[-1]["params"]["threadId"], original)
+
     def test_reuses_process_and_thread_changes_cwd_and_model_and_caches_retry(self):
         first = _telegram_task(1)
         self.store.stage_inbox_task(first)

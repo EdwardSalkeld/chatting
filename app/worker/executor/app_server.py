@@ -172,6 +172,7 @@ class AppServerExecutor(CodexExecutor):
             "request_id": request_id,
             "payload": payload,
             "cwd": self.cwd,
+            "instructions_revision": self.instructions_revision,
             "model_tier": self.model_tier,
             "timeout": self.timeout_seconds,
             "escalation_path": str(escalation_path)
