@@ -112,6 +112,7 @@ class Supervisor:
                 command=("codex", "app-server"),
                 cwd=legacy.cwd,
                 workspace_root=legacy.workspace_root,
+                instructions_repo=legacy.instructions_repo,
                 history_store=self.store,
                 env=legacy.env,
                 session_root=f"{settings['db_path']}.sessions",

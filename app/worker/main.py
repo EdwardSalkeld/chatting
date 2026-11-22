@@ -52,6 +52,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "codex_command",
         "codex_working_dir",
         "workspace_root",
+        "instructions_repo",
         "db_path",
         "handler_egress_url",
         "max_attempts",
@@ -183,6 +184,11 @@ def _build_executor(
     )
     if workspace_root is not None and not Path(workspace_root).is_absolute():
         raise ValueError("workspace_root must be absolute")
+    instructions_repo = _resolve_optional_str(
+        config.get("instructions_repo"), setting_name="instructions_repo"
+    )
+    if instructions_repo is not None and not Path(instructions_repo).is_absolute():
+        raise ValueError("instructions_repo must be absolute")
     command_line = _resolve_str(
         config.get("codex_command"),
         default_value="codex exec --json",
@@ -196,6 +202,7 @@ def _build_executor(
         command=command,
         cwd=codex_working_dir,
         workspace_root=workspace_root,
+        instructions_repo=instructions_repo,
         env=_build_executor_env(config_path, os.environ),
     )
 
