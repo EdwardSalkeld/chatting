@@ -37,7 +37,7 @@ def _safe_id(value: object) -> str:
         or os.path.basename(value) != value
     ):
         raise Unavailable
-    return value
+    return os.path.basename(value)
 
 
 def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
