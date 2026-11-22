@@ -77,7 +77,7 @@ func (dispatcher Dispatcher) Dispatch(ctx context.Context, message contracts.Out
 	normalized.Target = target
 
 	switch channel {
-	case "log", "drop":
+	case "log", "drop", "web":
 		return &normalized, nil
 	case "email":
 		if dispatcher.EmailSender == nil {

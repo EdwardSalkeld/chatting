@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -34,10 +36,11 @@ func Assets() (fs.FS, error) {
 }
 
 type Config struct {
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	HandlerURL string `json:"handler_url"`
-	WorkerURL  string `json:"worker_url"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	HandlerURL    string `json:"handler_url"`
+	WorkerURL     string `json:"worker_url"`
+	HandlerSocket string `json:"handler_socket"`
 }
 
 func DefaultConfig() Config {
@@ -63,6 +66,9 @@ func DecodeConfig(reader io.Reader) (Config, error) {
 }
 
 func (config Config) Validate() error {
+	if config.HandlerSocket != "" && !filepath.IsAbs(config.HandlerSocket) {
+		return fmt.Errorf("handler_socket must be absolute")
+	}
 	if strings.TrimSpace(config.Host) == "" || config.Port < 1 || config.Port > 65535 {
 		return fmt.Errorf("host and a port between 1 and 65535 are required")
 	}
@@ -75,11 +81,12 @@ func (config Config) Validate() error {
 	return nil
 }
 
+var conversationRoute = regexp.MustCompile(`^/api/handler/conversations/[^/]+/messages$`)
 var collection = regexp.MustCompile(`^/api/handler/(schedules|reminders)$`)
 var member = regexp.MustCompile(`^/api/handler/(schedules|reminders)/[^/]+$`)
-var worker = regexp.MustCompile(`^/api/worker/(items|items/[^/]+/runs|runs|runs/[^/]+|dead-letters|tasks/[^/]+/events|activity|metrics)$`)
 var dismissDeadLetter = regexp.MustCompile(`^/api/worker/dead-letters/[1-9][0-9]*/dismiss$`)
-var page = regexp.MustCompile(`^/(|overview|items|items/[^/]+|runs|runs/[^/]+|tasks/[^/]+|schedules|reminders|inbox|system)$`)
+var worker = regexp.MustCompile(`^/api/worker/(items|items/[^/]+/runs|runs|runs/[^/]+|dead-letters|tasks/[^/]+/events|conversations/[^/]+/messages|activity|metrics)$`)
+var page = regexp.MustCompile(`^/(|overview|items|items/[^/]+|runs|runs/[^/]+|tasks/[^/]+|conversations|conversations/[^/]+|schedules|reminders|inbox|system)$`)
 
 func writeError(writer http.ResponseWriter, status int, message string) {
 	writer.Header().Set("Content-Type", "application/json")
@@ -111,6 +118,14 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 		return nil, err
 	}
 	handlerProxy, workerProxy := proxy(config.HandlerURL), proxy(config.WorkerURL)
+	var conversationProxy *httputil.ReverseProxy
+	if config.HandlerSocket != "" {
+		conversationProxy = proxy("http://unix")
+		transport := conversationProxy.Transport.(*http.Transport)
+		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", config.HandlerSocket)
+		}
+	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		routePath := request.URL.EscapedPath()
 		writer.Header().Set("Cache-Control", "no-store")
@@ -120,6 +135,15 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 			var upstream *httputil.ReverseProxy
 			var allowed string
 			switch {
+			case routePath == "/api/handler/conversations" || conversationRoute.MatchString(routePath):
+				if conversationProxy == nil {
+					writeError(writer, 503, "Web messaging is not configured on this deployment")
+					return
+				}
+				upstream, allowed = conversationProxy, "GET"
+				if routePath != "/api/handler/conversations" {
+					allowed = "GET, POST"
+				}
 			case collection.MatchString(routePath):
 				upstream, allowed = handlerProxy, "GET, POST"
 			case member.MatchString(routePath):

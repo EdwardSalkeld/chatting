@@ -11,7 +11,8 @@ level. The listener defaults to loopback.
 built with Vite, Tailwind CSS and shadcn/ui, then embedded in the binary. Node is
 only needed at build time. The platform has no database, integration credentials,
 or executor of its own. It connects to the handler’s metrics/admin listener and
-the worker’s activity listener; it does not use the egress or webhook listeners.
+the worker’s activity listener; optional web ingress uses a separate private
+handler Unix socket. It does not proxy the egress or webhook listeners.
 
 Build from the repository root with Node 24 and the Go version in
 `go/handler/go.mod`:
@@ -40,7 +41,8 @@ All fields are optional. An omitted `--config` uses these defaults:
   "host": "127.0.0.1",
   "port": 9466,
   "handler_url": "http://127.0.0.1:9464",
-  "worker_url": "http://127.0.0.1:9465"
+  "worker_url": "http://127.0.0.1:9465",
+  "handler_socket": ""
 }
 ```
 
@@ -53,7 +55,8 @@ repository. The app does not assume that either upstream is on the same host.
 
 The interface is a dense operator console with light and dark themes (the top
 bar toggles system, light and dark). Lists are 32px-row tables with sticky
-headers; the window is the only vertical scroller. Every filter, tab, search,
+headers. The window is the vertical scroller except in Conversations, whose
+history scrolls independently to keep its composer available. Every filter, tab, search,
 sort, open sheet and transcript option is a URL query parameter, so reloads,
 back/forward and shared links restore the view. Run outcomes use one word
 each: Failed (amber) for an execution error, Dead letter (red), and Recovered
@@ -69,6 +72,10 @@ service failures. Unknown paths render the app's own not-found page.
   handler loop), running and queued work (queued rows show their position and
   time in the queue), upcoming schedule and reminder fires, recent runs and inbox
   categories.
+- Conversations (`/conversations`, `/conversations/:id`): recorded Telegram and
+  web history by chat/topic, with a text composer, durable queued/working/answered
+  status and web replies independent of Telegram. See [web conversations](web-conversations.md)
+  for the required private socket configuration and API contract.
 - Work items (`/items`, `/items/:id`): status filters (`?status=live|queued|failed|idle`;
   the old `?filter=` is redirected), search, time in queue, last result,
   failures and 7-day tokens per item. Item detail shows reply facts, a run

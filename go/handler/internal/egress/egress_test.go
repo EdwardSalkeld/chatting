@@ -746,3 +746,30 @@ func intPtr(value int) *int {
 func stringPtr(value string) *string {
 	return &value
 }
+
+func TestWebReplyIsRestrictedToItsOwnWebConversation(t *testing.T) {
+	for _, tc := range []struct {
+		origin, target string
+		want           string
+	}{
+		{"web", "conversation-a", StatusDispatched},
+		{"web", "conversation-b", StatusDropped},
+		{"telegram", "conversation-a", StatusDropped},
+	} {
+		t.Run(tc.origin+"-"+tc.target, func(t *testing.T) {
+			task := testTaskMessage(t)
+			task.Envelope.ReplyChannel.Type = tc.origin
+			task.Envelope.ReplyChannel.Target = "conversation-a"
+			state := newFakeState()
+			state.addTask(task)
+			engine := newTestEngine(t, state, &recordingDispatcher{})
+			message := testEgressMessage(t, task, nil, "evt:web", "incremental")
+			message.Message.Channel = "web"
+			message.Message.Target = tc.target
+			result, err := engine.Handle(context.Background(), message)
+			if err != nil || result.Status != tc.want {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+		})
+	}
+}

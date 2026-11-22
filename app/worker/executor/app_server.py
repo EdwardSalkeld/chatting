@@ -18,7 +18,12 @@ from threading import Thread
 from typing import Callable, Iterator, cast
 
 from app.models import ExecutionResult, TaskEnvelope
-from app.worker.executor.codex import CodexExecutor, _executor_env, _task_payload
+from app.worker.executor.codex import (
+    CodexExecutor,
+    _executor_env,
+    _task_payload,
+    _web_history,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -123,6 +128,7 @@ class AppServerExecutor(CodexExecutor):
             executor_working_dir=self.cwd,
             work_item_id=self.work_item_id,
             model_tier=self.model_tier,
+            web_history=_web_history(self.history_store, envelope),
         )
         metadata = envelope.reply_channel.metadata
         message_id = metadata.get("message_id")

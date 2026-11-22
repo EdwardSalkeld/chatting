@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ListTodo,
   Mail,
+  MessageSquare,
   Server,
   type LucideIcon,
 } from 'lucide-react'
@@ -18,6 +19,7 @@ export interface NavEntry {
 }
 export const NAV: NavEntry[] = [
   { to: '/', label: 'Overview', short: 'Overview', icon: LayoutDashboard, key: 'o' },
+  { to: '/conversations', label: 'Conversations', short: 'Chats', icon: MessageSquare, key: 'c' },
   { to: '/items', label: 'Work items', short: 'Items', icon: ListTodo, key: 'i' },
   { to: '/runs', label: 'Runs', short: 'Runs', icon: History, key: 'r' },
   { to: '/schedules', label: 'Schedules', short: 'Schedules', icon: CalendarClock, key: 's' },

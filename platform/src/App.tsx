@@ -9,6 +9,7 @@ import { useDayRuns, useInbox, useItems, useReminders, useSchedules } from '@/li
 import { CommunicationBanner, TelegramStatus } from '@/components/communication-health'
 import { PALETTE_KEY, useShortcuts } from '@/lib/keys'
 import { fmtClock } from '@/lib/format'
+import { Conversations } from '@/pages/conversations'
 import { Overview } from '@/pages/overview'
 import { WorkItems, WorkItemDetail } from '@/pages/work'
 import { Automations } from '@/pages/automations'
@@ -167,6 +168,8 @@ function Shell() {
               <Routes>
                 <Route path="/" element={<Overview />} />
                 <Route path="/overview" element={<Overview />} />
+                <Route path="/conversations" element={<Conversations />} />
+                <Route path="/conversations/:id" element={<Conversations />} />
                 <Route path="/items" element={<WorkItems />} />
                 <Route path="/items/:id" element={<WorkItemDetail />} />
                 <Route path="/runs" element={<Runs />} />
@@ -187,22 +190,26 @@ function Shell() {
             </main>
           </div>
           <nav className="tabbar" aria-label="Main navigation">
-            {NAV.filter((n) => ['/', '/items', '/runs', '/inbox'].includes(n.to)).map((entry) => (
-              <NavLink
-                key={entry.to}
-                to={entry.to}
-                end={entry.to === '/'}
-                className={({ isActive }) => (isActive ? 'active' : '')}
-              >
-                <entry.icon />
-                <span>{entry.short}</span>
-                <NavCount to={entry.to} />
-              </NavLink>
-            ))}
+            {NAV.filter((n) => ['/', '/conversations', '/items', '/inbox'].includes(n.to)).map(
+              (entry) => (
+                <NavLink
+                  key={entry.to}
+                  to={entry.to}
+                  end={entry.to === '/'}
+                  className={({ isActive }) => (isActive ? 'active' : '')}
+                >
+                  <entry.icon />
+                  <span>{entry.short}</span>
+                  <NavCount to={entry.to} />
+                </NavLink>
+              ),
+            )}
             <button
               type="button"
               className={
-                ['/schedules', '/reminders', '/system'].some((p) => location.pathname.startsWith(p))
+                ['/runs', '/schedules', '/reminders', '/system'].some((p) =>
+                  location.pathname.startsWith(p),
+                )
                   ? 'active'
                   : ''
               }
@@ -217,19 +224,19 @@ function Shell() {
         <Sheet open={more} onOpenChange={setMore}>
           <SheetContent title="More" aria-describedby={undefined} className="is-bottom">
             <div className="more-list">
-              {NAV.filter((n) => ['/schedules', '/reminders', '/system'].includes(n.to)).map(
-                (entry) => (
-                  <NavLink
-                    key={entry.to}
-                    to={entry.to}
-                    className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-                  >
-                    <entry.icon size={16} />
-                    <span>{entry.label}</span>
-                    <NavCount to={entry.to} />
-                  </NavLink>
-                ),
-              )}
+              {NAV.filter((n) =>
+                ['/runs', '/schedules', '/reminders', '/system'].includes(n.to),
+              ).map((entry) => (
+                <NavLink
+                  key={entry.to}
+                  to={entry.to}
+                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                >
+                  <entry.icon size={16} />
+                  <span>{entry.label}</span>
+                  <NavCount to={entry.to} />
+                </NavLink>
+              ))}
             </div>
           </SheetContent>
         </Sheet>

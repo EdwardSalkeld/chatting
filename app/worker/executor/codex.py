@@ -192,6 +192,7 @@ class CodexExecutor:
                 model_tier=self.model_tier,
                 escalation_path=escalation_path,
                 recent_history=recent_history,
+                web_history=_web_history(self.history_store, envelope),
                 finish_session=finish_session,
             )
         )
@@ -495,6 +496,40 @@ def _optional_str(value: object) -> str | None:
     return None
 
 
+def _web_history(
+    store: SQLiteStateStore | None,
+    envelope: TaskEnvelope,
+) -> list[dict[str, Any]]:
+    if store is None or envelope.reply_channel.type != "web":
+        return []
+    snapshot = store.web_conversation_snapshot(
+        conversation_id=envelope.reply_channel.target,
+        limit=30,
+    )
+    rows = snapshot["messages"]
+    if not isinstance(rows, list):
+        return []
+    history = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or row.get("task_id") == "task:" + envelope.id
+            or str(row.get("occurred_at", "")) > format_utc(envelope.received_at)
+        ):
+            continue
+        content = str(row.get("content") or "")
+        history.append(
+            {
+                **row,
+                "content": content
+                if len(content) <= 2000
+                else content[:2000]
+                + "… [truncated in prompt; full text remains in conversation history]",
+            }
+        )
+    return history
+
+
 def _task_payload(
     envelope: TaskEnvelope,
     *,
@@ -505,6 +540,7 @@ def _task_payload(
     escalation_path: Path | None = None,
     recent_history: list[TelegramHistoryTurn] | None = None,
     finish_session: FinishSession | None = None,
+    web_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if current_time.tzinfo is None:
         raise ValueError("current_time must be timezone-aware")
@@ -764,6 +800,20 @@ def _task_payload(
                 ),
             }
         )
+    if envelope.reply_channel.type == "web":
+        payload["reply_contract"]["destination_choice"] = (
+            "This is a message from the web conversation. Reply using channel web and "
+            "the event_channel target. Web replies are text-only and visible in the web UI "
+            "independently of Telegram. Do not cross-post to Telegram unless explicitly "
+            "requested by the user. The associated Telegram conversation is context."
+        )
+        payload["reply_contract"]["reply_spec_example"] = {
+            "task_id": "task:" + envelope.id,
+            "channel": "web",
+            "target": envelope.reply_channel.target,
+            "message": "Your answer",
+        }
+        payload["recent_history"] = web_history or []
     return payload
 
 

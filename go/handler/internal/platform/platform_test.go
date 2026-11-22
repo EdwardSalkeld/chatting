@@ -3,9 +3,11 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"github.com/EdwardSalkeld/chatting/go/handler/internal/httpserver"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -283,5 +285,71 @@ func TestGatewayRewritesRunsDeadLettersAndMetricsRoutes(t *testing.T) {
 		if tc.upstream == "/metrics" && (!strings.HasPrefix(response.Header.Get("Content-Type"), "text/plain") || string(body) != "chatting_up 1\n") {
 			t.Errorf("%s: metrics text not passed through: %q %q", tc.path, response.Header.Get("Content-Type"), body)
 		}
+	}
+}
+
+func TestConversationWritesRequirePrivateSocket(t *testing.T) {
+	server := platformServer(t, "http://127.0.0.1:1")
+	response, err := server.Client().Post(server.URL+"/api/handler/conversations/unknown/messages", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 503 {
+		t.Fatalf("unconfigured ingress status=%d", response.StatusCode)
+	}
+}
+
+func TestConversationGatewayUsesUnixSocketAndRejectsCrossSiteWrites(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "chat-socket-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	socket := filepath.Join(dir, "handler.sock")
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/conversations/known/messages", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" {
+			t.Error("browser credentials reached private ingress")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(202)
+		w.Write([]byte(`{"task_id":"task:web:accepted"}`))
+	})
+	private, err := httpserver.StartUnix(socket, mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer private.Close()
+	cfg := DefaultConfig()
+	cfg.HandlerSocket = socket
+	h, err := NewHandler(cfg, assets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(h)
+	defer server.Close()
+	request, _ := http.NewRequest("POST", server.URL+"/api/handler/conversations/known/messages", strings.NewReader("{}"))
+	request.Header.Set("Origin", "https://attacker.example")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 403 || calls != 0 {
+		t.Fatalf("cross-site status=%d upstream calls=%d", response.StatusCode, calls)
+	}
+	request.Header.Set("Origin", server.URL)
+	request.Header.Set("Cookie", "browser=secret")
+	request.Header.Set("Authorization", "Bearer browser-secret")
+	response, err = server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 202 || calls != 1 {
+		t.Fatalf("local status=%d upstream calls=%d", response.StatusCode, calls)
 	}
 }
