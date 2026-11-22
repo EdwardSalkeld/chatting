@@ -63,6 +63,12 @@ func Handler(logger *log.Logger, githubSecret []byte, filters ...*Filter) http.H
 				http.Error(w, "invalid json", http.StatusBadRequest)
 				return
 			}
+			if filter.InstructionsStore != nil && instructionsPush(body, r.Header.Get("X-GitHub-Event"), filter.InstructionsRepository) {
+				if err := filter.InstructionsStore.RecordInstructionsUpdate(r.Context()); err != nil {
+					http.Error(w, "could not record instructions update", http.StatusInternalServerError)
+					return
+				}
+			}
 		}
 		var id [16]byte
 		if _, err := rand.Read(id[:]); err != nil {

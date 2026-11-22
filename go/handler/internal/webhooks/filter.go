@@ -29,13 +29,15 @@ type Decision struct {
 // Filter serializes decisions and state writes within the handler process.
 // There is deliberately no broker or dispatcher dependency.
 type Filter struct {
-	mu                  sync.Mutex
-	Store               FilterStore
-	Login               string
-	SelfLogins          []string
-	ReleaseRepositories []string
-	DeliveryEnabled     bool
-	AssignTask          func(context.Context, contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
+	mu                     sync.Mutex
+	Store                  FilterStore
+	Login                  string
+	SelfLogins             []string
+	ReleaseRepositories    []string
+	DeliveryEnabled        bool
+	AssignTask             func(context.Context, contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
+	InstructionsRepository string
+	InstructionsStore      InstructionsStore
 }
 
 type user struct {

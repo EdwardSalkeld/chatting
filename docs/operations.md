@@ -63,11 +63,18 @@ logged. A failed fetch or missing, empty, invalid UTF-8 or oversized file fails
 the assignment rather than using an unapproved working-tree file. Leave the
 setting unset to retain existing behaviour.
 
-This installs or refreshes files when work is assigned. It does not process push
-webhooks or proactively refresh idle workspaces. When the approved revision
+Configure the handler's `instructions_repository` as an exact `owner/repo` and
+subscribe its signed GitHub webhook to push events. A push to that repository's
+main branch records a durable refresh signal. The worker polls the handler's
+loopback `/instructions/generation` endpoint, and when all executor slots are
+idle it fetches the approved main once and refreshes existing workspaces. It
+also reconciles on worker startup, so a missed webhook does not permanently
+prevent updates. The signal is only a hint: the worker always fetches current
+main rather than trusting an event's commit. Refresh waits while work is active,
+and a workspace is also refreshed on assignment. When the approved revision
 changes between turns, the persistent executor starts a fresh app-server process
 and resumes the same thread, so Codex reloads workspace instructions while
-keeping its conversation history. In-flight turns finish before this happens.
+keeping its conversation history.
 
 ### Supervisors
 
