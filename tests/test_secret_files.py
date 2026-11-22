@@ -53,6 +53,12 @@ class SecretFileTests(unittest.TestCase):
         with self.assertRaises(Unavailable):
             save_secret(self.root, {**self.payload, "work_item_id": "../outside"})
 
+    def test_rejects_invalid_and_oversized_identifiers(self):
+        for key in ("work_item_id", "request_id"):
+            for value in ("", ".", "..", "a/b", "a\\b", "é", "-" * 129):
+                with self.subTest(key=key, value=value), self.assertRaises(Unavailable):
+                    save_secret(self.root, {**self.payload, key: value})
+
     def test_loopback_endpoint_rejects_browser_and_accepts_handler(self):
         server = start_worker_activity_server(
             host="127.0.0.1", port=0, monitor=Mock(), secret_workspace_root=self.root

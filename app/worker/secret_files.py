@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import ctypes
 import os
-import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
+_ID_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
 _libc = ctypes.CDLL(None, use_errno=True)
 _linkat = _libc.linkat
 _linkat.argtypes = (
@@ -28,17 +29,27 @@ class Unavailable(Exception):
     pass
 
 
+def _safe_id(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 128
+        or not all(char in _ID_CHARS for char in value)
+        or os.path.basename(value) != value
+    ):
+        raise Unavailable
+    return value
+
+
 def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
     if payload.get("workspace_root") != str(root):
         raise OSError("workspace root mismatch")
-    item, request = payload.get("work_item_id"), payload.get("request_id")
+    item, request = (
+        _safe_id(payload.get("work_item_id")),
+        _safe_id(payload.get("request_id")),
+    )
     secret, expires = payload.get("secret"), payload.get("expires_at")
-    if (
-        not isinstance(item, str)
-        or not _ID.fullmatch(item)
-        or not isinstance(request, str)
-        or not _ID.fullmatch(request)
-    ):
+    result_path = root / item / ".chatting-secrets" / request
+    if os.path.commonpath((root, result_path)) != str(root):
         raise Unavailable
     if not isinstance(expires, str) or not (secret is None or isinstance(secret, str)):
         raise Unavailable
@@ -74,7 +85,7 @@ def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
                         raise Unavailable
                     os.fsync(directory_fd)
                     return {
-                        "path": str(root / item / ".chatting-secrets" / request),
+                        "path": str(result_path),
                         "existing": True,
                     }
                 if secret is None or not secret or datetime.now(timezone.utc) >= expiry:
@@ -109,7 +120,7 @@ def save_secret(root: Path, payload: dict[str, Any]) -> dict[str, object]:
                 finally:
                     os.close(fd)
                 return {
-                    "path": str(root / item / ".chatting-secrets" / request),
+                    "path": str(result_path),
                     "existing": False,
                 }
             finally:
