@@ -126,7 +126,7 @@ func NewHandler(config Config, assets fs.FS) (http.Handler, error) {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 		if secretPage.MatchString(routePath) {
-			writer.Header().Set("Referrer-Policy", "no-referrer")
+			writer.Header().Set("Referrer-Policy", "same-origin")
 			if request.Method != http.MethodGet && request.Method != http.MethodPost {
 				writer.Header().Set("Allow", "GET, POST")
 				writeError(writer, http.StatusMethodNotAllowed, "Method not allowed")
