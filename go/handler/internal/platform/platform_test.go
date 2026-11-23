@@ -88,6 +88,9 @@ func TestGatewayForwardsSecretFormWithoutCredentials(t *testing.T) {
 	server := platformServer(t, upstream.URL)
 	for _, method := range []string{"GET", "POST"} {
 		r, _ := http.NewRequest(method, server.URL+"/secrets/"+token, strings.NewReader("secret=example"))
+		if method == http.MethodPost {
+			r.Header.Set("Origin", server.URL)
+		}
 		r.Header.Set("Cookie", "session=private")
 		r.Header.Set("Authorization", "Bearer private")
 		response, err := server.Client().Do(r)
@@ -99,15 +102,17 @@ func TestGatewayForwardsSecretFormWithoutCredentials(t *testing.T) {
 			t.Fatalf("%s: %d", method, response.StatusCode)
 		}
 	}
-	r, _ := http.NewRequest("POST", server.URL+"/secrets/"+token, strings.NewReader("secret=example"))
-	r.Header.Set("Origin", "https://attacker.example")
-	response, err := server.Client().Do(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-origin post: %d", response.StatusCode)
+	for _, origin := range []string{"https://attacker.example", "null"} {
+		r, _ := http.NewRequest("POST", server.URL+"/secrets/"+token, strings.NewReader("secret=example"))
+		r.Header.Set("Origin", origin)
+		response, err := server.Client().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-origin post %q: %d", origin, response.StatusCode)
+		}
 	}
 }
 

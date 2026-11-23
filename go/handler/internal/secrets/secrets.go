@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,7 +30,18 @@ const prefix = "/secrets/"
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var tokenPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var page = template.Must(template.New("secret").Parse(`<!doctype html><html><head><meta name="referrer" content="no-referrer"><title>Send a secret</title></head><body><h1>Send a secret</h1><p>{{.Label}}</p><p>Expires {{.ExpiresAt}}.</p><form method="post"><label>Secret<br><textarea name="secret" rows="8" cols="60" required></textarea></label><br><button type="submit">Save secret</button></form></body></html>`))
+
+//go:embed secret_page.html
+var secretPageHTML string
+var page = template.Must(template.New("secret").Parse(secretPageHTML))
+
+type pageData struct{ State, Label, ExpiresAt, ExpiresDisplay, Title, Message string }
+
+func renderPage(w http.ResponseWriter, status int, data pageData) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = page.Execute(w, data)
+}
 
 type Service struct {
 	Store                    *sqlite.Store
@@ -100,9 +112,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) form(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 	token := strings.TrimPrefix(r.URL.Path, prefix)
 	if !tokenPattern.MatchString(token) {
 		http.NotFound(w, r)
@@ -112,11 +124,11 @@ func (s *Service) form(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		request, err := s.Store.SecretByHash(r.Context(), h)
 		if err != nil || request.Status != "pending" || request.Expired(time.Now()) {
-			http.Error(w, "This request is unavailable or expired.", http.StatusGone)
+			renderPage(w, http.StatusGone, pageData{State: "unavailable", Title: "This link is no longer available", Message: "It may have expired or already been used. Ask your worker for a new link."})
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = page.Execute(w, request)
+		expires, _ := time.Parse(time.RFC3339, request.ExpiresAt)
+		renderPage(w, http.StatusOK, pageData{State: "form", Label: request.Label, ExpiresAt: request.ExpiresAt, ExpiresDisplay: expires.UTC().Format("2 Jan 2006 at 15:04")})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -125,7 +137,7 @@ func (s *Service) form(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 65536)
 	if err := r.ParseForm(); err != nil || len(r.PostForm["secret"]) != 1 || r.PostForm.Get("secret") == "" {
-		http.Error(w, "Enter a secret of at most 64 KiB.", 400)
+		renderPage(w, http.StatusBadRequest, pageData{State: "error", Title: "Check the value and try again", Message: "Enter a value of at most 64 KiB. Go back to the form to try again."})
 		return
 	}
 	secret := []byte(r.PostForm.Get("secret"))
@@ -137,18 +149,17 @@ func (s *Service) form(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, errUnavailable) || errors.Is(err, sql.ErrNoRows) || errors.Is(err, sqlite.ErrSecretUsed) {
-			http.Error(w, "This request is unavailable or expired.", http.StatusGone)
+			renderPage(w, http.StatusGone, pageData{State: "unavailable", Title: "This link is no longer available", Message: "It may have expired or already been used. Ask your worker for a new link."})
 		} else {
-			http.Error(w, "Unable to save secret. Please retry.", 500)
+			renderPage(w, http.StatusInternalServerError, pageData{State: "error", Title: "Please try again", Message: "The secret could not be saved. Go back to the form and try again."})
 		}
 		return
 	}
 	if alreadySaved {
-		http.Error(w, "A previous submission was already saved; this value was not used.", http.StatusGone)
+		renderPage(w, http.StatusGone, pageData{State: "unavailable", Title: "This link has already been used", Message: "A previous submission was saved; this value was not used."})
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = io.WriteString(w, "Secret saved. You can close this page.")
+	renderPage(w, http.StatusOK, pageData{State: "success", Title: "Your secret is saved", Message: "Your worker will be notified. You can close this page."})
 }
 
 var errUnavailable = errors.New("unavailable")

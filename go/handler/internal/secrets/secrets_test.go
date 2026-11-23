@@ -115,8 +115,14 @@ func TestSubmissionRoutesOnceToOriginalWorkItem(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "API token") || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	if w.Header().Get("Referrer-Policy") != "same-origin" || !strings.Contains(w.Body.String(), `name="viewport"`) {
+		t.Fatal("missing browser form protections or mobile viewport")
+	}
 	if w = submit(mux, path, "top secret"); w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Your secret is saved") {
+		t.Fatal("missing confirmation")
 	}
 	if w = submit(mux, path, "replacement"); w.Code != 410 {
 		t.Fatal(w.Code)
