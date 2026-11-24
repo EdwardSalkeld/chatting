@@ -76,6 +76,7 @@ to the existing `log` channel rather than assuming an issue comment destination.
 Live notifications use an event/body hash for task and envelope identity;
 delivery headers remain correlation metadata. They contain only the event,
 action, repository/subject and specific comment/review/thread/run/release IDs,
+including GitHub's string `thread.node_id` as `review_thread_id` for review-thread events,
 plus run attempt and commit when available. They do not include a payload body or
 context bundle. The worker resumes its item session and fetches the details.
 

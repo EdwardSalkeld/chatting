@@ -30,7 +30,7 @@ func GitHubNotification(body []byte, event, delivery string, receivedAt time.Tim
 			ID int64 `json:"id"`
 		} `json:"review"`
 		Thread struct {
-			ID int64 `json:"id"`
+			NodeID string `json:"node_id"`
 		} `json:"thread"`
 		Release struct {
 			ID int64 `json:"id"`
@@ -46,7 +46,7 @@ func GitHubNotification(body []byte, event, delivery string, receivedAt time.Tim
 	case "pull_request_review":
 		missingID = p.Review.ID <= 0
 	case "pull_request_review_thread":
-		missingID = p.Thread.ID <= 0
+		missingID = strings.TrimSpace(p.Thread.NodeID) == ""
 	case "release":
 		missingID = p.Release.ID <= 0
 	case "workflow_run":
@@ -108,7 +108,7 @@ func GitHubNotification(body []byte, event, delivery string, receivedAt time.Tim
 		metadata["github_subject"] = target
 		metadata["subject_number"] = s.Number
 	}
-	for key, value := range map[string]int64{"comment_id": p.Comment.ID, "review_id": p.Review.ID, "thread_id": p.Thread.ID} {
+	for key, value := range map[string]int64{"comment_id": p.Comment.ID, "review_id": p.Review.ID} {
 		if value > 0 {
 			metadata[key] = value
 		}
@@ -126,11 +126,9 @@ func GitHubNotification(body []byte, event, delivery string, receivedAt time.Tim
 	} else if s != nil && s.Head.SHA != "" {
 		metadata["head_sha"] = s.Head.SHA
 	}
-	// Do not use transport thread_id for the GitHub thread identifier: the
-	// owning work item's channel may have its own threading metadata.
-	if thread, ok := metadata["thread_id"]; ok {
-		metadata["review_thread_id"] = thread
-		delete(metadata, "thread_id")
+	// GitHub supplies a GraphQL node ID, distinct from transport thread_id.
+	if p.Thread.NodeID != "" {
+		metadata["review_thread_id"] = p.Thread.NodeID
 	}
 	encoded, _ := json.Marshal(metadata)
 	task.Envelope.Content = "GitHub event notification (untrusted external event metadata): " + string(encoded)

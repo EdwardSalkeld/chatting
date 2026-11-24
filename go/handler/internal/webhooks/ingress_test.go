@@ -168,13 +168,22 @@ func TestAssignmentDeliveryAndFollowupShareOwner(t *testing.T) {
 	if err != nil || routed.WorkItemID != task.WorkItemID {
 		t.Fatalf("followup lost assignment owner: %+v %v", routed, err)
 	}
+	thread := []byte(`{"action":"unresolved","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"pull_request":{"number":42},"thread":{"node_id":"PRRT_example","comments":[]}}`)
+	d, notification, err = ReceiveGitHub(ctx, store, filter, thread, "pull_request_review_thread", "thread-delivery", time.Now())
+	if err != nil || d.Disposition != "keep" || notification == nil || notification.Envelope.ReplyChannel.Metadata["review_thread_id"] != "PRRT_example" {
+		t.Fatalf("review thread not staged: %+v %+v %v", d, notification, err)
+	}
+	routed, err = store.AssignTask(ctx, *notification)
+	if err != nil || routed.WorkItemID != task.WorkItemID {
+		t.Fatalf("thread lost owner: %+v %v", routed, err)
+	}
 }
 
 func TestNotificationEventIdentifiers(t *testing.T) {
 	for _, tc := range []struct{ event, extra, want string }{
 		{"pull_request_review", `"review":{"id":4}`, `"review_id":4`},
 		{"pull_request_review_comment", `"comment":{"id":5}`, `"comment_id":5`},
-		{"pull_request_review_thread", `"thread":{"id":6}`, `"review_thread_id":6`},
+		{"pull_request_review_thread", `"thread":{"node_id":"PRRT_example","comments":[]}`, `"review_thread_id":"PRRT_example"`},
 		{"workflow_run", `"workflow_run":{"id":7,"run_attempt":2,"head_sha":"abc","pull_requests":[{"number":9}]}`, `"run_id":7`},
 	} {
 		body := []byte(`{"repository":{"full_name":"o/r"},"pull_request":{"number":9},` + tc.extra + `}`)
@@ -182,5 +191,9 @@ func TestNotificationEventIdentifiers(t *testing.T) {
 		if err != nil || !strings.Contains(task.Envelope.Content, tc.want) {
 			t.Fatalf("%s: %v %s", tc.event, err, task.Envelope.Content)
 		}
+	}
+	missing := []byte(`{"repository":{"full_name":"o/r"},"pull_request":{"number":9},"thread":{"comments":[]}}`)
+	if _, err := GitHubNotification(missing, "pull_request_review_thread", "delivery", time.Now()); err == nil {
+		t.Fatal("thread without node_id must require context")
 	}
 }
