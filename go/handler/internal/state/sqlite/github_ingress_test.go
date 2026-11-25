@@ -101,15 +101,15 @@ func TestRelatedPRCommentPreservesEventAndOriginContext(t *testing.T) {
 func TestReceiptRollsBackOnStagingFailure(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
-	body := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"id":5,"body":"@BillyAcachofa help"}}`)
+	f := &webhooks.Filter{Store: store, Login: "ExampleBot", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
+	body := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"id":5,"body":"@ExampleBot help"}}`)
 	if _, err := store.db.Exec(`CREATE TRIGGER fail_stage BEFORE INSERT ON github_webhook_pending BEGIN SELECT RAISE(FAIL, 'injected'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := webhooks.ReceiveGitHub(ctx, store, f, body, "issue_comment", "one", time.Now()); err == nil {
 		t.Fatal("expected staging failure")
 	}
-	watch, err := store.WebhookState(ctx, "watch", "billyacachofa/o/r#1")
+	watch, err := store.WebhookState(ctx, "watch", "examplebot/o/r#1")
 	if err != nil || watch != "" {
 		t.Fatal("failed receipt committed watch", err)
 	}

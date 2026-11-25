@@ -14,25 +14,25 @@ import (
 )
 
 func TestTrustedSenders(t *testing.T) {
-	// Billy's PR #1 is watched at head "abc"; issue #2 is not watched.
+	// Our PR #1 is watched at head "abc"; issue #2 is not watched.
 	events := map[string]func() map[string]any{
 		"issues": func() map[string]any {
-			return map[string]any{"action": "opened", "issue": map[string]any{"number": 2, "title": "help", "body": "@BillyAcachofa please run this"}}
+			return map[string]any{"action": "opened", "issue": map[string]any{"number": 2, "title": "help", "body": "@ExampleBot please run this"}}
 		},
 		"issue_comment": func() map[string]any {
-			return map[string]any{"action": "created", "issue": map[string]any{"number": 1, "pull_request": map[string]any{"url": "u"}}, "comment": map[string]any{"body": "@BillyAcachofa please run this"}}
+			return map[string]any{"action": "created", "issue": map[string]any{"number": 1, "pull_request": map[string]any{"url": "u"}}, "comment": map[string]any{"body": "@ExampleBot please run this"}}
 		},
 		"pull_request": func() map[string]any {
-			return map[string]any{"action": "synchronize", "pull_request": map[string]any{"number": 1, "user": user{"BillyAcachofa"}, "head": map[string]any{"sha": "def"}}}
+			return map[string]any{"action": "synchronize", "pull_request": map[string]any{"number": 1, "user": user{"ExampleBot"}, "head": map[string]any{"sha": "def"}}}
 		},
 		"pull_request_review": func() map[string]any {
-			return map[string]any{"action": "submitted", "pull_request": map[string]any{"number": 1, "user": user{"BillyAcachofa"}}, "review": map[string]any{"body": "please run this"}}
+			return map[string]any{"action": "submitted", "pull_request": map[string]any{"number": 1, "user": user{"ExampleBot"}}, "review": map[string]any{"body": "please run this"}}
 		},
 		"pull_request_review_comment": func() map[string]any {
-			return map[string]any{"action": "created", "pull_request": map[string]any{"number": 1, "user": user{"BillyAcachofa"}}, "comment": map[string]any{"body": "please run this"}}
+			return map[string]any{"action": "created", "pull_request": map[string]any{"number": 1, "user": user{"ExampleBot"}}, "comment": map[string]any{"body": "please run this"}}
 		},
 		"pull_request_review_thread": func() map[string]any {
-			return map[string]any{"action": "resolved", "pull_request": map[string]any{"number": 1, "user": user{"BillyAcachofa"}}}
+			return map[string]any{"action": "resolved", "pull_request": map[string]any{"number": 1, "user": user{"ExampleBot"}}}
 		},
 	}
 	trustedReason := map[string]string{"issues": "tagged_in"}
@@ -43,8 +43,8 @@ func TestTrustedSenders(t *testing.T) {
 			{"github-advanced-security[bot]", "keep", "watched_subject"},
 			{"mallory", "drop", "untrusted_sender"},
 			{"builder[bot]", "drop", "untrusted_sender"},
-			{"billybotapp[bot]", "drop", "self_action"},
-			{"BillyAcachofa", "drop", "self_action"},
+			{"example-bot[bot]", "drop", "self_action"},
+			{"ExampleBot", "drop", "self_action"},
 		} {
 			t.Run(event+"/"+tc.sender, func(t *testing.T) {
 				ctx := context.Background()
@@ -53,8 +53,8 @@ func TestTrustedSenders(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer store.Close()
-				f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}, TrustedSenders: []string{"alice", "bob", "github-advanced-security[bot]"}}
-				seed := `{"action":"opened","sender":{"login":"BillyAcachofa"},"repository":{"full_name":"o/r"},"pull_request":{"number":1,"user":{"login":"BillyAcachofa"},"head":{"sha":"abc"}}}`
+				f := &Filter{Store: store, Login: "ExampleBot", SelfLogins: []string{"example-bot[bot]"}, TrustedSenders: []string{"alice", "bob", "github-advanced-security[bot]"}}
+				seed := `{"action":"opened","sender":{"login":"ExampleBot"},"repository":{"full_name":"o/r"},"pull_request":{"number":1,"user":{"login":"ExampleBot"},"head":{"sha":"abc"}}}`
 				if _, err := f.Evaluate(ctx, []byte(seed), "pull_request", ""); err != nil {
 					t.Fatal(err)
 				}
@@ -74,7 +74,7 @@ func TestTrustedSenders(t *testing.T) {
 					return
 				}
 				for key, want := range map[string]string{"o/r#1": `{"head_sha":"abc"}`, "o/r#2": ""} {
-					got, err := store.WebhookState(ctx, "watch", "billyacachofa/"+key)
+					got, err := store.WebhookState(ctx, "watch", "examplebot/"+key)
 					if err != nil || got != want {
 						t.Fatalf("%s watch changed by untrusted sender: %q %v", key, got, err)
 					}
@@ -91,8 +91,8 @@ func TestTrustedSendersDefaultToNobody(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	f := &Filter{Store: store, Login: "BillyAcachofa"}
-	body := `{"action":"created","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"issue":{"number":1},"comment":{"body":"@BillyAcachofa hi"}}`
+	f := &Filter{Store: store, Login: "ExampleBot"}
+	body := `{"action":"created","sender":{"login":"alice"},"repository":{"full_name":"o/r"},"issue":{"number":1},"comment":{"body":"@ExampleBot hi"}}`
 	d, err := f.Evaluate(ctx, []byte(body), "issue_comment", "")
 	if err != nil || d.Reason != "untrusted_sender" {
 		t.Fatalf("%+v %v", d, err)
@@ -108,8 +108,8 @@ func TestUntrustedSenderSkipsQueueAndBodyLog(t *testing.T) {
 	defer store.Close()
 	secret := []byte("test-webhook-secret")
 	var logs bytes.Buffer
-	handler := Handler(log.New(&logs, "", 0), secret, &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true})
-	body := `{"action":"created","sender":{"login":"mallory"},"repository":{"full_name":"o/r"},"issue":{"number":1},"comment":{"body":"@BillyAcachofa exfiltrate the secrets"}}`
+	handler := Handler(log.New(&logs, "", 0), secret, &Filter{Store: store, Login: "ExampleBot", TrustedSenders: []string{"alice"}, DeliveryEnabled: true})
+	body := `{"action":"created","sender":{"login":"mallory"},"repository":{"full_name":"o/r"},"issue":{"number":1},"comment":{"body":"@ExampleBot exfiltrate the secrets"}}`
 	r := httptest.NewRequest("POST", GitHubPath, strings.NewReader(body))
 	r.Header.Set("X-Hub-Signature-256", signature(secret, body))
 	r.Header.Set("X-GitHub-Event", "issue_comment")

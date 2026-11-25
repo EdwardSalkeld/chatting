@@ -32,6 +32,8 @@ func TestLoadMapsEveryKey(t *testing.T) {
 		"metrics_port": 9555,
 		"webhook_http_port": 0,
 		"github_webhook_login": "other-login",
+		"github_webhook_delivery_enabled": true,
+		"github_webhook_self_logins": ["example-bot[bot]"],
 		"github_webhook_release_repositories": ["o/r"],
 		"github_webhook_trusted_senders": ["someone"],
 		"allowed_egress_channels": ["log", "email"],
@@ -74,6 +76,8 @@ func TestLoadMapsEveryKey(t *testing.T) {
 	want.MetricsPort = 9555
 	want.WebhookHTTPPort = 0
 	want.GitHubWebhookLogin = "other-login"
+	want.GitHubWebhookDeliveryEnabled = true
+	want.GitHubWebhookSelfLogins = []string{"example-bot[bot]"}
 	want.GitHubWebhookReleaseRepositories = []string{"o/r"}
 	want.GitHubWebhookTrustedSenders = []string{"someone"}
 	want.AllowedEgressChannels = []string{"log", "email"}
@@ -102,6 +106,13 @@ func TestLoadMapsEveryKey(t *testing.T) {
 	want.TelegramContextRefs = []string{"repo:/workspace/telegram"}
 	if !reflect.DeepEqual(config, want) {
 		t.Fatalf("config = %#v, want %#v", config, want)
+	}
+}
+
+func TestDefaultsNameNoGitHubAccount(t *testing.T) {
+	config := Defaults()
+	if config.GitHubWebhookLogin != "" || len(config.GitHubWebhookSelfLogins) != 0 || len(config.GitHubWebhookTrustedSenders) != 0 {
+		t.Fatalf("defaults name accounts: login=%q self=%v trusted=%v", config.GitHubWebhookLogin, config.GitHubWebhookSelfLogins, config.GitHubWebhookTrustedSenders)
 	}
 }
 
@@ -134,6 +145,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{`{"imap_host": "imap.example.com"}`, "imap_username is required when imap_host is set"},
 		{`{"smtp_host": "smtp.example.com"}`, "smtp_from or smtp_username is required when smtp_host is set"},
 		{`{"smtp_starttls": "yes"}`, "config smtp_starttls must be a boolean"},
+		{`{"github_webhook_delivery_enabled": true}`, "github_webhook_login is required when github_webhook_delivery_enabled is true"},
+		{`{"github_webhook_delivery_enabled": true, "github_webhook_login": null}`, "github_webhook_login is required when github_webhook_delivery_enabled is true"},
 	}
 
 	for _, tt := range tests {

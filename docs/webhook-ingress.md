@@ -240,7 +240,9 @@ The deployed configuration lives in Lab's
 
 ## Tag-to-watch filtering
 
-`github_webhook_login` defaults to `BillyAcachofa`. An external actor can start
+`github_webhook_login` is the GitHub account the handler acts as. It has no
+default; the deployment sets it, and the handler refuses to start with
+`github_webhook_delivery_enabled: true` and no login. An external actor can start
 watching an issue or PR by assigning it to that login (`assigned_to_us`), or by
 directly `@mention`ing it in a new/edited issue or PR title/body, issue comment,
 inline review comment, or review. Assignment matches the top-level `assignee`
@@ -282,8 +284,9 @@ logs only. Draft PR events carry `draft_tracking_only`; an explicit initial
 tag still carries `tagged_in`. This is a preview filter, not permission to
 execute work or post a reply.
 
-Events whose sender is Billy or an additional `github_webhook_self_logins`
-identity (default: `billybotapp[bot]`) are dropped as `self_action`, while a
+Events whose sender is that login or an additional `github_webhook_self_logins`
+identity (default: empty, which the deployment sets; for example a GitHub App's
+`example-bot[bot]`) are dropped as `self_action`, while a
 watch's PR head is still updated. Own mentions cannot subscribe unrelated
 subjects; PR authorship can create a watch independently of the actor.
 
@@ -292,8 +295,8 @@ from any other sender must come from a login in
 `github_webhook_trusted_senders` (default: empty; matched case-insensitively),
 which the deployment sets. Anyone else, including bots, is dropped as
 `untrusted_sender` before watch state is read or written, so outsiders cannot
-start a watch, tag Billy in, or add work to a watched subject such as review
-comments on Billy's own PRs. An empty list trusts nobody. The receipt log for
+start a watch, tag the login in, or add work to a watched subject such as
+review comments on its own PRs. An empty list trusts nobody. The receipt log for
 these drops records the sender with `body_omitted` and leaves out the payload.
 Add a bot's login (for example `builder[bot]`) to the list to keep its comments
 reaching the worker and notification triage.
