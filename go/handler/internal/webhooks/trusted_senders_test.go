@@ -40,7 +40,9 @@ func TestTrustedSenders(t *testing.T) {
 		for _, tc := range []struct{ sender, want, reason string }{
 			{"EdwardSalkeld", "keep", "watched_subject"},
 			{"BROKENSBONE", "keep", "watched_subject"},
+			{"github-advanced-security[bot]", "keep", "watched_subject"},
 			{"mallory", "drop", "untrusted_sender"},
+			{"builder[bot]", "drop", "untrusted_sender"},
 			{"billybotapp[bot]", "drop", "self_action"},
 			{"BillyAcachofa", "drop", "self_action"},
 		} {
@@ -51,7 +53,7 @@ func TestTrustedSenders(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer store.Close()
-				f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}, TrustedSenders: []string{"EdwardSalkeld", "brokensbone"}}
+				f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}, TrustedSenders: []string{"EdwardSalkeld", "brokensbone", "github-advanced-security[bot]"}}
 				seed := `{"action":"opened","sender":{"login":"BillyAcachofa"},"repository":{"full_name":"o/r"},"pull_request":{"number":1,"user":{"login":"BillyAcachofa"},"head":{"sha":"abc"}}}`
 				if _, err := f.Evaluate(ctx, []byte(seed), "pull_request", ""); err != nil {
 					t.Fatal(err)

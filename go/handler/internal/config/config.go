@@ -82,6 +82,18 @@ type Config struct {
 	UnknownKeys []string
 }
 
+func defaultTrustedSenders() []string {
+	return []string{
+		"EdwardSalkeld",
+		"brokensbone",
+		// GitHub's own apps, which only act on a repository the owner enabled them on.
+		"github-advanced-security[bot]",
+		"github-actions[bot]",
+		"dependabot[bot]",
+		"copilot-pull-request-reviewer[bot]",
+	}
+}
+
 func Defaults() Config {
 	return Config{
 		SecretsWorkerURL:            "http://127.0.0.1:9465",
@@ -97,7 +109,7 @@ func Defaults() Config {
 		GitHubWebhookSecretEnv:      "CHATTING_GITHUB_WEBHOOK_SECRET",
 		GitHubWebhookLogin:          "BillyAcachofa",
 		GitHubWebhookSelfLogins:     []string{"billybotapp[bot]"},
-		GitHubWebhookTrustedSenders: []string{"EdwardSalkeld", "brokensbone"},
+		GitHubWebhookTrustedSenders: defaultTrustedSenders(),
 		EgressAttachmentAllowedDirs: []string{},
 		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		ContextRefs:                 []string{},
