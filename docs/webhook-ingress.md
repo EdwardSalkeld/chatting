@@ -289,10 +289,8 @@ subjects; PR authorship can create a watch independently of the actor.
 
 Issue, comment, pull request, review, review comment and review thread events
 from any other sender must come from a login in
-`github_webhook_trusted_senders` (default: `EdwardSalkeld`, `brokensbone` and
-GitHub's own apps `github-advanced-security[bot]`, `github-actions[bot]`,
-`dependabot[bot]` and `copilot-pull-request-reviewer[bot]`; matched
-case-insensitively). Anyone else, including other bots, is dropped as
+`github_webhook_trusted_senders` (default: empty; matched case-insensitively),
+which the deployment sets. Anyone else, including bots, is dropped as
 `untrusted_sender` before watch state is read or written, so outsiders cannot
 start a watch, tag Billy in, or add work to a watched subject such as review
 comments on Billy's own PRs. An empty list trusts nobody. The receipt log for
