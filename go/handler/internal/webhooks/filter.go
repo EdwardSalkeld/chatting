@@ -175,7 +175,7 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		return decision("needs_context", "missing_repository"), nil
 	}
 	// CI relevance is determined by the watched PR and commit, never the actor
-	// who caused the workflow to run (which can legitimately be Billy).
+	// who caused the workflow to run (which can legitimately be our own login).
 	if event == "workflow_run" {
 		return f.workflowDecision(ctx, p)
 	}

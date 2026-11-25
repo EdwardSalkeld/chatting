@@ -46,17 +46,17 @@ func TestCIWebhookOwnership(t *testing.T) {
 			if err := store.RegisterPR(ctx, origin.TaskID, "https://github.com/o/r/pull/9"); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.PutWebhookState(ctx, "watch", "billyacachofa/o/r#9", `{"head_sha":"abc"}`); err != nil {
+			if err := store.PutWebhookState(ctx, "watch", "examplebot/o/r#9", `{"head_sha":"abc"}`); err != nil {
 				t.Fatal(err)
 			}
 			// The same commit in another repo/login must never be considered.
-			for _, key := range []string{"billyacachofa/o/other#11", "other/o/r#12"} {
+			for _, key := range []string{"examplebot/o/other#11", "other/o/r#12"} {
 				if err := store.PutWebhookState(ctx, "watch", key, `{"head_sha":"abc"}`); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if tc.ambiguous {
-				if err := store.PutWebhookState(ctx, "watch", "billyacachofa/o/r#10", `{"head_sha":"abc"}`); err != nil {
+				if err := store.PutWebhookState(ctx, "watch", "examplebot/o/r#10", `{"head_sha":"abc"}`); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -90,12 +90,12 @@ func TestCIWebhookOwnership(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			filter := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
+			filter := &webhooks.Filter{Store: store, Login: "ExampleBot", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 			event := "pull_request"
 			if tc.sha != "abc" {
 				event = "push"
 			}
-			body := []byte(fmt.Sprintf(`{"action":"completed","repository":{"full_name":"o/r"},"sender":{"login":"BillyAcachofa"},"workflow_run":{"id":7,"workflow_id":20,"run_number":1,"run_attempt":1,"event":%q,"head_branch":"main","head_sha":%q,"conclusion":%q,"pull_requests":[]}}`, event, tc.sha, tc.conclusion))
+			body := []byte(fmt.Sprintf(`{"action":"completed","repository":{"full_name":"o/r"},"sender":{"login":"ExampleBot"},"workflow_run":{"id":7,"workflow_id":20,"run_number":1,"run_attempt":1,"event":%q,"head_branch":"main","head_sha":%q,"conclusion":%q,"pull_requests":[]}}`, event, tc.sha, tc.conclusion))
 			d, notification, err := webhooks.ReceiveGitHub(ctx, store, filter, body, "workflow_run", "one", time.Now())
 			if err != nil || d.Disposition != tc.want || d.Reason != tc.reason {
 				t.Fatalf("receipt: %+v %v", d, err)
@@ -145,7 +145,7 @@ func TestWorkflowRecoveryAndRegistrationAfterHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
+	f := &webhooks.Filter{Store: store, Login: "ExampleBot", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	body := func(attempt int, conclusion string) []byte {
 		b, _ := json.Marshal(map[string]any{"action": "completed", "repository": map[string]string{"full_name": "o/r"}, "workflow_run": map[string]any{"id": 7, "workflow_id": 20, "run_number": 1, "run_attempt": attempt, "head_sha": "merge", "conclusion": conclusion}})
 		return b
