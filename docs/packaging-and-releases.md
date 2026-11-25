@@ -102,7 +102,10 @@ repository.
 repository's latest release, and if the Lab repository pins an older release tag
 it moves that tag, relocks the input and opens or updates a "Deploy chatting
 vX.Y.Z" pull request there. It needs the `LAB_REPO_TOKEN` secret, which is its
-only cross-repository credential.
+only cross-repository credential. The secret belongs to the `lab-deploy`
+environment, whose deployment branches are limited to `main`, so a workflow on
+any other branch cannot read it. `workflow_run` always runs from the default
+branch; a manual run must be started from `main`.
 
 - The release is looked up here, never taken from the triggering event, and a
   triggered run only moves Lab forwards.
