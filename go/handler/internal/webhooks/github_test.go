@@ -78,7 +78,7 @@ func TestSignedFilterIngress(t *testing.T) {
 	defer store.Close()
 	secret := []byte("secret")
 	var logs bytes.Buffer
-	handler := Handler(log.New(&logs, "", 0), secret, &Filter{Store: store, Login: "BillyAcachofa"})
+	handler := Handler(log.New(&logs, "", 0), secret, &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}})
 	send := func(body, delivery string, valid bool, status int) map[string]any {
 		t.Helper()
 		logs.Reset()

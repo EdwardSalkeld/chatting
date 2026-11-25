@@ -33,6 +33,7 @@ func TestLoadMapsEveryKey(t *testing.T) {
 		"webhook_http_port": 0,
 		"github_webhook_login": "other-login",
 		"github_webhook_release_repositories": ["o/r"],
+		"github_webhook_trusted_senders": ["someone"],
 		"allowed_egress_channels": ["log", "email"],
 		"context_refs": ["repo:/workspace/chatting"],
 		"imap_host": "imap.example.com",
@@ -74,6 +75,7 @@ func TestLoadMapsEveryKey(t *testing.T) {
 	want.WebhookHTTPPort = 0
 	want.GitHubWebhookLogin = "other-login"
 	want.GitHubWebhookReleaseRepositories = []string{"o/r"}
+	want.GitHubWebhookTrustedSenders = []string{"someone"}
 	want.AllowedEgressChannels = []string{"log", "email"}
 	want.ContextRefs = []string{"repo:/workspace/chatting"}
 	want.IMAPHost = "imap.example.com"

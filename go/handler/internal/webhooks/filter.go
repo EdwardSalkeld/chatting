@@ -33,6 +33,7 @@ type Filter struct {
 	Store                  FilterStore
 	Login                  string
 	SelfLogins             []string
+	TrustedSenders         []string
 	ReleaseRepositories    []string
 	DeliveryEnabled        bool
 	AssignTask             func(context.Context, contracts.TaskQueueMessage) (contracts.TaskQueueMessage, error)
@@ -157,6 +158,15 @@ func (f *Filter) isSelf(login string) bool {
 	return false
 }
 
+func (f *Filter) isTrusted(login string) bool {
+	for _, trusted := range f.TrustedSenders {
+		if login != "" && strings.EqualFold(login, trusted) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (Decision, error) {
 	if event == "ping" {
 		return decision("drop", "ping"), nil
@@ -194,6 +204,11 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 	case "issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment", "pull_request_review_thread":
 	default:
 		return decision("drop", "unsupported_event"), nil
+	}
+	// Anyone can comment on a public repository, and a kept event becomes a
+	// worker task, so outsiders must not reach watch state or the queue.
+	if !self && !f.isTrusted(p.Sender.Login) {
+		return decision("drop", "untrusted_sender"), nil
 	}
 	s := p.PR
 	if s == nil {

@@ -41,7 +41,7 @@ func ReceiveGitHub(ctx context.Context, receiver AtomicReceiver, filter *Filter,
 				}
 			}
 		}
-		local := &Filter{Store: tx, Login: filter.Login, SelfLogins: filter.SelfLogins, ReleaseRepositories: filter.ReleaseRepositories}
+		local := &Filter{Store: tx, Login: filter.Login, SelfLogins: filter.SelfLogins, TrustedSenders: filter.TrustedSenders, ReleaseRepositories: filter.ReleaseRepositories}
 		var err error
 		d, err = local.Evaluate(ctx, body, event, delivery)
 		if err != nil {

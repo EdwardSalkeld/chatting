@@ -17,7 +17,7 @@ func TestTagWatchLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}}
+	f := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, SelfLogins: []string{"billybotapp[bot]"}}
 	evaluate := func(event, body, disposition, reason string) Decision {
 		t.Helper()
 		d, err := f.Evaluate(ctx, []byte(body), event, "")
@@ -64,7 +64,7 @@ func TestActionRulesAndWorkflowRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	f := &Filter{Store: store, Login: "BillyAcachofa", ReleaseRepositories: []string{"o/r"}}
+	f := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, ReleaseRepositories: []string{"o/r"}}
 	check := func(event, action string, extra map[string]any, want, reason string) {
 		t.Helper()
 		p := map[string]any{"repository": map[string]any{"full_name": "o/r"}, "sender": user{"alice"}, "action": action}
@@ -136,7 +136,7 @@ func TestAssignmentStartsWatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { store.Close() }()
-			f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}}
+			f := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, SelfLogins: []string{"billybotapp[bot]"}}
 			subjectKey := "issue"
 			if tc.event == "pull_request" {
 				subjectKey = "pull_request"
@@ -196,7 +196,7 @@ func TestOwnPRWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { store.Close() }()
-	f := &Filter{Store: store, Login: "BillyAcachofa", SelfLogins: []string{"billybotapp[bot]"}}
+	f := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, SelfLogins: []string{"billybotapp[bot]"}}
 	check := func(event, body, want, reason string, newWatch bool) {
 		t.Helper()
 		d, err := f.Evaluate(ctx, []byte(body), event, "")

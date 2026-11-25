@@ -44,6 +44,7 @@ type Config struct {
 	GitHubWebhookLogin               string
 	GitHubWebhookDeliveryEnabled     bool
 	GitHubWebhookSelfLogins          []string
+	GitHubWebhookTrustedSenders      []string
 	GitHubWebhookReleaseRepositories []string
 	InstructionsRepository           string
 	EgressAttachmentAllowedDirs      []string
@@ -257,6 +258,7 @@ func (c *Config) fields(payload map[string]json.RawMessage) []field {
 		str(&c.GitHubWebhookLogin, "github_webhook_login"),
 		boolean(&c.GitHubWebhookDeliveryEnabled, "github_webhook_delivery_enabled"),
 		list(&c.GitHubWebhookSelfLogins, "github_webhook_self_logins"),
+		list(&c.GitHubWebhookTrustedSenders, "github_webhook_trusted_senders"),
 		list(&c.GitHubWebhookReleaseRepositories, "github_webhook_release_repositories"),
 		str(&c.InstructionsRepository, "instructions_repository"),
 		list(&c.EgressAttachmentAllowedDirs, "egress_attachment_allowed_dirs"),

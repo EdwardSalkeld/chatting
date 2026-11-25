@@ -254,7 +254,8 @@ PRs authored by that login or a configured `github_webhook_self_logins` identity
 are watched automatically, without a tag. The opening hook records the watch
 even when it is a suppressed own action. Later PR/review hooks or ordinary PR
 comments can also establish the watch when they include PR author metadata.
-Other people's PRs still require an external tag.
+Other people's PRs still require an external tag. All of this applies only to
+trusted senders (see below).
 
 The handler stores watches in `github_webhook_watches` in its existing SQLite
 DB, scoped by login, repository and issue/PR number. Watches survive restarts
@@ -284,9 +285,22 @@ execute work or post a reply.
 Events whose sender is Billy or an additional `github_webhook_self_logins`
 identity (default: `billybotapp[bot]`) are dropped as `self_action`, while a
 watch's PR head is still updated. Own mentions cannot subscribe unrelated
-subjects; PR authorship can create a watch independently of the actor. Other
-bots are evaluated normally. Workflow runs are the exception: relevance comes
-from the watched PR and head SHA, regardless of who triggered the run.
+subjects; PR authorship can create a watch independently of the actor.
+
+Issue, comment, pull request, review, review comment and review thread events
+from any other sender must come from a login in
+`github_webhook_trusted_senders` (default: empty; matched case-insensitively),
+which the deployment sets. Anyone else, including bots, is dropped as
+`untrusted_sender` before watch state is read or written, so outsiders cannot
+start a watch, tag Billy in, or add work to a watched subject such as review
+comments on Billy's own PRs. An empty list trusts nobody. The receipt log for
+these drops records the sender with `body_omitted` and leaves out the payload.
+Add a bot's login (for example `builder[bot]`) to the list to keep its comments
+reaching the worker and notification triage.
+
+Workflow runs are exempt: relevance comes from the watched PR and head SHA,
+regardless of who triggered the run. Releases are also exempt, because each
+repository is opted in explicitly and publishing a release needs write access.
 
 `github_webhook_release_repositories` is an exact `owner/repo` list, empty by
 default. Release opt-in is independent of personal watches. Workflow state in
