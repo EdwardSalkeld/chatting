@@ -28,7 +28,7 @@ func TestNotificationCandidateTrustAndTagBoundaries(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			f := &Filter{Store: store, Login: "custom-login", DeliveryEnabled: true}
+			f := &Filter{Store: store, Login: "custom-login", TrustedSenders: []string{"alice", "builder[bot]"}, DeliveryEnabled: true}
 			if tc.watched {
 				seed := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"id":9,"body":"@custom-login inspect"}}`)
 				if _, _, err := ReceiveGitHub(ctx, store, f, seed, "issue_comment", "seed", time.Now()); err != nil {

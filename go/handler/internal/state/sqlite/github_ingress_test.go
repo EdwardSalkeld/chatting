@@ -101,7 +101,7 @@ func TestRelatedPRCommentPreservesEventAndOriginContext(t *testing.T) {
 func TestReceiptRollsBackOnStagingFailure(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	body := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"id":5,"body":"@BillyAcachofa help"}}`)
 	if _, err := store.db.Exec(`CREATE TRIGGER fail_stage BEFORE INSERT ON github_webhook_pending BEGIN SELECT RAISE(FAIL, 'injected'); END`); err != nil {
 		t.Fatal(err)

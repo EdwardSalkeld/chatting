@@ -29,7 +29,7 @@ func TestAtomicReceiptAndPendingRestart(t *testing.T) {
 	body := `{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"id":99,"body":"@BillyAcachofa please inspect this"}}`
 	receive := func(delivery string, live bool) {
 		t.Helper()
-		f := &Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: live, AssignTask: store.AssignTask}
+		f := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: live, AssignTask: store.AssignTask}
 		request := httptest.NewRequest(http.MethodPost, GitHubPath, strings.NewReader(body))
 		request.Header.Set("X-Hub-Signature-256", signature([]byte("secret"), body))
 		request.Header.Set("X-GitHub-Event", "issue_comment")
@@ -99,7 +99,7 @@ func TestPendingDeliveryRetriesThroughOrdinaryIngress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filter := &Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+	filter := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	body := []byte(`{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":1},"comment":{"id":5,"body":"@BillyAcachofa help"}}`)
 	d, notification, err := ReceiveGitHub(ctx, store, filter, body, "issue_comment", "delivery", time.Now())
 	if err != nil || d.Disposition != "keep" {
@@ -145,7 +145,7 @@ func TestAssignmentDeliveryAndFollowupShareOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	filter := &Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+	filter := &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	body := []byte(`{"action":"assigned","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"assignee":{"login":"BillyAcachofa"},"issue":{"number":42}}`)
 	d, _, err := ReceiveGitHub(ctx, store, filter, body, "issues", "assignment", time.Now())
 	if err != nil || d.Disposition != "keep" || d.Reason != "assigned_to_us" {

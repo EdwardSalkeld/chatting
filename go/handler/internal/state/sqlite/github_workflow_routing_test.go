@@ -90,7 +90,7 @@ func TestCIWebhookOwnership(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			filter := &webhooks.Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+			filter := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 			event := "pull_request"
 			if tc.sha != "abc" {
 				event = "push"
@@ -145,7 +145,7 @@ func TestWorkflowRecoveryAndRegistrationAfterHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	body := func(attempt int, conclusion string) []byte {
 		b, _ := json.Marshal(map[string]any{"action": "completed", "repository": map[string]string{"full_name": "o/r"}, "workflow_run": map[string]any{"id": 7, "workflow_id": 20, "run_number": 1, "run_attempt": attempt, "head_sha": "merge", "conclusion": conclusion}})
 		return b

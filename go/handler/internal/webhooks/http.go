@@ -111,6 +111,12 @@ func Handler(logger *log.Logger, githubSecret []byte, filters ...*Filter) http.H
 				return
 			}
 			fields["filter"] = decision
+			if decision.Reason == "untrusted_sender" {
+				// Outsiders choose this text; record who sent it, not what they wrote.
+				delete(fields, "body")
+				fields["body_omitted"] = true
+				fields["github_sender"] = boundedHeader(senderLogin(body))
+			}
 			if decision.Disposition == "keep" {
 				fields["task_preview"] = GitHubTaskPreview(body, r.Header.Get("X-GitHub-Event"), r.Header.Get("X-GitHub-Delivery"), time.Now())
 				if preview != nil {
@@ -169,4 +175,12 @@ func StartServer(port int, githubSecret []byte, filters ...*Filter) (*http.Serve
 		}
 	}()
 	return server, nil
+}
+
+func senderLogin(body []byte) string {
+	var p struct {
+		Sender user `json:"sender"`
+	}
+	_ = json.Unmarshal(body, &p)
+	return p.Sender.Login
 }

@@ -36,7 +36,7 @@ func ciBody(id, number, attempt int, sha, conclusion, event, branch string) []by
 
 func ciReceive(t *testing.T, store *Store, body []byte, reason string) *contracts.TaskQueueMessage {
 	t.Helper()
-	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", DeliveryEnabled: true}
+	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	d, n, err := webhooks.ReceiveGitHub(context.Background(), store, f, body, "workflow_run", fmt.Sprintf("delivery:%x", sha256.Sum256(body)), time.Now())
 	if err != nil || d.Reason != reason {
 		t.Fatalf("receipt: %+v %v (want %s)", d, err, reason)

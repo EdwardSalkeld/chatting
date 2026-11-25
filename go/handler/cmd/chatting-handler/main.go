@@ -291,6 +291,7 @@ func newRuntimeRunner(ctx context.Context, config handlerconfig.Config) (_ runne
 	webhookServer, err := webhooks.StartServer(config.WebhookHTTPPort, []byte(os.Getenv(config.GitHubWebhookSecretEnv)), &webhooks.Filter{
 		Store: store, Login: config.GitHubWebhookLogin, ReleaseRepositories: config.GitHubWebhookReleaseRepositories,
 		SelfLogins:      config.GitHubWebhookSelfLogins,
+		TrustedSenders:  config.GitHubWebhookTrustedSenders,
 		DeliveryEnabled: config.GitHubWebhookDeliveryEnabled, AssignTask: store.AssignTask,
 		InstructionsRepository: config.InstructionsRepository, InstructionsStore: store,
 	})
