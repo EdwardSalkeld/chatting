@@ -153,3 +153,87 @@ class TypeSafeTransportTests(unittest.TestCase):
                 [c.kwargs["timeout"] for c in build.return_value.open.call_args_list],
                 [4, 1],
             )
+
+
+def test_inbox_400_retry_recovers_without_logging_provider_text():
+    error = urllib.error.HTTPError(
+        typesafe.ENDPOINT, 400, "PRIVATE", {}, io.BytesIO(b'{"detail":"PRIVATE body"}')
+    )
+    with (
+        patch("app.typesafe.urllib.request.build_opener") as build,
+        patch("app.typesafe.time.sleep") as sleep,
+        unittest.TestCase().assertLogs("app.typesafe", level="WARNING") as logs,
+    ):
+        build.return_value.open.side_effect = [error, io.BytesIO(b"{}")]
+        assert typesafe.post(typesafe.ENDPOINT, "secret", {}, retry_400=True) == {}
+        assert build.return_value.open.call_count == 2
+        sleep.assert_called_once_with(1)
+        assert "PRIVATE" not in " ".join(logs.output)
+
+
+def test_inbox_400_retry_is_bounded_and_skips_input_limit():
+    for body, expected in (
+        (b'{"detail":"bad"}', 2),
+        (b'{"detail":{"error_type":"max_tokens_exceeded"}}', 1),
+    ):
+
+        def rejected():
+            return urllib.error.HTTPError(
+                typesafe.ENDPOINT, 400, "bad", {}, io.BytesIO(body)
+            )
+
+        with (
+            patch("app.typesafe.urllib.request.build_opener") as build,
+            patch("app.typesafe.time.sleep"),
+        ):
+            build.return_value.open.side_effect = [rejected(), rejected()]
+            with unittest.TestCase().assertRaises(urllib.error.HTTPError):
+                typesafe.post(typesafe.ENDPOINT, "secret", {}, retry_400=True)
+            assert build.return_value.open.call_count == expected
+
+
+def test_inbox_retry_keeps_auth_out_of_summary():
+    from app.personal_inbox import classify
+
+    error = urllib.error.HTTPError(typesafe.ENDPOINT, 400, "bad", {}, io.BytesIO(b"{}"))
+    answer = jev_answer()
+    answer["answers"]["auth_related"]["noul"] = 0.9
+    with (
+        patch("app.typesafe.urllib.request.build_opener") as build,
+        patch("app.typesafe.time.sleep"),
+        patch("app.personal_inbox.summarize") as summary,
+    ):
+        build.return_value.open.side_effect = [
+            error,
+            io.BytesIO(json.dumps(answer).encode()),
+        ]
+        result = classify(mail_task(), jev_key="key", summary_model="model")
+        assert result["classification"]["category"] == "auth"
+        summary.assert_not_called()
+
+
+def test_inbox_repeated_400_fails_closed_without_leaking_diagnostics():
+    from app.personal_inbox import classify
+
+    def rejected():
+        return urllib.error.HTTPError(
+            typesafe.ENDPOINT,
+            400,
+            "private reason",
+            {},
+            io.BytesIO(b'{"detail":{"error_type":"private secret"}}'),
+        )
+
+    with (
+        patch("app.typesafe.urllib.request.build_opener") as build,
+        patch("app.typesafe.time.sleep"),
+        patch("app.personal_inbox.summarize") as summary,
+        unittest.TestCase().assertLogs("app.personal_inbox", level="WARNING") as logs,
+    ):
+        build.return_value.open.side_effect = [rejected(), rejected()]
+        result = classify(mail_task(), jev_key="key", summary_model="model")
+        assert result["classification"]["category"] == "review"
+        assert result["classification"]["trace"]["triage_failed"]
+        assert "provider_shape=detail_object" in logs.output[0]
+        assert "private" not in " ".join(logs.output)
+        summary.assert_not_called()

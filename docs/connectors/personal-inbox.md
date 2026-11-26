@@ -48,6 +48,8 @@ is no decision to use: the worker returns `review`
 without calling the summariser. Suspicious mail is withheld from both summary
 paths, while retaining Jev's category. Summary failures produce a notice to read
 the original, retaining the category and confidence.
+The worker retries a rejected HTTP 400 classification once after one second, except for a known input-size error; rate-limit retries share the existing three-second wait budget. If retrying fails, it still fails closed. Logs record only the HTTP status, a fixed description of the provider response structure, model, excerpt length and rules revision; they do not record provider-supplied text or email contents.
+
 The Jev version is pinned to `jev-1.13.0`. Choice confidence is derived from
 the option probabilities, not another probability of correctness. The worker
 validates the distribution and confidence (allowing rounding) and reports
