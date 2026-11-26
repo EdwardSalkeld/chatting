@@ -250,6 +250,7 @@ def jev_triage(mail: dict[str, Any], key: str, *, rules_context: str = "") -> Tr
         JEV_ENDPOINT,
         key,
         {"model": typesafe.MODEL, "state": mail, "questions": questions},
+        retry_400=True,
     )
     answers = result["answers"]
     category, confidence = check_answer(answers["category"], CATEGORIES)
@@ -482,13 +483,39 @@ def summarize(
     return value
 
 
+def provider_error_shape(error: Exception) -> str:
+    """Describe the response structure without retaining provider-supplied text."""
+    if not isinstance(error, urllib.error.HTTPError):
+        return "not_http"
+    try:
+        raw = getattr(error, "safe_body", None)
+        if raw is None:
+            raw = error.read(4096)
+            setattr(error, "safe_body", raw)
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            return "json_non_object"
+        detail = payload.get("detail")
+        if isinstance(detail, dict):
+            if detail.get("error_type") == "max_tokens_exceeded":
+                return "max_tokens_exceeded"
+            return "detail_object"
+        if isinstance(detail, list):
+            return "detail_list"
+        if isinstance(detail, str):
+            return "detail_string"
+        return "other_object"
+    except OSError, ValueError, TypeError:
+        return "non_json"
+
+
 def triage_failure(error: Exception) -> tuple[str, int]:
     """Return a safe diagnostic; never log provider bodies, mail or credentials."""
     if isinstance(error, urllib.error.HTTPError):
         status = error.code
         if status == 400:
             try:
-                payload = json.loads(error.read(4096))
+                payload = json.loads(getattr(error, "safe_body", b""))
                 if payload.get("detail", {}).get("error_type") == "max_tokens_exceeded":
                     return "input_too_large", status
             except OSError, ValueError, AttributeError, TypeError:
@@ -533,9 +560,16 @@ def classify(
         category, confidence = "review", 0.0
         requires_action = has_deadline = suspicious = False
         triage_failed = True
+        shape = provider_error_shape(error)
         failure, http_status = triage_failure(error)
         LOGGER.warning(
-            "personal_inbox_triage_failed kind=%s http_status=%d", failure, http_status
+            "personal_inbox_triage_failed kind=%s http_status=%d provider_shape=%s model=%s excerpt_chars=%d rules_revision=%s",
+            failure,
+            http_status,
+            shape,
+            typesafe.MODEL,
+            len(mail["body"]),
+            rules_revision or "none",
         )
     trace = {
         "jev_category": category,
