@@ -155,8 +155,16 @@ class AppServerExecutor(CodexExecutor):
             )
         }
         # Stable across transport retries, distinct for recovery continuations.
+        request_identity = [envelope.to_dict(), self.model_tier]
+        retry_count = (
+            self.history_store.codex_quota_retry_count(f"task:{envelope.id}")
+            if self.history_store
+            else 0
+        )
+        if retry_count:
+            request_identity.append({"codex_quota_retry": retry_count})
         request_id = hashlib.sha256(
-            json.dumps([envelope.to_dict(), self.model_tier], sort_keys=True).encode()
+            json.dumps(request_identity, sort_keys=True).encode()
         ).hexdigest()
         escalation_path = (
             Path(self.cwd or Path.cwd()) / f".chatting-escalate-{request_id}.json"

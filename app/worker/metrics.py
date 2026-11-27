@@ -40,6 +40,8 @@ def _quota_metrics(db_path: str) -> list[str]:
         "# TYPE chatting_codex_quota_remaining_percent gauge",
         "# HELP chatting_codex_quota_reset_timestamp_seconds Reset time of a Codex usage window.",
         "# TYPE chatting_codex_quota_reset_timestamp_seconds gauge",
+        "# HELP chatting_codex_quota_interrupted_tasks Tasks requiring review after quota interruption.",
+        "# TYPE chatting_codex_quota_interrupted_tasks gauge",
     ]
     try:
         with closing(
@@ -50,13 +52,23 @@ def _quota_metrics(db_path: str) -> list[str]:
             row = db.execute(
                 "SELECT snapshot_json, observed_at FROM codex_quota_snapshot WHERE id = 1"
             ).fetchone()
+            blocked = (
+                db.execute("SELECT 1 FROM codex_quota_gate WHERE id=1").fetchone()
+                is not None
+            )
+            interrupted = db.execute(
+                "SELECT COUNT(*) FROM worker_inbox WHERE state='quota_interrupted'"
+            ).fetchone()[0]
+        lines.append(f"chatting_codex_quota_interrupted_tasks {interrupted}")
         if row is None:
+            if blocked:
+                lines.append("chatting_codex_quota_blocked 1")
             return lines
         snapshot, observed = json.loads(row[0]), float(row[1])
         lines.append(f"chatting_codex_quota_snapshot_timestamp_seconds {observed}")
         allowed = snapshot.get("ordinary_usage_allowed")
-        if type(allowed) is bool:
-            lines.append(f"chatting_codex_quota_blocked {int(not allowed)}")
+        if blocked or type(allowed) is bool:
+            lines.append(f"chatting_codex_quota_blocked {int(blocked or not allowed)}")
         for window in snapshot.get("windows", []):
             minutes, used, reset = (
                 window.get("duration_minutes"),
