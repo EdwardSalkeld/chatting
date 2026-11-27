@@ -30,7 +30,8 @@ def normalize(response: dict) -> dict:
         duration = window.get("windowDurationMins")
         reset = window.get("resetsAt")
         if (
-            type(used) not in (int, float)
+            not isinstance(used, (int, float))
+            or isinstance(used, bool)
             or not 0 <= used <= 100
             or type(duration) is not int
             or duration <= 0
