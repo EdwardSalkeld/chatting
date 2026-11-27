@@ -60,6 +60,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "poll_timeout_seconds",
         "sleep_seconds",
         "executor_pool_size",
+        "speculative_work",
     }
 )
 
@@ -288,6 +289,12 @@ def main() -> int:
         raise RuntimeError("another worker already owns this database") from exc
 
     store = SQLiteStateStore(db_path)
+    speculative_settings = config.get("speculative_work")
+    if speculative_settings is not None and not isinstance(speculative_settings, dict):
+        raise ValueError("speculative_work must be an object")
+    store.set_speculative_enabled(
+        bool(speculative_settings and speculative_settings.get("enabled") is True)
+    )
     supervisors = SupervisorPool(
         directory=Path(f"{Path(db_path).resolve()}.supervisors"),
         size=executor_pool_size,
@@ -357,6 +364,10 @@ def main() -> int:
         )
     try:
         loop_count = 0
+        speculative_last_poll = 0.0
+        speculative_config = config.get("speculative_work")
+        if speculative_config is not None and not isinstance(speculative_config, dict):
+            raise ValueError("speculative_work must be an object")
         while True:
             loop_count += 1
             # Replay any egress still pending in the outbox (a prior POST that
@@ -373,6 +384,22 @@ def main() -> int:
                     )
                 )
             supervisors.tick()
+            if (
+                speculative_config
+                and time.monotonic() - speculative_last_poll >= 30
+                and all(status["state"] == "idle" for status in supervisors.statuses())
+            ):
+                from app.worker.speculative_quota import tick as speculative_tick
+
+                speculative_last_poll = time.monotonic()
+                try:
+                    speculative_tick(
+                        store,
+                        speculative_config,
+                        handler_egress_url.rsplit("/", 1)[0],
+                    )
+                except Exception:
+                    LOGGER.exception("speculative_work_tick_failed")
             activity_monitor.set_supervisor_executors(
                 [
                     executor

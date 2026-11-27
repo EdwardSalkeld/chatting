@@ -150,7 +150,14 @@ def process_task_message(
     model_decision = None
     # Scheduled occurrences are independent jobs, not continuations of the
     # workspace's interactive model choice. The bounded router fails to high.
-    if model_tier == "auto" or envelope.source == "cron":
+    with store._transaction() as connection:
+        speculative = connection.execute(
+            "SELECT tier FROM speculative_runs WHERE task_id = ?",
+            (task_message.task_id,),
+        ).fetchone()
+    if speculative:
+        model_tier = speculative["tier"]
+    elif model_tier == "auto" or envelope.source == "cron":
         model_decision = choose_model(store=store, envelope=envelope)
         model_tier = model_decision.tier
     escalation_reason: str | None = None
