@@ -227,6 +227,22 @@ class SQLiteStateStore:
             ).fetchone()
             return int(row[0]) if row else 0
 
+    def codex_quota_blocked(self) -> bool:
+        with closing(self._connect()) as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM codex_quota_gate WHERE id=1"
+                ).fetchone()
+                is not None
+            )
+
+    def block_codex_quota(self) -> None:
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT INTO codex_quota_gate VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET blocked_at=excluded.blocked_at",
+                (time.time(),),
+            )
+
     def park_codex_quota_task(self, task_id: str) -> None:
         """Persist the gate and an uncertain interruption before releasing a lease."""
         with self._transaction() as connection:

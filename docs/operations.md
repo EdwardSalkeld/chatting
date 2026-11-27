@@ -73,6 +73,13 @@ worker activity and actual external state before choosing to resume; the command
 `--resume <task-id>` queues a reviewed task. The gate still applies. A resumed
 turn is instructed to check prior work and avoid repeating side effects.
 
+Personal inbox classification and digest jobs use a separate BBMB queue. The
+personal inbox collector pauses pickup while the same Codex quota gate is
+closed. A quota error from a Codex summary or digest also closes the gate and
+leaves the leased job unacknowledged for redelivery; it does not cache or send
+the usual unavailable-summary fallback. Other summarization failures retain
+their existing fallback behavior. Mail already processed is not reclassified.
+
 `codex_working_dir` sets the Codex subprocess cwd. `workspace_root` holds the
 persistent per-work-item workspaces. The worker runs up to
 `executor_pool_size` tasks at once (default two); tasks for one work item run

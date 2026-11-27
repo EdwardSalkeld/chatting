@@ -281,6 +281,36 @@ def codex_environment() -> dict[str, str]:
     return environment
 
 
+class CodexQuotaExhausted(Exception):
+    """A retryable subscription quota failure, with no mail in its message."""
+
+
+def _codex_quota_failure(stdout: str, stderr: str) -> bool:
+    markers = (
+        "usagelimitexceeded",
+        "you've hit your usage limit",
+        "you have hit your usage limit",
+    )
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError, TypeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") not in {
+            "error",
+            "turn.failed",
+        }:
+            continue
+        if any(marker in json.dumps(event).lower() for marker in markers):
+            return True
+    return any(
+        line.strip()
+        .lower()
+        .startswith(("you've hit your usage limit", "you have hit your usage limit"))
+        for line in stderr.splitlines()
+    )
+
+
 def codex_structured(
     instructions: str, payload: Any, schema: dict[str, Any], *, model: str
 ) -> dict[str, Any]:
@@ -318,6 +348,8 @@ def codex_structured(
             )
             output = completed.stdout
             if completed.returncode != 0:
+                if _codex_quota_failure(completed.stdout or "", completed.stderr or ""):
+                    raise CodexQuotaExhausted("Codex usage limit exceeded")
                 raise ValueError("codex exited non-zero")
             raw = answer_path.read_text() if answer_path.exists() else ""
             if len(raw) > 1_000_000:

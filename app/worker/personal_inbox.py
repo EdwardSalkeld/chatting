@@ -28,6 +28,7 @@ from app.worker.owner_rules import load_rules
 from app.codex_usage import usage_sink
 from app.state import SQLiteStateStore
 from app.personal_inbox import (
+    CodexQuotaExhausted,
     DEAD_QUEUE,
     RESULTS_QUEUE,
     TASKS_QUEUE,
@@ -93,6 +94,11 @@ def process_one(
             rules_repo=rules_repo,
             store=store,
         )
+    except CodexQuotaExhausted:
+        if store is not None:
+            store.block_codex_quota()
+        LOGGER.warning("personal_inbox_deferred reason=codex_quota")
+        raise
     except Exception as error:
         reason, location = diagnostics.failure_details(error)
         LOGGER.error(
@@ -131,6 +137,8 @@ def _process_one(
     rules_repo: str = "",
     store: SQLiteStateStore | None = None,
 ) -> bool:
+    if store is not None and store.codex_quota_blocked():
+        return False
     picked = broker.pickup_json(TASKS_QUEUE, timeout_seconds=120, wait_seconds=1)
     if picked is None:
         return False
@@ -197,6 +205,8 @@ def _process_one(
             result = work()
         finally:
             usage_sink.reset(token)
+        if store is not None and store.codex_quota_blocked():
+            raise CodexQuotaExhausted("Codex quota blocked while processing")
         diagnostics.mark_stage("cache_write")
         with cache:
             cache.execute(
@@ -253,6 +263,9 @@ class PersonalInboxCollector:
             self.broker.ensure_queue(queue)
         while not self._stop.is_set():
             try:
+                if self.store is not None and self.store.codex_quota_blocked():
+                    self._stop.wait(5)
+                    continue
                 process_one(
                     self.broker,
                     self.cache,
