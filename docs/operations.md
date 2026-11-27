@@ -102,8 +102,10 @@ the reserve because the limit is checked between tasks. Missing or stale quota
 information pauses new starts. Recent job/repository pairs rotate before
 repeating. State and reminder submissions survive worker restarts.
 
-Each task has a separate work item and is instructed to report useful findings
-or propose a PR, creating a Telegram topic when needed. A job's model tier can
+Each task has a separate work item and is instructed to create a Telegram topic,
+post its job, repository and model before starting, and report the outcome in
+the same topic even when it finds nothing. These updates are sent by the agent;
+an executor or Telegram failure can prevent one. A job's model tier can
 be `speculative` or `speculative_deep` (defaults `gpt-6.2-sol` and
 `gpt-6.2-astra` respectively); set `CHATTING_MODEL_SPECULATIVE` and
 `CHATTING_MODEL_SPECULATIVE_DEEP` to change them. Existing `high` and `low`

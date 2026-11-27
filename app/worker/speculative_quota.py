@@ -12,6 +12,8 @@ import uuid
 import urllib.request
 from datetime import datetime, timezone
 
+from app.model_command import MODELS
+
 WEEK_MINUTES = 7 * 24 * 60
 
 
@@ -146,7 +148,7 @@ def tick(store, config: dict, handler_url: str, *, now: float | None = None) -> 
                 },
                 "context_refs": ["repo:" + repo],
                 "prompt_context": [
-                    "This is speculative background work. Use a fresh checkout or workspace. Check recent issues and PRs for related findings before reporting. Report meaningful findings and open a PR for worthwhile changes. Create a Telegram topic for useful results using the task's topic contract."
+                    f"This is speculative background work: job {job.name}, repository {repo}, model {MODELS[job.model_tier]}. Before investigating, use the task's Telegram topic contract to create or reuse a topic for this work item. Send a short start message to that topic naming the job, repository and model. Then use a fresh checkout or workspace and check recent issues and PRs for related findings. Open a PR for worthwhile changes. At the end, send the outcome to the same topic, even if nothing worth reporting was found. Describe any incomplete investigation honestly."
                 ],
                 "created_from_task_id": "speculative-worker",
                 "created_by": "worker",

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from app.broker import TaskQueueMessage
 from app.models import ReplyChannel, TaskEnvelope
+from app.model_command import MODELS
 from app.state import SQLiteStateStore
 from app.worker.speculative_quota import tick
 
@@ -60,6 +61,14 @@ def test_handler_submission_is_idempotent_and_waits_for_completion(tmp_path):
         body = json.loads(post.call_args.args[0].data)
         assert body["context_refs"] == ["repo:/repo"]
         assert body["idempotency_key"].startswith("speculative:")
+        instructions = body["prompt_context"][0]
+        assert "Before investigating" in instructions
+        assert "same topic, even if nothing worth reporting" in instructions
+        assert (
+            "audit" in instructions
+            and "/repo" in instructions
+            and MODELS["speculative_deep"] in instructions
+        )
     assert not tick(store, CONFIG, "http://handler", now=NOW)
     assert not tick(store, CONFIG, "http://handler", now=NOW + 181)
 
