@@ -12,7 +12,12 @@ from app.usage_command import _THREAD_PREFIX_RE
 
 def models_from_environment(environment: Mapping[str, str]) -> dict[str, str]:
     models = {}
-    for tier, default in {"high": "gpt-6.1-sol", "low": "gpt-6-luna"}.items():
+    for tier, default in {
+        "high": "gpt-6.1-sol",
+        "low": "gpt-6-luna",
+        "speculative": "gpt-6.2-sol",
+        "speculative_deep": "gpt-6.2-astra",
+    }.items():
         setting = f"CHATTING_MODEL_{tier.upper()}"
         value = environment.get(setting, default).strip()
         if not value or any(character.isspace() for character in value):

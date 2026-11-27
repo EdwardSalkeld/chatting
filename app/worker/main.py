@@ -60,6 +60,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "poll_timeout_seconds",
         "sleep_seconds",
         "executor_pool_size",
+        "speculative_work",
     }
 )
 
@@ -357,6 +358,7 @@ def main() -> int:
         )
     try:
         loop_count = 0
+        speculative_last_poll = 0.0
         while True:
             loop_count += 1
             # Replay any egress still pending in the outbox (a prior POST that
@@ -373,6 +375,22 @@ def main() -> int:
                     )
                 )
             supervisors.tick()
+            if (
+                config.get("speculative_work")
+                and time.monotonic() - speculative_last_poll >= 30
+                and all(status["state"] == "idle" for status in supervisors.statuses())
+            ):
+                from app.worker.speculative_quota import tick as speculative_tick
+
+                speculative_last_poll = time.monotonic()
+                try:
+                    speculative_tick(
+                        store,
+                        config["speculative_work"],
+                        handler_egress_url.rsplit("/", 1)[0],
+                    )
+                except Exception:
+                    LOGGER.exception("speculative_work_tick_failed")
             activity_monitor.set_supervisor_executors(
                 [
                     executor

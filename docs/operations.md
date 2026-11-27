@@ -73,6 +73,43 @@ worker activity and actual external state before choosing to resume; the command
 `--resume <task-id>` queues a reviewed task. The gate still applies. A resumed
 turn is instructed to check prior work and avoid repeating side effects.
 
+#### Speculative quota work
+
+Speculative work is disabled unless `speculative_work.enabled` is true in the
+worker config. Configure an explicit list of local repository paths and jobs:
+
+```json
+{
+  "speculative_work": {
+    "enabled": true,
+    "repositories": ["/srv/chatting/workspace/chatting"],
+    "jobs": [
+      {"name": "security", "prompt": "Audit this repository for a concrete security vulnerability and verify any finding.", "model_tier": "speculative_deep"},
+      {"name": "efficiency", "prompt": "Find and verify a meaningful performance or resource-use improvement.", "model_tier": "speculative"},
+      {"name": "cleanup", "prompt": "Find a worthwhile code and test cleanup and verify it.", "model_tier": "speculative"},
+      {"name": "improvement", "prompt": "Investigate and propose a concrete improvement to this repository.", "model_tier": "speculative"}
+    ]
+  }
+}
+```
+
+The worker starts one at a time only while idle, if a successful quota reading
+less than three minutes old shows ordinary usage allowed, the seven-day reset is
+less than six hours away, and over 10% remains. It checks again when claiming
+the task and waits for a new reading after completion. Normal pending work is
+claimed first; already running work is not preempted. A task can finish below
+the reserve because the limit is checked between tasks. Missing or stale quota
+information pauses new starts. Recent job/repository pairs rotate before
+repeating. State and reminder submissions survive worker restarts.
+
+Each task has a separate work item and is instructed to report useful findings
+or propose a PR, creating a Telegram topic when needed. A job's model tier can
+be `speculative` or `speculative_deep` (defaults `gpt-6.2-sol` and
+`gpt-6.2-astra` respectively); set `CHATTING_MODEL_SPECULATIVE` and
+`CHATTING_MODEL_SPECULATIVE_DEEP` to change them. Existing `high` and `low`
+tiers are also accepted. Repository checkouts and prompts must be configured by
+the deployment, and the handler's reminders API must be reachable by the worker.
+
 `codex_working_dir` sets the Codex subprocess cwd. `workspace_root` holds the
 persistent per-work-item workspaces. The worker runs up to
 `executor_pool_size` tasks at once (default two); tasks for one work item run

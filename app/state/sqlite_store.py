@@ -53,6 +53,15 @@ CREATE TABLE IF NOT EXISTS codex_quota_retries (
     task_id TEXT PRIMARY KEY,
     attempts INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS speculative_runs (
+    id TEXT PRIMARY KEY,
+    job TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    task_id TEXT UNIQUE,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
@@ -682,6 +691,21 @@ class SQLiteStateStore:
                 ).fetchone()
                 is not None
             )
+            from app.worker.speculative_quota import eligible
+
+            quota = connection.execute(
+                "SELECT snapshot_json, observed_at FROM codex_quota_snapshot WHERE id = 1"
+            ).fetchone()
+            import time
+
+            speculative_allowed = bool(
+                quota
+                and eligible(
+                    json.loads(quota["snapshot_json"]),
+                    quota["observed_at"],
+                    time.time(),
+                )
+            )
             row = connection.execute(
                 """
                 SELECT candidate.* FROM worker_inbox AS candidate
@@ -690,6 +714,10 @@ class SQLiteStateStore:
                        (json_extract(candidate.task_payload_json, '$.envelope.source') = 'internal'
                         AND json_extract(candidate.task_payload_json, '$.envelope.reply_channel.type') = 'internal'
                         AND json_extract(candidate.task_payload_json, '$.envelope.reply_channel.target') = 'heartbeat'))
+                  AND (json_extract(candidate.task_payload_json, '$.envelope.reply_channel.metadata.speculative_run') IS NULL
+                       OR (candidate.state = 'closing'
+                           OR (? AND EXISTS (SELECT 1 FROM speculative_runs AS spec WHERE spec.task_id = candidate.task_id)
+                               AND NOT EXISTS (SELECT 1 FROM worker_inbox AS active JOIN speculative_runs AS spec ON spec.task_id = active.task_id WHERE active.lease_owner IS NOT NULL))))
                   AND (candidate.state = 'pending'
                        OR (candidate.state = 'closing' AND candidate.parent_task_id IS NULL))
                   AND NOT EXISTS (
@@ -715,10 +743,11 @@ class SQLiteStateStore:
                                  AND earlier.task_id < candidate.task_id))
                   )
                 ORDER BY CASE candidate.state WHEN 'closing' THEN 0 ELSE 1 END,
+                         CASE WHEN json_extract(candidate.task_payload_json, '$.envelope.reply_channel.metadata.speculative_run') IS NULL THEN 0 ELSE 1 END,
                          candidate.staged_at ASC, candidate.task_id ASC
                 LIMIT 1
                 """,
-                (int(blocked),),
+                (int(blocked), int(speculative_allowed)),
             ).fetchone()
             if row is None:
                 return None
