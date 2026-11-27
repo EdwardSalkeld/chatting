@@ -146,7 +146,7 @@ def tick(store, config: dict, handler_url: str, *, now: float | None = None) -> 
                 },
                 "context_refs": ["repo:" + repo],
                 "prompt_context": [
-                    "This is speculative background work. Use a fresh checkout or workspace. Report meaningful findings and open a PR for worthwhile changes. Avoid repeating previous findings. Create a Telegram topic for useful results using the task's topic contract."
+                    "This is speculative background work. Use a fresh checkout or workspace. Check recent issues and PRs for related findings before reporting. Report meaningful findings and open a PR for worthwhile changes. Create a Telegram topic for useful results using the task's topic contract."
                 ],
                 "created_from_task_id": "speculative-worker",
                 "created_by": "worker",

@@ -289,6 +289,12 @@ def main() -> int:
         raise RuntimeError("another worker already owns this database") from exc
 
     store = SQLiteStateStore(db_path)
+    speculative_settings = config.get("speculative_work")
+    if speculative_settings is not None and not isinstance(speculative_settings, dict):
+        raise ValueError("speculative_work must be an object")
+    store.set_speculative_enabled(
+        bool(speculative_settings and speculative_settings.get("enabled") is True)
+    )
     supervisors = SupervisorPool(
         directory=Path(f"{Path(db_path).resolve()}.supervisors"),
         size=executor_pool_size,
@@ -359,6 +365,9 @@ def main() -> int:
     try:
         loop_count = 0
         speculative_last_poll = 0.0
+        speculative_config = config.get("speculative_work")
+        if speculative_config is not None and not isinstance(speculative_config, dict):
+            raise ValueError("speculative_work must be an object")
         while True:
             loop_count += 1
             # Replay any egress still pending in the outbox (a prior POST that
@@ -376,7 +385,7 @@ def main() -> int:
                 )
             supervisors.tick()
             if (
-                config.get("speculative_work")
+                speculative_config
                 and time.monotonic() - speculative_last_poll >= 30
                 and all(status["state"] == "idle" for status in supervisors.statuses())
             ):
@@ -386,7 +395,7 @@ def main() -> int:
                 try:
                     speculative_tick(
                         store,
-                        config["speculative_work"],
+                        speculative_config,
                         handler_egress_url.rsplit("/", 1)[0],
                     )
                 except Exception:

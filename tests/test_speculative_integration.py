@@ -96,6 +96,7 @@ def test_claim_prioritizes_normal_work_and_rechecks_quota(tmp_path):
     import time
 
     store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.set_speculative_enabled(True)
     now = time.time()
     store.record_codex_quota(
         {
@@ -134,4 +135,7 @@ def test_claim_prioritizes_normal_work_and_rechecks_quota(tmp_path):
         },
         now,
     )
+    store.set_speculative_enabled(False)
+    assert store.claim_next_inbox_task() is None
+    store.set_speculative_enabled(True)
     assert store.claim_next_inbox_task().task_message.task_id == speculative
