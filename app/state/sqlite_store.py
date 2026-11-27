@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 import json
 import uuid
 from collections.abc import Iterator
@@ -43,6 +44,14 @@ CREATE TABLE IF NOT EXISTS codex_quota_snapshot (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     snapshot_json TEXT NOT NULL,
     observed_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS codex_quota_gate (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    blocked_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS codex_quota_retries (
+    task_id TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS audit_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +208,80 @@ class SQLiteStateStore:
                 "ON CONFLICT(id) DO UPDATE SET snapshot_json=excluded.snapshot_json, observed_at=excluded.observed_at",
                 (json.dumps(snapshot), observed_at),
             )
+            allowed = snapshot.get("ordinary_usage_allowed")
+            if allowed is False:
+                connection.execute(
+                    "INSERT OR IGNORE INTO codex_quota_gate VALUES (1, ?)",
+                    (observed_at,),
+                )
+            elif allowed is True:
+                connection.execute(
+                    "DELETE FROM codex_quota_gate WHERE id=1 AND blocked_at <= ?",
+                    (observed_at,),
+                )
+
+    def codex_quota_retry_count(self, task_id: str) -> int:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT attempts FROM codex_quota_retries WHERE task_id=?", (task_id,)
+            ).fetchone()
+            return int(row[0]) if row else 0
+
+    def park_codex_quota_task(self, task_id: str) -> None:
+        """Persist the gate and an uncertain interruption before releasing a lease."""
+        with self._transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO codex_quota_gate VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET blocked_at=excluded.blocked_at",
+                (time.time(),),
+            )
+            connection.execute(
+                "UPDATE worker_inbox SET state='quota_interrupted' WHERE task_id=? AND state IN ('active', 'closing')",
+                (task_id,),
+            )
+
+    def release_codex_quota_task(self, task_id: str, *, safe_to_retry: bool) -> None:
+        now = format_utc(datetime.now(timezone.utc))
+        with self._transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = "pending" if safe_to_retry else "quota_interrupted"
+            updated = connection.execute(
+                "UPDATE worker_inbox SET state=?, lease_owner=NULL, updated_at=? WHERE task_id=? AND state='quota_interrupted'",
+                (state, now, task_id),
+            )
+            if safe_to_retry and updated.rowcount:
+                connection.execute(
+                    "INSERT INTO codex_quota_retries VALUES (?, 1) ON CONFLICT(task_id) DO UPDATE SET attempts=attempts+1",
+                    (task_id,),
+                )
+            connection.execute(
+                "UPDATE worker_inbox SET state='pending', parent_task_id=NULL, updated_at=? WHERE parent_task_id=? AND state='attached'",
+                (now, task_id),
+            )
+
+    def resume_interrupted_quota_task(self, task_id: str) -> bool:
+        """After operator review, explicitly resume one unleased interrupted task."""
+        with self._transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE worker_inbox SET state='pending', updated_at=? WHERE task_id=? AND state='quota_interrupted' AND lease_owner IS NULL",
+                (format_utc(datetime.now(timezone.utc)), task_id),
+            )
+            if updated.rowcount:
+                connection.execute(
+                    "INSERT INTO codex_quota_retries VALUES (?, 1) ON CONFLICT(task_id) DO UPDATE SET attempts=attempts+1",
+                    (task_id,),
+                )
+            return bool(updated.rowcount)
+
+    def interrupted_quota_tasks(self) -> list[str]:
+        with closing(self._connect()) as connection:
+            return [
+                row[0]
+                for row in connection.execute(
+                    "SELECT task_id FROM worker_inbox WHERE state='quota_interrupted' ORDER BY staged_at, task_id"
+                )
+            ]
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -593,10 +676,20 @@ class SQLiteStateStore:
         lease_owner = uuid.uuid4().hex
         with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            blocked = (
+                connection.execute(
+                    "SELECT 1 FROM codex_quota_gate WHERE id=1"
+                ).fetchone()
+                is not None
+            )
             row = connection.execute(
                 """
                 SELECT candidate.* FROM worker_inbox AS candidate
                 WHERE candidate.lease_owner IS NULL
+                  AND (? = 0 OR candidate.state = 'closing' OR
+                       (json_extract(candidate.task_payload_json, '$.envelope.source') = 'internal'
+                        AND json_extract(candidate.task_payload_json, '$.envelope.reply_channel.type') = 'internal'
+                        AND json_extract(candidate.task_payload_json, '$.envelope.reply_channel.target') = 'heartbeat'))
                   AND (candidate.state = 'pending'
                        OR (candidate.state = 'closing' AND candidate.parent_task_id IS NULL))
                   AND NOT EXISTS (
@@ -616,7 +709,7 @@ class SQLiteStateStore:
                                              WHERE mode.conversation_id = candidate.conversation_id
                                                AND mode.backend = 'app-server')))
                         AND earlier.parent_task_id IS NULL
-                        AND earlier.state IN ('pending', 'active', 'closing')
+                        AND earlier.state IN ('pending', 'active', 'closing', 'quota_interrupted')
                         AND (earlier.staged_at < candidate.staged_at
                              OR (earlier.staged_at = candidate.staged_at
                                  AND earlier.task_id < candidate.task_id))
@@ -624,7 +717,8 @@ class SQLiteStateStore:
                 ORDER BY CASE candidate.state WHEN 'closing' THEN 0 ELSE 1 END,
                          candidate.staged_at ASC, candidate.task_id ASC
                 LIMIT 1
-                """
+                """,
+                (int(blocked),),
             ).fetchone()
             if row is None:
                 return None
@@ -652,7 +746,7 @@ class SQLiteStateStore:
                 """
                 SELECT state, lease_owner, COUNT(*) AS count,
                        MIN(staged_at) AS oldest FROM worker_inbox
-                WHERE state IN ('pending', 'active', 'closing')
+                WHERE state IN ('pending', 'active', 'closing', 'quota_interrupted')
                   AND parent_task_id IS NULL
                 GROUP BY state, lease_owner IS NOT NULL
                 """
@@ -984,9 +1078,9 @@ class SQLiteStateStore:
                    ) AS runs ON runs.work_item_id = item.work_item_id
                    LEFT JOIN (
                        SELECT work_item_id,
-                              SUM(CASE WHEN state IN ('pending', 'attached') THEN 1 ELSE 0 END) AS queued,
+                              SUM(CASE WHEN state IN ('pending', 'attached', 'quota_interrupted') THEN 1 ELSE 0 END) AS queued,
                               SUM(CASE WHEN state IN ('active', 'closing') THEN 1 ELSE 0 END) AS running,
-                              MIN(CASE WHEN state IN ('pending', 'attached') THEN staged_at END) AS oldest_queued_at
+                              MIN(CASE WHEN state IN ('pending', 'attached', 'quota_interrupted') THEN staged_at END) AS oldest_queued_at
                        FROM worker_inbox GROUP BY work_item_id
                    ) AS queue ON queue.work_item_id = item.work_item_id
                    ORDER BY COALESCE(runs.last_run_at, item.created_at) DESC"""

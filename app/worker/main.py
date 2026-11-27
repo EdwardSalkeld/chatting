@@ -420,6 +420,12 @@ def _process_claimed_task(
             activity_monitor=activity_monitor,
             on_pr_created=_pr_registrar(handler_egress_url, task_message.task_id),
         )
+    if result.quota_retry_safe is not None:
+        store.release_codex_quota_task(
+            task_message.task_id, safe_to_retry=result.quota_retry_safe
+        )
+        _log_worker_processed(task_id=task_message.task_id, result=result)
+        return
     # Supervisors only queue results: the manager alone drains the outbox, so
     # sends never run concurrently and results survive the manager's absence.
     for egress_message in result.egress_messages:

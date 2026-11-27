@@ -57,6 +57,22 @@ last successful read. Missing fields are omitted rather than treated as zero;
 poll failures leave the last observation in place, so alerts must check its
 age. The credit balance is not a proxy for whether plan usage is available.
 
+When Codex reports ordinary usage unavailable, the worker keeps incoming work
+in its durable inbox and pauses model-task claims. Internal heartbeats and
+already-delivered closing work continue. A later successful quota read that
+reports usage allowed resumes claims; a stale or failed read does not clear the
+gate. A Codex `usageLimitExceeded` failure also closes the gate immediately.
+
+A failed app-server turn is automatically queued for retry only if its complete
+structured transcript confirms the quota error occurred before any tool action
+or visible reply. Other interrupted turns remain in `quota_interrupted`, which
+preserves the task and blocks later work in that work item until reviewed. The
+`chatting_codex_quota_interrupted_tasks` gauge exposes these for alerting. Inspect
+worker activity and actual external state before choosing to resume; the command
+`python3 -P -m app.main_quota --db <worker-db>` lists task IDs, and adding
+`--resume <task-id>` queues a reviewed task. The gate still applies. A resumed
+turn is instructed to check prior work and avoid repeating side effects.
+
 `codex_working_dir` sets the Codex subprocess cwd. `workspace_root` holds the
 persistent per-work-item workspaces. The worker runs up to
 `executor_pool_size` tasks at once (default two); tasks for one work item run

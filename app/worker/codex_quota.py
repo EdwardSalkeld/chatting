@@ -61,6 +61,7 @@ class QuotaPoller:
         self.thread.join(timeout=15)
 
     def poll(self) -> None:
+        started_at = time.time()
         server = AppServer([self.command, "app-server"])
         try:
             deadline = time.monotonic() + 10
@@ -76,7 +77,7 @@ class QuotaPoller:
             )
             server.send({"method": "initialized"})
             response = server.rpc("account/rateLimits/read", {}, deadline, sink)
-            self.store.record_codex_quota(normalize(response), time.time())
+            self.store.record_codex_quota(normalize(response), started_at)
         finally:
             server.close()
 
