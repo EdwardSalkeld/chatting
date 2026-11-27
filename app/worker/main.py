@@ -332,6 +332,10 @@ def main() -> int:
         notification_triage=notification_triage_from_environment(db_path),
     )
     collector.start()
+    from app.worker.codex_quota import QuotaPoller
+
+    quota_poller = QuotaPoller(store, _build_executor(config, args.config).command[0])
+    quota_poller.start()
     # Personal mail is classified in this process but never reaches the
     # executor: it has its own queue, and the only thing this thread can do
     # with an email is ask two fixed endpoints about it.
@@ -383,6 +387,7 @@ def main() -> int:
         return 0
     finally:
         collector.stop()
+        quota_poller.stop()
         if personal is not None:
             personal.stop()
         if max_loops:

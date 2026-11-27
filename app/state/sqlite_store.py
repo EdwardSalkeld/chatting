@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS run_records (
     schema_version TEXT NOT NULL,
     work_item_id TEXT
 );
+CREATE TABLE IF NOT EXISTS codex_quota_snapshot (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    snapshot_json TEXT NOT NULL,
+    observed_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
@@ -186,6 +191,14 @@ class SQLiteStateStore:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+    def record_codex_quota(self, snapshot: dict, observed_at: float) -> None:
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT INTO codex_quota_snapshot VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET snapshot_json=excluded.snapshot_json, observed_at=excluded.observed_at",
+                (json.dumps(snapshot), observed_at),
+            )
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:

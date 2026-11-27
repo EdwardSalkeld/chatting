@@ -47,6 +47,16 @@ Codex must be logged in as the worker user.
 
 ## Worker
 
+The worker polls Codex's account rate-limit API without starting a model turn.
+Its Prometheus endpoint reports `chatting_codex_quota_blocked` when the API
+reports whether ordinary usage is allowed, and
+`chatting_codex_quota_remaining_percent` and
+`chatting_codex_quota_reset_timestamp_seconds` labelled by window length in
+minutes. `chatting_codex_quota_snapshot_timestamp_seconds` is the time of the
+last successful read. Missing fields are omitted rather than treated as zero;
+poll failures leave the last observation in place, so alerts must check its
+age. The credit balance is not a proxy for whether plan usage is available.
+
 `codex_working_dir` sets the Codex subprocess cwd. `workspace_root` holds the
 persistent per-work-item workspaces. The worker runs up to
 `executor_pool_size` tasks at once (default two); tasks for one work item run
