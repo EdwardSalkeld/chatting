@@ -156,9 +156,13 @@ a destination rather than inferring one from a branch name.
 When GitHub omits a PR-triggered run's `pull_requests`, match its repository and
 `head_sha` against current watched PR heads. One match routes through that PR's
 existing owner. Multiple matches stay held as `workflow_ambiguous_commit`;
-unmatched events remain held. This uses local watch state, including heads
+unmatched failures remain held. This uses local watch state, including heads
 recorded on suppressed own-PR events, and works for fork PRs without GitHub API
 calls in the receiver. Old PR heads are not backfilled.
+
+For runs with no matching PR or registered owner, complete successful results
+are recorded for late run registration without holding the webhook.
+Failures, incomplete results and ambiguous PR runs remain held.
 
 For a run being awaited, explicitly register its owner before waiting:
 
@@ -280,8 +284,9 @@ these rules (an initial tag itself is always kept):
 | Workflow runs | Completed failures/timeouts/action-required/startup failures for current watched PR commits; success clearing a recorded failure |
 
 Other actions (including labels, milestones and comment deletion) are receipt
-logs only. Draft PR events carry `draft_tracking_only`; an explicit initial
-tag still carries `tagged_in`. This is a preview filter, not permission to
+logs only. Synchronize events on an already watched draft update its tracked
+head without starting an agent; other draft PR events carry `draft_tracking_only`.
+An explicit initial tag still carries `tagged_in`. This is a preview filter, not permission to
 execute work or post a reply.
 
 Events whose sender is that login or an additional `github_webhook_self_logins`

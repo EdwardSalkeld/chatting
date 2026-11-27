@@ -130,11 +130,50 @@ func TestNonPRExecutionDoesNotInferOldPROwner(t *testing.T) {
 	ciReceive(t, store, ciBody(1, 1, 1, "abc", "failure", "push", "main"), "workflow_missing_pr_context")
 }
 
+func TestUnownedSuccessIsNotHeldButCanBeRegisteredLater(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	origin := ciOwner(t, store, "-100")
+	body := ciBody(7, 1, 1, "abc", "success", "push", "main")
+	if n := ciReceive(t, store, body, "unowned_workflow_success"); n != nil {
+		t.Fatal("unowned success queued")
+	}
+	var held int
+	if err := store.db.QueryRow(`SELECT count(*) FROM github_webhook_held`).Scan(&held); err != nil || held != 0 {
+		t.Fatalf("held=%d: %v", held, err)
+	}
+	if err := store.RegisterRun(ctx, origin.TaskID, "https://github.com/o/r/actions/runs/7"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingGitHub(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("late registration: %v %v", pending, err)
+	}
+	routed, err := store.AssignTask(ctx, contracts.NewTaskQueueMessage(pending[0], "late", time.Now()))
+	if err != nil || routed.WorkItemID != origin.WorkItemID {
+		t.Fatalf("wrong owner: %+v %v", routed, err)
+	}
+	if err := store.RegisterRun(ctx, origin.TaskID, "https://github.com/o/r/actions/runs/7"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.PendingGitHub(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("duplicate completion: %v %v", pending, err)
+	}
+}
+
+func TestUnownedSuccessRequiresEnoughDataToSaveForLater(t *testing.T) {
+	store := openTestStore(t)
+	ciReceive(t, store, ciBody(7, 0, 1, "abc", "success", "push", "main"), "workflow_missing_pr_context")
+	ciReceive(t, store, ciBody(8, 1, 1, "abc", "failure", "push", "main"), "workflow_missing_pr_context")
+	ciReceive(t, store, ciBody(9, 1, 1, "abc", "success", "pull_request", "feature"), "unowned_workflow_success")
+}
+
 func TestLateRunRegistrationReconcilesHeldCompletionAtomically(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 	origin := ciOwner(t, store, "-100")
-	ciReceive(t, store, ciBody(7, 1, 1, "abc", "success", "push", "main"), "workflow_missing_pr_context")
+	ciReceive(t, store, ciBody(7, 1, 1, "abc", "failure", "push", "main"), "workflow_missing_pr_context")
 	if _, err := store.db.Exec(`CREATE TRIGGER fail_run_completion BEFORE INSERT ON github_webhook_pending BEGIN SELECT RAISE(FAIL,'injected'); END`); err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/EdwardSalkeld/chatting/go/handler/internal/state/sqlite"
@@ -79,6 +80,16 @@ func TestActionRulesAndWorkflowRecovery(t *testing.T) {
 	}
 	pr := map[string]any{"number": 1, "body": "@ExampleBot", "head": map[string]any{"sha": "abc"}}
 	check("pull_request", "opened", map[string]any{"pull_request": pr}, "keep", "tagged_in")
+	pr["draft"] = true
+	pr["head"] = map[string]any{"sha": "draft-new"}
+	check("pull_request", "synchronize", map[string]any{"pull_request": pr}, "drop", "draft_head_tracked")
+	stored, err := store.WebhookState(ctx, "watch", "examplebot/o/r#1")
+	if err != nil || !strings.Contains(stored, "draft-new") {
+		t.Fatalf("draft head not updated: %s %v", stored, err)
+	}
+	pr["draft"] = false
+	pr["head"] = map[string]any{"sha": "abc"}
+	check("pull_request", "synchronize", map[string]any{"pull_request": pr}, "keep", "watched_subject")
 	for _, tc := range []struct{ event, action, want, reason string }{
 		{"issues", "labeled", "drop", "action_noise"},
 		{"issues", "closed", "keep", "watched_subject"},
