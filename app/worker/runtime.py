@@ -40,6 +40,7 @@ class WorkerProcessResult:
     attempt_count: int
     reason_codes: list[str]
     error_summary: str | None
+    quota_retry_safe: bool | None = None
 
 
 def process_task_message(
@@ -56,6 +57,18 @@ def process_task_message(
         raise ValueError("max_attempts must be positive")
 
     envelope = task_message.envelope
+    if store.codex_quota_retry_count(task_message.task_id):
+        context = envelope.prompt_context
+        envelope = replace(
+            envelope,
+            prompt_context=replace(
+                context,
+                task_instructions=[
+                    *context.task_instructions,
+                    "A previous attempt was interrupted by the Codex usage limit. Review earlier context and actual external state before continuing; do not repeat completed side effects.",
+                ],
+            ),
+        )
     if is_maintenance(envelope):
         counts = run_maintenance(store.db_path, envelope.content)
         emitted_at = datetime.now(timezone.utc)
@@ -106,6 +119,7 @@ def process_task_message(
     egress_messages: list[EgressQueueMessage] = []
     executor_launch_count = 0
     used_supervised_recovery = False
+    quota_retry_safe: bool | None = None
     inbox_task = store.get_inbox_task(task_id=task_message.task_id)
     assignment = store.get_work_assignment(task_id=task_message.task_id)
     explicit_finish = bool(
@@ -136,7 +150,14 @@ def process_task_message(
     model_decision = None
     # Scheduled occurrences are independent jobs, not continuations of the
     # workspace's interactive model choice. The bounded router fails to high.
-    if model_tier == "auto" or envelope.source == "cron":
+    with store._transaction() as connection:
+        speculative = connection.execute(
+            "SELECT tier FROM speculative_runs WHERE task_id = ?",
+            (task_message.task_id,),
+        ).fetchone()
+    if speculative:
+        model_tier = speculative["tier"]
+    elif model_tier == "auto" or envelope.source == "cron":
         model_decision = choose_model(store=store, envelope=envelope)
         model_tier = model_decision.tier
     escalation_reason: str | None = None
@@ -222,6 +243,20 @@ def process_task_message(
                 )
             )
             reason_codes = []
+            if execution_result.errors and _is_codex_quota_error(
+                execution_result.errors
+            ):
+                store.park_codex_quota_task(task_message.task_id)
+                quota_retry_safe = (
+                    published_incremental_reply_count == 0
+                    and escalation_reason is None
+                    and not used_supervised_recovery
+                    and _quota_failed_before_tools(execution_result.stdout)
+                )
+                reason_codes = ["codex_quota_exhausted"]
+                result_status = "execution_error"
+                egress_messages = []
+                break
             if execution_result.errors:
                 reason_codes.append("executor_reported_errors")
             if (
@@ -368,7 +403,52 @@ def process_task_message(
         attempt_count=executor_launch_count or attempt_count,
         reason_codes=list(reason_codes),
         error_summary=error_summary,
+        quota_retry_safe=quota_retry_safe,
     )
+
+
+def _is_codex_quota_error(errors: list[str]) -> bool:
+    return any(
+        "usagelimitexceeded" in error.lower()
+        or "you've hit your usage limit" in error.lower()
+        for error in errors
+    )
+
+
+def _quota_failed_before_tools(stdout: str | None) -> bool:
+    """Only replay a complete structured failed turn with no tool events."""
+    if not stdout:
+        return False
+    failed = False
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError, TypeError:
+            return False
+        if not isinstance(event, dict):
+            return False
+        method = event.get("method")
+        params = event.get("params", {})
+        if not isinstance(params, dict):
+            return False
+        if method in ("item/started", "item/completed"):
+            item = params.get("item")
+            if not isinstance(item, dict) or item.get("type") not in {
+                "userMessage",
+                "agentMessage",
+                "reasoning",
+            }:
+                return False
+        if method == "turn/completed":
+            turn = params.get("turn", {})
+            error = turn.get("error") if isinstance(turn, dict) else None
+            if (
+                isinstance(error, dict)
+                and error.get("codexErrorInfo") == "usageLimitExceeded"
+                and turn.get("status") == "failed"
+            ):
+                failed = True
+    return failed
 
 
 def build_coalesced_task_result(

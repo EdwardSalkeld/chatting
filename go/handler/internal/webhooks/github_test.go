@@ -19,7 +19,7 @@ import (
 
 func TestGitHubAuthentication(t *testing.T) {
 	secret := []byte("test-webhook-secret")
-	body := `{"action":"published","repository":{"full_name":"BillyAcachofa/test"}}`
+	body := `{"action":"published","repository":{"full_name":"ExampleBot/test"}}`
 	sign := func(body string) string { return signature(secret, body) }
 	for _, tc := range []struct {
 		name, method, path, body, signature string
@@ -78,7 +78,7 @@ func TestSignedFilterIngress(t *testing.T) {
 	defer store.Close()
 	secret := []byte("secret")
 	var logs bytes.Buffer
-	handler := Handler(log.New(&logs, "", 0), secret, &Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}})
+	handler := Handler(log.New(&logs, "", 0), secret, &Filter{Store: store, Login: "ExampleBot", TrustedSenders: []string{"alice"}})
 	send := func(body, delivery string, valid bool, status int) map[string]any {
 		t.Helper()
 		logs.Reset()
@@ -102,9 +102,9 @@ func TestSignedFilterIngress(t *testing.T) {
 		}
 		return record
 	}
-	body := `{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":7},"comment":{"id":99,"body":"@BillyAcachofa help"}}`
+	body := `{"action":"created","repository":{"full_name":"o/r"},"sender":{"login":"alice"},"issue":{"number":7},"comment":{"id":99,"body":"@ExampleBot help"}}`
 	send(body, "tag", false, 401)
-	stored, err := store.WebhookState(context.Background(), "watch", "billyacachofa/o/r#7")
+	stored, err := store.WebhookState(context.Background(), "watch", "examplebot/o/r#7")
 	if err != nil || stored != "" {
 		t.Fatalf("unsigned request touched watches: %q %v", stored, err)
 	}
@@ -122,7 +122,7 @@ func TestSignedFilterIngress(t *testing.T) {
 		}
 	}
 	// Matching uses the whole accepted payload even beyond the log preview cap.
-	long := strings.Replace(body, "@BillyAcachofa help", strings.Repeat("x", MaxLogBodyBytes)+" @BillyAcachofa", 1)
+	long := strings.Replace(body, "@ExampleBot help", strings.Repeat("x", MaxLogBodyBytes)+" @ExampleBot", 1)
 	long = strings.Replace(long, `"number":7`, `"number":8`, 1)
 	if got := send(long, "long-tag", true, 200); got["task_preview"] == nil || got["body_truncated"] != true {
 		t.Fatalf("long mention missed: %+v", got)

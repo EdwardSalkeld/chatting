@@ -95,8 +95,7 @@ func Defaults() Config {
 		EgressHTTPPort:              DefaultEgressHTTPPort,
 		WebhookHTTPPort:             DefaultWebhookHTTPPort,
 		GitHubWebhookSecretEnv:      "CHATTING_GITHUB_WEBHOOK_SECRET",
-		GitHubWebhookLogin:          "BillyAcachofa",
-		GitHubWebhookSelfLogins:     []string{"billybotapp[bot]"},
+		GitHubWebhookSelfLogins:     []string{},
 		EgressAttachmentAllowedDirs: []string{},
 		AllowedEgressChannels:       []string{"email", "telegram", "telegram_reaction", "github", "log"},
 		ContextRefs:                 []string{},
@@ -175,6 +174,11 @@ func Load(raw []byte) (Config, error) {
 		if err := field.decode(rawValue); err != nil {
 			return Config{}, err
 		}
+	}
+	// Without a login every event is dropped as filter_not_configured, which
+	// would quietly turn live delivery into nothing.
+	if config.GitHubWebhookDeliveryEnabled && config.GitHubWebhookLogin == "" {
+		return Config{}, errors.New("github_webhook_login is required when github_webhook_delivery_enabled is true")
 	}
 	if config.IMAPHost != "" {
 		if config.IMAPUsername == "" {

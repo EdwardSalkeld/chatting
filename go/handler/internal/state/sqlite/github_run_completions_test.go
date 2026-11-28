@@ -36,7 +36,7 @@ func ciBody(id, number, attempt int, sha, conclusion, event, branch string) []by
 
 func ciReceive(t *testing.T, store *Store, body []byte, reason string) *contracts.TaskQueueMessage {
 	t.Helper()
-	f := &webhooks.Filter{Store: store, Login: "BillyAcachofa", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
+	f := &webhooks.Filter{Store: store, Login: "ExampleBot", TrustedSenders: []string{"alice"}, DeliveryEnabled: true}
 	d, n, err := webhooks.ReceiveGitHub(context.Background(), store, f, body, "workflow_run", fmt.Sprintf("delivery:%x", sha256.Sum256(body)), time.Now())
 	if err != nil || d.Reason != reason {
 		t.Fatalf("receipt: %+v %v (want %s)", d, err, reason)
@@ -58,7 +58,7 @@ func TestLateRunRegistrationReconcilesSeenCompletion(t *testing.T) {
 			if err := store.RegisterPR(ctx, origin.TaskID, "https://github.com/o/r/pull/9"); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.PutWebhookState(ctx, "watch", "billyacachofa/o/r#9", `{"head_sha":"abc"}`); err != nil {
+			if err := store.PutWebhookState(ctx, "watch", "examplebot/o/r#9", `{"head_sha":"abc"}`); err != nil {
 				t.Fatal(err)
 			}
 			body := ciBody(7, 1, 1, "abc", conclusion, "pull_request", "feature")
@@ -104,7 +104,7 @@ func TestRegisteredRunAdvancesSharedOrdering(t *testing.T) {
 	if err := store.RegisterPR(ctx, origin.TaskID, "https://github.com/o/r/pull/9"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutWebhookState(ctx, "watch", "billyacachofa/o/r#9", `{"head_sha":"abc"}`); err != nil {
+	if err := store.PutWebhookState(ctx, "watch", "examplebot/o/r#9", `{"head_sha":"abc"}`); err != nil {
 		t.Fatal(err)
 	}
 	ciReceive(t, store, ciBody(1, 1, 1, "abc", "failure", "pull_request", "feature"), "workflow_failure")
@@ -124,17 +124,56 @@ func TestRegisteredRunAdvancesSharedOrdering(t *testing.T) {
 
 func TestNonPRExecutionDoesNotInferOldPROwner(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.PutWebhookState(context.Background(), "watch", "billyacachofa/o/r#9", `{"head_sha":"abc"}`); err != nil {
+	if err := store.PutWebhookState(context.Background(), "watch", "examplebot/o/r#9", `{"head_sha":"abc"}`); err != nil {
 		t.Fatal(err)
 	}
 	ciReceive(t, store, ciBody(1, 1, 1, "abc", "failure", "push", "main"), "workflow_missing_pr_context")
+}
+
+func TestUnownedSuccessIsNotHeldButCanBeRegisteredLater(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	origin := ciOwner(t, store, "-100")
+	body := ciBody(7, 1, 1, "abc", "success", "push", "main")
+	if n := ciReceive(t, store, body, "unowned_workflow_success"); n != nil {
+		t.Fatal("unowned success queued")
+	}
+	var held int
+	if err := store.db.QueryRow(`SELECT count(*) FROM github_webhook_held`).Scan(&held); err != nil || held != 0 {
+		t.Fatalf("held=%d: %v", held, err)
+	}
+	if err := store.RegisterRun(ctx, origin.TaskID, "https://github.com/o/r/actions/runs/7"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingGitHub(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("late registration: %v %v", pending, err)
+	}
+	routed, err := store.AssignTask(ctx, contracts.NewTaskQueueMessage(pending[0], "late", time.Now()))
+	if err != nil || routed.WorkItemID != origin.WorkItemID {
+		t.Fatalf("wrong owner: %+v %v", routed, err)
+	}
+	if err := store.RegisterRun(ctx, origin.TaskID, "https://github.com/o/r/actions/runs/7"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.PendingGitHub(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("duplicate completion: %v %v", pending, err)
+	}
+}
+
+func TestUnownedSuccessRequiresEnoughDataToSaveForLater(t *testing.T) {
+	store := openTestStore(t)
+	ciReceive(t, store, ciBody(7, 0, 1, "abc", "success", "push", "main"), "workflow_missing_pr_context")
+	ciReceive(t, store, ciBody(8, 1, 1, "abc", "failure", "push", "main"), "workflow_missing_pr_context")
+	ciReceive(t, store, ciBody(9, 1, 1, "abc", "success", "pull_request", "feature"), "unowned_workflow_success")
 }
 
 func TestLateRunRegistrationReconcilesHeldCompletionAtomically(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 	origin := ciOwner(t, store, "-100")
-	ciReceive(t, store, ciBody(7, 1, 1, "abc", "success", "push", "main"), "workflow_missing_pr_context")
+	ciReceive(t, store, ciBody(7, 1, 1, "abc", "failure", "push", "main"), "workflow_missing_pr_context")
 	if _, err := store.db.Exec(`CREATE TRIGGER fail_run_completion BEFORE INSERT ON github_webhook_pending BEGIN SELECT RAISE(FAIL,'injected'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +212,7 @@ func TestWorkflowDestinationRecoversAcrossCommits(t *testing.T) {
 	if err := store.RegisterPR(ctx, prOwner.TaskID, "https://github.com/o/r/pull/9"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutWebhookState(ctx, "watch", "billyacachofa/o/r#9", `{"head_sha":"abc"}`); err != nil {
+	if err := store.PutWebhookState(ctx, "watch", "examplebot/o/r#9", `{"head_sha":"abc"}`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RegisterWorkflow(ctx, ops.TaskID, "https://github.com/o/r/actions/workflows/20"); err != nil {

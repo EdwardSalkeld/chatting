@@ -81,6 +81,18 @@ class AppServerExecutorTests(unittest.TestCase):
         self.assertEqual(len({t["params"]["threadId"] for t in turns}), 3)
         self.assertEqual(len({t["params"]["cwd"] for t in turns}), 1)
 
+    def test_quota_retry_gets_new_journal_identity_without_changing_thread(self):
+        task = _telegram_task(998)
+        self.store.stage_inbox_task(task)
+        self.assertIsNotNone(self.store.claim_next_inbox_task())
+        self.assertEqual(self.executor.execute(task.envelope).errors, [])
+        original = self.calls("turn/start")[-1]["params"]["threadId"]
+        self.store.park_codex_quota_task(task.task_id)
+        self.store.release_codex_quota_task(task.task_id, safe_to_retry=True)
+        self.assertEqual(self.executor.execute(task.envelope).errors, [])
+        self.assertEqual(len(self.calls("turn/start")), 2)
+        self.assertEqual(self.calls("turn/start")[-1]["params"]["threadId"], original)
+
     def test_instruction_revision_change_resumes_same_thread_between_turns(self):
         executor = replace(self.executor, instructions_revision="revision-a")
         self.assertEqual(executor.execute(_telegram_task(801).envelope).errors, [])

@@ -47,6 +47,71 @@ Codex must be logged in as the worker user.
 
 ## Worker
 
+The worker polls Codex's account rate-limit API without starting a model turn.
+Its Prometheus endpoint reports `chatting_codex_quota_blocked` when the API
+reports whether ordinary usage is allowed, and
+`chatting_codex_quota_remaining_percent` and
+`chatting_codex_quota_reset_timestamp_seconds` labelled by window length in
+minutes. `chatting_codex_quota_snapshot_timestamp_seconds` is the time of the
+last successful read. Missing fields are omitted rather than treated as zero;
+poll failures leave the last observation in place, so alerts must check its
+age. The credit balance is not a proxy for whether plan usage is available.
+
+When Codex reports ordinary usage unavailable, the worker keeps incoming work
+in its durable inbox and pauses model-task claims. Internal heartbeats and
+already-delivered closing work continue. A later successful quota read that
+reports usage allowed resumes claims; a stale or failed read does not clear the
+gate. A Codex `usageLimitExceeded` failure also closes the gate immediately.
+
+A failed app-server turn is automatically queued for retry only if its complete
+structured transcript confirms the quota error occurred before any tool action
+or visible reply. Other interrupted turns remain in `quota_interrupted`, which
+preserves the task and blocks later work in that work item until reviewed. The
+`chatting_codex_quota_interrupted_tasks` gauge exposes these for alerting. Inspect
+worker activity and actual external state before choosing to resume; the command
+`python3 -P -m app.main_quota --db <worker-db>` lists task IDs, and adding
+`--resume <task-id>` queues a reviewed task. The gate still applies. A resumed
+turn is instructed to check prior work and avoid repeating side effects.
+
+#### Speculative quota work
+
+Speculative work is disabled unless `speculative_work.enabled` is true in the
+worker config. Configure an explicit list of local repository paths and jobs:
+
+```json
+{
+  "speculative_work": {
+    "enabled": true,
+    "repositories": ["/srv/chatting/workspace/chatting"],
+    "jobs": [
+      {"name": "security", "prompt": "Audit this repository for a concrete security vulnerability and verify any finding.", "model_tier": "speculative_deep"},
+      {"name": "efficiency", "prompt": "Find and verify a meaningful performance or resource-use improvement.", "model_tier": "speculative"},
+      {"name": "cleanup", "prompt": "Find a worthwhile code and test cleanup and verify it.", "model_tier": "speculative"},
+      {"name": "improvement", "prompt": "Investigate and propose a concrete improvement to this repository.", "model_tier": "speculative"}
+    ]
+  }
+}
+```
+
+The worker starts one at a time only while idle, if a successful quota reading
+less than three minutes old shows ordinary usage allowed, the seven-day reset is
+less than six hours away, and over 10% remains. It checks again when claiming
+the task and waits for a new reading after completion. Normal pending work is
+claimed first; already running work is not preempted. A task can finish below
+the reserve because the limit is checked between tasks. Missing or stale quota
+information pauses new starts. Recent job/repository pairs rotate before
+repeating. State and reminder submissions survive worker restarts.
+
+Each task has a separate work item and is instructed to create a Telegram topic,
+post its job, repository and model before starting, and report the outcome in
+the same topic even when it finds nothing. These updates are sent by the agent;
+an executor or Telegram failure can prevent one. A job's model tier can
+be `speculative` or `speculative_deep` (defaults `gpt-6.2-sol` and
+`gpt-6.2-astra` respectively); set `CHATTING_MODEL_SPECULATIVE` and
+`CHATTING_MODEL_SPECULATIVE_DEEP` to change them. Existing `high` and `low`
+tiers are also accepted. Repository checkouts and prompts must be configured by
+the deployment, and the handler's reminders API must be reachable by the worker.
+
 `codex_working_dir` sets the Codex subprocess cwd. `workspace_root` holds the
 persistent per-work-item workspaces. The worker runs up to
 `executor_pool_size` tasks at once (default two); tasks for one work item run

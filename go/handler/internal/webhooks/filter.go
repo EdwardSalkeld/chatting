@@ -175,7 +175,7 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		return decision("needs_context", "missing_repository"), nil
 	}
 	// CI relevance is determined by the watched PR and commit, never the actor
-	// who caused the workflow to run (which can legitimately be Billy).
+	// who caused the workflow to run (which can legitimately be our own login).
 	if event == "workflow_run" {
 		return f.workflowDecision(ctx, p)
 	}
@@ -284,6 +284,10 @@ func (f *Filter) evaluate(ctx context.Context, p filterPayload, event string) (D
 		} else {
 			d.Reason = "tagged_in"
 		}
+		return d, nil
+	}
+	if event == "pull_request" && p.Action == "synchronize" && s.Draft {
+		d.Disposition, d.Reason = "drop", "draft_head_tracked"
 		return d, nil
 	}
 	d.Disposition, d.Reason = actionDecision(p, event, s)
@@ -413,6 +417,12 @@ func (f *Filter) workflowDecision(ctx context.Context, p filterPayload) (Decisio
 			return decision("needs_context", "workflow_missing_head_context"), nil
 		}
 		if len(r.PullRequests) == 0 {
+			// Preserve PR ambiguity and failures; only discard an unowned
+			// success after all fields needed for late registration
+			// have been checked. ObserveGitHubRun stores it atomically.
+			if r.Event != "" && r.Conclusion == "success" && r.ID > 0 && r.WorkflowID > 0 && r.RunNumber > 0 && r.RunAttempt > 0 && r.HeadSHA != "" {
+				return decision("drop", "unowned_workflow_success"), nil
+			}
 			return decision("needs_context", "workflow_missing_pr_context"), nil
 		}
 		return decision("drop", "workflow_unwatched_or_stale_commit"), nil

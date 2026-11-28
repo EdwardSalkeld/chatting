@@ -60,6 +60,7 @@ ALLOWED_WORKER_CONFIG_KEYS = frozenset(
         "poll_timeout_seconds",
         "sleep_seconds",
         "executor_pool_size",
+        "speculative_work",
     }
 )
 
@@ -288,6 +289,12 @@ def main() -> int:
         raise RuntimeError("another worker already owns this database") from exc
 
     store = SQLiteStateStore(db_path)
+    speculative_settings = config.get("speculative_work")
+    if speculative_settings is not None and not isinstance(speculative_settings, dict):
+        raise ValueError("speculative_work must be an object")
+    store.set_speculative_enabled(
+        bool(speculative_settings and speculative_settings.get("enabled") is True)
+    )
     supervisors = SupervisorPool(
         directory=Path(f"{Path(db_path).resolve()}.supervisors"),
         size=executor_pool_size,
@@ -332,6 +339,10 @@ def main() -> int:
         notification_triage=notification_triage_from_environment(db_path),
     )
     collector.start()
+    from app.worker.codex_quota import QuotaPoller
+
+    quota_poller = QuotaPoller(store, _build_executor(config, args.config).command[0])
+    quota_poller.start()
     # Personal mail is classified in this process but never reaches the
     # executor: it has its own queue, and the only thing this thread can do
     # with an email is ask two fixed endpoints about it.
@@ -353,6 +364,10 @@ def main() -> int:
         )
     try:
         loop_count = 0
+        speculative_last_poll = 0.0
+        speculative_config = config.get("speculative_work")
+        if speculative_config is not None and not isinstance(speculative_config, dict):
+            raise ValueError("speculative_work must be an object")
         while True:
             loop_count += 1
             # Replay any egress still pending in the outbox (a prior POST that
@@ -369,6 +384,22 @@ def main() -> int:
                     )
                 )
             supervisors.tick()
+            if (
+                speculative_config
+                and time.monotonic() - speculative_last_poll >= 30
+                and all(status["state"] == "idle" for status in supervisors.statuses())
+            ):
+                from app.worker.speculative_quota import tick as speculative_tick
+
+                speculative_last_poll = time.monotonic()
+                try:
+                    speculative_tick(
+                        store,
+                        speculative_config,
+                        handler_egress_url.rsplit("/", 1)[0],
+                    )
+                except Exception:
+                    LOGGER.exception("speculative_work_tick_failed")
             activity_monitor.set_supervisor_executors(
                 [
                     executor
@@ -383,6 +414,7 @@ def main() -> int:
         return 0
     finally:
         collector.stop()
+        quota_poller.stop()
         if personal is not None:
             personal.stop()
         if max_loops:
@@ -415,6 +447,12 @@ def _process_claimed_task(
             activity_monitor=activity_monitor,
             on_pr_created=_pr_registrar(handler_egress_url, task_message.task_id),
         )
+    if result.quota_retry_safe is not None:
+        store.release_codex_quota_task(
+            task_message.task_id, safe_to_retry=result.quota_retry_safe
+        )
+        _log_worker_processed(task_id=task_message.task_id, result=result)
+        return
     # Supervisors only queue results: the manager alone drains the outbox, so
     # sends never run concurrently and results survive the manager's absence.
     for egress_message in result.egress_messages:
